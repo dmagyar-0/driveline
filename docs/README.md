@@ -50,12 +50,25 @@ For someone new to the project, read in this order:
 - **Layout:** FlexLayout for dockable panels; state in Zustand.
 - **Chromium-first.** Firefox best-effort. Safari not in MVP.
 
-## Biggest risk
+## M0 de-risk status (as of 2026-04-17)
 
-`mf4-rs` does not currently build for `wasm32-unknown-unknown`. The
-very first task (**T0.1** in `10-task-breakdown.md`) is a time-boxed
-spike to port it; the architecture hinges on its outcome. Fallbacks
-are laid out in `08-risks-and-open-questions.md`.
+All three M0 spikes have been investigated. Implementation of T0.2 and
+T0.3 is still pending, but the architecture is no longer blocked on
+unknowns.
+
+- **T0.1 · `mf4-rs` WASM** — **GO-WITH-PATCHES**. `mf4-rs` compiles
+  for `wasm32-unknown-unknown` behind a minimal `cfg`-gated patch set.
+  Pin to the `claude/wasm-feasibility-spike-Op9Z3` branch until the
+  patches land on `main`. Full report:
+  [`mf4-rs/WASM_FEASIBILITY.md`](https://github.com/dmagyar-0/mf4-rs/blob/claude/wasm-feasibility-spike-Op9Z3/WASM_FEASIBILITY.md).
+- **T0.2 · WebCodecs + MCAP** — **GO**. `@mcap/core` + `@mcap/browser`
+  parse MCAP from a `Blob`; Foxglove's `CompressedVideo` schema gives
+  us Annex-B with SPS+PPS per IDR; `VideoDecoder` accepts it directly.
+  See [`spike-T0.2-webcodecs-mcap.md`](./spike-T0.2-webcodecs-mcap.md).
+- **T0.3 · Sample corpus** — **GO**. One `sample-data/generate.py`
+  driving `ffmpeg` (libx264 deterministic), `mcap` (Python), and
+  `asammdf` produces all four fixtures plus reference PNGs. See
+  [`spike-T0.3-sample-corpus.md`](./spike-T0.3-sample-corpus.md).
 
 ## MVP definition of done
 

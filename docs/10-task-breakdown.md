@@ -23,6 +23,9 @@ Legend:
 
 ### T0.1 · `mf4-rs` WASM build spike
 
+- **Status:** **investigated — GO-WITH-PATCHES**. See
+  [`mf4-rs/WASM_FEASIBILITY.md`](https://github.com/dmagyar-0/mf4-rs/blob/claude/wasm-feasibility-spike-Op9Z3/WASM_FEASIBILITY.md).
+  Risk R1 in `08-risks-and-open-questions.md` closed.
 - **Summary:** Make `mf4-rs` compile for `wasm32-unknown-unknown` and
   read a reference MF4 file in a Web Worker. Document any necessary
   source changes.
@@ -40,6 +43,9 @@ Legend:
 
 ### T0.2 · WebCodecs + MCAP H.264 feasibility
 
+- **Status:** **investigated — GO**. See
+  [`spike-T0.2-webcodecs-mcap.md`](./spike-T0.2-webcodecs-mcap.md).
+  Implementation still pending.
 - **Summary:** In a standalone HTML page, decode one keyframe from
   `sample-data/short.mcap` using `VideoDecoder`. No UI, no React.
 - **Depends on:** nothing.
@@ -52,6 +58,9 @@ Legend:
 
 ### T0.3 · Sample corpus generation
 
+- **Status:** **investigated — GO**. See
+  [`spike-T0.3-sample-corpus.md`](./spike-T0.3-sample-corpus.md).
+  Implementation still pending.
 - **Summary:** Produce `sample-data/short.mcap`, `short.mf4`, and
   `short.mp4` + `short.mp4.ts.bin` per `09-verification-plan.md`.
 - **Depends on:** nothing.
