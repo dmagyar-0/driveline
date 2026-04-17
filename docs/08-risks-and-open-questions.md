@@ -8,31 +8,32 @@ world.
 
 ## R1. `mf4-rs` does not build for `wasm32-unknown-unknown`
 
-**Probability:** high (user stated the crate has no WASM target today).
-**Impact:** critical — without it, the MF4 path has no reader.
+**Status (2026-04-17):** **resolved — GO-WITH-PATCHES.** T0.1 was
+investigated over two spikes in `dmagyar-0/mf4-rs` (PR #53 merged +
+branch `claude/wasm-feasibility-spike-Op9Z3`). The crate now compiles
+for `wasm32-unknown-unknown` with a minimal patch set: filesystem I/O
+and `memmap2` are gated behind `#[cfg(not(target_arch = "wasm32"))]`,
+and `parse_from_bytes` / `MdfIndex::from_bytes` / `SliceRangeReader` /
+`MdfWriter::new_from_writer` are added as the WASM entry points. All
+50 native tests still pass. No C deps, no threading, no `SystemTime`,
+no crypto — the dependency tree is pure Rust. Full report:
+[`mf4-rs/WASM_FEASIBILITY.md`](https://github.com/dmagyar-0/mf4-rs/blob/claude/wasm-feasibility-spike-Op9Z3/WASM_FEASIBILITY.md).
 
-**Common causes we expect:**
+Punted items (not blocking M1, re-enter during M2):
 
-- Use of `std::fs` or `memmap2` for file I/O. Both are unavailable on
-  `wasm32-unknown-unknown`. Fix: abstract over a trait
-  (`BlobReader: Read + Seek`) and provide a blob-backed implementation
-  that reads via `Blob.slice()` from JS.
-- Native zstd/zlib bindings (C deps). Fix: swap to pure-Rust alternatives
-  (`ruzstd`, `flate2` with `rust_backend` feature).
-- Threading (`std::thread`, `rayon`). Fix: gate behind a `cfg` so the
-  WASM build stays single-threaded; revisit if `wasm32-wasi-threads`
-  becomes ubiquitous.
-- `u128`/`i128` through the FFI boundary. Fix: avoid at the boundary; use
-  two `u64`s or hex strings.
+- Streaming byte-range reads via `Blob.slice()` (trait is in place;
+  JS glue impl needed).
+- `##DZ` (zstd/deflate) block decoding for compressed MF4s — currently
+  unsupported on any target. Fix with `flate2`/`ruzstd` (pure Rust,
+  WASM-safe).
+- Large files (> 2 GB) via chunked `Uint8Array::subarray` reads.
 
-**Mitigation plan:** T0.1 is a time-boxed spike (1–2 days). If we burn
-through the box:
-
-**Fallbacks (ranked):**
+**Original fallbacks (kept for history, no longer active):**
 
 1. **Patch set carried in-tree.** Fork `mf4-rs`, apply the minimum diff
-   to compile for WASM, pin to that fork. Acceptable if the diff is
-   small and upstreamable.
+   to compile for WASM, pin to that fork. This is effectively the chosen
+   path: we pin to the `claude/wasm-feasibility-spike-Op9Z3` branch
+   until the patches merge to `main` / a tagged release.
 2. **JS-side MF4 reader.** Write a minimal MF4 reader in TypeScript
    covering the subset we need for MVP (fixed-point integer, float32/64
    channels; no VLSD, no complex records). Significant re-work but
@@ -45,11 +46,21 @@ through the box:
 
 ## R2. WebCodecs support gaps outside Chromium
 
+**Status (2026-04-17):** T0.2 investigation complete; implementation
+pending. Full report:
+[`spike-T0.2-webcodecs-mcap.md`](./spike-T0.2-webcodecs-mcap.md).
+All primitives are stable: `@mcap/core` + `@mcap/browser` parse MCAP
+from a `Blob`; Foxglove's `foxglove.CompressedVideo` schema carries
+Annex-B with SPS+PPS per IDR; `VideoDecoder` accepts Annex-B without
+a `description` on Chrome ≥ M107. The portable path (AVCC +
+`description`) is ~30 lines of byte wrangling. COOP/COEP headers are
+not required.
+
 **Probability:** medium.
 **Impact:** medium — scope, not show-stopper.
 
 Chrome and Edge: stable. Firefox: shipped in FF 130+ but historically
-jittery on older builds. Safari: partial.
+jittery on older builds. Safari: partial on 16.4, full on 26+.
 
 **Mitigation:** feature-detect on boot. If `VideoDecoder` or
 `isConfigSupported` is missing or returns `false` for our codec string,
@@ -176,12 +187,16 @@ implementation is trivial. Periodic scope audits during M3–M6.
 
 ## Open questions to answer before M1
 
-1. **`mf4-rs` dependency source.** Git URL + rev? (`docs/07-build-and-tooling.md`
-   documents the mechanics; the URL is TBD.)
-2. **Sample corpus authorship.** Do we have or can we produce a 4K/30fps
-   MCAP that matches `09-verification-plan.md`? If not, generate one
-   synthetically (ffmpeg + a signal-generator script). Deferring a
-   decision means deferring the spike gate.
+1. **`mf4-rs` dependency source.** **Resolved** — pin to
+   `{ git = "https://github.com/dmagyar-0/mf4-rs", branch =
+   "claude/wasm-feasibility-spike-Op9Z3" }` until the WASM patches land
+   on `main` / a tagged release. Entry points: `MDF::from_bytes`,
+   `MdfIndex::from_bytes`, `SliceRangeReader`,
+   `MdfWriter::new_from_writer`.
+2. **Sample corpus authorship.** **Resolved** — synthesise via a single
+   `sample-data/generate.py` driving `ffmpeg` (libx264 deterministic
+   mode), `mcap` (Python), and `asammdf`. Full plan:
+   [`spike-T0.3-sample-corpus.md`](./spike-T0.3-sample-corpus.md).
 3. **Hosting target.** Not strictly needed for MVP, but knowing in advance
    helps (Cloudflare Pages vs GitHub Pages vs internal).
 4. **Tauri timing.** Keep out of MVP; when do we plan the follow-up?
