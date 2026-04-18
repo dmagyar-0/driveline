@@ -1,0 +1,18 @@
+{
+  "name": "driveline",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "wasm:build": "wasm-pack build crates/wasm-bindings --target web --out-dir ../../apps/web/src/wasm --out-name wasm_bindings",
+    "wasm:build:dev": "wasm-pack build crates/wasm-bindings --target web --out-dir ../../apps/web/src/wasm --out-name wasm_bindings --dev",
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm wasm:build && pnpm --filter web build",
+    "test": "pnpm --filter web test --run && cargo test --workspace",
+    "test:web": "pnpm --filter web test --run",
+    "test:rust": "cargo test --workspace",
+    "e2e": "pnpm --filter e2e test",
+    "fmt": "cargo fmt --all && pnpm --filter web fmt"
+  },
+  "devDependencies": {},
+  "packageManager": "pnpm@10.33.0"
+}

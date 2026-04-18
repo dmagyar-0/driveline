@@ -1,0 +1,29 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Node
+node_modules
+.pnpm-store
+.pnpm-debug.log*
+
+# Vite
+apps/web/dist
+apps/web/.vite
+
+# wasm-pack output (generated; regenerate with `pnpm wasm:build`)
+apps/web/src/wasm/*
+!apps/web/src/wasm/.gitkeep
+
+# Sample corpus (generated locally; see docs/spike-T0.3-sample-corpus.md)
+sample-data/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Playwright
+/apps/e2e/playwright-report
+/apps/e2e/test-results
+/test-results

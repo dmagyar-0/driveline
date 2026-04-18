@@ -1,0 +1,12 @@
+[package]
+name = "data-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Driveline data-core: Reader trait, format adapters, Arrow IPC producers."
+
+[dependencies]
+arrow-array = "54"
+arrow-schema = "54"
+arrow-ipc = "54"
+thiserror = "2"
