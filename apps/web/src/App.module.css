@@ -1,0 +1,67 @@
+.shell {
+  font-family: system-ui, sans-serif;
+  padding: 2rem;
+  min-height: 100vh;
+  box-sizing: border-box;
+}
+
+.dropZone {
+  border: 2px dashed #888;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+  color: #555;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.dropZoneActive {
+  border-color: #2a6df4;
+  background: rgba(42, 109, 244, 0.06);
+}
+
+.sources {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.source {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.sourceHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+}
+
+.sourceName {
+  font-weight: 600;
+}
+
+.sourceKind {
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.meta {
+  font-size: 0.85rem;
+  color: #444;
+  margin: 0.25rem 0 0;
+}
+
+.global {
+  margin: 1rem 0 0;
+  font-size: 0.9rem;
+}
+
+.errors {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  color: #b23a00;
+}

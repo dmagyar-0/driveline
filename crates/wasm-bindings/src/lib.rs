@@ -8,7 +8,9 @@
 
 use std::cell::RefCell;
 
-use data_core::{FetchOpts, Mf4Reader, Mp4SidecarReader, Reader, TimeRange};
+use data_core::{
+    ChannelKind, DType, FetchOpts, McapReader, Mf4Reader, Mp4SidecarReader, Reader, TimeRange,
+};
 use js_sys::Uint8Array;
 use serde::Serialize;
 use slab::Slab;
@@ -17,6 +19,16 @@ use wasm_bindgen::prelude::*;
 thread_local! {
     static READERS: RefCell<Slab<Mf4Reader>> = const { RefCell::new(Slab::new()) };
     static MP4_READERS: RefCell<Slab<Mp4SidecarReader>> = const { RefCell::new(Slab::new()) };
+    static MCAP_READERS: RefCell<Slab<McapReader>> = const { RefCell::new(Slab::new()) };
+}
+
+/// i64 ns UTC timestamps frequently exceed `Number.MAX_SAFE_INTEGER`
+/// (9.007e15) — e.g. 2024-01-01 lands at ~1.704e18. The default serializer
+/// bails with "can't be represented as a JavaScript number" on those, so
+/// every summary emits 64-bit numbers as `BigInt`. The TS worker normalises
+/// through `BigInt()` regardless, so either shape is consumer-safe.
+fn bigint_serializer() -> serde_wasm_bindgen::Serializer {
+    serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true)
 }
 
 #[wasm_bindgen]
@@ -99,7 +111,7 @@ pub fn mf4_summary(handle: u32) -> Result<JsValue, JsError> {
                 })
                 .collect(),
         };
-        serde_wasm_bindgen::to_value(&summary)
+        summary.serialize(&bigint_serializer())
             .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
     })
 }
@@ -172,7 +184,108 @@ pub fn mp4_sidecar_summary(handle: u32) -> Result<JsValue, JsError> {
                 })
                 .collect(),
         };
-        serde_wasm_bindgen::to_value(&summary)
+        summary.serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// MCAP channels carry heterogeneous kinds (scalar / vector / video / enum /
+/// bytes), so — unlike the MF4 and MP4+sidecar summaries — every entry needs
+/// an explicit `kind` tag plus an optional `dtype` string. Values are the
+/// lowercased `ChannelKind` / `DType` enum variants, matching
+/// `docs/03-data-model.md`.
+#[derive(Serialize)]
+struct McapChannelInfo {
+    id: String,
+    name: String,
+    kind: &'static str,
+    dtype: Option<&'static str>,
+    unit: Option<String>,
+    sample_count: u64,
+    start_ns: i64,
+    end_ns: i64,
+}
+
+#[derive(Serialize)]
+struct McapSummary {
+    start_ns: i64,
+    end_ns: i64,
+    channels: Vec<McapChannelInfo>,
+}
+
+fn channel_kind_str(k: ChannelKind) -> &'static str {
+    match k {
+        ChannelKind::Scalar => "scalar",
+        ChannelKind::Vector => "vector",
+        ChannelKind::Video => "video",
+        ChannelKind::Enum => "enum",
+        ChannelKind::Bytes => "bytes",
+    }
+}
+
+fn dtype_str(d: DType) -> &'static str {
+    match d {
+        DType::F32 => "f32",
+        DType::F64 => "f64",
+        DType::I32 => "i32",
+        DType::I64 => "i64",
+        DType::U32 => "u32",
+        DType::U64 => "u64",
+    }
+}
+
+/// Parse an MCAP blob and register a `McapReader` in the thread-local slab.
+/// Inserts into the slab only after the parse succeeds, so a failed open never
+/// leaks a handle.
+#[wasm_bindgen]
+pub fn open_mcap(data: &[u8]) -> Result<u32, JsError> {
+    let reader =
+        McapReader::open(data).map_err(|e| JsError::new(&format!("open mcap failed: {e}")))?;
+    let key = MCAP_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the mcap reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_mcap(handle: u32) {
+    MCAP_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the mcap reader's `SourceMeta` as a plain JS object. Channel
+/// records carry an explicit `kind` (and optional `dtype`) so the JS store
+/// can route scalar / vector / video channels appropriately.
+#[wasm_bindgen]
+pub fn mcap_summary(handle: u32) -> Result<JsValue, JsError> {
+    MCAP_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid mcap handle"))?;
+        let meta = reader.meta();
+        let summary = McapSummary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| McapChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    kind: channel_kind_str(c.kind),
+                    dtype: c.dtype.map(dtype_str),
+                    unit: c.unit.clone(),
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary.serialize(&bigint_serializer())
             .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
     })
 }

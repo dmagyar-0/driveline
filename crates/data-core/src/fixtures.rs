@@ -205,3 +205,80 @@ pub fn short_mcap_bytes() -> crate::Result<Vec<u8>> {
     writer.finish()?;
     Ok(writer.into_inner().into_inner())
 }
+
+/// 2023-11-14T22:13:20Z — chosen to land beyond `Number.MAX_SAFE_INTEGER`
+/// when expressed as ns, which lets the JS side exercise the BigInt path.
+const T0_MP4_NS: i64 = 1_700_000_000_000_000_000;
+
+/// Frame step for the mp4 fixture: 33_333_333 ns ≈ 30 fps.
+const STEP_MP4_NS: i64 = 33_333_333;
+
+/// Sample count of the mp4 fixture.
+const MP4_SAMPLE_COUNT: usize = 10;
+
+/// Dummy H.264 SPS NAL bytes. Valid enough for the `mp4` crate's `avcC`
+/// serialiser to accept; these never reach a real decoder — the T2.4 e2e
+/// only exercises the parse + sidecar-pairing path.
+const DUMMY_SPS: &[u8] = &[
+    0x67, 0x64, 0x00, 0x1e, 0xac, 0xd9, 0x40, 0xa0, 0x3d, 0xa1, 0x00, 0x00, 0x03, 0x00, 0x01,
+    0x00, 0x00, 0x03, 0x00, 0x3c, 0x0f, 0x16, 0x2e, 0x48,
+];
+const DUMMY_PPS: &[u8] = &[0x68, 0xeb, 0xec, 0xb2, 0x2c];
+
+/// Build a minimal in-memory H.264 mp4 with `MP4_SAMPLE_COUNT` samples at
+/// 30 fps. Sample payloads are placeholder length-prefixed NAL bytes —
+/// adequate for `Mp4SidecarReader::open_pair` (which only reads the `moov`)
+/// but not playable. Paired with `short_sidecar_bytes`.
+pub fn short_mp4_bytes() -> crate::Result<Vec<u8>> {
+    use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType};
+
+    let config = Mp4Config {
+        major_brand: "isom".parse().expect("static str parses as FourCC"),
+        minor_version: 512,
+        compatible_brands: vec![
+            "isom".parse().expect("static str parses as FourCC"),
+            "iso2".parse().expect("static str parses as FourCC"),
+            "avc1".parse().expect("static str parses as FourCC"),
+            "mp41".parse().expect("static str parses as FourCC"),
+        ],
+        timescale: 30,
+    };
+    let mut writer = Mp4Writer::write_start(Cursor::new(Vec::<u8>::new()), &config)?;
+    let track = TrackConfig {
+        track_type: TrackType::Video,
+        timescale: 30,
+        language: "und".to_string(),
+        media_conf: MediaConfig::AvcConfig(AvcConfig {
+            width: 16,
+            height: 16,
+            seq_param_set: DUMMY_SPS.to_vec(),
+            pic_param_set: DUMMY_PPS.to_vec(),
+        }),
+    };
+    writer.add_track(&track)?;
+
+    let payload = Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x09]);
+    for i in 0..MP4_SAMPLE_COUNT {
+        let sample = Mp4Sample {
+            start_time: i as u64,
+            duration: 1,
+            rendering_offset: 0,
+            is_sync: i == 0,
+            bytes: payload.clone(),
+        };
+        writer.write_sample(1, &sample)?;
+    }
+    writer.write_end()?;
+    Ok(writer.into_writer().into_inner())
+}
+
+/// Packed little-endian i64 ns timestamps matching `short_mp4_bytes`:
+/// `T0_MP4_NS + i * STEP_MP4_NS` for `i in 0..MP4_SAMPLE_COUNT`.
+pub fn short_sidecar_bytes() -> Vec<u8> {
+    let mut out = Vec::with_capacity(MP4_SAMPLE_COUNT * 8);
+    for i in 0..MP4_SAMPLE_COUNT {
+        let t = T0_MP4_NS + (i as i64) * STEP_MP4_NS;
+        out.extend_from_slice(&t.to_le_bytes());
+    }
+    out
+}
