@@ -1,8 +1,8 @@
 import * as Comlink from "comlink";
-import type { DataCoreApi } from "./workers/dataCore.worker";
+import type { DataCoreApi, Mf4ChannelInfo, Mf4Summary } from "./workers/dataCore.worker";
 import type { VideoDecodeApi } from "./workers/videoDecode.worker";
 
-export type { DataCoreApi, VideoDecodeApi };
+export type { DataCoreApi, Mf4ChannelInfo, Mf4Summary, VideoDecodeApi };
 
 export function makeDataCoreClient(): Comlink.Remote<DataCoreApi> {
   const worker = new Worker(

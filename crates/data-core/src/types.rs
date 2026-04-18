@@ -11,7 +11,10 @@ pub struct TimeRange {
 
 impl TimeRange {
     pub const fn empty() -> Self {
-        Self { start_ns: 0, end_ns: 0 }
+        Self {
+            start_ns: 0,
+            end_ns: 0,
+        }
     }
 
     pub fn is_empty(&self) -> bool {

@@ -10,3 +10,4 @@ arrow-array = "54"
 arrow-schema = "54"
 arrow-ipc = "54"
 thiserror = "2"
+mf4-rs = { git = "https://github.com/dmagyar-0/mf4-rs", rev = "af795676d490c5a972796c25a327c10205d93f51" }
