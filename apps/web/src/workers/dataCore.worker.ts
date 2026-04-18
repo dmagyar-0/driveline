@@ -1,5 +1,5 @@
 import * as Comlink from "comlink";
-import init, { ping as wasmPing } from "../wasm/wasm_bindings.js";
+import init, { ping as wasmPing, fetch_range_stub } from "../wasm/wasm_bindings.js";
 
 // Register the Comlink listener BEFORE awaiting wasm init. A top-level await
 // here would suspend module evaluation; any messages posted by the main
@@ -11,6 +11,10 @@ export const dataCoreApi = {
   async ping(): Promise<string> {
     await ready;
     return wasmPing();
+  },
+  async fetchRangeStub(): Promise<Uint8Array> {
+    await ready;
+    return fetch_range_stub();
   },
 };
 

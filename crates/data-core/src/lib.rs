@@ -3,6 +3,7 @@
 //! M1 provides the `Reader` trait skeleton and a `NoopReader`; real MCAP /
 //! MF4 readers land in M2.
 
+pub mod fixtures;
 pub mod noop;
 pub mod reader;
 pub mod types;

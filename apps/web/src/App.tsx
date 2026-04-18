@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { tableFromIPC } from "apache-arrow";
 import { makeDataCoreClient, makeVideoDecodeClient } from "./workerClient";
 import type { DataCoreApi, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
@@ -10,6 +11,7 @@ declare global {
     __drivelineDevHooks?: {
       ping: () => Promise<string>;
       pingVideo: () => Promise<string>;
+      fetchScalar: () => Promise<{ rows: number; sum: number }>;
     };
   }
 }
@@ -26,6 +28,14 @@ export function App() {
     window.__drivelineDevHooks = {
       ping: async () => (await dataCore.current!.ping()),
       pingVideo: async () => (await videoDecode.current!.ping()),
+      fetchScalar: async () => {
+        const bytes = await dataCore.current!.fetchRangeStub();
+        const table = tableFromIPC(bytes);
+        const value = table.getChild("value")!;
+        let sum = 0;
+        for (let i = 0; i < value.length; i++) sum += Number(value.get(i));
+        return { rows: table.numRows, sum };
+      },
     };
     setReady(true);
   }, []);
