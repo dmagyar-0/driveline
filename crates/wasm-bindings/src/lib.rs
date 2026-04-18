@@ -1,9 +1,13 @@
 //! Thin wasm-bindgen surface exposing `data-core` to the browser worker.
-//! M1 is scaffold-only; `ping` and `fetch_range_stub` land in T1.3 / T1.4.
+//!
+//! M1 exposes:
+//! - `ping()` → "pong" (worker-plumbing smoke test)
+//!
+//! Real MCAP / MF4 entry points land in M2.
 
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
-pub fn _scaffold() -> bool {
-    true
+pub fn ping() -> String {
+    "pong".to_string()
 }
