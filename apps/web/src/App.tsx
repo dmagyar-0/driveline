@@ -1,17 +1,40 @@
 import { useEffect, useRef, useState } from "react";
 import { tableFromIPC } from "apache-arrow";
 import { makeDataCoreClient, makeVideoDecodeClient } from "./workerClient";
-import type { DataCoreApi, VideoDecodeApi } from "./workerClient";
+import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
 
-// Dev-only hook surface. Playwright and DevTools use this for M1 smoke tests;
-// real UI replaces it in M3+.
+export interface OpenMf4Result {
+  handle: number;
+  summary: Mf4Summary;
+}
+
+export interface Mf4FetchResult {
+  rows: number;
+  tsSchema: string;
+  valueSchema: string;
+  firstTsNs: string;
+  lastTsNs: string;
+  valueSum: number;
+}
+
+// Dev-only hook surface. Playwright and DevTools use this for M1 / M2 smoke
+// tests; real UI replaces it in M3+.
 declare global {
   interface Window {
     __drivelineDevHooks?: {
       ping: () => Promise<string>;
       pingVideo: () => Promise<string>;
       fetchScalar: () => Promise<{ rows: number; sum: number }>;
+      openMf4: (bytes: Uint8Array) => Promise<OpenMf4Result>;
+      closeMf4: (handle: number) => Promise<void>;
+      mf4FetchRange: (
+        handle: number,
+        channelId: string,
+        startNs: bigint,
+        endNs: bigint,
+        includePrev: boolean,
+      ) => Promise<Mf4FetchResult>;
     };
   }
 }
@@ -35,6 +58,36 @@ export function App() {
         let sum = 0;
         for (let i = 0; i < value.length; i++) sum += Number(value.get(i));
         return { rows: table.numRows, sum };
+      },
+      openMf4: async (bytes) => {
+        const handle = await dataCore.current!.openMf4(bytes);
+        const summary = await dataCore.current!.mf4Summary(handle);
+        return { handle, summary };
+      },
+      closeMf4: async (handle) => {
+        await dataCore.current!.closeMf4(handle);
+      },
+      mf4FetchRange: async (handle, channelId, startNs, endNs, includePrev) => {
+        const bytes = await dataCore.current!.mf4FetchRange(
+          handle,
+          channelId,
+          startNs,
+          endNs,
+          includePrev,
+        );
+        const table = tableFromIPC(bytes);
+        const ts = table.getChild("ts")!;
+        const value = table.getChild("value")!;
+        let valueSum = 0;
+        for (let i = 0; i < value.length; i++) valueSum += Number(value.get(i));
+        return {
+          rows: table.numRows,
+          tsSchema: table.schema.fields[0].type.toString(),
+          valueSchema: table.schema.fields[1].type.toString(),
+          firstTsNs: String(ts.get(0)),
+          lastTsNs: String(ts.get(ts.length - 1)),
+          valueSum,
+        };
       },
     };
     setReady(true);

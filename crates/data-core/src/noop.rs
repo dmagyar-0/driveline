@@ -10,7 +10,9 @@ pub struct NoopReader {
 
 impl Reader for NoopReader {
     fn open(_bytes: &[u8]) -> crate::Result<Self> {
-        Ok(Self { meta: SourceMeta::empty() })
+        Ok(Self {
+            meta: SourceMeta::empty(),
+        })
     }
 
     fn meta(&self) -> &SourceMeta {

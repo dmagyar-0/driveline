@@ -1,13 +1,16 @@
 //! Portable reader core for driveline. Native-only (no wasm-bindgen).
 //!
-//! M1 provides the `Reader` trait skeleton and a `NoopReader`; real MCAP /
-//! MF4 readers land in M2.
+//! M2 introduces `Mf4Reader` — the first real `Reader` implementation — on
+//! top of the WASM-safe entry points of `mf4-rs`. MCAP / mp4+sidecar land
+//! in follow-up milestones.
 
 pub mod fixtures;
+pub mod mf4;
 pub mod noop;
 pub mod reader;
 pub mod types;
 
+pub use mf4::Mf4Reader;
 pub use reader::{ArrowIpc, Reader};
 pub use types::{
     Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceId, SourceKind, SourceMeta, TimeRange,
@@ -26,6 +29,12 @@ pub enum Error {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("mf4 error: {0}")]
+    Mf4(#[from] mf4_rs::error::MdfError),
+
+    #[error("mf4 channel group {group_index} has no master (time) channel")]
+    MasterChannelMissing { group_index: usize },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

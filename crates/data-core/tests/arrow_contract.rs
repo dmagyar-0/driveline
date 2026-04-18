@@ -51,5 +51,9 @@ fn fixture_equals_generator() {
     // Bit-identical to the in-repo generator guarantees JS reads the same
     // bytes as the wasm binding would produce at runtime.
     let expected = data_core::fixtures::arrow_scalar_ipc().expect("generate");
-    assert_eq!(FIXTURE, expected.as_slice(), "committed fixture drifted from generator");
+    assert_eq!(
+        FIXTURE,
+        expected.as_slice(),
+        "committed fixture drifted from generator"
+    );
 }
