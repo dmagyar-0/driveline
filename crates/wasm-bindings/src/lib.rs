@@ -8,7 +8,7 @@
 
 use std::cell::RefCell;
 
-use data_core::{FetchOpts, Mf4Reader, Reader, TimeRange};
+use data_core::{FetchOpts, Mf4Reader, Mp4SidecarReader, Reader, TimeRange};
 use js_sys::Uint8Array;
 use serde::Serialize;
 use slab::Slab;
@@ -16,6 +16,7 @@ use wasm_bindgen::prelude::*;
 
 thread_local! {
     static READERS: RefCell<Slab<Mf4Reader>> = const { RefCell::new(Slab::new()) };
+    static MP4_READERS: RefCell<Slab<Mp4SidecarReader>> = const { RefCell::new(Slab::new()) };
 }
 
 #[wasm_bindgen]
@@ -106,6 +107,76 @@ pub fn mf4_summary(handle: u32) -> Result<JsValue, JsError> {
 /// Arrow IPC bytes for `[start_ns, end_ns)` of the given channel id.
 /// `include_prev` controls the step-hold leading-sample option documented
 /// in `docs/03-data-model.md` FetchOpts.
+#[derive(Serialize)]
+struct Mp4VideoChannelInfo {
+    id: String,
+    name: String,
+    sample_count: u64,
+    start_ns: i64,
+    end_ns: i64,
+}
+
+#[derive(Serialize)]
+struct Mp4SidecarSummary {
+    start_ns: i64,
+    end_ns: i64,
+    channels: Vec<Mp4VideoChannelInfo>,
+}
+
+/// Parse an mp4 + sidecar pair and register the resulting `Mp4SidecarReader`
+/// in the thread-local slab. The sidecar is a packed little-endian `i64` array
+/// with one entry per mp4 video sample (see `docs/05-video-pipeline.md`);
+/// length mismatch or an mp4 without exactly one video track fails the open
+/// with a descriptive error.
+#[wasm_bindgen]
+pub fn open_mp4_sidecar(mp4_bytes: &[u8], sidecar_bytes: &[u8]) -> Result<u32, JsError> {
+    let reader = Mp4SidecarReader::open_pair(mp4_bytes, sidecar_bytes)
+        .map_err(|e| JsError::new(&format!("open mp4+sidecar failed: {e}")))?;
+    let key = MP4_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the mp4+sidecar reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_mp4_sidecar(handle: u32) {
+    MP4_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the reader's `SourceMeta` as a plain JS object. Video-only source;
+/// channels have `kind = Video` implicitly — no `dtype` is emitted.
+#[wasm_bindgen]
+pub fn mp4_sidecar_summary(handle: u32) -> Result<JsValue, JsError> {
+    MP4_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid mp4+sidecar handle"))?;
+        let meta = reader.meta();
+        let summary = Mp4SidecarSummary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| Mp4VideoChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        serde_wasm_bindgen::to_value(&summary)
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
 #[wasm_bindgen]
 pub fn mf4_fetch_range(
     handle: u32,
