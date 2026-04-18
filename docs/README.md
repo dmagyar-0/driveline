@@ -50,25 +50,46 @@ For someone new to the project, read in this order:
 - **Layout:** FlexLayout for dockable panels; state in Zustand.
 - **Chromium-first.** Firefox best-effort. Safari not in MVP.
 
-## M0 de-risk status (as of 2026-04-17)
+## Implementation status
 
-All three M0 spikes have been investigated. Implementation of T0.2 and
-T0.3 is still pending, but the architecture is no longer blocked on
-unknowns.
+Legend: ✅ shipped · 🚧 in progress (branch open) · ⏳ not started.
+Task list and dependencies live in
+[`10-task-breakdown.md`](./10-task-breakdown.md); this section tracks
+state only. Update on PR merge.
 
-- **T0.1 · `mf4-rs` WASM** — **GO-WITH-PATCHES**. `mf4-rs` compiles
-  for `wasm32-unknown-unknown` behind a minimal `cfg`-gated patch set.
-  Pin to the `claude/wasm-feasibility-spike-Op9Z3` branch until the
-  patches land on `main`. Full report:
+### M0 — De-risk (2026-04-17)
+
+All three M0 spikes have been investigated. Architecture is no longer
+blocked on unknowns; the upstream `mf4-rs` patches have since landed
+on `main` and the spike pin is obsolete as of 2026-04-16.
+
+- ✅ **T0.1 · `mf4-rs` WASM** — GO-WITH-PATCHES (patches merged
+  upstream). Full report:
   [`mf4-rs/WASM_FEASIBILITY.md`](https://github.com/dmagyar-0/mf4-rs/blob/claude/wasm-feasibility-spike-Op9Z3/WASM_FEASIBILITY.md).
-- **T0.2 · WebCodecs + MCAP** — **GO**. `@mcap/core` + `@mcap/browser`
-  parse MCAP from a `Blob`; Foxglove's `CompressedVideo` schema gives
-  us Annex-B with SPS+PPS per IDR; `VideoDecoder` accepts it directly.
-  See [`spike-T0.2-webcodecs-mcap.md`](./spike-T0.2-webcodecs-mcap.md).
-- **T0.3 · Sample corpus** — **GO**. One `sample-data/generate.py`
-  driving `ffmpeg` (libx264 deterministic), `mcap` (Python), and
-  `asammdf` produces all four fixtures plus reference PNGs. See
+- ✅ **T0.2 · WebCodecs + MCAP** — GO. See
+  [`spike-T0.2-webcodecs-mcap.md`](./spike-T0.2-webcodecs-mcap.md).
+- ✅ **T0.3 · Sample corpus** — GO. See
   [`spike-T0.3-sample-corpus.md`](./spike-T0.3-sample-corpus.md).
+
+### M1 — Foundations (PR #3)
+
+- ✅ **T1.1 · Repo scaffold** — workspace + vite app.
+- ✅ **T1.2 · `Reader` trait finalised** — `NoopReader` in `data-core`.
+- ✅ **T1.3 · Worker plumbing** — Comlink ping/pong across both workers.
+- ✅ **T1.4 · Arrow-over-Comlink contract** — Rust↔JS round-trip test.
+
+### M2 — Ingest
+
+- ⏳ **T2.1 · MCAP reader** — not started.
+- 🚧 **T2.2 · MF4 reader** — on branch
+  `claude/mf4-next-milestone-ec2KB`, not yet merged.
+- ⏳ **T2.3 · mp4 + sidecar reader** — not started.
+- ⏳ **T2.4 · Session registry and file drop** — not started
+  (depends on T2.1–T2.3).
+
+### M3 — Timeline and transport · M4 — Signal plotting · M5 — Video · M6 — Polish
+
+⏳ Not started. Full task list in `10-task-breakdown.md`.
 
 ## MVP definition of done
 
