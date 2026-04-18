@@ -25,3 +25,48 @@ pub trait Reader: Send {
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc>;
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::mcap::infer_channel_kind;
+    use crate::types::{ChannelKind, DType};
+
+    /// Corresponds to `docs/09-verification-plan.md:66` —
+    /// `reader::tests::infers_channel_kind_from_schema`.
+    #[test]
+    fn infers_channel_kind_from_schema() {
+        assert_eq!(
+            infer_channel_kind("foxglove.CompressedVideo", "jsonschema"),
+            (ChannelKind::Video, None)
+        );
+        assert_eq!(
+            infer_channel_kind("foxglove.Float64", "jsonschema"),
+            (ChannelKind::Scalar, Some(DType::F64))
+        );
+        assert_eq!(
+            infer_channel_kind("foxglove.Float32", "jsonschema"),
+            (ChannelKind::Scalar, Some(DType::F32))
+        );
+        assert_eq!(
+            infer_channel_kind("foxglove.Vector3", "jsonschema"),
+            (ChannelKind::Vector, Some(DType::F64))
+        );
+        assert_eq!(
+            infer_channel_kind("driveline.ControlMode", "jsonschema"),
+            (ChannelKind::Enum, Some(DType::I32))
+        );
+        assert_eq!(
+            infer_channel_kind("some.Unknown", "jsonschema"),
+            (ChannelKind::Bytes, None)
+        );
+        // Protobuf video name heuristic.
+        assert_eq!(
+            infer_channel_kind("foxglove_msgs/ImageCompressed", "protobuf"),
+            (ChannelKind::Video, None)
+        );
+        assert_eq!(
+            infer_channel_kind("ros.H264Packet", "protobuf"),
+            (ChannelKind::Video, None)
+        );
+    }
+}

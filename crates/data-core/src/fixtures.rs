@@ -8,8 +8,10 @@
 use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use base64::Engine as _;
 use mf4_rs::blocks::common::DataType as Mf4DataType;
 use mf4_rs::writer::MdfWriter;
+use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
@@ -88,4 +90,118 @@ pub fn short_mf4_bytes() -> crate::Result<Vec<u8>> {
 
     let bytes = cursor.lock().unwrap().get_ref().clone();
     Ok(bytes)
+}
+
+/// 2024-01-01T00:00:00Z, matching `docs/spike-T0.3-sample-corpus.md:47`.
+const T0_MCAP_NS: u64 = 1_704_067_200_000_000_000;
+
+/// Synthesises a minimal MCAP file in memory via the `mcap` crate's writer.
+/// Unit tests and the integration test (`tests/mcap_reader.rs`) consume it;
+/// a committed copy lives at `test-fixtures/short.mcap`, produced by
+/// `examples/gen_mcap_fixture.rs`.
+///
+/// Four channels, mirroring the T0.3 fixture spec as closely as practical
+/// for Rust-side tests:
+///
+/// - `/vehicle/speed` — `foxglove.Float64`, 10 samples @ 10 ms.
+/// - `/imu/accel` — `foxglove.Vector3`, 5 samples @ 20 ms.
+/// - `/control/mode` — `driveline.ControlMode`, 3 sparse samples at 0 / 40 / 80 ms.
+/// - `/camera/front` — `foxglove.CompressedVideo`, 3 synthetic Annex-B
+///   keyframes (SPS + IDR start codes, no real payload) base64-encoded
+///   inside the JSON envelope.
+///
+/// Output is deterministic: compression is disabled, the `library` string
+/// is pinned, chunks are suppressed (`use_chunks = false`) so no indexes or
+/// CRCs of chunk bytes bleed into the stream.
+pub fn short_mcap_bytes() -> crate::Result<Vec<u8>> {
+    use ::mcap::{records::MessageHeader, WriteOptions};
+
+    let buf: Vec<u8> = Vec::new();
+    let cursor = Cursor::new(buf);
+
+    let mut writer = WriteOptions::new()
+        .compression(None)
+        .library("driveline-test-fixtures")
+        .use_chunks(false)
+        .create(cursor)?;
+
+    let float_schema = writer.add_schema("foxglove.Float64", "jsonschema", b"")?;
+    let speed_ch =
+        writer.add_channel(float_schema, "/vehicle/speed", "json", &BTreeMap::new())?;
+    for i in 0u32..10 {
+        let ts = T0_MCAP_NS + (i as u64) * 10_000_000;
+        let payload = format!(r#"{{"value":{}}}"#, i).into_bytes();
+        writer.write_to_known_channel(
+            &MessageHeader {
+                channel_id: speed_ch,
+                sequence: i,
+                log_time: ts,
+                publish_time: ts,
+            },
+            &payload,
+        )?;
+    }
+
+    let vec3_schema = writer.add_schema("foxglove.Vector3", "jsonschema", b"")?;
+    let accel_ch = writer.add_channel(vec3_schema, "/imu/accel", "json", &BTreeMap::new())?;
+    for i in 0u32..5 {
+        let ts = T0_MCAP_NS + (i as u64) * 20_000_000;
+        let payload = br#"{"x":1.0,"y":2.0,"z":3.0}"#.to_vec();
+        writer.write_to_known_channel(
+            &MessageHeader {
+                channel_id: accel_ch,
+                sequence: i,
+                log_time: ts,
+                publish_time: ts,
+            },
+            &payload,
+        )?;
+    }
+
+    let enum_schema = writer.add_schema("driveline.ControlMode", "jsonschema", b"")?;
+    let mode_ch = writer.add_channel(enum_schema, "/control/mode", "json", &BTreeMap::new())?;
+    for (i, (offset_ms, code)) in [(0u64, 0i32), (40, 1), (80, 0)].into_iter().enumerate() {
+        let ts = T0_MCAP_NS + offset_ms * 1_000_000;
+        let payload = format!(r#"{{"value":{}}}"#, code).into_bytes();
+        writer.write_to_known_channel(
+            &MessageHeader {
+                channel_id: mode_ch,
+                sequence: i as u32,
+                log_time: ts,
+                publish_time: ts,
+            },
+            &payload,
+        )?;
+    }
+
+    // Synthetic H.264 Annex-B: 4-byte start code + SPS (NAL type 7, header
+    // byte 0x67), then start code + IDR (NAL type 5, header byte 0x65).
+    // Exercises `is_keyframe` + `extract_video_bytes_from_json` without
+    // bundling a real H.264 encoder.
+    const FAKE_SPS_IDR: &[u8] = &[
+        0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xc0, 0x1e, // SPS header + minimal bytes
+        0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00, // IDR header + minimal bytes
+    ];
+    let video_schema =
+        writer.add_schema("foxglove.CompressedVideo", "jsonschema", b"")?;
+    let camera_ch =
+        writer.add_channel(video_schema, "/camera/front", "json", &BTreeMap::new())?;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(FAKE_SPS_IDR);
+    for i in 0u32..3 {
+        let ts = T0_MCAP_NS + (i as u64) * 30_000_000;
+        let payload =
+            format!(r#"{{"data":"{}","format":"h264"}}"#, b64).into_bytes();
+        writer.write_to_known_channel(
+            &MessageHeader {
+                channel_id: camera_ch,
+                sequence: i,
+                log_time: ts,
+                publish_time: ts,
+            },
+            &payload,
+        )?;
+    }
+
+    writer.finish()?;
+    Ok(writer.into_inner().into_inner())
 }
