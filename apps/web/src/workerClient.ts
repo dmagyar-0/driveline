@@ -1,8 +1,27 @@
 import * as Comlink from "comlink";
-import type { DataCoreApi, Mf4ChannelInfo, Mf4Summary } from "./workers/dataCore.worker";
+import type {
+  ChannelKindWire,
+  DataCoreApi,
+  McapChannelInfo,
+  McapSummary,
+  Mf4ChannelInfo,
+  Mf4Summary,
+  Mp4SidecarChannelInfo,
+  Mp4SidecarSummary,
+} from "./workers/dataCore.worker";
 import type { VideoDecodeApi } from "./workers/videoDecode.worker";
 
-export type { DataCoreApi, Mf4ChannelInfo, Mf4Summary, VideoDecodeApi };
+export type {
+  ChannelKindWire,
+  DataCoreApi,
+  McapChannelInfo,
+  McapSummary,
+  Mf4ChannelInfo,
+  Mf4Summary,
+  Mp4SidecarChannelInfo,
+  Mp4SidecarSummary,
+  VideoDecodeApi,
+};
 
 export function makeDataCoreClient(): Comlink.Remote<DataCoreApi> {
   const worker = new Worker(
