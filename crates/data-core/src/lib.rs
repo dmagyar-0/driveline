@@ -1,16 +1,18 @@
 //! Portable reader core for driveline. Native-only (no wasm-bindgen).
 //!
-//! M2 introduces `Mf4Reader` — the first real `Reader` implementation — on
-//! top of the WASM-safe entry points of `mf4-rs`. MCAP / mp4+sidecar land
-//! in follow-up milestones.
+//! M2 introduces the three concrete `Reader` implementations: `Mf4Reader`
+//! on top of `mf4-rs`, `McapReader` on top of the `mcap` crate, and
+//! `Mp4SidecarReader` for mp4 + `.ts.bin` sidecar pairs.
 
 pub mod fixtures;
+pub mod mcap;
 pub mod mf4;
 pub mod mp4_sidecar;
 pub mod noop;
 pub mod reader;
 pub mod types;
 
+pub use mcap::McapReader;
 pub use mf4::Mf4Reader;
 pub use mp4_sidecar::Mp4SidecarReader;
 pub use reader::{ArrowIpc, Reader};
@@ -37,6 +39,12 @@ pub enum Error {
 
     #[error("mf4 channel group {group_index} has no master (time) channel")]
     MasterChannelMissing { group_index: usize },
+
+    #[error("mcap error: {0}")]
+    Mcap(#[from] ::mcap::McapError),
+
+    #[error("mcap file has no summary section")]
+    McapMissingSummary,
 
     #[error("mp4 parse error: {0}")]
     Mp4(#[from] mp4::Error),
