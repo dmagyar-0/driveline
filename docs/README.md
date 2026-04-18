@@ -81,8 +81,8 @@ on `main` and the spike pin is obsolete as of 2026-04-16.
 ### M2 — Ingest
 
 - ⏳ **T2.1 · MCAP reader** — not started.
-- 🚧 **T2.2 · MF4 reader** — on branch
-  `claude/mf4-next-milestone-ec2KB`, not yet merged.
+- ✅ **T2.2 · MF4 reader** — `Mf4Reader` + wasm/Comlink surface +
+  committed `test-fixtures/short.mf4`.
 - ⏳ **T2.3 · mp4 + sidecar reader** — not started.
 - ⏳ **T2.4 · Session registry and file drop** — not started
   (depends on T2.1–T2.3).
