@@ -1,18 +1,20 @@
 //! Portable reader core for driveline. Native-only (no wasm-bindgen).
 //!
-//! M2 introduces the first concrete `Reader` implementations: `Mf4Reader`
-//! on top of `mf4-rs`, and `McapReader` on top of the `mcap` crate.
-//! mp4+sidecar (T2.3) lands in a follow-up milestone.
+//! M2 introduces the three concrete `Reader` implementations: `Mf4Reader`
+//! on top of `mf4-rs`, `McapReader` on top of the `mcap` crate, and
+//! `Mp4SidecarReader` for mp4 + `.ts.bin` sidecar pairs.
 
 pub mod fixtures;
 pub mod mcap;
 pub mod mf4;
+pub mod mp4_sidecar;
 pub mod noop;
 pub mod reader;
 pub mod types;
 
 pub use mcap::McapReader;
 pub use mf4::Mf4Reader;
+pub use mp4_sidecar::Mp4SidecarReader;
 pub use reader::{ArrowIpc, Reader};
 pub use types::{
     Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceId, SourceKind, SourceMeta, TimeRange,
@@ -43,6 +45,30 @@ pub enum Error {
 
     #[error("mcap file has no summary section")]
     McapMissingSummary,
+
+    #[error("mp4 parse error: {0}")]
+    Mp4(#[from] mp4::Error),
+
+    #[error(
+        "mp4 video track has {mp4_count} samples but sidecar has {sidecar_count} entries; \
+         the sidecar must contain exactly one i64 ns timestamp per mp4 sample"
+    )]
+    SidecarLengthMismatch {
+        mp4_count: usize,
+        sidecar_count: usize,
+    },
+
+    #[error("sidecar byte length {0} is not a multiple of 8; expected a packed i64 LE array")]
+    SidecarByteLengthNotMultipleOf8(usize),
+
+    #[error(
+        "mp4+sidecar MVP requires exactly one video track, found {0}; \
+         see docs/05-video-pipeline.md for the sidecar format"
+    )]
+    Mp4VideoTrackCount(usize),
+
+    #[error("Mp4SidecarReader requires two blobs; use Mp4SidecarReader::open_pair")]
+    Mp4SidecarRequiresPair,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
