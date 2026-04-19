@@ -1,15 +1,23 @@
-// Zustand store for T2.4. Scope: the "session" slice — sources, flat
-// channel list, and union `globalRange`. Transport / panel bindings /
-// layout (per `docs/06-ui-and-panels.md:47-77`) belong to later milestones.
+// Zustand store. Scope:
+// - session slice (T2.4): sources, flat channel list, union `globalRange`
+// - transport slice (T3.1): cursorNs, playing, speed
+// - layout + bindings slice (T6.2): FlexLayout JSON model plus per-panel
+//   video/plot channel bindings keyed by panel id
 //
 // The store is worker-aware: it holds the `Remote<DataCoreApi>` proxy and
 // dispatches to the correct `open_*` / `close_*` WASM function based on the
 // bucketed file type. Each live `SourceMeta` carries the wasm slab handle
 // so `clear()` can tear everything down without a separate handle table.
+//
+// Layout + bindings are hydrated synchronously from `localStorage` at
+// store-create time so the first render already has the saved layout and
+// we avoid a default-then-swap flash.
 
 import type { Remote } from "comlink";
 import { create } from "zustand";
 import { bucketFiles, type BucketError } from "./bucket";
+import { MAX_PLOT_SERIES } from "../panels/palette";
+import { loadLayoutFromStorage } from "../layout/persist";
 import type {
   ChannelKindWire,
   DataCoreApi,
@@ -62,6 +70,13 @@ export interface SessionState {
   cursorNs: bigint;
   playing: boolean;
   speed: number;
+  // Layout + bindings slice (T6.2). `layoutJson` is the opaque FlexLayout
+  // model (`Model.toJson()` output); the binding maps are keyed by the
+  // FlexLayout tab id so a closed-and-reopened panel can reclaim its
+  // configuration on reload.
+  layoutJson: unknown | null;
+  videoBindings: Record<string, string | null>;
+  plotBindings: Record<string, string[]>;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Close every loaded wasm handle and reset to the empty session. */
@@ -83,6 +98,16 @@ export interface SessionState {
   setSpeed(n: number): void;
   /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`. */
   setCursor(ns: bigint): void;
+  /** Replace the FlexLayout JSON model wholesale. */
+  setLayoutJson(json: unknown | null): void;
+  /** Bind a video panel to a channel, or `null` to clear. */
+  setVideoBinding(panelId: string, channelId: string | null): void;
+  /** Replace a plot panel's bound channels wholesale (capped, deduped). */
+  setPlotBinding(panelId: string, ids: string[]): void;
+  /** Append one channel to a plot panel (no-op if present or at cap). */
+  addPlotChannel(panelId: string, channelId: string): void;
+  /** Remove one channel from a plot panel (no-op if absent). */
+  removePlotChannel(panelId: string, channelId: string): void;
   /**
    * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
    * Dispatches to the right reader based on the owning source's kind so
@@ -177,6 +202,10 @@ export const useSession = create<SessionState>((set, get) => {
   let worker: Remote<DataCoreApi> | null = null;
   // Serialise `openFiles` so two rapid drops don't interleave `set()` calls.
   let pending: Promise<unknown> = Promise.resolve();
+  // Hydrate layout + bindings synchronously so the first render paints the
+  // saved layout. Missing / malformed storage → `null` and empty maps; the
+  // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
+  const hydrated = loadLayoutFromStorage();
 
   return {
     sources: [],
@@ -185,6 +214,9 @@ export const useSession = create<SessionState>((set, get) => {
     cursorNs: 0n,
     playing: false,
     speed: 1,
+    layoutJson: hydrated?.layoutJson ?? null,
+    videoBindings: hydrated?.videoBindings ?? {},
+    plotBindings: hydrated?.plotBindings ?? {},
 
     setWorker(w) {
       worker = w;
@@ -225,6 +257,50 @@ export const useSession = create<SessionState>((set, get) => {
       } else {
         set({ cursorNs: clamped });
       }
+    },
+
+    setLayoutJson(json) {
+      set({ layoutJson: json });
+    },
+
+    setVideoBinding(panelId, channelId) {
+      const prev = get().videoBindings;
+      if (prev[panelId] === channelId) return;
+      set({ videoBindings: { ...prev, [panelId]: channelId } });
+    },
+
+    setPlotBinding(panelId, ids) {
+      const seen = new Set<string>();
+      const next: string[] = [];
+      for (const id of ids) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        next.push(id);
+        if (next.length >= MAX_PLOT_SERIES) break;
+      }
+      set({ plotBindings: { ...get().plotBindings, [panelId]: next } });
+    },
+
+    addPlotChannel(panelId, channelId) {
+      const prev = get().plotBindings;
+      const existing = prev[panelId] ?? [];
+      if (existing.includes(channelId)) return;
+      if (existing.length >= MAX_PLOT_SERIES) return;
+      set({
+        plotBindings: { ...prev, [panelId]: [...existing, channelId] },
+      });
+    },
+
+    removePlotChannel(panelId, channelId) {
+      const prev = get().plotBindings;
+      const existing = prev[panelId];
+      if (!existing || !existing.includes(channelId)) return;
+      set({
+        plotBindings: {
+          ...prev,
+          [panelId]: existing.filter((x) => x !== channelId),
+        },
+      });
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev, maxPoints) {
@@ -381,6 +457,9 @@ export const useSession = create<SessionState>((set, get) => {
             // lifetime of the worker, or was already freed.
           }
         }
+        // Wipe session + transport + per-panel bindings, but keep
+        // `layoutJson` so the user's dock layout survives a clear (T6.2 —
+        // layout outlives a session, per docs/06-ui-and-panels.md:167).
         set({
           sources: [],
           channels: [],
@@ -388,6 +467,8 @@ export const useSession = create<SessionState>((set, get) => {
           cursorNs: 0n,
           playing: false,
           speed: 1,
+          videoBindings: {},
+          plotBindings: {},
         });
       };
       const next = pending.then(run, run);
