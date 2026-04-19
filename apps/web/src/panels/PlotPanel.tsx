@@ -1,70 +1,128 @@
-// T4.1 · PlotPanel — single series (T4.3: Rust-side min-max decimation).
+// T4.2 · PlotPanel — multi-series and channel picker (T4.3: Rust-side
+// min-max decimation).
 //
-// uPlot-backed scalar trace for one channel bound via a native picker. Data
-// fetch goes through `useSession.fetchChannelRange`, which dispatches to the
-// right reader based on the owning source's kind. Cursor overlay lives on a
-// separate canvas so cursor ticks never rebuild the plot.
+// Up to 8 scalar channels bound via a popover tree (`ChannelPicker`).
+// Colour per channel is deterministic (`palette.colorFor`). Data for
+// each binding is fetched via `useSession.fetchChannelRange`, decoded
+// with `seriesFromArrow`, then k-way merged onto a shared x array so
+// uPlot can render them as aligned series. The cursor overlay lives on
+// a separate canvas so cursor ticks never rebuild the plot.
 //
-// The fetch call passes `maxPoints = canvas_px * 2` per
-// docs/06-ui-and-panels.md:131, which triggers min-max bucket decimation in
-// Rust so PlotPanel can render 1 M-sample windows under the 16 ms budget in
-// docs/09-verification-plan.md:146.
+// Each fetch passes `maxPoints = canvas_px * 2` per
+// docs/06-ui-and-panels.md:131, which triggers min-max bucket decimation
+// in Rust so PlotPanel can render 1 M-sample windows under the 16 ms
+// budget in docs/09-verification-plan.md:146.
 //
-// Out of scope (later tasks): pan/zoom, multi-series, channel-picker tree,
-// FlexLayout. See docs/06-ui-and-panels.md and docs/10-task-breakdown.md
-// T4.2.
+// Bindings live in component-local state, same pattern as T4.1; the
+// store's planned `plotBindings: Record<PanelId, ChannelId[]>` slot
+// (docs/06-ui-and-panels.md:63) moves in with FlexLayout (T6.2).
+//
+// Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle,
+// per-panel layout persistence.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { useSession } from "../state/store";
-import type { Channel, TimeRange } from "../state/store";
-import { seriesFromArrow } from "./seriesFromArrow";
+import type { Channel, SourceMeta, TimeRange } from "../state/store";
+import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
+import { mergeSeries } from "./mergeSeries";
 import { cursorXPx } from "./cursorOverlay";
+import { MAX_PLOT_SERIES, colorFor } from "./palette";
+import { ChannelPicker } from "./ChannelPicker";
 import styles from "./PlotPanel.module.css";
 
 const EMPTY_X = new Float64Array();
 const EMPTY_Y = new Float64Array();
-
-function pickScalarChannels(channels: Channel[]): Channel[] {
-  return channels.filter((c) => c.kind === "scalar");
-}
+const EMPTY_DATA: uPlot.AlignedData = [EMPTY_X, EMPTY_Y];
 
 function labelFor(c: Channel): string {
   return c.unit ? `${c.name} (${c.unit})` : c.name;
 }
 
+function channelMap(sources: SourceMeta[]): Map<string, Channel> {
+  const m = new Map<string, Channel>();
+  for (const s of sources) for (const c of s.channels) m.set(c.id, c);
+  return m;
+}
+
 export function PlotPanel() {
-  const channels = useSession((s) => s.channels);
+  const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
 
-  const [boundChannelId, setBoundChannelId] = useState<string>("");
+  const [boundChannelIds, setBoundChannelIds] = useState<string[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  const addBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  const scalarChannels = useMemo(
-    () => pickScalarChannels(channels),
-    [channels],
+  const channels = useMemo(() => channelMap(sources), [sources]);
+  const boundChannels = useMemo(
+    () => boundChannelIds.map((id) => channels.get(id)).filter((c): c is Channel => !!c),
+    [boundChannelIds, channels],
   );
-  const boundChannel = scalarChannels.find((c) => c.id === boundChannelId);
 
-  // Drop a stale binding if the user cleared the session (or the channel
-  // otherwise vanished). Mirrors the pattern used for cursor reseating in
-  // the store's `openFiles`.
+  // Drop stale bindings when sources change (e.g. after `clear`).
   useEffect(() => {
-    if (boundChannelId && !scalarChannels.some((c) => c.id === boundChannelId)) {
-      setBoundChannelId("");
-    }
-  }, [boundChannelId, scalarChannels]);
+    setBoundChannelIds((ids) => {
+      const filtered = ids.filter((id) => {
+        const c = channels.get(id);
+        return c && c.kind === "scalar";
+      });
+      return filtered.length === ids.length ? ids : filtered;
+    });
+  }, [channels]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const plotRef = useRef<uPlot | null>(null);
-  // Range used for the most recent `setData`; the cursor overlay uses this
-  // so a stale cursor tick doesn't project onto a range we haven't rendered.
+  // Range used for the most recent `setData`; the cursor overlay uses
+  // this so a stale cursor tick never projects onto a range we haven't
+  // rendered yet.
   const lastRangeRef = useRef<TimeRange | null>(null);
 
-  // Construct uPlot once; resize with the container.
+  const resizePlotToContainer = useCallback(() => {
+    const plot = plotRef.current;
+    const c = containerRef.current;
+    if (!plot || !c) return;
+    const r = c.getBoundingClientRect();
+    plot.setSize({
+      width: Math.max(1, Math.round(r.width)),
+      height: Math.max(1, Math.round(r.height)),
+    });
+  }, []);
+
+  const sizeOverlayToContainer = useCallback(() => {
+    const overlay = overlayRef.current;
+    const c = containerRef.current;
+    if (!overlay || !c) return;
+    const r = c.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    overlay.width = Math.max(1, Math.round(r.width * dpr));
+    overlay.height = Math.max(1, Math.round(r.height * dpr));
+    overlay.style.width = `${r.width}px`;
+    overlay.style.height = `${r.height}px`;
+  }, []);
+
+  // Keep a ResizeObserver alive for the plot area. The plot itself is
+  // rebuilt in the effect below whenever the series set changes, since
+  // uPlot has no public API for adding/removing series in-place.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => {
+      resizePlotToContainer();
+      sizeOverlayToContainer();
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [resizePlotToContainer, sizeOverlayToContainer]);
+
+  // (Re)build uPlot whenever the set of bound channels changes. We key
+  // off the joined id string so the effect reruns only on meaningful
+  // changes, not on every `boundChannels` reference churn.
+  const seriesKey = boundChannelIds.join("|");
   useEffect(() => {
     const mount = plotMountRef.current;
     const container = containerRef.current;
@@ -74,103 +132,87 @@ export function PlotPanel() {
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height)),
-      scales: { x: { time: true } },
+      scales: { x: { time: true }, y: { auto: true } },
       series: [
         {},
-        {
-          label: "value",
-          stroke: "#3b82f6",
+        ...boundChannels.map((c) => ({
+          label: labelFor(c),
+          stroke: colorFor(c.id),
           width: 1,
-        },
+          spanGaps: false,
+        })),
       ],
       axes: [{}, {}],
       cursor: { show: false },
-      legend: { show: false },
+      legend: { show: boundChannels.length > 0 },
     };
-    plotRef.current = new uPlot(
-      opts,
-      [EMPTY_X, EMPTY_Y] as uPlot.AlignedData,
-      mount,
-    );
-
-    const sizeOverlayToContainer = () => {
-      const overlay = overlayRef.current;
-      const c = containerRef.current;
-      if (!overlay || !c) return;
-      const r = c.getBoundingClientRect();
-      const dpr = window.devicePixelRatio || 1;
-      overlay.width = Math.max(1, Math.round(r.width * dpr));
-      overlay.height = Math.max(1, Math.round(r.height * dpr));
-      overlay.style.width = `${r.width}px`;
-      overlay.style.height = `${r.height}px`;
-    };
+    const plot = new uPlot(opts, EMPTY_DATA, mount);
+    plotRef.current = plot;
     sizeOverlayToContainer();
-
-    const ro = new ResizeObserver(() => {
-      const r = container.getBoundingClientRect();
-      plotRef.current?.setSize({
-        width: Math.max(1, Math.round(r.width)),
-        height: Math.max(1, Math.round(r.height)),
-      });
-      sizeOverlayToContainer();
-    });
-    ro.observe(container);
+    // Clear stale overlay pixels from the previous plot geometry.
+    const overlay = overlayRef.current;
+    const ctx = overlay?.getContext("2d");
+    if (overlay && ctx) {
+      const dpr = window.devicePixelRatio || 1;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+    }
+    // New series set means any previous data is no longer valid.
+    lastRangeRef.current = null;
 
     return () => {
-      ro.disconnect();
-      plotRef.current?.destroy();
-      plotRef.current = null;
+      plot.destroy();
+      if (plotRef.current === plot) plotRef.current = null;
     };
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seriesKey]);
 
-  // Fetch & render on bind or range change.
+  // Fetch & render on binding or range change.
   useEffect(() => {
     const plot = plotRef.current;
     if (!plot) return;
-    if (!boundChannel || !globalRange) {
-      plot.setData([EMPTY_X, EMPTY_Y] as uPlot.AlignedData);
+    if (boundChannels.length === 0 || !globalRange) {
+      plot.setData(EMPTY_DATA);
       lastRangeRef.current = null;
       return;
     }
 
-    // Update the series label so the legend/y-axis read naturally when we
-    // add it in T4.2. `setSeries` doesn't rename; mutate in place is the
-    // documented escape hatch for label-only tweaks.
-    plot.series[1].label = labelFor(boundChannel);
-
-    // `canvas_px_width * 2` per docs/06-ui-and-panels.md:131. Floor at 256
-    // so a not-yet-laid-out container still triggers decimation rather
-    // than pulling the full range over Comlink.
-    const containerWidth = containerRef.current?.getBoundingClientRect().width ?? 0;
+    // `canvas_px_width * 2` per docs/06-ui-and-panels.md:131. Floor at
+    // 256 so a not-yet-laid-out container still triggers decimation
+    // rather than pulling the full range over Comlink.
+    const containerWidth =
+      containerRef.current?.getBoundingClientRect().width ?? 0;
     const maxPoints = Math.max(256, Math.round(containerWidth) * 2);
 
     let aborted = false;
     void (async () => {
       try {
-        const bytes = await useSession
-          .getState()
-          .fetchChannelRange(
-            boundChannel.id,
-            globalRange.startNs,
-            globalRange.endNs,
-            false,
-            maxPoints,
-          );
+        const store = useSession.getState();
+        const batches = await Promise.all(
+          boundChannels.map((c) =>
+            store.fetchChannelRange(
+              c.id,
+              globalRange.startNs,
+              globalRange.endNs,
+              false,
+              maxPoints,
+            ),
+          ),
+        );
         if (aborted) return;
-        const { xs, ys } = seriesFromArrow(bytes);
-        plot.setData([xs, ys] as uPlot.AlignedData);
+        const decoded: PlotSeries[] = batches.map((b) => seriesFromArrow(b));
+        const merged = mergeSeries(decoded);
+        plot.setData([merged.xs, ...merged.ys] as uPlot.AlignedData);
         lastRangeRef.current = globalRange;
       } catch (err) {
-        if (!aborted) {
-          console.error("PlotPanel fetch failed", err);
-        }
+        if (!aborted) console.error("PlotPanel fetch failed", err);
       }
     })();
 
     return () => {
       aborted = true;
     };
-  }, [boundChannel, globalRange]);
+  }, [boundChannels, globalRange]);
 
   // Cursor overlay redraw on every cursor tick.
   useEffect(() => {
@@ -187,8 +229,8 @@ export function PlotPanel() {
     const range = lastRangeRef.current ?? globalRange;
     if (!range) return;
     const bbox = plot.bbox;
-    // uPlot's `bbox` is in device pixels; convert back to CSS pixels for
-    // drawing alongside the standard 2D context.
+    // uPlot's bbox is in device pixels; convert to CSS pixels for the
+    // standard 2D context.
     const left = bbox.left / dpr;
     const top = bbox.top / dpr;
     const width = bbox.width / dpr;
@@ -203,38 +245,92 @@ export function PlotPanel() {
     ctx.moveTo(left + x + 0.5, top);
     ctx.lineTo(left + x + 0.5, top + height);
     ctx.stroke();
-  }, [cursorNs, globalRange]);
+  }, [cursorNs, globalRange, seriesKey]);
 
-  const hasScalars = scalarChannels.length > 0;
+  const atCap = boundChannelIds.length >= MAX_PLOT_SERIES;
+  const hasAnyScalar = useMemo(
+    () => sources.some((s) => s.channels.some((c) => c.kind === "scalar")),
+    [sources],
+  );
+
+  const togglePicker = () => {
+    if (!pickerOpen) {
+      const rect = addBtnRef.current?.getBoundingClientRect() ?? null;
+      setAnchorRect(rect);
+      setPickerOpen(true);
+    } else {
+      setPickerOpen(false);
+    }
+  };
+
+  const onToggle = (id: string) => {
+    setBoundChannelIds((ids) => {
+      if (ids.includes(id)) return ids.filter((x) => x !== id);
+      if (ids.length >= MAX_PLOT_SERIES) return ids;
+      return [...ids, id];
+    });
+  };
+
+  const onRemove = (id: string) => {
+    setBoundChannelIds((ids) => ids.filter((x) => x !== id));
+  };
 
   return (
     <section className={styles.panel} data-testid="plot-panel">
       <div className={styles.controls}>
-        <label htmlFor="plot-channel-picker">channel</label>
-        <select
-          id="plot-channel-picker"
-          data-testid="plot-channel-picker"
-          value={boundChannelId}
-          onChange={(e) => setBoundChannelId(e.target.value)}
-          disabled={!hasScalars}
-        >
-          <option value="">
-            {hasScalars ? "— pick a channel —" : "no scalar channels loaded"}
-          </option>
-          {scalarChannels.map((c) => (
-            <option key={`${c.sourceId}::${c.id}`} value={c.id}>
-              {labelFor(c)}
-            </option>
+        <div className={styles.chips} data-testid="plot-chips">
+          {boundChannels.map((c) => (
+            <span key={c.id} className={styles.chip} data-testid={`chip-${c.id}`}>
+              <span
+                className={styles.chipSwatch}
+                style={{ background: colorFor(c.id) }}
+                aria-hidden
+              />
+              <span className={styles.chipLabel}>{labelFor(c)}</span>
+              <button
+                type="button"
+                className={styles.chipRemove}
+                aria-label={`remove ${c.name}`}
+                onClick={() => onRemove(c.id)}
+                data-testid={`remove-${c.id}`}
+              >
+                ×
+              </button>
+            </span>
           ))}
-        </select>
+        </div>
+        <button
+          ref={addBtnRef}
+          type="button"
+          className={styles.addBtn}
+          onClick={togglePicker}
+          disabled={!hasAnyScalar || atCap}
+          aria-expanded={pickerOpen}
+          data-testid="plot-add-channel"
+        >
+          + Add channel{" "}
+          <span className={styles.countBadge}>
+            {boundChannelIds.length} / {MAX_PLOT_SERIES}
+          </span>
+        </button>
       </div>
+      {pickerOpen && (
+        <ChannelPicker
+          sources={sources}
+          selectedIds={boundChannelIds}
+          maxSelected={MAX_PLOT_SERIES}
+          anchorRect={anchorRect}
+          onToggle={onToggle}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       <div ref={containerRef} className={styles.plotArea}>
         <div ref={plotMountRef} className={styles.plotMount} />
         <canvas ref={overlayRef} className={styles.overlay} />
-        {!boundChannel && (
+        {boundChannels.length === 0 && (
           <div className={styles.empty} data-testid="plot-empty">
-            {hasScalars
-              ? "Pick a channel to plot."
+            {hasAnyScalar
+              ? "Pick one or more channels to plot."
               : "Drop an MCAP or MF4 file to load scalar channels."}
           </div>
         )}
