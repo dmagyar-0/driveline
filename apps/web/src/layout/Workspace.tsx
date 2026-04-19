@@ -103,7 +103,15 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
         ignoreNextChangeRef.current = false;
         return;
       }
-      setLayoutJson(m.toJson());
+      const json = m.toJson();
+      // Stamp the last-built ref with the exact payload we're about to push
+      // into the store. Otherwise the layoutJson effect sees the round-trip
+      // diff (FlexLayout normalises on tab-select / drag) and rebuilds the
+      // Model — which unmounts every panel and wipes their local React
+      // state (hudOn, scroll offsets, …). The rebuild path is only for
+      // out-of-band writes (dev hook, reset button, another tab).
+      lastBuiltJsonRef.current = JSON.stringify(json);
+      setLayoutJson(json);
     },
     [setLayoutJson],
   );
