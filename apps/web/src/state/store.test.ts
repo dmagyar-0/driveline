@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Remote } from "comlink";
-import { useSession } from "./store";
+import { MAX_SPEED, MIN_SPEED, useSession } from "./store";
 import type {
   DataCoreApi,
   McapSummary,
@@ -229,5 +229,123 @@ describe("session store", () => {
     await useSession.getState().clear();
     expect(useSession.getState().sources).toHaveLength(0);
     expect(worker.closeLog.sort()).toEqual(["mcap:1", "mf4:2"]);
+  });
+});
+
+describe("transport", () => {
+  // Seed a known globalRange [500n, 3_000n] via the mf4 summary; tests that
+  // need a wider range open additional sources inline.
+  async function loadMf4(): Promise<void> {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("seed.mf4")]);
+  }
+
+  it("has sane defaults on an empty session", () => {
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(0n);
+    expect(s.playing).toBe(false);
+    expect(s.speed).toBe(1);
+  });
+
+  it("openFiles seeds cursorNs to globalRange.startNs on first drop", async () => {
+    await loadMf4();
+    const s = useSession.getState();
+    // Default cursor (0n) is below the mf4 range start (500n) so the drop
+    // should snap the cursor up to the session start.
+    expect(s.globalRange).toEqual({ startNs: 500n, endNs: 3_000n });
+    expect(s.cursorNs).toBe(500n);
+  });
+
+  it("openFiles leaves an in-range cursor alone on a later drop", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_500n);
+    // Add the mcap source: range widens to [500n, 3_000n] (mcap is 1000..2000,
+    // already inside), cursor at 1500n stays valid.
+    await useSession.getState().openFiles([file("extra.mcap")]);
+    expect(useSession.getState().cursorNs).toBe(1_500n);
+  });
+
+  it("setCursor is a no-op without a session", () => {
+    useSession.getState().setCursor(123n);
+    expect(useSession.getState().cursorNs).toBe(0n);
+  });
+
+  it("setCursor clamps below the session start", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(-1n);
+    expect(useSession.getState().cursorNs).toBe(500n);
+  });
+
+  it("setCursor clamps above the session end and pauses", async () => {
+    await loadMf4();
+    useSession.getState().play();
+    expect(useSession.getState().playing).toBe(true);
+    useSession.getState().setCursor(999_999n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(3_000n);
+    expect(s.playing).toBe(false);
+  });
+
+  it("setCursor accepts a value strictly inside the range", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_234n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(1_234n);
+    expect(s.playing).toBe(false);
+  });
+
+  it("play / pause toggle the playing flag", async () => {
+    await loadMf4();
+    useSession.getState().play();
+    expect(useSession.getState().playing).toBe(true);
+    useSession.getState().pause();
+    expect(useSession.getState().playing).toBe(false);
+  });
+
+  it("play is a no-op without a session", () => {
+    useSession.getState().play();
+    expect(useSession.getState().playing).toBe(false);
+  });
+
+  it("play from end-of-session rewinds to the session start", async () => {
+    await loadMf4();
+    // Park the cursor at the end (setCursor will pause as a side effect).
+    useSession.getState().setCursor(3_000n);
+    expect(useSession.getState().cursorNs).toBe(3_000n);
+    useSession.getState().play();
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(500n);
+    expect(s.playing).toBe(true);
+  });
+
+  it("setSpeed clamps to [MIN_SPEED, MAX_SPEED]", () => {
+    useSession.getState().setSpeed(0.01);
+    expect(useSession.getState().speed).toBe(MIN_SPEED);
+    useSession.getState().setSpeed(99);
+    expect(useSession.getState().speed).toBe(MAX_SPEED);
+    useSession.getState().setSpeed(2);
+    expect(useSession.getState().speed).toBe(2);
+  });
+
+  it("setSpeed ignores non-finite input", () => {
+    useSession.getState().setSpeed(2);
+    useSession.getState().setSpeed(Number.NaN);
+    expect(useSession.getState().speed).toBe(2);
+    useSession.getState().setSpeed(Number.POSITIVE_INFINITY);
+    expect(useSession.getState().speed).toBe(2);
+  });
+
+  it("clear resets transport state to defaults", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_000n);
+    useSession.getState().setSpeed(2);
+    useSession.getState().play();
+    await useSession.getState().clear();
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(0n);
+    expect(s.playing).toBe(false);
+    expect(s.speed).toBe(1);
+    expect(s.globalRange).toBeNull();
   });
 });
