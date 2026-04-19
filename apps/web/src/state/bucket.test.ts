@@ -57,4 +57,29 @@ describe("bucketFiles", () => {
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.errors).toHaveLength(0);
   });
+
+  it("pairs regardless of drop order (sidecar listed before its mp4)", () => {
+    // The worker passes a flat `File[]` whose order is driven by the user's
+    // OS file dialog / drag-drop — not something the bucketer can rely on.
+    const r = bucketFiles([f("drive.mp4.ts.bin"), f("drive.mp4")]);
+    expect(r.mp4Pairs).toHaveLength(1);
+    expect(r.mp4Pairs[0].mp4.name).toBe("drive.mp4");
+    expect(r.mp4Pairs[0].ts.name).toBe("drive.mp4.ts.bin");
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("with two mp4s sharing a basename and one sidecar, pairs once and flags the other", () => {
+    // A sidecar is consumed when it pairs, so the second mp4 with the same
+    // name sees no remaining sidecar and must surface a `missing sidecar`
+    // error rather than silently being dropped or double-pairing.
+    const r = bucketFiles([
+      f("drive.mp4"),
+      f("drive.mp4"),
+      f("drive.mp4.ts.bin"),
+    ]);
+    expect(r.mp4Pairs).toHaveLength(1);
+    expect(r.errors).toEqual([
+      { name: "drive.mp4", reason: "missing sidecar drive.mp4.ts.bin" },
+    ]);
+  });
 });

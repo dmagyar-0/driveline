@@ -85,3 +85,40 @@ pub struct FetchOpts {
     pub max_points: Option<u32>,
     pub include_prev: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn time_range_empty_constructor_is_empty() {
+        let r = TimeRange::empty();
+        assert_eq!(r.start_ns, 0);
+        assert_eq!(r.end_ns, 0);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn time_range_is_empty_half_open_semantics() {
+        // Non-empty: end_ns > start_ns.
+        assert!(!TimeRange {
+            start_ns: 10,
+            end_ns: 11,
+        }
+        .is_empty());
+        // Zero-length range (end == start) is empty under the half-open
+        // [start, end) contract in docs/03-data-model.md.
+        assert!(TimeRange {
+            start_ns: 42,
+            end_ns: 42,
+        }
+        .is_empty());
+        // Inverted ranges (end < start) are also treated as empty so callers
+        // can skip work without having to validate ordering themselves.
+        assert!(TimeRange {
+            start_ns: 100,
+            end_ns: 50,
+        }
+        .is_empty());
+    }
+}
