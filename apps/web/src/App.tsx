@@ -6,6 +6,7 @@ import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
 import { VideoPanel } from "./panels/VideoPanel";
+import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import { startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import { PlotPanel } from "./panels/PlotPanel";
@@ -51,6 +52,17 @@ declare global {
       openFiles: (files: DevFileDesc[]) => Promise<OpenResult>;
       clearSession: () => Promise<void>;
       videoLastBlitPtsNs: () => bigint | null;
+      // T5.2 — serialised HUD snapshot so Playwright can assert seek
+      // settles without pixel compare. BigInt → string for `page.evaluate`.
+      videoHudStats: () => {
+        ptsNs: string | null;
+        frameIndex: number;
+        decodeQueue: number;
+        blitQueueLen: number;
+        dropped: number;
+        codec: string | null;
+        hudOn: boolean;
+      } | null;
       // Read-only snapshot for e2e (T3.2). BigInts serialised as strings
       // so the value survives `page.evaluate`.
       getSessionSnapshot: () => {
@@ -168,6 +180,7 @@ export function App() {
           startNs,
           endNs,
           includePrev,
+          undefined,
         );
         const table = tableFromIPC(bytes);
         const ts = table.getChild("ts")!;
@@ -196,6 +209,19 @@ export function App() {
         setRecentErrors([]);
       },
       videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
+      videoHudStats: () => {
+        const h: VideoHudSnapshot | undefined = window.__drivelineVideoHud;
+        if (!h) return null;
+        return {
+          ptsNs: h.ptsNs === null ? null : h.ptsNs.toString(),
+          frameIndex: h.frameIndex,
+          decodeQueue: h.decodeQueue,
+          blitQueueLen: h.blitQueueLen,
+          dropped: h.dropped,
+          codec: h.codec,
+          hudOn: h.hudOn,
+        };
+      },
       getSessionSnapshot: () => {
         const s = useSession.getState();
         return {

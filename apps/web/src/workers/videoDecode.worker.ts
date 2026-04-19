@@ -13,14 +13,31 @@
 // VideoPanel to drive; the queue is kept shallow.
 
 import * as Comlink from "comlink";
-import type { DataCoreApi, EncodedChunkWire } from "./dataCore.worker";
-import { makeDataCoreClient } from "../workerClient";
+import type { EncodedChunkWire } from "./dataCore.worker";
 
 const PULL_BATCH = 8;
 const REFILL_LOW_WATER = 4;
 
 interface OpenResult {
   codec: string;
+}
+
+// The subset of `DataCoreApi` that videoDecode actually needs. Bound to a
+// MessagePort handed in from the main thread so we share the main-thread
+// dataCore worker's wasm slab (where the MCAP was opened) — spawning our
+// own dataCore worker would give us an empty slab and every handle would
+// fail to resolve.
+interface DataCorePortApi {
+  openMcapVideoStream(
+    handle: number,
+    channelId: string,
+    fromPtsNs: bigint,
+  ): Promise<number>;
+  mcapVideoNextBatch(
+    streamId: number,
+    maxN: number,
+  ): Promise<EncodedChunkWire[]>;
+  closeMcapVideoStream(streamId: number): Promise<void>;
 }
 
 interface SessionState {
@@ -36,13 +53,26 @@ interface SessionState {
   // decrement deterministically, so we track our own.
   inFlight: number;
   ended: boolean;
+  // T5.2 HUD: monotonic count of frames emitted to the sink since the
+  // current stream was opened. Reset in `openInternal`; incremented only
+  // for frames that clear the discard gate so seek-prime frames don't
+  // pollute the count.
+  frameIndex: number;
+  // `fromPtsNs` used at the last `openInternal` call. Used by `seek()` to
+  // short-circuit when the debounce fires on an unchanged target.
+  lastOpenedFromNs: bigint;
 }
 
-let dataCore: Comlink.Remote<DataCoreApi> | null = null;
+let dataCore: Comlink.Remote<DataCorePortApi> | null = null;
 let session: SessionState | null = null;
 
-function getDataCore(): Comlink.Remote<DataCoreApi> {
-  if (!dataCore) dataCore = makeDataCoreClient();
+function getDataCore(): Comlink.Remote<DataCorePortApi> {
+  if (!dataCore) {
+    throw new Error(
+      "videoDecode: dataCore port not configured — main thread must " +
+        "call setDataCorePort before open()",
+    );
+  }
   return dataCore;
 }
 
@@ -153,17 +183,18 @@ async function configureFromFirstKeyframe(
   }
   const sps = findSps(first.data);
   const codec = sps ? codecStringFromSps(sps) : "avc1.64002A";
-  const supported = await VideoDecoder.isConfigSupported({ codec });
+  // Probe once without a HW hint; Chromium headless rejects
+  // `prefer-hardware` when no HW decoder is wired in. Fall back to
+  // `no-preference` if the probed support object reports unsupported
+  // under either hint, so the app still works in CI.
+  const baseConfig: VideoDecoderConfig = { codec, optimizeForLatency: false };
+  const supported = await VideoDecoder.isConfigSupported(baseConfig);
   if (!supported.supported) {
     throw new Error(
       `videoDecode: codec not supported by this browser: ${codec}`,
     );
   }
-  decoder.configure({
-    codec,
-    optimizeForLatency: false,
-    hardwareAcceleration: "prefer-hardware",
-  });
+  decoder.configure(baseConfig);
   return { codec };
 }
 
@@ -197,6 +228,8 @@ async function openInternal(
     discardBeforePtsNs: fromPtsNs,
     inFlight: 0,
     ended: false,
+    frameIndex: 0,
+    lastOpenedFromNs: fromPtsNs,
   };
 
   const initial = (await dc.mcapVideoNextBatch(
@@ -240,9 +273,19 @@ function onFrame(frame: VideoFrame): void {
     void maybeRefill();
     return;
   }
+  // HUD metrics. We only count frames that clear the discard gate — that
+  // keeps `frameIndex` a "visible frames since open" counter even when a
+  // seek primes the decoder with pre-target frames.
+  session.frameIndex += 1;
+  // `decodeQueueSize` is a hint per spec; some backends report 0 even with
+  // chunks in flight. Surface it anyway — it's the metric `T5.2` asks for.
+  const decodeQueue = session.decoder.decodeQueueSize;
   // Transfer the VideoFrame to VideoPanel. The panel owns `close()` from
   // here on.
-  session.sink.postMessage({ ptsNs, frame }, [frame]);
+  session.sink.postMessage(
+    { ptsNs, frame, frameIndex: session.frameIndex, decodeQueue },
+    [frame],
+  );
   void maybeRefill();
 }
 
@@ -273,6 +316,13 @@ export const videoDecodeApi = {
   ping(): string {
     return "pong";
   },
+  setDataCorePort(port: MessagePort): void {
+    // One-shot; last port wins. Comlink.wrap around a MessagePort gives us
+    // a Remote whose calls tunnel to whatever `Comlink.expose` has bound
+    // the other end to (on the main thread, that's a relay forwarding to
+    // the real dataCore Remote).
+    dataCore = Comlink.wrap<DataCorePortApi>(port);
+  },
   setFrameSink(port: MessagePort): void {
     if (session) session.sink = port;
     // If set before open(), the latest port wins and will be adopted at open().
@@ -289,6 +339,10 @@ export const videoDecodeApi = {
   },
   async seek(targetNs: bigint): Promise<void> {
     if (!session) return;
+    // Duplicate-target guard: the debounced effect in VideoPanel can fire
+    // with an unchanged target after a drag that ended on the same PTS.
+    // The teardown+reopen round-trip isn't free, so skip it.
+    if (session.lastOpenedFromNs === targetNs) return;
     const { mcapHandle, channelId } = session;
     try {
       session.decoder.reset();

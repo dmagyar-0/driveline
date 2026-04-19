@@ -68,6 +68,13 @@ export interface SessionState {
   clear(): Promise<void>;
   /** Test / dev seam: inject the Comlink worker proxy exactly once. */
   setWorker(worker: Remote<DataCoreApi>): void;
+  /**
+   * Expose the injected worker proxy to other modules that need a direct
+   * dataCore handle — specifically `VideoPanel`, which has to bridge the
+   * same dataCore slab into its videoDecode worker so MCAP handles round-
+   * trip correctly.
+   */
+  getWorker(): Remote<DataCoreApi> | null;
   /** Start playback. No-op without a session; rewinds if at end. */
   play(): void;
   /** Stop playback. Always safe to call. */
@@ -181,6 +188,10 @@ export const useSession = create<SessionState>((set, get) => {
 
     setWorker(w) {
       worker = w;
+    },
+
+    getWorker() {
+      return worker;
     },
 
     play() {
