@@ -36,6 +36,47 @@ interface PlotPanelProps {
   panelId: string;
 }
 
+// T6.1 — Cross-panel sync snapshot. Mirrors the `__drivelineVideoHud`
+// pattern: an e2e spec reads it via a dev hook (`getPlotPanelSync`) to
+// assert that the rendered plot agrees with the shared `cursorNs`.
+export interface PlotSyncSnapshot {
+  cursorNs: bigint;
+  boundChannelIds: string[];
+  lastFetchedRange: { startNs: bigint; endNs: bigint } | null;
+  // One entry per bound channel, in binding order. `null` when no sample
+  // in that channel has `ts <= cursorNs` yet — callers must treat this
+  // as "not yet resolvable", not as a valid value.
+  sampleAtCursor: Array<
+    { channelId: string; tsNs: bigint; value: number } | null
+  >;
+}
+
+declare global {
+  interface Window {
+    __drivelinePlotPanels?: Record<string, PlotSyncSnapshot | undefined>;
+  }
+}
+
+// Largest index `i` with `tsNs[i] <= cursorNs`, or -1 if none.
+function lastIndexAtOrBefore(
+  tsNs: BigInt64Array,
+  cursorNs: bigint,
+): number {
+  let lo = 0;
+  let hi = tsNs.length - 1;
+  let ans = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (tsNs[mid] <= cursorNs) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+}
+
 const EMPTY_X = new Float64Array();
 const EMPTY_Y = new Float64Array();
 const EMPTY_DATA: uPlot.AlignedData = [EMPTY_X, EMPTY_Y];
@@ -95,6 +136,39 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // this so a stale cursor tick never projects onto a range we haven't
   // rendered yet.
   const lastRangeRef = useRef<TimeRange | null>(null);
+  // Per-channel decoded series, retained so the T6.1 sync snapshot can
+  // binary-search raw ns timestamps. Parallel to `lastRangeRef`: both
+  // are updated in lockstep after a successful fetch and cleared when
+  // the binding set changes.
+  const decodedRef = useRef<
+    { channelId: string; series: PlotSeries }[]
+  >([]);
+
+  const publishSync = useCallback(() => {
+    const store =
+      (window.__drivelinePlotPanels ??= {});
+    const decoded = decodedRef.current;
+    const sampleAtCursor: PlotSyncSnapshot["sampleAtCursor"] = decoded.map(
+      ({ channelId, series }) => {
+        const idx = lastIndexAtOrBefore(series.rawTsNs, cursorNs);
+        if (idx < 0) return null;
+        return {
+          channelId,
+          tsNs: series.rawTsNs[idx],
+          value: series.ys[idx],
+        };
+      },
+    );
+    const range = lastRangeRef.current;
+    store[panelId] = {
+      cursorNs,
+      boundChannelIds,
+      lastFetchedRange: range
+        ? { startNs: range.startNs, endNs: range.endNs }
+        : null,
+      sampleAtCursor,
+    };
+  }, [boundChannelIds, cursorNs, panelId]);
 
   const resizePlotToContainer = useCallback(() => {
     const plot = plotRef.current;
@@ -173,6 +247,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     }
     // New series set means any previous data is no longer valid.
     lastRangeRef.current = null;
+    // Clear decoded series so a post-rebuild cursor tick doesn't publish
+    // stale samples keyed by the previous binding set.
+    decodedRef.current = [];
 
     return () => {
       plot.destroy();
@@ -188,6 +265,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (boundChannels.length === 0 || !globalRange) {
       plot.setData(EMPTY_DATA);
       lastRangeRef.current = null;
+      decodedRef.current = [];
+      publishSync();
       return;
     }
 
@@ -218,6 +297,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         const merged = mergeSeries(decoded);
         plot.setData([merged.xs, ...merged.ys] as uPlot.AlignedData);
         lastRangeRef.current = globalRange;
+        decodedRef.current = boundChannels.map((c, i) => ({
+          channelId: c.id,
+          series: decoded[i],
+        }));
+        publishSync();
       } catch (err) {
         if (!aborted) console.error("PlotPanel fetch failed", err);
       }
@@ -226,10 +310,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return () => {
       aborted = true;
     };
-  }, [boundChannels, globalRange]);
+  }, [boundChannels, globalRange, publishSync]);
 
   // Cursor overlay redraw on every cursor tick.
   useEffect(() => {
+    // Re-publish the T6.1 sync snapshot every cursor tick so e2e
+    // assertions see the latest `sampleAtCursor` without waiting on a
+    // fetch. Cheap: one binary search per bound channel.
+    publishSync();
+
     const overlay = overlayRef.current;
     const plot = plotRef.current;
     if (!overlay || !plot) return;
@@ -259,7 +348,16 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.moveTo(left + x + 0.5, top);
     ctx.lineTo(left + x + 0.5, top + height);
     ctx.stroke();
-  }, [cursorNs, globalRange, seriesKey]);
+  }, [cursorNs, globalRange, seriesKey, publishSync]);
+
+  // Drop this panel's sync snapshot on unmount so stale ids don't leak
+  // into a test after a panel is closed.
+  useEffect(() => {
+    return () => {
+      const store = window.__drivelinePlotPanels;
+      if (store) delete store[panelId];
+    };
+  }, [panelId]);
 
   const atCap = boundChannelIds.length >= MAX_PLOT_SERIES;
   const hasAnyScalar = useMemo(

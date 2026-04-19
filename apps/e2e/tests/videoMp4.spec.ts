@@ -51,9 +51,23 @@ declare global {
       clearSession: () => Promise<void>;
       getSessionSnapshot: () => SessionSnapshot;
       videoHudStats: () => HudStats | null;
+      setVideoChannelBinding: (
+        panelId: string,
+        channelId: string | null,
+      ) => void;
+      resetLayout: () => void;
     };
   }
 }
+
+// Matches the default FlexLayout panel id from
+// `apps/web/src/layout/defaultLayout.ts`. T6.2 made video panels
+// unbound by default, so the spec binds the channel explicitly. The
+// mp4-sidecar channel id is `"<track_id>/video"`; `short.mp4` is
+// written with a single video track at `track_id = 1` (see
+// `crates/data-core/src/fixtures.rs::short_mp4_bytes`).
+const VIDEO_PANEL_ID = "video-1";
+const VIDEO_CHANNEL_ID = "1/video";
 
 async function snapshot(page: Page): Promise<SessionSnapshot> {
   return await page.evaluate(() =>
@@ -95,6 +109,12 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
   const IGNORED_ERRORS = [
     /VideoDecoder error: EncodingError/,
     /VideoDecoder error: OperationError/,
+    // `decode()` throws synchronously when the synthetic fixture's keyframe
+    // lacks an IDR slice (AUD NALs only). The worker catches the throw and
+    // surfaces it via console.error so the codec side of `open()` still
+    // resolves — the whole point of T5.3's seek plumbing test. A real mp4
+    // corpus (T0.3) is the proper fix.
+    /VideoDecoder error: DataError/,
   ];
 
   function installConsoleGuard(page: Page): { pageErrors: string[] } {
@@ -115,6 +135,9 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
       "workers ready",
     );
 
+    // Reset any layout persisted from a prior run so `video-1` exists.
+    await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
+
     const mp4Bytes = Array.from(readFileSync(MP4));
     const sidecarBytes = Array.from(readFileSync(SIDECAR));
     const result = await page.evaluate(
@@ -134,6 +157,15 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
     // The pair opens as a single `mp4+sidecar` source; `opened` reports the
     // mp4 filename.
     expect(result.opened).toContain("short.mp4");
+
+    // Bind the default video panel to the mp4's video channel. T6.2
+    // made panels unbound by default; without this the canvas never
+    // mounts.
+    await page.evaluate(
+      ([panelId, channelId]) =>
+        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, channelId),
+      [VIDEO_PANEL_ID, VIDEO_CHANNEL_ID],
+    );
 
     await page.getByTestId("video-panel-canvas").waitFor();
     await expect

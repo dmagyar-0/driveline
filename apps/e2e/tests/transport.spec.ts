@@ -68,11 +68,25 @@ test.describe("transport bar (T3.2)", () => {
     const playBtn = page.getByTestId("play-pause");
     await expect(playBtn).toBeEnabled();
 
-    await playBtn.click();
-    expect((await snapshot(page)).playing).toBe(true);
-
-    await playBtn.click();
-    expect((await snapshot(page)).playing).toBe(false);
+    // Batch both clicks inside a single `page.evaluate` so Playwright
+    // round-trip latency can't push the cursor past the ~90 ms fixture
+    // span between toggles — the auto-pause at `endNs` would flip the
+    // second click's effect (pause→play) and break the assertion.
+    const { afterFirst, afterSecond } = await page.evaluate(() => {
+      const btn = document.querySelector<HTMLButtonElement>(
+        "[data-testid='play-pause']",
+      );
+      if (!btn) throw new Error("play-pause button not found");
+      btn.click();
+      const afterFirst =
+        window.__drivelineDevHooks!.getSessionSnapshot().playing;
+      btn.click();
+      const afterSecond =
+        window.__drivelineDevHooks!.getSessionSnapshot().playing;
+      return { afterFirst, afterSecond };
+    });
+    expect(afterFirst).toBe(true);
+    expect(afterSecond).toBe(false);
   });
 
   test("scrubber click at 75 % lands cursor within tolerance", async ({ page }) => {
@@ -126,11 +140,34 @@ test.describe("transport bar (T3.2)", () => {
 
   test("Space toggles play/pause when no input is focused", async ({ page }) => {
     await page.locator("body").click(); // ensure focus is off any button
-    await page.keyboard.press("Space");
-    expect((await snapshot(page)).playing).toBe(true);
 
-    await page.keyboard.press("Space");
-    expect((await snapshot(page)).playing).toBe(false);
+    // Same batching rationale as "play button toggles …": back-to-back
+    // `keyboard.press()` calls each round-trip to the driver, and the
+    // fixture span is short enough that an auto-pause between them
+    // would invert the second toggle's expected effect.
+    const { afterFirst, afterSecond } = await page.evaluate(() => {
+      function dispatchSpace() {
+        const opts = {
+          key: " ",
+          code: "Space",
+          keyCode: 32,
+          which: 32,
+          bubbles: true,
+          cancelable: true,
+        } as const;
+        document.dispatchEvent(new KeyboardEvent("keydown", opts));
+        document.dispatchEvent(new KeyboardEvent("keyup", opts));
+      }
+      dispatchSpace();
+      const afterFirst =
+        window.__drivelineDevHooks!.getSessionSnapshot().playing;
+      dispatchSpace();
+      const afterSecond =
+        window.__drivelineDevHooks!.getSessionSnapshot().playing;
+      return { afterFirst, afterSecond };
+    });
+    expect(afterFirst).toBe(true);
+    expect(afterSecond).toBe(false);
   });
 
   test("Home jumps the cursor to globalRange.startNs", async ({ page }) => {

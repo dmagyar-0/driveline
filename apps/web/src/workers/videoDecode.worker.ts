@@ -202,7 +202,13 @@ async function pullAndFeed(): Promise<void> {
       timestamp: ptsToMicros(c.pts_ns),
       data: c.data,
     });
-    session.decoder.decode(chunk);
+    try {
+      session.decoder.decode(chunk);
+    } catch (e) {
+      console.error("VideoDecoder error:", e);
+      session.ended = true;
+      return;
+    }
     session.inFlight += 1;
   }
 }
@@ -285,7 +291,17 @@ async function openInternal(
       timestamp: ptsToMicros(c.pts_ns),
       data: c.data,
     });
-    decoder.decode(chunk);
+    // `decode()` can throw synchronously when a key chunk's payload lacks an
+    // IDR slice (e.g. the synthetic mp4 fixture, whose samples are just AUD
+    // NALs). Async decoder faults already surface via the `error:` callback
+    // without blowing up `open()`, so mirror that behaviour here — the codec
+    // is resolved, the HUD can reflect it, and the session stays navigable.
+    try {
+      decoder.decode(chunk);
+    } catch (e) {
+      console.error("VideoDecoder error:", e);
+      break;
+    }
     session.inFlight += 1;
   }
   return result;

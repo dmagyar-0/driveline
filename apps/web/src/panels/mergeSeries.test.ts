@@ -3,7 +3,16 @@ import { mergeSeries } from "./mergeSeries";
 import type { PlotSeries } from "./seriesFromArrow";
 
 function mk(xs: number[], ys: number[]): PlotSeries {
-  return { xs: new Float64Array(xs), ys: new Float64Array(ys) };
+  // `rawTsNs` is only used by the T6.1 cross-panel sync snapshot; these
+  // merge unit tests work in seconds and don't exercise that field.
+  // Build a parallel BigInt64 view from `xs` so the shape is complete.
+  const rawTsNs = new BigInt64Array(xs.length);
+  for (let i = 0; i < xs.length; i++) rawTsNs[i] = BigInt(Math.round(xs[i]));
+  return {
+    xs: new Float64Array(xs),
+    ys: new Float64Array(ys),
+    rawTsNs,
+  };
 }
 
 describe("mergeSeries", () => {

@@ -23,6 +23,16 @@ describe("seriesFromArrow", () => {
     expect(ys[2]).toBeCloseTo(3.0);
   });
 
+  it("exposes the raw ns timestamps as BigInt64 for T6.1 sync lookup", () => {
+    const bytes = readFileSync(fixturePath);
+    const { rawTsNs } = seriesFromArrow(new Uint8Array(bytes));
+    expect(rawTsNs).toBeInstanceOf(BigInt64Array);
+    expect(rawTsNs.length).toBe(3);
+    expect(rawTsNs[0]).toBe(1_000_000_000n);
+    expect(rawTsNs[1]).toBe(1_010_000_000n);
+    expect(rawTsNs[2]).toBe(1_020_000_000n);
+  });
+
   it("returns monotonically non-decreasing xs", () => {
     const bytes = readFileSync(fixturePath);
     const { xs } = seriesFromArrow(new Uint8Array(bytes));

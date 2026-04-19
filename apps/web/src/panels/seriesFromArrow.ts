@@ -9,11 +9,16 @@ import { tableFromIPC } from "apache-arrow";
 export interface PlotSeries {
   xs: Float64Array; // seconds since epoch
   ys: Float64Array;
+  // Original ns timestamps, preserved as BigInt64 so the T6.1 cross-panel
+  // sync snapshot can binary-search for "the sample whose ts ≤ cursorNs"
+  // without losing precision through the ns→seconds Float64 conversion.
+  rawTsNs: BigInt64Array;
 }
 
 const EMPTY: PlotSeries = {
   xs: new Float64Array(),
   ys: new Float64Array(),
+  rawTsNs: new BigInt64Array(),
 };
 
 export function seriesFromArrow(bytes: Uint8Array): PlotSeries {
@@ -36,5 +41,10 @@ export function seriesFromArrow(bytes: Uint8Array): PlotSeries {
   for (let i = 0; i < n; i++) xs[i] = Number(rawTs[i]) / 1e9;
   // Copy ys so uPlot's retained reference never aliases the Arrow buffer.
   const ys = new Float64Array(rawY.subarray(0, n));
-  return { xs, ys };
+  // `rawTsNs` aliases the Arrow backing buffer via `subarray` — zero-copy.
+  // The returned typed array retains a reference to the underlying
+  // ArrayBuffer, so the Arrow table's storage stays alive for its
+  // lifetime. Callers must treat it as read-only.
+  const rawTsNs = rawTs.subarray(0, n);
+  return { xs, ys, rawTsNs };
 }
