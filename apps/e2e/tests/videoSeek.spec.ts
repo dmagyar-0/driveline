@@ -1,29 +1,11 @@
 // T5.2 acceptance test.
 //
-// The plan (`docs/09-verification-plan.md:56,144`) asks for scrub-seek to
-// settle <250 ms at five reference times. Achieving that end-to-end needs a
-// real H.264 MCAP fixture; the one in `test-fixtures/short.mcap` is
-// synthetic — SPS/IDR NAL headers only, no decodable payload — so the
-// browser's `VideoDecoder` will emit `EncodingError` rather than frames.
-//
-// This spec exercises everything around the decoder that T5.2 actually
-// adds: the `videoHudStats` dev hook shape, the HUD toggle (button +
-// focus-scoped `h` key), and the seek plumbing (scrubber→store→debounced
-// worker `seek()` call path). The pts-convergence assertion lives on a
-// follow-up task that ships a real H.264 fixture.
-//
-// All five reference times are still driven through the scrubber; we
-// assert the cursor commits into the store. A page-error listener catches
-// regressions in the seek worker contract.
+// `docs/09-verification-plan.md:56,144` asks for scrub-seek to settle
+// <250 ms at five reference times. This runs against the real
+// 10 s 4K H.264 corpus produced by `sample-data/generate.py` (T0.3),
+// so the assertions now cover the full decode → blit pipeline.
 
 import { test, expect, type Page, type ConsoleMessage } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const fixtureDir = resolve(thisDir, "../../../test-fixtures");
-const MCAP = resolve(fixtureDir, "short.mcap");
 
 interface SessionSnapshot {
   cursorNs: string;
@@ -107,12 +89,7 @@ async function clickScrubberAtRatio(page: Page, ratio: number): Promise<void> {
 test.describe("video seek (T5.2)", () => {
   test.slow();
 
-  // Filter out the expected VideoDecoder error fired by the synthetic
-  // fixture — decoding fails, but everything around it still has to work.
-  const IGNORED_ERRORS = [
-    /VideoDecoder error: EncodingError/,
-    /VideoDecoder error: OperationError/,
-  ];
+  const IGNORED_ERRORS: RegExp[] = [];
 
   function installConsoleGuard(page: Page): { pageErrors: string[] } {
     const pageErrors: string[] = [];
@@ -136,17 +113,14 @@ test.describe("video seek (T5.2)", () => {
     // custom layout. Reset so `video-1` always exists.
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
 
-    const bytes = Array.from(readFileSync(MCAP));
-    const result = await page.evaluate(
-      async (input) => {
-        const materialised = input.map((d) => ({
-          name: d.name,
-          bytes: new Uint8Array(d.bytes),
-        }));
-        return await window.__drivelineDevHooks!.openFiles(materialised);
-      },
-      [{ name: "short.mcap", bytes }],
-    );
+    const result = await page.evaluate(async () => {
+      const r = await fetch("/sample-data/short.mcap");
+      if (!r.ok) throw new Error(`fetch mcap: ${r.status}`);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      return await window.__drivelineDevHooks!.openFiles([
+        { name: "short.mcap", bytes },
+      ]);
+    });
     expect(result.errors).toEqual([]);
     expect(result.opened).toEqual(["short.mcap"]);
 
@@ -189,19 +163,23 @@ test.describe("video seek (T5.2)", () => {
       hudOn: false,
     });
     // `ptsNs` is bigint-as-string when populated (or null until a frame
-    // blits). We don't require a frame here — the synthetic fixture never
-    // produces one — so accept either.
-    expect(h!.ptsNs === null || typeof h!.ptsNs === "string").toBe(true);
+    // blits). Poll until the blit loop publishes the first frame.
+    await expect
+      .poll(async () => (await hud(page))?.ptsNs !== null, {
+        timeout: 5_000,
+        intervals: [50, 100, 200],
+      })
+      .toBe(true);
     // The worker derives the codec from the first keyframe's SPS inside
     // `open()`, which is async; the panel writes `codecRef` after the
-    // promise resolves. Poll until the HUD snapshot reflects it.
-    // `short.mcap`'s synthetic SPS codes to `avc1.42C01E`.
+    // promise resolves. The real corpus from `sample-data/generate.py`
+    // encodes at High profile / level 5.1.
     await expect
       .poll(async () => (await hud(page))?.codec, {
         timeout: 5_000,
         intervals: [50, 100, 200],
       })
-      .toBe("avc1.42C01E");
+      .toBe("avc1.640033");
   });
 
   test("HUD button toggles the overlay and the snapshot flag", async ({
@@ -251,10 +229,8 @@ test.describe("video seek (T5.2)", () => {
     const span = endNs - startNs;
     expect(span).toBeGreaterThan(0n);
 
-    // The fixture span is ~90 ms so the "5s / 7.5s / 10s - 1/30" references
-    // from the verification plan all clamp to `endNs - 1`. We still drive
-    // each one through the scrubber — the goal here is to exercise the
-    // seek plumbing five times, not to land on distinct timestamps.
+    // Five reference times from the verification plan. On the real
+    // 10 s corpus each offset maps to a distinct frame.
     const refOffsetsNs: bigint[] = [
       0n,
       2_500_000_000n,
@@ -295,9 +271,6 @@ test.describe("video seek (T5.2)", () => {
       expect(h!.frameIndex).toBeLessThanOrEqual(120);
     }
 
-    // Surface any unexpected error that fired during the run. The
-    // synthetic-fixture decoder error is filtered out in
-    // `installConsoleGuard`.
     expect(guard.pageErrors).toEqual([]);
   });
 });

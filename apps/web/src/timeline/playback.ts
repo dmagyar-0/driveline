@@ -14,6 +14,7 @@
 
 import type { StoreApi } from "zustand";
 import type { SessionState } from "../state/store";
+import { mark, measure } from "../perf";
 
 export interface PlaybackDeps {
   /** Wall-clock source in milliseconds. */
@@ -75,11 +76,14 @@ export function startPlaybackLoop(
     if (!a) return;
     const state = store.getState();
     if (!state.playing) return;
+    mark("tick:start");
     const elapsedMs = now() - a.nowMs;
     const deltaNs = BigInt(Math.round(elapsedMs * 1e6 * a.speed));
     const nextNs = a.cursorNs + deltaNs;
     lastWritten = nextNs;
     state.setCursor(nextNs);
+    mark("tick:end");
+    measure("tick", "tick:start", "tick:end");
     // setCursor may have clamped and auto-paused at end-of-session; the
     // subscribe listener will have already cleared `anchor` in that
     // case, so re-check before scheduling the next frame.

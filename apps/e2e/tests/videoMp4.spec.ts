@@ -1,26 +1,11 @@
 // T5.3 acceptance test.
 //
-// Mirrors `videoSeek.spec.ts` but drops the committed mp4 + sidecar pair
-// (`short.mp4` + `short.mp4.ts.bin`) instead of the mcap fixture. Asserts
-// that the mp4 path wires end-to-end: VideoPanel mounts, the codec string
-// gets derived from the avcC-prepended first keyframe, and the scrub-seek
-// pipeline commits the cursor for the same five reference times used by
-// T5.2.
-//
-// Like T5.2, the bundled fixture is synthetic — placeholder NAL payloads
-// rather than a decodable bitstream — so `VideoDecoder` will raise
-// `EncodingError`. The pixel-compare assertion from
-// `docs/10-task-breakdown.md` T5.3 is deferred to a real-fixture follow-up.
+// Mirrors `videoSeek.spec.ts` but drops the committed mp4 + sidecar
+// pair (`short.mp4` + `short.mp4.ts.bin`) instead of the mcap fixture.
+// Runs against the real 10 s 4K H.264 corpus produced by
+// `sample-data/generate.py` (T0.3).
 
 import { test, expect, type Page, type ConsoleMessage } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const fixtureDir = resolve(thisDir, "../../../test-fixtures");
-const MP4 = resolve(fixtureDir, "short.mp4");
-const SIDECAR = resolve(fixtureDir, "short.mp4.ts.bin");
 
 interface SessionSnapshot {
   cursorNs: string;
@@ -106,16 +91,7 @@ async function clickScrubberAtRatio(page: Page, ratio: number): Promise<void> {
 test.describe("video mp4 + sidecar (T5.3)", () => {
   test.slow();
 
-  const IGNORED_ERRORS = [
-    /VideoDecoder error: EncodingError/,
-    /VideoDecoder error: OperationError/,
-    // `decode()` throws synchronously when the synthetic fixture's keyframe
-    // lacks an IDR slice (AUD NALs only). The worker catches the throw and
-    // surfaces it via console.error so the codec side of `open()` still
-    // resolves — the whole point of T5.3's seek plumbing test. A real mp4
-    // corpus (T0.3) is the proper fix.
-    /VideoDecoder error: DataError/,
-  ];
+  const IGNORED_ERRORS: RegExp[] = [];
 
   function installConsoleGuard(page: Page): { pageErrors: string[] } {
     const pageErrors: string[] = [];
@@ -138,21 +114,17 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
     // Reset any layout persisted from a prior run so `video-1` exists.
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
 
-    const mp4Bytes = Array.from(readFileSync(MP4));
-    const sidecarBytes = Array.from(readFileSync(SIDECAR));
-    const result = await page.evaluate(
-      async (input) => {
-        const materialised = input.map((d) => ({
-          name: d.name,
-          bytes: new Uint8Array(d.bytes),
-        }));
-        return await window.__drivelineDevHooks!.openFiles(materialised);
-      },
-      [
-        { name: "short.mp4", bytes: mp4Bytes },
-        { name: "short.mp4.ts.bin", bytes: sidecarBytes },
-      ],
-    );
+    const result = await page.evaluate(async () => {
+      const names = ["short.mp4", "short.mp4.ts.bin"];
+      const descs = await Promise.all(
+        names.map(async (n) => {
+          const r = await fetch(`/sample-data/${n}`);
+          if (!r.ok) throw new Error(`fetch ${n}: ${r.status}`);
+          return { name: n, bytes: new Uint8Array(await r.arrayBuffer()) };
+        }),
+      );
+      return await window.__drivelineDevHooks!.openFiles(descs);
+    });
     expect(result.errors).toEqual([]);
     // The pair opens as a single `mp4+sidecar` source; `opened` reports the
     // mp4 filename.
@@ -188,17 +160,16 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
   });
 
   test("codec string is derived from the fixture's SPS", async ({ page }) => {
-    // The fixture SPS from `crates/data-core/src/fixtures.rs::DUMMY_SPS`
-    // starts with `0x67 0x64 0x00 0x1e …` — NAL header then
-    // profile=High (0x64) / flags=0x00 / level_idc=0x1e. The reader
-    // prepends this SPS onto the first chunk, so
-    // `codecStringFromSps` resolves to exactly `avc1.64001E`.
+    // The real corpus SPS (produced by `sample-data/generate.py` via x264
+    // at 3840x2160) carries profile_idc=0x64 (High), flags=0x00, and
+    // level_idc=0x33 (level 5.1, required for 4K). `codecStringFromSps`
+    // renders that triplet as `avc1.640033`.
     await expect
       .poll(async () => (await hud(page))?.codec, {
         timeout: 5_000,
         intervals: [50, 100, 200],
       })
-      .toBe("avc1.64001E");
+      .toBe("avc1.640033");
   });
 
   test("scrubber seek commits cursor to each of five reference times", async ({

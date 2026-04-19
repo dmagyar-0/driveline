@@ -1,0 +1,16 @@
+{
+  "title": "foxglove.Float64",
+  "description": "A scalar Float64 sample with a timestamp",
+  "type": "object",
+  "properties": {
+    "timestamp": {
+      "title": "time",
+      "type": "object",
+      "properties": {
+        "sec": { "type": "integer", "minimum": 0 },
+        "nsec": { "type": "integer", "minimum": 0, "maximum": 999999999 }
+      }
+    },
+    "value": { "type": "number" }
+  }
+}

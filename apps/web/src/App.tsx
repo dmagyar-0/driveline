@@ -12,6 +12,7 @@ import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
 import type { WorkspaceHandle } from "./layout/Workspace";
 import { attachLayoutPersistence } from "./layout/persist";
+import { installPerfHooks } from "./perf";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -98,6 +99,24 @@ declare global {
           { channelId: string; tsNs: string; value: number } | null
         >;
       } | null;
+      // T6.3 — per-series min/max stats over the most recent render for
+      // `signalAlignment.spec.ts`.
+      getPlotPanelSeriesStats: (panelId: string) => Array<{
+        channelId: string;
+        min: number;
+        max: number;
+        count: number;
+      }> | null;
+      // T6.3 — enumerate channels without exposing the Zustand store.
+      listChannels: () => Array<{
+        id: string;
+        sourceId: string;
+        name: string;
+        kind: string;
+        dtype: string | null;
+        unit: string | null;
+        sampleCount: number;
+      }>;
     };
   }
 }
@@ -157,6 +176,7 @@ export function App() {
     dataCore.current = makeDataCoreClient();
     videoDecode.current = makeVideoDecodeClient();
     useSession.getState().setWorker(dataCore.current);
+    installPerfHooks();
     // T6.2 — start saving `layoutJson` / `videoBindings` / `plotBindings`
     // to localStorage on every change. The store was hydrated from the
     // same key at module load, so the first render already matches.
@@ -279,6 +299,27 @@ export function App() {
           ),
         };
       },
+      getPlotPanelSeriesStats: (panelId) => {
+        const snap: PlotSyncSnapshot | undefined =
+          window.__drivelinePlotPanels?.[panelId];
+        if (!snap) return null;
+        return snap.seriesStats.map((s) => ({
+          channelId: s.channelId,
+          min: s.min,
+          max: s.max,
+          count: s.count,
+        }));
+      },
+      listChannels: () =>
+        useSession.getState().channels.map((c) => ({
+          id: c.id,
+          sourceId: c.sourceId,
+          name: c.name,
+          kind: c.kind,
+          dtype: c.dtype,
+          unit: c.unit,
+          sampleCount: c.sampleCount,
+        })),
     };
     setReady(true);
     return () => {

@@ -1,0 +1,7 @@
+# T0.3 sample-corpus binaries. Originally planned for Git LFS, but the
+# target remote does not expose an LFS endpoint; short.mf4 (~140 KB) and
+# the five reference PNGs (~1 MB each, ~6 MB total) are small enough to
+# track as regular git objects. Left here as a binary-tagging hint so
+# tools don't try to diff them as text.
+sample-data/short.mf4 binary
+sample-data/refs/*.png binary

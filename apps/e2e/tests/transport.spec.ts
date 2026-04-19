@@ -5,13 +5,6 @@
 // strings so they survive `page.evaluate`).
 
 import { test, expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const fixtureDir = resolve(thisDir, "../../../test-fixtures");
-const MCAP = resolve(fixtureDir, "short.mcap");
 
 interface SessionSnapshot {
   cursorNs: string;
@@ -41,14 +34,14 @@ test.describe("transport bar (T3.2)", () => {
     await page.goto("/");
     await expect(page.getByTestId("worker-status")).toHaveText("workers ready");
 
-    const bytes = Array.from(readFileSync(MCAP));
-    const result = await page.evaluate(async (input) => {
-      const materialised = input.map((d) => ({
-        name: d.name,
-        bytes: new Uint8Array(d.bytes),
-      }));
-      return await window.__drivelineDevHooks!.openFiles(materialised);
-    }, [{ name: "short.mcap", bytes }]);
+    const result = await page.evaluate(async () => {
+      const r = await fetch("/sample-data/short.mcap");
+      if (!r.ok) throw new Error(`fetch mcap: ${r.status}`);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      return await window.__drivelineDevHooks!.openFiles([
+        { name: "short.mcap", bytes },
+      ]);
+    });
     expect(result.errors).toEqual([]);
     expect(result.opened).toEqual(["short.mcap"]);
 

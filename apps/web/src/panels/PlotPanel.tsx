@@ -30,6 +30,7 @@ import { mergeSeries } from "./mergeSeries";
 import { cursorXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
+import { mark, measure } from "../perf";
 import styles from "./PlotPanel.module.css";
 
 interface PlotPanelProps {
@@ -39,6 +40,13 @@ interface PlotPanelProps {
 // T6.1 — Cross-panel sync snapshot. Mirrors the `__drivelineVideoHud`
 // pattern: an e2e spec reads it via a dev hook (`getPlotPanelSync`) to
 // assert that the rendered plot agrees with the shared `cursorNs`.
+export interface PlotSeriesStats {
+  channelId: string;
+  min: number;
+  max: number;
+  count: number;
+}
+
 export interface PlotSyncSnapshot {
   cursorNs: bigint;
   boundChannelIds: string[];
@@ -49,6 +57,11 @@ export interface PlotSyncSnapshot {
   sampleAtCursor: Array<
     { channelId: string; tsNs: bigint; value: number } | null
   >;
+  // T6.3 — per-series min/max over the most recent fetched range. Used
+  // by `signalAlignment.spec.ts` to assert two sources agree on the same
+  // underlying signal within one sample. Empty when no render has
+  // completed yet.
+  seriesStats: PlotSeriesStats[];
 }
 
 declare global {
@@ -160,6 +173,23 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       },
     );
     const range = lastRangeRef.current;
+    const seriesStats: PlotSeriesStats[] = decoded.map(
+      ({ channelId, series }) => {
+        let min = Infinity;
+        let max = -Infinity;
+        for (let i = 0; i < series.ys.length; i++) {
+          const v = series.ys[i];
+          if (v < min) min = v;
+          if (v > max) max = v;
+        }
+        return {
+          channelId,
+          min: Number.isFinite(min) ? min : NaN,
+          max: Number.isFinite(max) ? max : NaN,
+          count: series.ys.length,
+        };
+      },
+    );
     store[panelId] = {
       cursorNs,
       boundChannelIds,
@@ -167,6 +197,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         ? { startNs: range.startNs, endNs: range.endNs }
         : null,
       sampleAtCursor,
+      seriesStats,
     };
   }, [boundChannelIds, cursorNs, panelId]);
 
@@ -295,7 +326,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         if (aborted) return;
         const decoded: PlotSeries[] = batches.map((b) => seriesFromArrow(b));
         const merged = mergeSeries(decoded);
+        const renderStart = `plot:render:${panelId}:start`;
+        const renderEnd = `plot:render:${panelId}:end`;
+        mark(renderStart);
         plot.setData([merged.xs, ...merged.ys] as uPlot.AlignedData);
+        mark(renderEnd);
+        measure(`plot:render:${panelId}`, renderStart, renderEnd);
         lastRangeRef.current = globalRange;
         decodedRef.current = boundChannels.map((c, i) => ({
           channelId: c.id,

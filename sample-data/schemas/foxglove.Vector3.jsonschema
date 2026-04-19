@@ -1,0 +1,18 @@
+{
+  "title": "foxglove.Vector3",
+  "description": "A 3-axis vector (x, y, z) sample with a timestamp",
+  "type": "object",
+  "properties": {
+    "timestamp": {
+      "title": "time",
+      "type": "object",
+      "properties": {
+        "sec": { "type": "integer", "minimum": 0 },
+        "nsec": { "type": "integer", "minimum": 0, "maximum": 999999999 }
+      }
+    },
+    "x": { "type": "number" },
+    "y": { "type": "number" },
+    "z": { "type": "number" }
+  }
+}

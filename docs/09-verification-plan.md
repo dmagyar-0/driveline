@@ -70,7 +70,15 @@ account for colour space drift between decoders.
 - `mf4::tests::translates_cg_time_to_ns_utc`
 - `mf4::tests::fetch_range_returns_expected_arrow_schema`
 - `mp4_sidecar::tests::rejects_length_mismatch`
-- `index::tests::lttb_decimation_preserves_extrema`
+- `decimate::tests::min_before_max_order_preserved`
+- `decimate::tests::max_before_min_order_preserved`
+- `decimate::tests::partial_nan_bucket_picks_finite_extrema`
+  - *M5 note*: the original plan row named one LTTB test. The
+    implementation in `crates/data-core/src/decimate.rs` picked
+    min-max bucketed decimation instead (preserves per-bucket
+    extrema, cheaper under heavy IMU); see T5.1 in
+    `docs/10-task-breakdown.md`. Plan rows retitled to track the
+    three extrema-preservation tests that actually ship.
 
 These run on the **native** target — the `Reader` implementations are
 written so that their logic is not wasm-specific. The wasm build only

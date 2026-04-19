@@ -1,40 +1,29 @@
-// T6.1 acceptance test — frame-accurate cross-panel sync.
+// T6.1 + T6.3 acceptance test — frame-accurate cross-panel sync and
+// pixel-compare against the five reference PNGs.
 //
-// Verifies the invariant that VideoPanel and PlotPanel agree on
-// `cursorNs` at each of the five reference times from
-// `docs/09-verification-plan.md:106-108`:
+// Verifies `docs/09-verification-plan.md:99-115` steps 2-3 against the
+// real 10 s 4K H.264 corpus produced by `sample-data/generate.py`.
 //
-//   - VideoPanel: `videoHudStats().ptsNs <= cursorNs` (the rAF blit loop
-//     picks the newest frame with `ptsNs ≤ cursorNs`, enforced by
+//   - VideoPanel: `videoHudStats().ptsNs <= cursorNs` (the rAF blit
+//     loop picks the newest frame with `ptsNs ≤ cursorNs`, enforced by
 //     `apps/web/src/panels/VideoPanel.tsx:193-216`).
+//   - VideoPanel pixel-compare: the canvas bitmap at each of the five
+//     reference cursors matches `sample-data/refs/t_<ms>.png` within
+//     `pixelmatch` threshold 0.02 and <2% pixel disagreement.
 //   - PlotPanel: for each bound channel, the "sample at or before
 //     cursor" surfaced via `getPlotPanelSync` satisfies
 //     `tsNs <= cursorNs`.
 //   - Both panels observe the same `cursorNs` as the session store.
 //
-// The pixel-compare half of verification-plan step 2 is blocked on T0.3
-// (real H.264 corpus + reference PNGs); `test-fixtures/short.mcap`'s
-// `/camera/front` is synthetic (SPS+IDR headers only, no decodable
-// payload). On the synthetic fixture `videoHudStats().ptsNs` stays
-// `null`, so the video assertion degrades to "null OR ≤ cursor". The
-// same test will pass unchanged once a real fixture lands — see the
-// `TODO(T6.3)` marker inline.
-//
 // Scrubs are driven through the same `clickScrubberAtRatio` helper as
 // videoSeek.spec.ts so we exercise the production seek path, not a
-// bypass. The five reference times all clamp into the fixture's ~90 ms
-// span; asserting the sync invariant at each of five positions is
-// identical whether the fixture is 90 ms or 10 s — it's the five
-// scrubs that matter for seek-plumbing coverage.
+// bypass.
 
 import { test, expect, type Page, type ConsoleMessage } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const fixtureDir = resolve(thisDir, "../../../test-fixtures");
-const MCAP = resolve(fixtureDir, "short.mcap");
+import {
+  compareVideoCanvasToRef,
+  MAX_MISMATCH_FRACTION,
+} from "./_pixelCompare";
 
 // Mirrors `apps/web/src/layout/defaultLayout.ts:8-9`. The default
 // FlexLayout model spawns these two tabs on a fresh session, so an
@@ -170,17 +159,14 @@ test.describe("cross-panel sync (T6.1)", () => {
     // custom layout. Reset so `video-1` + `plot-1` always exist.
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
 
-    const bytes = Array.from(readFileSync(MCAP));
-    const result = await page.evaluate(
-      async (input) => {
-        const materialised = input.map((d) => ({
-          name: d.name,
-          bytes: new Uint8Array(d.bytes),
-        }));
-        return await window.__drivelineDevHooks!.openFiles(materialised);
-      },
-      [{ name: "short.mcap", bytes }],
-    );
+    const result = await page.evaluate(async () => {
+      const r = await fetch("/sample-data/short.mcap");
+      if (!r.ok) throw new Error(`fetch mcap: ${r.status}`);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      return await window.__drivelineDevHooks!.openFiles([
+        { name: "short.mcap", bytes },
+      ]);
+    });
     expect(result.errors).toEqual([]);
     expect(result.opened).toEqual(["short.mcap"]);
 
@@ -235,23 +221,22 @@ test.describe("cross-panel sync (T6.1)", () => {
     const span = endNs - startNs;
     expect(span).toBeGreaterThan(0n);
 
-    // Five reference times from the verification plan. The fixture's
-    // span is ~90 ms, so the later offsets clamp to `endNs - 1`. What
-    // we exercise here is five scrubs spread across the range; the
-    // sync invariant does not depend on the absolute offsets.
-    const refOffsetsNs: bigint[] = [
-      0n,
-      2_500_000_000n,
-      5_000_000_000n,
-      7_500_000_000n,
-      10_000_000_000n - 33_333_333n,
+    // Five reference times from the verification plan. On the real
+    // 10 s corpus each offset maps to a frame whose PNG is committed
+    // at `sample-data/refs/t_<ms>.png`.
+    const refs: { offsetNs: bigint; ms: number }[] = [
+      { offsetNs: 0n,                              ms:    0 },
+      { offsetNs: 2_500_000_000n,                  ms: 2500 },
+      { offsetNs: 5_000_000_000n,                  ms: 5000 },
+      { offsetNs: 7_500_000_000n,                  ms: 7500 },
+      { offsetNs: 10_000_000_000n - 33_333_333n,   ms: 9967 },
     ];
-    const targets = refOffsetsNs.map((off) => {
-      const t = startNs + off;
-      return t >= endNs ? endNs - 1n : t;
+    const targets = refs.map((r) => {
+      const t = startNs + r.offsetNs;
+      return { target: t >= endNs ? endNs - 1n : t, ms: r.ms };
     });
 
-    for (const target of targets) {
+    for (const { target, ms } of targets) {
       const ratio = Math.min(
         1,
         Math.max(0, Number(target - startNs) / Number(span)),
@@ -306,14 +291,35 @@ test.describe("cross-panel sync (T6.1)", () => {
       expect(sample.channelId).toBe(SPEED_CHANNEL_ID);
       expect(BigInt(sample.tsNs)).toBeLessThanOrEqual(target);
 
-      // TODO(T6.3): once `sample-data/short.mcap` ships with real H.264
-      // via T0.3, tighten this to `expect(BigInt(h.ptsNs!)).toBeLessThanOrEqual(target)`
-      // and add the pixel-compare block against `sample-data/refs/t_<ms>.png`.
+      // Wait for the blit loop to settle on a frame whose PTS is at or
+      // before the target cursor. On the real H.264 corpus `ptsNs`
+      // lands within 1-3 frames of the target depending on how close
+      // the scrubber ratio fell to a keyframe.
+      await expect
+        .poll(
+          async () => {
+            const h = await hud(page);
+            if (!h || h.ptsNs === null) return -1;
+            return BigInt(h.ptsNs) <= target ? 1 : 0;
+          },
+          { timeout: 5_000, intervals: [33, 50, 100] },
+        )
+        .toBe(1);
+
       const h = await hud(page);
       expect(h).not.toBeNull();
-      if (h!.ptsNs !== null) {
-        expect(BigInt(h!.ptsNs)).toBeLessThanOrEqual(target);
-      }
+      expect(h!.ptsNs).not.toBeNull();
+      expect(BigInt(h!.ptsNs!)).toBeLessThanOrEqual(target);
+
+      // Pixel-compare the VideoPanel canvas against the reference PNG
+      // at this cursor. Threshold is per-pixel YUV→RGB tolerance; we
+      // cap total mismatched pixels at 2% to absorb browser vs ffmpeg
+      // colour-space drift.
+      const result = await compareVideoCanvasToRef(page, ms);
+      expect(
+        result.fraction,
+        `pixel-compare t_${ms}: ${result.mismatched}/${result.total} mismatched`,
+      ).toBeLessThan(MAX_MISMATCH_FRACTION);
     }
 
     expect(guard.pageErrors).toEqual([]);

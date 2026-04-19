@@ -1,10 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
-
-const thisDir = dirname(fileURLToPath(import.meta.url));
-const fixturePath = resolve(thisDir, "../../../test-fixtures/short.mf4");
 
 interface Mf4ChannelInfo {
   id: string;
@@ -57,19 +51,26 @@ test("openMf4 parses the short.mf4 fixture and fetch_range returns Arrow IPC", a
   await page.goto("/");
   await expect(page.getByTestId("worker-status")).toHaveText("workers ready");
 
-  const bytes = readFileSync(fixturePath);
-  const byteArray = Array.from(bytes);
-
-  const opened = await page.evaluate(async (data) => {
-    const buf = new Uint8Array(data);
+  const opened = await page.evaluate(async () => {
+    const r = await fetch("/sample-data/short.mf4");
+    if (!r.ok) throw new Error(`fetch mf4: ${r.status}`);
+    const buf = new Uint8Array(await r.arrayBuffer());
     return await window.__drivelineDevHooks!.openMf4(buf);
-  }, byteArray);
+  });
 
-  expect(opened.summary.channels).toHaveLength(1);
-  expect(opened.summary.channels[0].name).toBe("speed");
-  expect(opened.summary.channels[0].sample_count).toBe(10);
+  // Real corpus from `sample-data/generate.py` exports three MF4
+  // channels: `vehicle_speed` (100 Hz / 1000 samples),
+  // `imu_accel` (1 kHz / 10000 samples), and sparse `control_mode`.
+  expect(opened.summary.channels).toHaveLength(3);
+  const names = opened.summary.channels.map((c) => c.name).sort();
+  expect(names).toEqual(["control_mode", "imu_accel", "vehicle_speed"]);
 
-  const channelId = opened.summary.channels[0].id;
+  const speed = opened.summary.channels.find(
+    (c) => c.name === "vehicle_speed",
+  )!;
+  expect(speed.sample_count).toBe(1000);
+
+  const channelId = speed.id;
   const startNs = opened.summary.start_ns;
   const endNs = opened.summary.end_ns;
 
@@ -91,12 +92,14 @@ test("openMf4 parses the short.mf4 fixture and fetch_range returns Arrow IPC", a
     },
   );
 
-  expect(fetched.rows).toBe(10);
+  expect(fetched.rows).toBe(1000);
   // Schema from `docs/03-data-model.md`: `{ ts: Timestamp(ns, UTC), value: Float64 }`.
   expect(fetched.tsSchema).toMatch(/Timestamp/i);
   expect(fetched.valueSchema).toMatch(/Float64|float/i);
-  // Values are `i * 2` for `i in 0..10` → sum == 90.
-  expect(fetched.valueSum).toBeCloseTo(90.0, 9);
+  // vehicle_speed = sin(2π·t/2) over 10 s at 100 Hz (5 full periods) —
+  // the Riemann sum converges toward 0. Tolerance accommodates the
+  // discrete end-point.
+  expect(Math.abs(fetched.valueSum)).toBeLessThan(1.0);
 
   await page.evaluate(async (handle) => {
     await window.__drivelineDevHooks!.closeMf4(handle);

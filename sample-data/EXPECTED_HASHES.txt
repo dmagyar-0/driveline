@@ -1,0 +1,3 @@
+# SHA256 of sample-data/out.h264 — the bit-identical
+# cornerstone. All other outputs derive from it.
+0a79d8f99b2ef2a3bfd62d6d2da69cc7496421b29ba01bf98badcaf840cba484  out.h264
