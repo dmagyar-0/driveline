@@ -54,9 +54,21 @@ declare global {
       clearSession: () => Promise<void>;
       getSessionSnapshot: () => SessionSnapshot;
       videoHudStats: () => HudStats | null;
+      setVideoChannelBinding: (
+        panelId: string,
+        channelId: string | null,
+      ) => void;
+      resetLayout: () => void;
     };
   }
 }
+
+// Matches the default FlexLayout panel id from
+// `apps/web/src/layout/defaultLayout.ts`. Video panels are unbound by
+// default (T6.2) so the spec has to wire a channel before the canvas
+// will mount.
+const VIDEO_PANEL_ID = "video-1";
+const VIDEO_CHANNEL_ID = "/camera/front";
 
 async function snapshot(page: Page): Promise<SessionSnapshot> {
   return await page.evaluate(() =>
@@ -120,6 +132,10 @@ test.describe("video seek (T5.2)", () => {
       "workers ready",
     );
 
+    // A prior run in the same browser context could have persisted a
+    // custom layout. Reset so `video-1` always exists.
+    await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
+
     const bytes = Array.from(readFileSync(MCAP));
     const result = await page.evaluate(
       async (input) => {
@@ -133,6 +149,15 @@ test.describe("video seek (T5.2)", () => {
     );
     expect(result.errors).toEqual([]);
     expect(result.opened).toEqual(["short.mcap"]);
+
+    // Bind the default video panel to the fixture's video channel.
+    // T6.2 made panels unbound-by-default; without this, the canvas
+    // never mounts and `video-panel-canvas` below hangs.
+    await page.evaluate(
+      ([panelId, channelId]) =>
+        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, channelId),
+      [VIDEO_PANEL_ID, VIDEO_CHANNEL_ID],
+    );
 
     // Wait for the VideoPanel to mount and the HUD snapshot to populate.
     // The HUD publishes every rAF tick, so it appears even when the
