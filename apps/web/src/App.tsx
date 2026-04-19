@@ -6,6 +6,7 @@ import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
 import { Transport } from "./timeline/Transport";
+import { PlotPanel } from "./panels/PlotPanel";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -219,6 +220,7 @@ export function App() {
         Drop .mcap, .mf4, or .mp4 (+ .mp4.ts.bin) files here to load a session.
       </div>
       <SessionSummary />
+      <PlotPanel />
       {recentErrors.length > 0 && (
         <ul className={styles.errors} data-testid="session-errors">
           {recentErrors.map((e, i) => (

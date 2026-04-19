@@ -9,6 +9,7 @@ import init, {
   open_mcap,
   close_mcap,
   mcap_summary,
+  mcap_fetch_range,
   open_mp4_sidecar,
   close_mp4_sidecar,
   mp4_sidecar_summary,
@@ -198,6 +199,16 @@ export const dataCoreApi = {
   async mcapSummary(handle: number): Promise<McapSummary> {
     await ready;
     return normaliseMcap(mcap_summary(handle) as RawMcapSummary);
+  },
+  async mcapFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    return mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
   },
   async openMp4Sidecar(
     mp4Bytes: Uint8Array,
