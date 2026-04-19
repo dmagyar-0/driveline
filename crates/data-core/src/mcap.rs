@@ -36,9 +36,10 @@ use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use base64::Engine as _;
 
-use crate::reader::{ArrowIpc, Reader};
+use crate::reader::{ArrowIpc, EncodedChunkIter, Reader};
 use crate::types::{
-    Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
+    Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceKind, SourceMeta,
+    TimeRange,
 };
 
 pub struct McapReader {
@@ -57,6 +58,18 @@ struct ChannelData {
     /// Element count per sample for `Vector` channels (e.g. 3 for Vector3).
     /// `None` for non-vector kinds.
     vector_len: Option<usize>,
+    /// Per-sample Annex-B bytes + keyframe flag for `Video` channels. Parallel
+    /// to `timestamps`. `None` for non-video kinds. Populated at open time so
+    /// `video_stream` can serve chunks without rescanning the MCAP; the
+    /// backing `mcap` crate's `MessageStream` does not surface file offsets,
+    /// so buffering is the simplest correct approach for MVP.
+    video_samples: Option<Vec<VideoSample>>,
+}
+
+#[derive(Clone)]
+struct VideoSample {
+    bytes: Vec<u8>,
+    is_keyframe: bool,
 }
 
 enum ParsedValue {
@@ -250,6 +263,7 @@ impl Reader for McapReader {
                     timestamps: Vec::new(),
                     values: Vec::new(),
                     vector_len: None,
+                    video_samples: None,
                 });
 
             match kind {
@@ -275,7 +289,8 @@ impl Reader for McapReader {
                 ChannelKind::Video => {
                     let annex_b = extract_video_bytes_from_json(&msg.data)
                         .unwrap_or_else(|| msg.data.to_vec());
-                    if is_keyframe(&annex_b) {
+                    let keyframe = is_keyframe(&annex_b);
+                    if keyframe {
                         keyframe_index
                             .entry(channel_id.clone())
                             .or_default()
@@ -286,6 +301,13 @@ impl Reader for McapReader {
                     }
                     entry.timestamps.push(log_time);
                     entry.values.push(ParsedValue::None);
+                    entry
+                        .video_samples
+                        .get_or_insert_with(Vec::new)
+                        .push(VideoSample {
+                            bytes: annex_b,
+                            is_keyframe: keyframe,
+                        });
                 }
                 ChannelKind::Bytes => {
                     entry.timestamps.push(log_time);
@@ -309,14 +331,28 @@ impl Reader for McapReader {
                 let mut new_ts = Vec::with_capacity(pairs.len());
                 let mut new_vals = Vec::with_capacity(pairs.len());
                 let mut values = std::mem::take(&mut cd.values);
+                let mut video_in = cd.video_samples.take();
+                let mut new_video: Option<Vec<VideoSample>> =
+                    video_in.as_ref().map(|v| Vec::with_capacity(v.len()));
                 for (t, orig_idx) in pairs {
                     new_ts.push(t);
                     // Swap-remove style: replace with a cheap sentinel so we can reuse.
                     let v = std::mem::replace(&mut values[orig_idx], ParsedValue::None);
                     new_vals.push(v);
+                    if let (Some(src), Some(dst)) = (video_in.as_mut(), new_video.as_mut()) {
+                        let sample = std::mem::replace(
+                            &mut src[orig_idx],
+                            VideoSample {
+                                bytes: Vec::new(),
+                                is_keyframe: false,
+                            },
+                        );
+                        dst.push(sample);
+                    }
                 }
                 cd.timestamps = new_ts;
                 cd.values = new_vals;
+                cd.video_samples = new_video;
             }
         }
         for kf_list in keyframe_index.values_mut() {
@@ -440,6 +476,68 @@ impl Reader for McapReader {
             ChannelKind::Enum => build_enum_ipc(&cd.timestamps[lo..hi], &cd.values[lo..hi]),
             ChannelKind::Video | ChannelKind::Bytes => unreachable!("guarded above"),
         }
+    }
+
+    fn video_stream(
+        &self,
+        channel_id: &ChannelId,
+        from_pts_ns: i64,
+    ) -> crate::Result<EncodedChunkIter> {
+        let channel = self
+            .meta
+            .channels
+            .iter()
+            .find(|c| &c.id == channel_id)
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+
+        if channel.kind != ChannelKind::Video {
+            return Err(crate::Error::UnsupportedKind);
+        }
+
+        let cd = self
+            .channel_data
+            .get(channel_id)
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+        let video = cd
+            .video_samples
+            .as_ref()
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+
+        // Snap to the largest keyframe whose pts <= from_pts_ns. If the
+        // request predates every keyframe, start at the first one so callers
+        // always receive a decodable prefix.
+        let kfs = self
+            .keyframe_index
+            .get(channel_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let start_pts = if kfs.is_empty() {
+            // No keyframes at all — nothing decodable; emit an empty stream.
+            return Ok(Box::new(std::iter::empty()));
+        } else {
+            let idx = kfs.partition_point(|k| k.pts_ns <= from_pts_ns);
+            if idx == 0 {
+                kfs[0].pts_ns
+            } else {
+                kfs[idx - 1].pts_ns
+            }
+        };
+        let start_idx = cd.timestamps.partition_point(|&t| t < start_pts);
+
+        // Clone only the tail we need; the MCAP fixture is small and this
+        // keeps the iterator `'static` + `Send` without self-referential
+        // trickery.
+        let out: Vec<EncodedChunk> = cd.timestamps[start_idx..]
+            .iter()
+            .zip(video[start_idx..].iter())
+            .map(|(&pts_ns, s)| EncodedChunk {
+                pts_ns,
+                is_keyframe: s.is_keyframe,
+                data: s.bytes.clone(),
+            })
+            .collect();
+
+        Ok(Box::new(out.into_iter()))
     }
 }
 
@@ -802,6 +900,73 @@ mod tests {
             .expect("fetch");
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 10);
+    }
+
+    #[test]
+    fn video_stream_starts_at_preceding_keyframe() {
+        // Fixture has 3 keyframes at T0, T0+30ms, T0+60ms.
+        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
+        let r = McapReader::open(&bytes).expect("open");
+
+        // Target between keyframes 1 and 2: must snap to T0+30ms.
+        let chunks: Vec<_> = r
+            .video_stream(&"/camera/front".to_string(), T0 + 45_000_000)
+            .expect("video_stream")
+            .collect();
+        assert_eq!(chunks.len(), 2, "expect snap to k2, then k3");
+        assert_eq!(chunks[0].pts_ns, T0 + 30_000_000);
+        assert!(chunks[0].is_keyframe);
+        assert_eq!(chunks[1].pts_ns, T0 + 60_000_000);
+
+        // Target before everything snaps to the first keyframe.
+        let chunks: Vec<_> = r
+            .video_stream(&"/camera/front".to_string(), T0 - 1)
+            .expect("video_stream")
+            .collect();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0].pts_ns, T0);
+    }
+
+    #[test]
+    fn video_stream_is_monotonic_and_complete() {
+        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
+        let r = McapReader::open(&bytes).expect("open");
+
+        let chunks: Vec<_> = r
+            .video_stream(&"/camera/front".to_string(), T0)
+            .expect("video_stream")
+            .collect();
+        assert_eq!(chunks.len(), 3);
+        for w in chunks.windows(2) {
+            assert!(w[1].pts_ns > w[0].pts_ns, "chunks must be strictly monotonic");
+        }
+        // Fixture payload is SPS + IDR on every message, so each is a keyframe.
+        for c in &chunks {
+            assert!(c.is_keyframe);
+            assert!(!c.data.is_empty(), "payload bytes preserved");
+        }
+    }
+
+    #[test]
+    fn video_stream_returns_unsupported_on_signal_channel() {
+        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
+        let r = McapReader::open(&bytes).expect("open");
+        match r.video_stream(&"/vehicle/speed".to_string(), T0) {
+            Err(crate::Error::UnsupportedKind) => {}
+            Err(other) => panic!("expected UnsupportedKind, got {other:?}"),
+            Ok(_) => panic!("expected error on signal channel"),
+        }
+    }
+
+    #[test]
+    fn video_stream_unknown_channel_returns_channel_not_found() {
+        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
+        let r = McapReader::open(&bytes).expect("open");
+        match r.video_stream(&"/nope".to_string(), T0) {
+            Err(crate::Error::ChannelNotFound(_)) => {}
+            Err(other) => panic!("expected ChannelNotFound, got {other:?}"),
+            Ok(_) => panic!("expected error on unknown channel"),
+        }
     }
 
     #[test]
