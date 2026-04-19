@@ -87,12 +87,17 @@ export interface SessionState {
    * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
    * Dispatches to the right reader based on the owning source's kind so
    * panels never see the worker shape directly.
+   *
+   * `maxPoints` requests Rust-side min-max decimation (T4.3); pass the
+   * plot canvas width * 2 from the caller. `undefined` returns every
+   * sample in the range (legacy behaviour, only safe for small ranges).
    */
   fetchChannelRange(
     channelId: string,
     startNs: bigint,
     endNs: bigint,
     includePrev: boolean,
+    maxPoints?: number,
   ): Promise<Uint8Array>;
 }
 
@@ -222,7 +227,7 @@ export const useSession = create<SessionState>((set, get) => {
       }
     },
 
-    async fetchChannelRange(channelId, startNs, endNs, includePrev) {
+    async fetchChannelRange(channelId, startNs, endNs, includePrev, maxPoints) {
       if (!worker) throw new Error("session store: worker not initialised");
       const { channels, sources } = get();
       const channel = channels.find((c) => c.id === channelId);
@@ -236,6 +241,7 @@ export const useSession = create<SessionState>((set, get) => {
           startNs,
           endNs,
           includePrev,
+          maxPoints,
         );
       }
       if (source.kind === "mf4") {
@@ -245,6 +251,7 @@ export const useSession = create<SessionState>((set, get) => {
           startNs,
           endNs,
           includePrev,
+          maxPoints,
         );
       }
       throw new Error(`channel kind not plottable: ${source.kind}`);
