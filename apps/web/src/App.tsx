@@ -6,6 +6,7 @@ import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
+import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
@@ -81,6 +82,22 @@ declare global {
       addVideoPanel: (channelId?: string) => string | undefined;
       addPlotPanel: () => string | undefined;
       resetLayout: () => void;
+      // T6.1 — bind panels programmatically and read the per-panel
+      // sync snapshot so e2e specs can assert the cross-panel
+      // "PTS/ts ≤ cursor" invariant without driving the picker UI.
+      setVideoChannelBinding: (
+        panelId: string,
+        channelId: string | null,
+      ) => void;
+      addPlotChannelBinding: (panelId: string, channelId: string) => void;
+      getPlotPanelSync: (panelId: string) => {
+        cursorNs: string;
+        boundChannelIds: string[];
+        lastFetchedRange: { startNs: string; endNs: string } | null;
+        sampleAtCursor: Array<
+          { channelId: string; tsNs: string; value: number } | null
+        >;
+      } | null;
     };
   }
 }
@@ -234,6 +251,34 @@ export function App() {
         workspaceRef.current?.addVideoPanel(channelId),
       addPlotPanel: () => workspaceRef.current?.addPlotPanel(),
       resetLayout: () => workspaceRef.current?.resetLayout(),
+      setVideoChannelBinding: (panelId, channelId) =>
+        useSession.getState().setVideoBinding(panelId, channelId),
+      addPlotChannelBinding: (panelId, channelId) =>
+        useSession.getState().addPlotChannel(panelId, channelId),
+      getPlotPanelSync: (panelId) => {
+        const snap: PlotSyncSnapshot | undefined =
+          window.__drivelinePlotPanels?.[panelId];
+        if (!snap) return null;
+        return {
+          cursorNs: snap.cursorNs.toString(),
+          boundChannelIds: [...snap.boundChannelIds],
+          lastFetchedRange: snap.lastFetchedRange
+            ? {
+                startNs: snap.lastFetchedRange.startNs.toString(),
+                endNs: snap.lastFetchedRange.endNs.toString(),
+              }
+            : null,
+          sampleAtCursor: snap.sampleAtCursor.map((s) =>
+            s === null
+              ? null
+              : {
+                  channelId: s.channelId,
+                  tsNs: s.tsNs.toString(),
+                  value: s.value,
+                },
+          ),
+        };
+      },
     };
     setReady(true);
     return () => {
