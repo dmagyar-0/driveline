@@ -111,9 +111,10 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       startNs: bigint,
       endNs: bigint,
       includePrev: boolean,
+      maxPoints: number | undefined,
     ) {
       openLog.push(
-        `mcapFetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+        `mcapFetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}:${maxPoints ?? "none"}`,
       );
       return new Uint8Array([0xaa]);
     },
@@ -134,9 +135,10 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       startNs: bigint,
       endNs: bigint,
       includePrev: boolean,
+      maxPoints: number | undefined,
     ) {
       openLog.push(
-        `mf4FetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+        `mf4FetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}:${maxPoints ?? "none"}`,
       );
       return new Uint8Array([0xbb]);
     },
@@ -382,7 +384,7 @@ describe("fetchChannelRange", () => {
       .fetchChannelRange("/a", 100n, 200n, false);
     expect(bytes).toEqual(new Uint8Array([0xaa]));
     expect(worker.openLog).toContain(
-      `mcapFetchRange:${mcapSource.handle}:/a:100:200:false`,
+      `mcapFetchRange:${mcapSource.handle}:/a:100:200:false:none`,
     );
   });
 
@@ -396,7 +398,33 @@ describe("fetchChannelRange", () => {
       .fetchChannelRange("0/1", 500n, 3_000n, true);
     expect(bytes).toEqual(new Uint8Array([0xbb]));
     expect(worker.openLog).toContain(
-      `mf4FetchRange:${mf4Source.handle}:0/1:500:3000:true`,
+      `mf4FetchRange:${mf4Source.handle}:0/1:500:3000:true:none`,
+    );
+  });
+
+  it("forwards maxPoints to mcapFetchRange for T4.3 decimation", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    const mcapSource = useSession.getState().sources[0];
+    await useSession
+      .getState()
+      .fetchChannelRange("/a", 100n, 200n, false, 2048);
+    expect(worker.openLog).toContain(
+      `mcapFetchRange:${mcapSource.handle}:/a:100:200:false:2048`,
+    );
+  });
+
+  it("forwards maxPoints to mf4FetchRange for T4.3 decimation", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    const mf4Source = useSession.getState().sources[0];
+    await useSession
+      .getState()
+      .fetchChannelRange("0/1", 500n, 3_000n, true, 1024);
+    expect(worker.openLog).toContain(
+      `mf4FetchRange:${mf4Source.handle}:0/1:500:3000:true:1024`,
     );
   });
 

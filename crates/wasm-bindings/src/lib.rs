@@ -299,6 +299,7 @@ pub fn mf4_fetch_range(
     start_ns: i64,
     end_ns: i64,
     include_prev: bool,
+    max_points: Option<u32>,
 ) -> Result<Uint8Array, JsError> {
     READERS.with(|cell| {
         let slab = cell.borrow();
@@ -310,7 +311,7 @@ pub fn mf4_fetch_range(
                 &channel_id.to_string(),
                 TimeRange { start_ns, end_ns },
                 FetchOpts {
-                    max_points: None,
+                    max_points,
                     include_prev,
                 },
             )
@@ -328,6 +329,7 @@ pub fn mcap_fetch_range(
     start_ns: i64,
     end_ns: i64,
     include_prev: bool,
+    max_points: Option<u32>,
 ) -> Result<Uint8Array, JsError> {
     MCAP_READERS.with(|cell| {
         let slab = cell.borrow();
@@ -339,7 +341,7 @@ pub fn mcap_fetch_range(
                 &channel_id.to_string(),
                 TimeRange { start_ns, end_ns },
                 FetchOpts {
-                    max_points: None,
+                    max_points,
                     include_prev,
                 },
             )
