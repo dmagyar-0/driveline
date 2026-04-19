@@ -5,6 +5,7 @@ import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
+import { VideoPanel } from "./panels/VideoPanel";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -46,6 +47,7 @@ declare global {
       ) => Promise<Mf4FetchResult>;
       openFiles: (files: DevFileDesc[]) => Promise<OpenResult>;
       clearSession: () => Promise<void>;
+      videoLastBlitPtsNs: () => bigint | null;
     };
   }
 }
@@ -53,6 +55,30 @@ declare global {
 function formatRange(r: TimeRange | null): string {
   if (!r) return "(empty)";
   return `[${r.startNs.toString()}, ${r.endNs.toString()})`;
+}
+
+// Pre-FlexLayout (T6.2) shim: mount VideoPanel for the first MCAP video
+// channel found in the session. Mp4+sidecar video lands in T5.3.
+function FirstVideo() {
+  const sources = useSession((s) => s.sources);
+  for (const source of sources) {
+    if (source.kind !== "mcap") continue;
+    const channel = source.channels.find((c) => c.kind === "video");
+    if (!channel) continue;
+    return (
+      <section
+        data-testid="video-panel-mount"
+        style={{ width: "100%", aspectRatio: "16 / 9", maxWidth: 960 }}
+      >
+        <VideoPanel
+          key={`${source.id}:${channel.id}`}
+          mcapHandle={source.handle}
+          channelId={channel.id}
+        />
+      </section>
+    );
+  }
+  return null;
 }
 
 function SessionSummary() {
@@ -158,6 +184,7 @@ export function App() {
         await useSession.getState().clear();
         setRecentErrors([]);
       },
+      videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
     };
     setReady(true);
   }, []);
@@ -196,6 +223,7 @@ export function App() {
         Drop .mcap, .mf4, or .mp4 (+ .mp4.ts.bin) files here to load a session.
       </div>
       <SessionSummary />
+      <FirstVideo />
       {recentErrors.length > 0 && (
         <ul className={styles.errors} data-testid="session-errors">
           {recentErrors.map((e, i) => (

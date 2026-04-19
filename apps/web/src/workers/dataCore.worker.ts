@@ -9,6 +9,9 @@ import init, {
   open_mcap,
   close_mcap,
   mcap_summary,
+  mcap_video_open,
+  mcap_video_next_batch,
+  mcap_video_close,
   open_mp4_sidecar,
   close_mp4_sidecar,
   mp4_sidecar_summary,
@@ -71,6 +74,15 @@ export interface Mp4SidecarSummary {
   start_ns: bigint;
   end_ns: bigint;
   channels: Mp4SidecarChannelInfo[];
+}
+
+/// One encoded access unit pulled from a video stream. Annex-B framing per
+/// the MCAP `foxglove.CompressedVideo` payload; the TS video-decode worker
+/// feeds these directly to `VideoDecoder.decode`.
+export interface EncodedChunkWire {
+  pts_ns: bigint;
+  is_keyframe: boolean;
+  data: Uint8Array;
 }
 
 // serde_wasm_bindgen serialises i64 as JS `number` when the value fits in a
@@ -214,7 +226,37 @@ export const dataCoreApi = {
     await ready;
     return normaliseMp4(mp4_sidecar_summary(handle) as RawMp4Summary);
   },
+  async openMcapVideoStream(
+    handle: number,
+    channelId: string,
+    fromPtsNs: bigint,
+  ): Promise<number> {
+    await ready;
+    return mcap_video_open(handle, channelId, fromPtsNs);
+  },
+  async mcapVideoNextBatch(
+    streamId: number,
+    maxN: number,
+  ): Promise<EncodedChunkWire[]> {
+    await ready;
+    const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
+    return raw.map((c) => ({
+      pts_ns: toBig(c.pts_ns),
+      is_keyframe: !!c.is_keyframe,
+      data: c.data,
+    }));
+  },
+  async closeMcapVideoStream(streamId: number): Promise<void> {
+    await ready;
+    mcap_video_close(streamId);
+  },
 };
+
+interface RawEncodedChunk {
+  pts_ns: number | bigint;
+  is_keyframe: boolean;
+  data: Uint8Array;
+}
 
 export type DataCoreApi = typeof dataCoreApi;
 
