@@ -76,6 +76,17 @@ export interface SessionState {
   setSpeed(n: number): void;
   /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`. */
   setCursor(ns: bigint): void;
+  /**
+   * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
+   * Dispatches to the right reader based on the owning source's kind so
+   * panels never see the worker shape directly.
+   */
+  fetchChannelRange(
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array>;
 }
 
 export const MIN_SPEED = 0.25;
@@ -198,6 +209,34 @@ export const useSession = create<SessionState>((set, get) => {
       } else {
         set({ cursorNs: clamped });
       }
+    },
+
+    async fetchChannelRange(channelId, startNs, endNs, includePrev) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel) throw new Error(`unknown channel: ${channelId}`);
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      if (source.kind === "mcap") {
+        return worker.mcapFetchRange(
+          source.handle,
+          channel.id,
+          startNs,
+          endNs,
+          includePrev,
+        );
+      }
+      if (source.kind === "mf4") {
+        return worker.mf4FetchRange(
+          source.handle,
+          channel.id,
+          startNs,
+          endNs,
+          includePrev,
+        );
+      }
+      throw new Error(`channel kind not plottable: ${source.kind}`);
     },
 
     async openFiles(files) {

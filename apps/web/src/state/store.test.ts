@@ -105,6 +105,18 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
     async mcapSummary() {
       return summaries.mcap;
     },
+    async mcapFetchRange(
+      handle: number,
+      channelId: string,
+      startNs: bigint,
+      endNs: bigint,
+      includePrev: boolean,
+    ) {
+      openLog.push(
+        `mcapFetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+      );
+      return new Uint8Array([0xaa]);
+    },
     async openMf4() {
       openLog.push("mf4");
       await maybeBlock();
@@ -116,8 +128,17 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
     async mf4Summary() {
       return summaries.mf4;
     },
-    async mf4FetchRange() {
-      return new Uint8Array();
+    async mf4FetchRange(
+      handle: number,
+      channelId: string,
+      startNs: bigint,
+      endNs: bigint,
+      includePrev: boolean,
+    ) {
+      openLog.push(
+        `mf4FetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+      );
+      return new Uint8Array([0xbb]);
     },
     async openMp4Sidecar() {
       openLog.push("mp4");
@@ -348,4 +369,55 @@ describe("transport", () => {
     expect(s.speed).toBe(1);
     expect(s.globalRange).toBeNull();
   });
+});
+
+describe("fetchChannelRange", () => {
+  it("routes mcap channels to mcapFetchRange", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    const mcapSource = useSession.getState().sources[0];
+    const bytes = await useSession
+      .getState()
+      .fetchChannelRange("/a", 100n, 200n, false);
+    expect(bytes).toEqual(new Uint8Array([0xaa]));
+    expect(worker.openLog).toContain(
+      `mcapFetchRange:${mcapSource.handle}:/a:100:200:false`,
+    );
+  });
+
+  it("routes mf4 channels to mf4FetchRange", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    const mf4Source = useSession.getState().sources[0];
+    const bytes = await useSession
+      .getState()
+      .fetchChannelRange("0/1", 500n, 3_000n, true);
+    expect(bytes).toEqual(new Uint8Array([0xbb]));
+    expect(worker.openLog).toContain(
+      `mf4FetchRange:${mf4Source.handle}:0/1:500:3000:true`,
+    );
+  });
+
+  it("throws for unknown channels", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    await expect(
+      useSession.getState().fetchChannelRange("missing", 0n, 1n, false),
+    ).rejects.toThrow(/unknown channel/);
+  });
+
+  it("throws for non-plottable source kinds (video)", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession
+      .getState()
+      .openFiles([file("short.mp4"), file("short.mp4.ts.bin")]);
+    await expect(
+      useSession.getState().fetchChannelRange("1/video", 0n, 1n, false),
+    ).rejects.toThrow(/channel kind not plottable/);
+  });
+
 });

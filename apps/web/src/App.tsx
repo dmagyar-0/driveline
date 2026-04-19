@@ -8,6 +8,7 @@ import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
 import { VideoPanel } from "./panels/VideoPanel";
 import { startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
+import { PlotPanel } from "./panels/PlotPanel";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -253,6 +254,7 @@ export function App() {
       </div>
       <SessionSummary />
       <FirstVideo />
+      <PlotPanel />
       {recentErrors.length > 0 && (
         <ul className={styles.errors} data-testid="session-errors">
           {recentErrors.map((e, i) => (
