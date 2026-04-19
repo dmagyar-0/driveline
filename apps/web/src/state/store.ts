@@ -55,13 +55,31 @@ export interface SessionState {
   sources: SourceMeta[];
   channels: Channel[];
   globalRange: TimeRange | null;
+  // Transport slice (T3.1). Consumed by the scrubber (T3.2) and the rAF
+  // playback loop (T3.3); the invariants — clamp to `globalRange`, bounded
+  // speed, stop at end-of-session — are enforced by the actions below so
+  // that UI code cannot violate them.
+  cursorNs: bigint;
+  playing: boolean;
+  speed: number;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Close every loaded wasm handle and reset to the empty session. */
   clear(): Promise<void>;
   /** Test / dev seam: inject the Comlink worker proxy exactly once. */
   setWorker(worker: Remote<DataCoreApi>): void;
+  /** Start playback. No-op without a session; rewinds if at end. */
+  play(): void;
+  /** Stop playback. Always safe to call. */
+  pause(): void;
+  /** Set playback speed; clamped to [MIN_SPEED, MAX_SPEED]. */
+  setSpeed(n: number): void;
+  /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`. */
+  setCursor(ns: bigint): void;
 }
+
+export const MIN_SPEED = 0.25;
+export const MAX_SPEED = 4;
 
 function bigMin(a: bigint, b: bigint): bigint {
   return a < b ? a : b;
@@ -141,9 +159,45 @@ export const useSession = create<SessionState>((set, get) => {
     sources: [],
     channels: [],
     globalRange: null,
+    cursorNs: 0n,
+    playing: false,
+    speed: 1,
 
     setWorker(w) {
       worker = w;
+    },
+
+    play() {
+      const { globalRange, cursorNs } = get();
+      if (!globalRange) return;
+      if (cursorNs >= globalRange.endNs) {
+        set({ cursorNs: globalRange.startNs, playing: true });
+      } else {
+        set({ playing: true });
+      }
+    },
+
+    pause() {
+      set({ playing: false });
+    },
+
+    setSpeed(n) {
+      if (!Number.isFinite(n)) return;
+      set({ speed: Math.min(MAX_SPEED, Math.max(MIN_SPEED, n)) });
+    },
+
+    setCursor(ns) {
+      const { globalRange } = get();
+      if (!globalRange) return;
+      const clamped = bigMax(
+        globalRange.startNs,
+        bigMin(globalRange.endNs, ns),
+      );
+      if (clamped === globalRange.endNs) {
+        set({ cursorNs: clamped, playing: false });
+      } else {
+        set({ cursorNs: clamped });
+      }
     },
 
     async openFiles(files) {
@@ -227,10 +281,22 @@ export const useSession = create<SessionState>((set, get) => {
         if (newSources.length > 0) {
           const allSources = [...get().sources, ...newSources];
           const allChannels = allSources.flatMap((s) => s.channels);
+          const newRange = mergeGlobalRange(allSources);
+          const prevCursor = get().cursorNs;
+          // Seed / reseat the cursor so it is always inside `globalRange`.
+          // On the first successful drop, `cursorNs` is still the 0n
+          // default; on later drops, leave it alone unless it now falls
+          // outside the (possibly widened) union range.
+          const nextCursor =
+            newRange &&
+            (prevCursor < newRange.startNs || prevCursor > newRange.endNs)
+              ? newRange.startNs
+              : prevCursor;
           set({
             sources: allSources,
             channels: allChannels,
-            globalRange: mergeGlobalRange(allSources),
+            globalRange: newRange,
+            cursorNs: nextCursor,
           });
         }
 
@@ -258,7 +324,14 @@ export const useSession = create<SessionState>((set, get) => {
             // lifetime of the worker, or was already freed.
           }
         }
-        set({ sources: [], channels: [], globalRange: null });
+        set({
+          sources: [],
+          channels: [],
+          globalRange: null,
+          cursorNs: 0n,
+          playing: false,
+          speed: 1,
+        });
       };
       const next = pending.then(run, run);
       pending = next.catch(() => undefined);
