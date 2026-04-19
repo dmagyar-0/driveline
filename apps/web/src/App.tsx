@@ -80,14 +80,16 @@ function formatRange(r: TimeRange | null): string {
   return `[${r.startNs.toString()}, ${r.endNs.toString()})`;
 }
 
-// Pre-FlexLayout (T6.2) shim: mount VideoPanel for the first MCAP video
-// channel found in the session. Mp4+sidecar video lands in T5.3.
+// Pre-FlexLayout (T6.2) shim: mount VideoPanel for the first video channel
+// found in the session, whether it comes from an MCAP or an mp4+sidecar
+// source.
 function FirstVideo() {
   const sources = useSession((s) => s.sources);
   for (const source of sources) {
-    if (source.kind !== "mcap") continue;
+    if (source.kind !== "mcap" && source.kind !== "mp4+sidecar") continue;
     const channel = source.channels.find((c) => c.kind === "video");
     if (!channel) continue;
+    const sourceKind: "mcap" | "mp4" = source.kind === "mcap" ? "mcap" : "mp4";
     return (
       <section
         data-testid="video-panel-mount"
@@ -95,7 +97,8 @@ function FirstVideo() {
       >
         <VideoPanel
           key={`${source.id}:${channel.id}`}
-          mcapHandle={source.handle}
+          sourceKind={sourceKind}
+          sourceHandle={source.handle}
           channelId={channel.id}
         />
       </section>

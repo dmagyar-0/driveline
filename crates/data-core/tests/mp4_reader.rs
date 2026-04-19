@@ -38,3 +38,56 @@ fn sidecar_generator_is_deterministic() {
     assert_eq!(a, b);
     assert_eq!(a.as_slice(), SIDECAR);
 }
+
+/// T5.3: `video_stream` must yield one Annex-B access unit per mp4 sample,
+/// with the first chunk carrying inline SPS + PPS so the video-decode
+/// worker's codec-string probe works without the mp4's avcC extradata.
+#[test]
+fn video_stream_yields_annex_b_chunks_from_fixture() {
+    let r = Mp4SidecarReader::open_pair(MP4, SIDECAR).expect("open pair");
+    let ch_id = r.meta().channels[0].id.clone();
+
+    let chunks: Vec<_> = r
+        .video_stream(&ch_id, i64::MIN)
+        .expect("video_stream")
+        .collect();
+    assert_eq!(chunks.len(), 10);
+
+    for c in &chunks {
+        assert_eq!(
+            &c.data[..4],
+            &[0x00, 0x00, 0x00, 0x01],
+            "chunk must start with Annex-B start code",
+        );
+    }
+
+    // Timestamps must strictly increase, matching the sidecar.
+    let mut prev = i64::MIN;
+    for c in &chunks {
+        assert!(c.pts_ns > prev, "ptss must strictly increase");
+        prev = c.pts_ns;
+    }
+
+    // First chunk contains SPS (NAL 7) and PPS (NAL 8). Scan for start
+    // code + (header & 0x1f).
+    let first = &chunks[0].data;
+    let mut has_sps = false;
+    let mut has_pps = false;
+    let mut i = 0;
+    while i + 4 < first.len() {
+        if first[i..i + 4] == [0x00, 0x00, 0x00, 0x01] {
+            let header = first[i + 4];
+            match header & 0x1f {
+                7 => has_sps = true,
+                8 => has_pps = true,
+                _ => {}
+            }
+            i += 4;
+        } else {
+            i += 1;
+        }
+    }
+    assert!(has_sps, "first chunk missing SPS (NAL 7)");
+    assert!(has_pps, "first chunk missing PPS (NAL 8)");
+    assert!(chunks[0].is_keyframe);
+}
