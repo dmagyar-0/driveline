@@ -6,6 +6,7 @@ import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
 import { VideoPanel } from "./panels/VideoPanel";
+import { Transport } from "./timeline/Transport";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -48,6 +49,14 @@ declare global {
       openFiles: (files: DevFileDesc[]) => Promise<OpenResult>;
       clearSession: () => Promise<void>;
       videoLastBlitPtsNs: () => bigint | null;
+      // Read-only snapshot for e2e (T3.2). BigInts serialised as strings
+      // so the value survives `page.evaluate`.
+      getSessionSnapshot: () => {
+        cursorNs: string;
+        playing: boolean;
+        speed: number;
+        globalRange: { startNs: string; endNs: string } | null;
+      };
     };
   }
 }
@@ -185,6 +194,20 @@ export function App() {
         setRecentErrors([]);
       },
       videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
+      getSessionSnapshot: () => {
+        const s = useSession.getState();
+        return {
+          cursorNs: s.cursorNs.toString(),
+          playing: s.playing,
+          speed: s.speed,
+          globalRange: s.globalRange
+            ? {
+                startNs: s.globalRange.startNs.toString(),
+                endNs: s.globalRange.endNs.toString(),
+              }
+            : null,
+        };
+      },
     };
     setReady(true);
   }, []);
@@ -233,6 +256,7 @@ export function App() {
           ))}
         </ul>
       )}
+      <Transport />
     </main>
   );
 }
