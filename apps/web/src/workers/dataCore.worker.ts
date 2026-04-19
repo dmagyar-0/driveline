@@ -16,6 +16,9 @@ import init, {
   open_mp4_sidecar,
   close_mp4_sidecar,
   mp4_sidecar_summary,
+  mp4_video_open,
+  mp4_video_next_batch,
+  mp4_video_close,
 } from "../wasm/wasm_bindings.js";
 
 // Register the Comlink listener BEFORE awaiting wasm init. A top-level await
@@ -276,6 +279,30 @@ export const dataCoreApi = {
   async closeMcapVideoStream(streamId: number): Promise<void> {
     await ready;
     mcap_video_close(streamId);
+  },
+  async openMp4VideoStream(
+    handle: number,
+    channelId: string,
+    fromPtsNs: bigint,
+  ): Promise<number> {
+    await ready;
+    return mp4_video_open(handle, channelId, fromPtsNs);
+  },
+  async mp4VideoNextBatch(
+    streamId: number,
+    maxN: number,
+  ): Promise<EncodedChunkWire[]> {
+    await ready;
+    const raw = mp4_video_next_batch(streamId, maxN) as RawEncodedChunk[];
+    return raw.map((c) => ({
+      pts_ns: toBig(c.pts_ns),
+      is_keyframe: !!c.is_keyframe,
+      data: c.data,
+    }));
+  },
+  async closeMp4VideoStream(streamId: number): Promise<void> {
+    await ready;
+    mp4_video_close(streamId);
   },
 };
 
