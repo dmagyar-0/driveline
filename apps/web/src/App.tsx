@@ -5,6 +5,7 @@ import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
+import { startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import styles from "./App.module.css";
 
@@ -184,6 +185,11 @@ export function App() {
     };
     setReady(true);
   }, []);
+
+  // T3.3 · Drive `cursorNs` forward in real time while `playing`. The
+  // loop only reads/writes the existing store actions; its lifetime is
+  // tied to the App component.
+  useEffect(() => startPlaybackLoop(useSession), []);
 
   const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
