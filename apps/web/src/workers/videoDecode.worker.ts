@@ -1,4 +1,4 @@
-// T5.1 · MCAP video path.
+// T5.1 · MCAP video path, extended in T5.3 for mp4+sidecar sources.
 //
 // This worker owns a single `VideoDecoder` configured from the first MCAP
 // keyframe's inline SPS. It pulls encoded Annex-B chunks from the dataCore
@@ -8,9 +8,10 @@
 // must stay in JS land — everything upstream is plain bytes owned by Rust
 // until it crosses the wasm boundary.
 //
-// Out of scope for T5.1 (→ T5.2): HUD counters (dropped / queue depth),
-// seek UX, scrub-debounce tuning. We expose `seek()` and `close()` for
-// VideoPanel to drive; the queue is kept shallow.
+// T5.3: the worker is reader-agnostic. `open()` takes a `sourceKind` and
+// dispatches to the mcap or mp4 pull/close bindings; both readers emit
+// Annex-B chunks with inline SPS on the first keyframe, so the decode
+// path below is format-agnostic.
 
 import * as Comlink from "comlink";
 import type { EncodedChunkWire } from "./dataCore.worker";
@@ -18,13 +19,15 @@ import type { EncodedChunkWire } from "./dataCore.worker";
 const PULL_BATCH = 8;
 const REFILL_LOW_WATER = 4;
 
+export type VideoSourceKind = "mcap" | "mp4";
+
 interface OpenResult {
   codec: string;
 }
 
 // The subset of `DataCoreApi` that videoDecode actually needs. Bound to a
 // MessagePort handed in from the main thread so we share the main-thread
-// dataCore worker's wasm slab (where the MCAP was opened) — spawning our
+// dataCore worker's wasm slab (where the source was opened) — spawning our
 // own dataCore worker would give us an empty slab and every handle would
 // fail to resolve.
 interface DataCorePortApi {
@@ -38,12 +41,51 @@ interface DataCorePortApi {
     maxN: number,
   ): Promise<EncodedChunkWire[]>;
   closeMcapVideoStream(streamId: number): Promise<void>;
+  openMp4VideoStream(
+    handle: number,
+    channelId: string,
+    fromPtsNs: bigint,
+  ): Promise<number>;
+  mp4VideoNextBatch(
+    streamId: number,
+    maxN: number,
+  ): Promise<EncodedChunkWire[]>;
+  closeMp4VideoStream(streamId: number): Promise<void>;
+}
+
+// Resolves the three stream ops for a given reader kind. Keeping this as a
+// single dispatch point means `openInternal` / `pullAndFeed` / `closeInternal`
+// / `seek` never have to branch on `sourceKind` themselves.
+interface VideoStreamOps {
+  open(handle: number, channelId: string, fromPtsNs: bigint): Promise<number>;
+  next(streamId: number, maxN: number): Promise<EncodedChunkWire[]>;
+  close(streamId: number): Promise<void>;
+}
+
+function videoStreamOps(
+  dc: Comlink.Remote<DataCorePortApi>,
+  kind: VideoSourceKind,
+): VideoStreamOps {
+  if (kind === "mcap") {
+    return {
+      open: (h, c, p) => dc.openMcapVideoStream(h, c, p),
+      next: (s, m) => dc.mcapVideoNextBatch(s, m),
+      close: (s) => dc.closeMcapVideoStream(s),
+    };
+  }
+  return {
+    open: (h, c, p) => dc.openMp4VideoStream(h, c, p),
+    next: (s, m) => dc.mp4VideoNextBatch(s, m),
+    close: (s) => dc.closeMp4VideoStream(s),
+  };
 }
 
 interface SessionState {
-  mcapHandle: number;
+  sourceKind: VideoSourceKind;
+  sourceHandle: number;
   channelId: string;
   streamId: number;
+  ops: VideoStreamOps;
   decoder: VideoDecoder;
   sink: MessagePort | null;
   discardBeforePtsNs: bigint;
@@ -145,8 +187,7 @@ function ptsToMicros(ptsNs: bigint): number {
 async function pullAndFeed(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
-  const dc = getDataCore();
-  const batch = (await dc.mcapVideoNextBatch(
+  const batch = (await session.ops.next(
     session.streamId,
     PULL_BATCH,
   )) as EncodedChunkWire[];
@@ -199,17 +240,15 @@ async function configureFromFirstKeyframe(
 }
 
 async function openInternal(
-  mcapHandle: number,
+  sourceKind: VideoSourceKind,
+  sourceHandle: number,
   channelId: string,
   fromPtsNs: bigint,
 ): Promise<OpenResult> {
   await closeInternal();
   const dc = getDataCore();
-  const streamId = await dc.openMcapVideoStream(
-    mcapHandle,
-    channelId,
-    fromPtsNs,
-  );
+  const ops = videoStreamOps(dc, sourceKind);
+  const streamId = await ops.open(sourceHandle, channelId, fromPtsNs);
   const decoder = new VideoDecoder({
     output: (frame) => onFrame(frame),
     error: (e) => {
@@ -220,9 +259,11 @@ async function openInternal(
   });
 
   session = {
-    mcapHandle,
+    sourceKind,
+    sourceHandle,
     channelId,
     streamId,
+    ops,
     decoder,
     sink: session?.sink ?? null,
     discardBeforePtsNs: fromPtsNs,
@@ -232,10 +273,7 @@ async function openInternal(
     lastOpenedFromNs: fromPtsNs,
   };
 
-  const initial = (await dc.mcapVideoNextBatch(
-    streamId,
-    PULL_BATCH,
-  )) as EncodedChunkWire[];
+  const initial = (await ops.next(streamId, PULL_BATCH)) as EncodedChunkWire[];
   if (initial.length === 0) {
     session.ended = true;
     return { codec: "" };
@@ -291,7 +329,6 @@ function onFrame(frame: VideoFrame): void {
 
 async function closeInternal(): Promise<void> {
   if (!session) return;
-  const dc = getDataCore();
   const s = session;
   session = null;
   try {
@@ -305,7 +342,7 @@ async function closeInternal(): Promise<void> {
     }
   } finally {
     try {
-      await dc.closeMcapVideoStream(s.streamId);
+      await s.ops.close(s.streamId);
     } catch {
       // Stream handle may already be freed on the Rust side.
     }
@@ -329,11 +366,17 @@ export const videoDecodeApi = {
     pendingSink = port;
   },
   async open(
-    mcapHandle: number,
+    sourceKind: VideoSourceKind,
+    sourceHandle: number,
     channelId: string,
     fromPtsNs: bigint,
   ): Promise<OpenResult> {
-    const result = await openInternal(mcapHandle, channelId, fromPtsNs);
+    const result = await openInternal(
+      sourceKind,
+      sourceHandle,
+      channelId,
+      fromPtsNs,
+    );
     if (session && pendingSink) session.sink = pendingSink;
     return result;
   },
@@ -343,20 +386,19 @@ export const videoDecodeApi = {
     // with an unchanged target after a drag that ended on the same PTS.
     // The teardown+reopen round-trip isn't free, so skip it.
     if (session.lastOpenedFromNs === targetNs) return;
-    const { mcapHandle, channelId } = session;
+    const { sourceKind, sourceHandle, channelId, ops } = session;
     try {
       session.decoder.reset();
     } catch {
       // If the decoder is already closed, restart fresh below.
     }
     const prevStreamId = session.streamId;
-    const dc = getDataCore();
     try {
-      await dc.closeMcapVideoStream(prevStreamId);
+      await ops.close(prevStreamId);
     } catch {
       // ignore
     }
-    await openInternal(mcapHandle, channelId, targetNs);
+    await openInternal(sourceKind, sourceHandle, channelId, targetNs);
     if (session && pendingSink) session.sink = pendingSink;
   },
   async close(): Promise<void> {

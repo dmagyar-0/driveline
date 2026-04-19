@@ -19,7 +19,8 @@ import type { VideoDecodeApi } from "../workerClient";
 import styles from "./VideoPanel.module.css";
 
 interface VideoPanelProps {
-  mcapHandle: number;
+  sourceKind: "mcap" | "mp4";
+  sourceHandle: number;
   channelId: string;
 }
 
@@ -58,7 +59,11 @@ function formatPts(ptsNs: bigint | null): string {
   return `${ms.toFixed(3)} ms`;
 }
 
-export function VideoPanel({ mcapHandle, channelId }: VideoPanelProps) {
+export function VideoPanel({
+  sourceKind,
+  sourceHandle,
+  channelId,
+}: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const queueRef = useRef<QueueEntry[]>([]);
   const cursorRef = useRef<bigint>(0n);
@@ -134,7 +139,7 @@ export function VideoPanel({ mcapHandle, channelId }: VideoPanelProps) {
     const startNs = globalRange?.startNs ?? 0n;
     // Bridge the main-thread dataCore Remote into this panel's videoDecode
     // worker. Spawning a fresh dataCore inside the videoDecode worker would
-    // give it an empty wasm slab, making `mcapHandle` invalid there.
+    // give it an empty wasm slab, making `sourceHandle` invalid there.
     const dc = useSession.getState().getWorker();
     const bridge = new MessageChannel();
     const relay = {
@@ -143,6 +148,11 @@ export function VideoPanel({ mcapHandle, channelId }: VideoPanelProps) {
       mcapVideoNextBatch: (s: number, m: number) =>
         dc!.mcapVideoNextBatch(s, m),
       closeMcapVideoStream: (s: number) => dc!.closeMcapVideoStream(s),
+      openMp4VideoStream: (h: number, c: string, p: bigint) =>
+        dc!.openMp4VideoStream(h, c, p),
+      mp4VideoNextBatch: (s: number, m: number) =>
+        dc!.mp4VideoNextBatch(s, m),
+      closeMp4VideoStream: (s: number) => dc!.closeMp4VideoStream(s),
     };
     Comlink.expose(relay, bridge.port1);
     (async () => {
@@ -159,7 +169,12 @@ export function VideoPanel({ mcapHandle, channelId }: VideoPanelProps) {
       );
       if (cancelled) return;
       try {
-        const result = await videoDecode.open(mcapHandle, channelId, startNs);
+        const result = await videoDecode.open(
+          sourceKind,
+          sourceHandle,
+          channelId,
+          startNs,
+        );
         codecRef.current = result.codec || null;
         // Seed the seek-dedupe ref so the mount cursor effect doesn't
         // issue a seek back to the same target that `open()` already took.
@@ -242,7 +257,7 @@ export function VideoPanel({ mcapHandle, channelId }: VideoPanelProps) {
       videoDecodeRef.current = null;
       if (dc) void dc.close().catch(() => undefined);
     };
-  }, [mcapHandle, channelId, globalRange?.startNs]);
+  }, [sourceKind, sourceHandle, channelId, globalRange?.startNs]);
 
   // Seek side effect: trailing-debounce on cursorNs changes. Skips the
   // fire when the target duplicates the most recent one — this is what
