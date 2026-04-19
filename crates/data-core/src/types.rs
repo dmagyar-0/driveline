@@ -85,3 +85,13 @@ pub struct FetchOpts {
     pub max_points: Option<u32>,
     pub include_prev: bool,
 }
+
+/// One access unit (frame's worth of NAL units, Annex-B framed) as pulled
+/// from a `Reader::video_stream` iterator. `pts_ns` is absolute ns UTC;
+/// `is_keyframe` is true for IDR/SPS-bearing access units.
+#[derive(Debug, Clone)]
+pub struct EncodedChunk {
+    pub pts_ns: i64,
+    pub is_keyframe: bool,
+    pub data: Vec<u8>,
+}

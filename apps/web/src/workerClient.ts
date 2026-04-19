@@ -2,6 +2,7 @@ import * as Comlink from "comlink";
 import type {
   ChannelKindWire,
   DataCoreApi,
+  EncodedChunkWire,
   McapChannelInfo,
   McapSummary,
   Mf4ChannelInfo,
@@ -14,6 +15,7 @@ import type { VideoDecodeApi } from "./workers/videoDecode.worker";
 export type {
   ChannelKindWire,
   DataCoreApi,
+  EncodedChunkWire,
   McapChannelInfo,
   McapSummary,
   Mf4ChannelInfo,

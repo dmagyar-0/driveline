@@ -5,11 +5,16 @@
 //! simplified: `open` takes an in-memory slice; `video_stream` is not present
 //! yet because no `Video` channels are produced in this milestone.
 
-use crate::types::{ChannelId, FetchOpts, SourceMeta, TimeRange};
+use crate::types::{ChannelId, EncodedChunk, FetchOpts, SourceMeta, TimeRange};
 
 /// A freshly-serialised Arrow IPC (File format) byte payload, ready to
 /// `postMessage` to the main thread as a `Transferable`.
 pub type ArrowIpc = Vec<u8>;
+
+/// Owning iterator of encoded video access units produced by
+/// `Reader::video_stream`. Boxed so the worker-facing handle table can
+/// store heterogeneous readers behind a single trait object.
+pub type EncodedChunkIter = Box<dyn Iterator<Item = EncodedChunk> + Send>;
 
 pub trait Reader: Send {
     fn open(bytes: &[u8]) -> crate::Result<Self>
@@ -24,6 +29,20 @@ pub trait Reader: Send {
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc>;
+
+    /// Return an iterator over the Annex-B access units of the video
+    /// channel `channel_id`, starting at the largest keyframe whose PTS is
+    /// `<= from_pts_ns`. If no such keyframe exists, the iterator starts at
+    /// the first keyframe. Readers that do not produce video channels
+    /// return `Err(UnsupportedKind)`.
+    fn video_stream(
+        &self,
+        channel_id: &ChannelId,
+        from_pts_ns: i64,
+    ) -> crate::Result<EncodedChunkIter> {
+        let _ = (channel_id, from_pts_ns);
+        Err(crate::Error::UnsupportedKind)
+    }
 }
 
 #[cfg(test)]

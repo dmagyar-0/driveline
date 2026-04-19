@@ -15,9 +15,10 @@ pub mod types;
 pub use mcap::McapReader;
 pub use mf4::Mf4Reader;
 pub use mp4_sidecar::Mp4SidecarReader;
-pub use reader::{ArrowIpc, Reader};
+pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
 pub use types::{
-    Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceId, SourceKind, SourceMeta, TimeRange,
+    Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceId, SourceKind,
+    SourceMeta, TimeRange,
 };
 
 #[derive(Debug, thiserror::Error)]

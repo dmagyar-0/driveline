@@ -9,9 +9,10 @@
 use std::cell::RefCell;
 
 use data_core::{
-    ChannelKind, DType, FetchOpts, McapReader, Mf4Reader, Mp4SidecarReader, Reader, TimeRange,
+    ChannelKind, DType, EncodedChunkIter, FetchOpts, McapReader, Mf4Reader, Mp4SidecarReader,
+    Reader, TimeRange,
 };
-use js_sys::Uint8Array;
+use js_sys::{Array, Uint8Array};
 use serde::Serialize;
 use slab::Slab;
 use wasm_bindgen::prelude::*;
@@ -20,6 +21,7 @@ thread_local! {
     static READERS: RefCell<Slab<Mf4Reader>> = const { RefCell::new(Slab::new()) };
     static MP4_READERS: RefCell<Slab<Mp4SidecarReader>> = const { RefCell::new(Slab::new()) };
     static MCAP_READERS: RefCell<Slab<McapReader>> = const { RefCell::new(Slab::new()) };
+    static VIDEO_STREAMS: RefCell<Slab<EncodedChunkIter>> = const { RefCell::new(Slab::new()) };
 }
 
 /// i64 ns UTC timestamps frequently exceed `Number.MAX_SAFE_INTEGER`
@@ -346,4 +348,74 @@ pub fn mcap_fetch_range(
         out.copy_from(&bytes);
         Ok(out)
     })
+}
+
+/// Open an MCAP video stream, snapping to the keyframe at or before
+/// `from_pts_ns`. Returns a handle into `VIDEO_STREAMS`; callers must
+/// balance every successful open with `mcap_video_close`.
+#[wasm_bindgen]
+pub fn mcap_video_open(
+    handle: u32,
+    channel_id: &str,
+    from_pts_ns: i64,
+) -> Result<u32, JsError> {
+    let iter = MCAP_READERS.with(|cell| -> Result<EncodedChunkIter, JsError> {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid mcap handle"))?;
+        reader
+            .video_stream(&channel_id.to_string(), from_pts_ns)
+            .map_err(|e| JsError::new(&format!("video_stream failed: {e}")))
+    })?;
+    let key = VIDEO_STREAMS.with(|cell| cell.borrow_mut().insert(iter));
+    u32::try_from(key).map_err(|_| JsError::new("stream handle overflowed u32"))
+}
+
+/// Pull up to `max_n` encoded access units from a video stream, returning a
+/// JS array of `{ pts_ns: bigint, is_keyframe: boolean, data: Uint8Array }`.
+/// An empty array signals end-of-stream; the caller should `mcap_video_close`
+/// and stop polling. `max_n == 0` returns an empty array without advancing.
+#[wasm_bindgen]
+pub fn mcap_video_next_batch(stream_id: u32, max_n: u32) -> Result<Array, JsError> {
+    VIDEO_STREAMS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        let iter = slab
+            .get_mut(stream_id as usize)
+            .ok_or_else(|| JsError::new("invalid video stream handle"))?;
+        let out = Array::new();
+        for _ in 0..max_n {
+            let Some(chunk) = iter.next() else { break };
+            let obj = js_sys::Object::new();
+            js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("pts_ns"),
+                &js_sys::BigInt::from(chunk.pts_ns).into(),
+            )
+            .map_err(|_| JsError::new("set pts_ns"))?;
+            js_sys::Reflect::set(
+                &obj,
+                &JsValue::from_str("is_keyframe"),
+                &JsValue::from_bool(chunk.is_keyframe),
+            )
+            .map_err(|_| JsError::new("set is_keyframe"))?;
+            let data = Uint8Array::new_with_length(chunk.data.len() as u32);
+            data.copy_from(&chunk.data);
+            js_sys::Reflect::set(&obj, &JsValue::from_str("data"), &data.into())
+                .map_err(|_| JsError::new("set data"))?;
+            out.push(&obj);
+        }
+        Ok(out)
+    })
+}
+
+/// Drop the iterator at `stream_id`. No-op on stale handles.
+#[wasm_bindgen]
+pub fn mcap_video_close(stream_id: u32) {
+    VIDEO_STREAMS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(stream_id as usize) {
+            drop(slab.remove(stream_id as usize));
+        }
+    });
 }
