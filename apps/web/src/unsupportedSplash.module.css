@@ -1,0 +1,56 @@
+.splash {
+  font-family: system-ui, sans-serif;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #222;
+}
+
+.card {
+  max-width: 40rem;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 2rem 2.25rem;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.title {
+  margin: 0 0 0.75rem;
+  font-size: 1.5rem;
+  color: #b23a00;
+}
+
+.body {
+  margin: 0 0 1rem;
+  line-height: 1.5;
+  color: #333;
+}
+
+.browsers {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.browsers li {
+  padding: 0.35rem 0;
+}
+
+.browsers a {
+  color: #2a6df4;
+  text-decoration: none;
+}
+
+.browsers a:hover {
+  text-decoration: underline;
+}
+
+.note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #666;
+}

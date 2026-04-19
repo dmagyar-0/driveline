@@ -1,10 +1,10 @@
 // T6.2 · FlexLayout container for VideoPanel.
 //
 // Resolves `videoBindings[panelId]` from the store, finds the owning
-// source (only MCAP is wired today; mp4+sidecar lands with T5.3), and
-// renders the existing `VideoPanel` with props. When unbound, or when
-// the bound channel no longer exists (session cleared, different file
-// loaded), show a picker that lists every `kind === "video"` channel.
+// source (MCAP or mp4+sidecar), and renders the existing `VideoPanel`
+// with props. When unbound, or when the bound channel no longer exists
+// (session cleared, different file loaded), show a picker that lists
+// every `kind === "video"` channel.
 
 import { useMemo } from "react";
 import { useSession } from "../state/store";
@@ -19,6 +19,7 @@ interface VideoPanelContainerProps {
 interface Resolved {
   source: SourceMeta;
   channel: Channel;
+  sourceKind: "mcap" | "mp4";
 }
 
 function resolveBinding(
@@ -27,9 +28,12 @@ function resolveBinding(
 ): Resolved | null {
   if (!channelId) return null;
   for (const source of sources) {
+    if (source.kind !== "mcap" && source.kind !== "mp4+sidecar") continue;
     const channel = source.channels.find((c) => c.id === channelId);
     if (channel && channel.kind === "video") {
-      return { source, channel };
+      const sourceKind: "mcap" | "mp4" =
+        source.kind === "mcap" ? "mcap" : "mp4";
+      return { source, channel, sourceKind };
     }
   }
   return null;
@@ -38,6 +42,7 @@ function resolveBinding(
 function videoChannels(sources: SourceMeta[]): { source: SourceMeta; channel: Channel }[] {
   const out: { source: SourceMeta; channel: Channel }[] = [];
   for (const source of sources) {
+    if (source.kind !== "mcap" && source.kind !== "mp4+sidecar") continue;
     for (const channel of source.channels) {
       if (channel.kind === "video") out.push({ source, channel });
     }
@@ -56,14 +61,15 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
   );
   const candidates = useMemo(() => videoChannels(sources), [sources]);
 
-  if (resolved && resolved.source.kind === "mcap") {
+  if (resolved) {
     // Keyed by the binding id so switching channel tears down + remounts
-    // the worker wiring (matches the previous `FirstVideo` pattern).
+    // the worker wiring.
     return (
       <div className={styles.wrap} data-testid={`video-panel-${panelId}`}>
         <VideoPanel
           key={`${resolved.source.id}:${resolved.channel.id}`}
-          mcapHandle={resolved.source.handle}
+          sourceKind={resolved.sourceKind}
+          sourceHandle={resolved.source.handle}
           channelId={resolved.channel.id}
         />
         <button
@@ -80,13 +86,13 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
   }
 
   // Empty / unresolved state: show a small picker so the user can bind a
-  // video channel without leaving the panel. mp4+sidecar is not yet
-  // supported — T5.3 will route that source kind through here too.
+  // video channel without leaving the panel.
   return (
     <div className={styles.empty} data-testid={`video-panel-${panelId}-empty`}>
       {candidates.length === 0 ? (
         <p className={styles.hint}>
-          Drop an MCAP file with a video channel to bind this panel.
+          Drop an MCAP file or mp4 + sidecar with a video channel to bind
+          this panel.
         </p>
       ) : (
         <>
@@ -96,28 +102,19 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
               : "Pick a video channel for this panel:"}
           </p>
           <ul className={styles.list}>
-            {candidates.map(({ source, channel }) => {
-              const disabled = source.kind !== "mcap";
-              return (
-                <li key={channel.id}>
-                  <button
-                    type="button"
-                    className={styles.choice}
-                    disabled={disabled}
-                    onClick={() => setVideoBinding(panelId, channel.id)}
-                    data-testid={`video-pick-${channel.id}`}
-                    title={
-                      disabled
-                        ? "mp4+sidecar video wiring lands with T5.3"
-                        : undefined
-                    }
-                  >
-                    <span className={styles.choiceSource}>{source.name}</span>
-                    <span className={styles.choiceName}>{channel.name}</span>
-                  </button>
-                </li>
-              );
-            })}
+            {candidates.map(({ source, channel }) => (
+              <li key={channel.id}>
+                <button
+                  type="button"
+                  className={styles.choice}
+                  onClick={() => setVideoBinding(panelId, channel.id)}
+                  data-testid={`video-pick-${channel.id}`}
+                >
+                  <span className={styles.choiceSource}>{source.name}</span>
+                  <span className={styles.choiceName}>{channel.name}</span>
+                </button>
+              </li>
+            ))}
           </ul>
         </>
       )}
