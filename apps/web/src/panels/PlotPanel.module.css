@@ -7,6 +7,10 @@
   flex-direction: column;
   gap: 0.5rem;
   position: relative;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
 .controls {
@@ -95,7 +99,8 @@
 .plotArea {
   position: relative;
   width: 100%;
-  height: 280px;
+  flex: 1;
+  min-height: 0;
 }
 
 .plotMount {

@@ -1,0 +1,76 @@
+.workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  background: #0b0b0b;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: #151515;
+  border-bottom: 1px solid #2a2a2a;
+  font-size: 0.85rem;
+}
+
+.toolbarBtn {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #e0e0e0;
+  padding: 0.25rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.toolbarBtn:hover {
+  background: #222;
+  border-color: #555;
+}
+
+.toolbarBtnSecondary {
+  composes: toolbarBtn;
+  margin-left: auto;
+  color: #aaa;
+}
+
+.flexContainer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.emptyShell {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: #888;
+}
+
+/*
+ * FlexLayout renders its own chrome inside `.flexContainer`. Its dark
+ * stylesheet is imported globally from Workspace.tsx; a handful of CSS
+ * custom properties let us nudge the palette to match the rest of the
+ * app (orange cursor accent, slightly darker backgrounds). Only the
+ * vars that the installed 0.8.x `dark.css` documents are overridden.
+ */
+.flexContainer :global(.flexlayout__layout) {
+  --color-background: #0b0b0b;
+  --color-text: #e0e0e0;
+  --color-tabset-background: #151515;
+  --color-tabset-background-selected: #1a1a1a;
+  --color-tab-selected: #f97316;
+  --color-tab-selected-background: #151515;
+  --color-splitter: #2a2a2a;
+  --color-splitter-hover: #3a3a3a;
+  --color-splitter-drag: #f97316;
+}

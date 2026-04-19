@@ -172,6 +172,10 @@ function file(name: string, bytes = new Uint8Array([1, 2, 3])): File {
 
 beforeEach(async () => {
   await useSession.getState().clear();
+  // `clear()` leaves `layoutJson` alone (by design — layout outlives a
+  // session); wipe it manually so layout-slice tests start from a known
+  // empty state instead of whatever an earlier test last set.
+  useSession.getState().setLayoutJson(null);
 });
 
 describe("session store", () => {
@@ -448,4 +452,135 @@ describe("fetchChannelRange", () => {
     ).rejects.toThrow(/channel kind not plottable/);
   });
 
+});
+
+describe("layout + bindings (T6.2)", () => {
+  it("defaults to null layoutJson and empty binding maps", () => {
+    const s = useSession.getState();
+    expect(s.layoutJson).toBeNull();
+    expect(s.videoBindings).toEqual({});
+    expect(s.plotBindings).toEqual({});
+  });
+
+  it("setLayoutJson replaces the stored layout", () => {
+    const model = { layout: { type: "row", weight: 100, children: [] } };
+    useSession.getState().setLayoutJson(model);
+    expect(useSession.getState().layoutJson).toBe(model);
+    useSession.getState().setLayoutJson(null);
+    expect(useSession.getState().layoutJson).toBeNull();
+  });
+
+  it("setVideoBinding sets and clears", () => {
+    useSession.getState().setVideoBinding("video-1", "/cam/front");
+    expect(useSession.getState().videoBindings).toEqual({
+      "video-1": "/cam/front",
+    });
+
+    // no-op when value already matches — object identity preserved
+    const snapshot = useSession.getState().videoBindings;
+    useSession.getState().setVideoBinding("video-1", "/cam/front");
+    expect(useSession.getState().videoBindings).toBe(snapshot);
+
+    useSession.getState().setVideoBinding("video-1", null);
+    expect(useSession.getState().videoBindings["video-1"]).toBeNull();
+  });
+
+  it("setVideoBinding on different panels does not collide", () => {
+    useSession.getState().setVideoBinding("video-1", "/cam/front");
+    useSession.getState().setVideoBinding("video-2", "/cam/rear");
+    expect(useSession.getState().videoBindings).toEqual({
+      "video-1": "/cam/front",
+      "video-2": "/cam/rear",
+    });
+  });
+
+  it("addPlotChannel appends, dedupes, and caps at MAX_PLOT_SERIES", () => {
+    const store = useSession.getState();
+    for (let i = 0; i < 10; i++) {
+      store.addPlotChannel("plot-1", `/ch/${i}`);
+    }
+    const bound = useSession.getState().plotBindings["plot-1"];
+    expect(bound).toHaveLength(8);
+    expect(bound).toEqual([
+      "/ch/0",
+      "/ch/1",
+      "/ch/2",
+      "/ch/3",
+      "/ch/4",
+      "/ch/5",
+      "/ch/6",
+      "/ch/7",
+    ]);
+    // dedupe: adding an existing id is a no-op
+    store.addPlotChannel("plot-1", "/ch/0");
+    expect(useSession.getState().plotBindings["plot-1"]).toEqual(bound);
+  });
+
+  it("removePlotChannel drops the id and no-ops when absent", () => {
+    const store = useSession.getState();
+    store.addPlotChannel("plot-1", "/a");
+    store.addPlotChannel("plot-1", "/b");
+    store.removePlotChannel("plot-1", "/a");
+    expect(useSession.getState().plotBindings["plot-1"]).toEqual(["/b"]);
+    // absent → no change
+    const before = useSession.getState().plotBindings;
+    store.removePlotChannel("plot-1", "/missing");
+    expect(useSession.getState().plotBindings).toBe(before);
+    // unknown panel → no change
+    store.removePlotChannel("plot-does-not-exist", "/b");
+    expect(useSession.getState().plotBindings).toBe(before);
+  });
+
+  it("setPlotBinding dedupes and caps the input", () => {
+    useSession
+      .getState()
+      .setPlotBinding("plot-1", [
+        "/a",
+        "/a",
+        "/b",
+        "/c",
+        "/d",
+        "/e",
+        "/f",
+        "/g",
+        "/h",
+        "/i",
+      ]);
+    expect(useSession.getState().plotBindings["plot-1"]).toEqual([
+      "/a",
+      "/b",
+      "/c",
+      "/d",
+      "/e",
+      "/f",
+      "/g",
+      "/h",
+    ]);
+  });
+
+  it("bindings on different plot panels are independent", () => {
+    const store = useSession.getState();
+    store.addPlotChannel("plot-1", "/speed");
+    store.addPlotChannel("plot-2", "/rpm");
+    const pb = useSession.getState().plotBindings;
+    expect(pb["plot-1"]).toEqual(["/speed"]);
+    expect(pb["plot-2"]).toEqual(["/rpm"]);
+  });
+
+  it("clear wipes bindings but keeps layoutJson", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    const model = { layout: { type: "row", weight: 100, children: [] } };
+    useSession.getState().setLayoutJson(model);
+    useSession.getState().setVideoBinding("video-1", "/cam");
+    useSession.getState().addPlotChannel("plot-1", "/a");
+
+    await useSession.getState().clear();
+    const s = useSession.getState();
+    expect(s.videoBindings).toEqual({});
+    expect(s.plotBindings).toEqual({});
+    // layout survives
+    expect(s.layoutJson).toBe(model);
+  });
 });

@@ -1,5 +1,5 @@
 // T4.2 · PlotPanel — multi-series and channel picker (T4.3: Rust-side
-// min-max decimation).
+// min-max decimation). T6.2 wired bindings into the store.
 //
 // Up to 8 scalar channels bound via a popover tree (`ChannelPicker`).
 // Colour per channel is deterministic (`palette.colorFor`). Data for
@@ -13,12 +13,12 @@
 // in Rust so PlotPanel can render 1 M-sample windows under the 16 ms
 // budget in docs/09-verification-plan.md:146.
 //
-// Bindings live in component-local state, same pattern as T4.1; the
-// store's planned `plotBindings: Record<PanelId, ChannelId[]>` slot
-// (docs/06-ui-and-panels.md:63) moves in with FlexLayout (T6.2).
+// Bindings live in the Zustand store keyed by `panelId` (T6.2) so they
+// round-trip through FlexLayout serialisation and `localStorage`.
+// Several plot panels can coexist, each with its own independent set of
+// channels (per the manual checklist in docs/09-verification-plan.md:131).
 //
-// Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle,
-// per-panel layout persistence.
+// Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
@@ -31,6 +31,10 @@ import { cursorXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import styles from "./PlotPanel.module.css";
+
+interface PlotPanelProps {
+  panelId: string;
+}
 
 const EMPTY_X = new Float64Array();
 const EMPTY_Y = new Float64Array();
@@ -46,12 +50,20 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
   return m;
 }
 
-export function PlotPanel() {
+export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
+  const storedBindings = useSession((s) => s.plotBindings[panelId]);
+  const setPlotBinding = useSession((s) => s.setPlotBinding);
+  const addPlotChannel = useSession((s) => s.addPlotChannel);
+  const removePlotChannel = useSession((s) => s.removePlotChannel);
 
-  const [boundChannelIds, setBoundChannelIds] = useState<string[]>([]);
+  const boundChannelIds = useMemo(
+    () => storedBindings ?? [],
+    [storedBindings],
+  );
+
   const [pickerOpen, setPickerOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -62,16 +74,18 @@ export function PlotPanel() {
     [boundChannelIds, channels],
   );
 
-  // Drop stale bindings when sources change (e.g. after `clear`).
+  // Drop bindings that no longer map to a live scalar channel. Defence in
+  // depth against stale ids left in the persisted layout (e.g. the user
+  // saved a session, reloaded, then dropped a different file).
   useEffect(() => {
-    setBoundChannelIds((ids) => {
-      const filtered = ids.filter((id) => {
-        const c = channels.get(id);
-        return c && c.kind === "scalar";
-      });
-      return filtered.length === ids.length ? ids : filtered;
+    const filtered = boundChannelIds.filter((id) => {
+      const c = channels.get(id);
+      return c && c.kind === "scalar";
     });
-  }, [channels]);
+    if (filtered.length !== boundChannelIds.length) {
+      setPlotBinding(panelId, filtered);
+    }
+  }, [boundChannelIds, channels, panelId, setPlotBinding]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);
@@ -264,15 +278,15 @@ export function PlotPanel() {
   };
 
   const onToggle = (id: string) => {
-    setBoundChannelIds((ids) => {
-      if (ids.includes(id)) return ids.filter((x) => x !== id);
-      if (ids.length >= MAX_PLOT_SERIES) return ids;
-      return [...ids, id];
-    });
+    if (boundChannelIds.includes(id)) {
+      removePlotChannel(panelId, id);
+    } else {
+      addPlotChannel(panelId, id);
+    }
   };
 
   const onRemove = (id: string) => {
-    setBoundChannelIds((ids) => ids.filter((x) => x !== id));
+    removePlotChannel(panelId, id);
   };
 
   return (

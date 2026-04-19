@@ -5,11 +5,12 @@ import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
-import { VideoPanel } from "./panels/VideoPanel";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import { startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
-import { PlotPanel } from "./panels/PlotPanel";
+import { Workspace } from "./layout/Workspace";
+import type { WorkspaceHandle } from "./layout/Workspace";
+import { attachLayoutPersistence } from "./layout/persist";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -71,6 +72,15 @@ declare global {
         speed: number;
         globalRange: { startNs: string; endNs: string } | null;
       };
+      // T6.2 — expose layout + panel-add actions for future e2e driving.
+      // `getLayoutJson` returns a serialised snapshot; `setLayoutJson`
+      // replaces it wholesale; the add methods create a new FlexLayout
+      // tab (video/plot) with a fresh panel id.
+      getLayoutJson: () => string;
+      setLayoutJson: (json: unknown | null) => void;
+      addVideoPanel: (channelId?: string) => string | undefined;
+      addPlotPanel: () => string | undefined;
+      resetLayout: () => void;
     };
   }
 }
@@ -78,33 +88,6 @@ declare global {
 function formatRange(r: TimeRange | null): string {
   if (!r) return "(empty)";
   return `[${r.startNs.toString()}, ${r.endNs.toString()})`;
-}
-
-// Pre-FlexLayout (T6.2) shim: mount VideoPanel for the first video channel
-// found in the session, whether it comes from an MCAP or an mp4+sidecar
-// source.
-function FirstVideo() {
-  const sources = useSession((s) => s.sources);
-  for (const source of sources) {
-    if (source.kind !== "mcap" && source.kind !== "mp4+sidecar") continue;
-    const channel = source.channels.find((c) => c.kind === "video");
-    if (!channel) continue;
-    const sourceKind: "mcap" | "mp4" = source.kind === "mcap" ? "mcap" : "mp4";
-    return (
-      <section
-        data-testid="video-panel-mount"
-        style={{ width: "100%", aspectRatio: "16 / 9", maxWidth: 960 }}
-      >
-        <VideoPanel
-          key={`${source.id}:${channel.id}`}
-          sourceKind={sourceKind}
-          sourceHandle={source.handle}
-          channelId={channel.id}
-        />
-      </section>
-    );
-  }
-  return null;
 }
 
 function SessionSummary() {
@@ -146,6 +129,7 @@ function SessionSummary() {
 export function App() {
   const dataCore = useRef<Remote<DataCoreApi> | null>(null);
   const videoDecode = useRef<Remote<VideoDecodeApi> | null>(null);
+  const workspaceRef = useRef<WorkspaceHandle | null>(null);
   const [ready, setReady] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [recentErrors, setRecentErrors] = useState<
@@ -156,6 +140,10 @@ export function App() {
     dataCore.current = makeDataCoreClient();
     videoDecode.current = makeVideoDecodeClient();
     useSession.getState().setWorker(dataCore.current);
+    // T6.2 — start saving `layoutJson` / `videoBindings` / `plotBindings`
+    // to localStorage on every change. The store was hydrated from the
+    // same key at module load, so the first render already matches.
+    const detachPersistence = attachLayoutPersistence(useSession);
 
     window.__drivelineDevHooks = {
       ping: async () => await dataCore.current!.ping(),
@@ -239,8 +227,18 @@ export function App() {
             : null,
         };
       },
+      getLayoutJson: () =>
+        JSON.stringify(useSession.getState().layoutJson),
+      setLayoutJson: (json) => useSession.getState().setLayoutJson(json),
+      addVideoPanel: (channelId) =>
+        workspaceRef.current?.addVideoPanel(channelId),
+      addPlotPanel: () => workspaceRef.current?.addPlotPanel(),
+      resetLayout: () => workspaceRef.current?.resetLayout(),
     };
     setReady(true);
+    return () => {
+      detachPersistence();
+    };
   }, []);
 
   // T3.3 · Drive `cursorNs` forward in real time while `playing`. The
@@ -282,8 +280,6 @@ export function App() {
         Drop .mcap, .mf4, or .mp4 (+ .mp4.ts.bin) files here to load a session.
       </div>
       <SessionSummary />
-      <FirstVideo />
-      <PlotPanel />
       {recentErrors.length > 0 && (
         <ul className={styles.errors} data-testid="session-errors">
           {recentErrors.map((e, i) => (
@@ -293,6 +289,7 @@ export function App() {
           ))}
         </ul>
       )}
+      <Workspace ref={workspaceRef} />
       <Transport />
     </main>
   );

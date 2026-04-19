@@ -1,0 +1,97 @@
+.wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+.wrap > :global(.panel),
+.wrap > div {
+  flex: 1;
+}
+
+.clearBtn {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  background: rgba(0, 0, 0, 0.6);
+  color: #e0e0e0;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  cursor: pointer;
+  font-size: 0.75rem;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.wrap:hover .clearBtn,
+.clearBtn:focus-visible {
+  opacity: 1;
+}
+
+.empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  color: #bbb;
+  background: #0f0f0f;
+  box-sizing: border-box;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.9rem;
+  text-align: center;
+}
+
+.list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  max-height: 60%;
+  overflow-y: auto;
+  width: min(100%, 24rem);
+}
+
+.choice {
+  width: 100%;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  color: #e0e0e0;
+  padding: 0.4rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.choice:hover:not(:disabled) {
+  background: #222;
+  border-color: #555;
+}
+
+.choice:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.choiceSource {
+  font-size: 0.7rem;
+  color: #888;
+}
+
+.choiceName {
+  font-weight: 500;
+}
