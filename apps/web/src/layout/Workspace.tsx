@@ -81,16 +81,21 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
   );
 
   // If the store's `layoutJson` changes out from under us (dev hook,
-  // reset button, another tab) and does not match the Model's current
-  // JSON, rebuild. We compare by stringify — cheap for MVP layouts.
+  // reset button, another tab) and does not match the JSON we most
+  // recently used to (re)build the Model, rebuild. Depending only on the
+  // stringified layoutJson avoids a render loop: FlexLayout's
+  // `Model.fromJson(X).toJson()` is not an identity, so comparing to the
+  // live model's JSON can re-fire this effect indefinitely.
+  const lastBuiltJsonRef = useRef<string>(
+    JSON.stringify(layoutJson ?? defaultLayoutModel),
+  );
   useEffect(() => {
-    const current = JSON.stringify(model.toJson());
     const next = JSON.stringify(layoutJson ?? defaultLayoutModel);
-    if (current !== next) {
-      ignoreNextChangeRef.current = true;
-      setReloadKey((k) => k + 1);
-    }
-  }, [layoutJson, model]);
+    if (next === lastBuiltJsonRef.current) return;
+    lastBuiltJsonRef.current = next;
+    ignoreNextChangeRef.current = true;
+    setReloadKey((k) => k + 1);
+  }, [layoutJson]);
 
   const onModelChange = useCallback(
     (m: Model) => {
