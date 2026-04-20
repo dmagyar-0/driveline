@@ -80,17 +80,9 @@ export const dataCoreApi = {
     startNs: bigint,
     endNs: bigint,
     includePrev: boolean,
-    maxPoints: number | undefined,
   ): Promise<Uint8Array> {
     await ready;
-    return mf4_fetch_range(
-      handle,
-      channelId,
-      startNs,
-      endNs,
-      includePrev,
-      maxPoints,
-    );
+    return mf4_fetch_range(handle, channelId, startNs, endNs, includePrev);
   },
   async openMcap(bytes: Uint8Array): Promise<number> {
     await ready;
@@ -110,17 +102,9 @@ export const dataCoreApi = {
     startNs: bigint,
     endNs: bigint,
     includePrev: boolean,
-    maxPoints: number | undefined,
   ): Promise<Uint8Array> {
     await ready;
-    return mcap_fetch_range(
-      handle,
-      channelId,
-      startNs,
-      endNs,
-      includePrev,
-      maxPoints,
-    );
+    return mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
   },
   async openMp4Sidecar(
     mp4Bytes: Uint8Array,

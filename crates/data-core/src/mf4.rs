@@ -6,10 +6,6 @@
 //! and surface every non-master channel as a `Scalar` / `Float64` Arrow
 //! column on demand.
 //!
-//! `opts.max_points` decimation is applied to the sliced scalar vectors
-//! via [`crate::decimate::min_max_decimate`] (T4.3), matching the MCAP
-//! reader's behaviour.
-//!
 //! Deliberate scope limits (per `docs/10-task-breakdown.md` T2.2 and the
 //! approved plan): no vector / enum / bytes channels, no compressed-
 //! block decoding (the upstream library itself does not support `##DZ`
@@ -23,7 +19,6 @@ use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use mf4_rs::index::{IndexedChannelGroup, MdfIndex};
 
-use crate::decimate::min_max_decimate;
 use crate::reader::{ArrowIpc, Reader};
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
@@ -206,12 +201,8 @@ impl Reader for Mf4Reader {
                 let all_values = self
                     .idx
                     .read_channel_values_from_slice_as_f64(g, c, &self.bytes)?;
-                let body_ts: Vec<i64> = abs_ns[start_idx..end_idx].to_vec();
-                let body_vals: Vec<f64> = all_values[start_idx..end_idx].to_vec();
-                let (mut ts, mut vs) = match opts.max_points {
-                    Some(m) => min_max_decimate(&body_ts, &body_vals, m),
-                    None => (body_ts, body_vals),
-                };
+                let mut ts: Vec<i64> = abs_ns[start_idx..end_idx].to_vec();
+                let mut vs: Vec<f64> = all_values[start_idx..end_idx].to_vec();
                 if let Some(p) = prev_idx {
                     ts.insert(0, abs_ns[p]);
                     vs.insert(0, all_values[p]);
@@ -420,10 +411,7 @@ mod tests {
             .fetch_range(
                 &channel_id,
                 range,
-                FetchOpts {
-                    max_points: None,
-                    include_prev: true,
-                },
+                FetchOpts { include_prev: true },
             )
             .unwrap();
         let batch = parse_ipc(&ipc);
@@ -547,140 +535,4 @@ mod tests {
         assert_eq!(r.meta().time_range.end_ns, start + 49_000_000 + 1);
     }
 
-    /// Single CG at 1 kHz carrying `n` samples. Values are a triangle
-    /// wave with distinguished global extrema (min -42.0 at n/2, max
-    /// 99.0 at n/3) so decimation tests can assert peak preservation.
-    fn synth_long_scalar(n: usize) -> Vec<u8> {
-        let (mut w, cursor) = new_writer();
-        w.init_mdf_file().unwrap();
-        let cg = w.add_channel_group(None, |_| {}).unwrap();
-        let t = w
-            .add_channel(&cg, None, |ch| {
-                ch.data_type = Mf4DataType::FloatLE;
-                ch.name = Some("Time".into());
-                ch.bit_count = 64;
-            })
-            .unwrap();
-        w.set_time_channel(&t).unwrap();
-        w.add_channel(&cg, Some(&t), |ch| {
-            ch.data_type = Mf4DataType::FloatLE;
-            ch.name = Some("signal".into());
-            ch.bit_count = 64;
-        })
-        .unwrap();
-
-        let min_at = n / 2;
-        let max_at = n / 3;
-        let t_samples: Vec<f64> = (0..n).map(|i| i as f64 * 0.001).collect();
-        let v_samples: Vec<f64> = (0..n)
-            .map(|i| {
-                if i == min_at {
-                    -42.0
-                } else if i == max_at {
-                    99.0
-                } else {
-                    ((i % 20) as f64 - 10.0).abs()
-                }
-            })
-            .collect();
-
-        w.start_data_block_for_cg(&cg, 0).unwrap();
-        w.write_columns_f64(&cg, &[&t_samples, &v_samples]).unwrap();
-        w.finish_data_block(&cg).unwrap();
-        w.finalize().unwrap();
-        bytes_of(cursor)
-    }
-
-    #[test]
-    fn fetch_range_applies_min_max_decimation_for_scalar() {
-        let bytes = synth_long_scalar(1000);
-        let r = Mf4Reader::open(&bytes).unwrap();
-        let channel_id = r.meta().channels[0].id.clone();
-
-        let ipc = r
-            .fetch_range(
-                &channel_id,
-                r.meta().time_range,
-                FetchOpts {
-                    max_points: Some(200),
-                    include_prev: false,
-                },
-            )
-            .unwrap();
-        let batch = parse_ipc(&ipc);
-        assert!(
-            batch.num_rows() <= 200,
-            "decimated batch must honour max_points; got {}",
-            batch.num_rows(),
-        );
-        assert!(batch.num_rows() < 1000);
-
-        let vals = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
-        let samples: Vec<f64> = (0..vals.len()).map(|i| vals.value(i)).collect();
-        let out_min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
-        let out_max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        assert!((out_min - -42.0).abs() < 1e-9, "lost global min");
-        assert!((out_max - 99.0).abs() < 1e-9, "lost global max");
-    }
-
-    #[test]
-    fn fetch_range_passes_through_when_max_points_exceeds_range() {
-        let bytes = synth_single_group();
-        let r = Mf4Reader::open(&bytes).unwrap();
-        let channel_id = r.meta().channels[0].id.clone();
-
-        let ipc = r
-            .fetch_range(
-                &channel_id,
-                r.meta().time_range,
-                FetchOpts {
-                    max_points: Some(1000),
-                    include_prev: false,
-                },
-            )
-            .unwrap();
-        let batch = parse_ipc(&ipc);
-        assert_eq!(batch.num_rows(), 10);
-    }
-
-    #[test]
-    fn fetch_range_preserves_include_prev_with_decimation() {
-        let bytes = synth_long_scalar(500);
-        let r = Mf4Reader::open(&bytes).unwrap();
-        let channel_id = r.meta().channels[0].id.clone();
-        let base = r.meta().time_range.start_ns;
-
-        let range = TimeRange {
-            start_ns: base + 100_000_000, // index 100 at 1 kHz
-            end_ns: base + 400_000_000,   // index 400
-        };
-        let ipc = r
-            .fetch_range(
-                &channel_id,
-                range,
-                FetchOpts {
-                    max_points: Some(40),
-                    include_prev: true,
-                },
-            )
-            .unwrap();
-        let batch = parse_ipc(&ipc);
-        assert!(batch.num_rows() >= 1);
-
-        let ts = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
-        // Leading row is the sample strictly before start_ns.
-        assert!(ts.value(0) < range.start_ns);
-        for i in 1..ts.len() {
-            assert!(ts.value(i) >= range.start_ns);
-            assert!(ts.value(i) < range.end_ns);
-        }
-    }
 }

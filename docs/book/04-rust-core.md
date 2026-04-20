@@ -268,8 +268,6 @@ the lack of exceptions.
   `fetch_range`, `video_stream`.
 - `noop.rs` is the 15-line toy implementation used as a sanity check.
 - `mcap.rs`, `mf4.rs`, `mp4_sidecar.rs` are the real ones.
-- `decimate.rs` is a helper for reducing huge signals to plottable
-  sizes — worth reading alongside PlotPanel in Chapter 6.
 - Errors are a `thiserror` enum; `Result<T>` is a crate-local alias.
 
 This is the entire portable Rust API. Next chapter: how we teach a

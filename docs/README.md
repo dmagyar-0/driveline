@@ -60,7 +60,7 @@ The MVP has shipped. This directory now holds two kinds of content:
 - **Video:** H.264 via WebCodecs. 4K @ 30 fps with hardware decode.
   Seek by keyframe + decode-forward. MSE rejected.
 - **Signals:** uPlot, fed by Arrow IPC record batches produced by the
-  Rust core. Server-side decimation for large windows.
+  Rust core. Every in-range sample is returned verbatim.
 - **Layout:** FlexLayout for dockable panels; state in Zustand.
 - **Chromium-first.** Firefox best-effort. Safari not in MVP.
 

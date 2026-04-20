@@ -110,7 +110,6 @@ crates/data-core/
 │   ├── mcap.rs      # McapReader — reads .mcap files
 │   ├── mf4.rs       # Mf4Reader — reads .mf4 files
 │   ├── mp4_sidecar.rs # Mp4SidecarReader — reads .mp4 + .mp4.timestamps
-│   ├── decimate.rs  # Min-max decimation for large signals
 │   └── fixtures.rs  # Test-data generators
 ├── tests/           # Integration tests
 └── examples/        # Small programs that exercise the library

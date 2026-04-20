@@ -11,12 +11,6 @@
 //!   producing Arrow IPC bytes matching the contract in
 //!   `docs/03-data-model.md:100-120`.
 //!
-//! `opts.max_points` decimation is honoured for `Scalar` channels via
-//! [`crate::decimate::min_max_decimate`] (T4.3). `Vector` and `Enum`
-//! channels currently pass through the full slice — their sample
-//! counts are orders of magnitude below the 1 M-point perf target and
-//! per-axis decimation is a separate design.
-//!
 //! Deliberate omissions: `video_stream` belongs to T5.1. `Bytes`
 //! channels are surfaced in the channel list but `fetch_range` returns
 //! `UnsupportedKind` for them — schema-aware decoding is post-MVP.
@@ -41,7 +35,6 @@ use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use base64::Engine as _;
 
-use crate::decimate::min_max_decimate;
 use crate::reader::{ArrowIpc, EncodedChunkIter, Reader};
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceKind, SourceMeta,
@@ -470,9 +463,7 @@ impl Reader for McapReader {
             .partition_point(|&t| t < range.end_ns)
             .max(start_idx);
         // `include_prev` surfaces one sample strictly before `start_ns` so a
-        // step-hold line renderer can draw the leading segment. Tracked
-        // separately from the in-range body so decimation (T4.3) cannot
-        // absorb or drop it.
+        // step-hold line renderer can draw the leading segment.
         let prev_idx = if opts.include_prev && start_idx > 0 {
             Some(start_idx - 1)
         } else {
@@ -486,10 +477,7 @@ impl Reader for McapReader {
                     .iter()
                     .map(parsed_scalar_as_f64)
                     .collect();
-                let (mut ts_out, mut vals_out) = match opts.max_points {
-                    Some(m) => min_max_decimate(body_ts, &body_vals, m),
-                    None => (body_ts.to_vec(), body_vals),
-                };
+                let (mut ts_out, mut vals_out) = (body_ts.to_vec(), body_vals);
                 if let Some(p) = prev_idx {
                     ts_out.insert(0, cd.timestamps[p]);
                     vals_out.insert(0, parsed_scalar_as_f64(&cd.values[p]));
@@ -765,10 +753,7 @@ mod tests {
             .fetch_range(
                 &speed_id,
                 range,
-                FetchOpts {
-                    max_points: None,
-                    include_prev: true,
-                },
+                FetchOpts { include_prev: true },
             )
             .expect("fetch");
         let batch = parse_ipc(&ipc);
@@ -923,10 +908,7 @@ mod tests {
             .fetch_range(
                 &speed_id,
                 r.meta().time_range,
-                FetchOpts {
-                    max_points: None,
-                    include_prev: true,
-                },
+                FetchOpts { include_prev: true },
             )
             .expect("fetch");
         let batch = parse_ipc(&ipc);
@@ -998,188 +980,6 @@ mod tests {
             Err(other) => panic!("expected ChannelNotFound, got {other:?}"),
             Ok(_) => panic!("expected error on unknown channel"),
         }
-    }
-
-    /// Build an MCAP in memory with a single scalar channel of `n` samples
-    /// on a 1 ms cadence. Values are a triangle wave in `[0, 10]` with the
-    /// guaranteed global min `-42.0` at index `n / 2` and global max `99.0`
-    /// at index `n / 3`, so decimation tests can assert that per-bucket
-    /// extrema survive the reduction.
-    fn long_scalar_mcap(n: usize) -> Vec<u8> {
-        use ::mcap::{records::MessageHeader, WriteOptions};
-        use std::collections::BTreeMap;
-
-        let buf: Vec<u8> = Vec::new();
-        let cursor = std::io::Cursor::new(buf);
-        let mut writer = WriteOptions::new()
-            .compression(None)
-            .library("driveline-test-fixtures")
-            .use_chunks(false)
-            .create(cursor)
-            .unwrap();
-        let schema = writer
-            .add_schema("foxglove.Float64", "jsonschema", b"")
-            .unwrap();
-        let ch = writer
-            .add_channel(schema, "/long/scalar", "json", &BTreeMap::new())
-            .unwrap();
-
-        let min_at = n / 2;
-        let max_at = n / 3;
-        for i in 0..n {
-            let ts = T0 as u64 + (i as u64) * 1_000_000;
-            let mut v = ((i % 20) as f64 - 10.0).abs();
-            if i == min_at {
-                v = -42.0;
-            }
-            if i == max_at {
-                v = 99.0;
-            }
-            let payload = format!(r#"{{"value":{}}}"#, v).into_bytes();
-            writer
-                .write_to_known_channel(
-                    &MessageHeader {
-                        channel_id: ch,
-                        sequence: i as u32,
-                        log_time: ts,
-                        publish_time: ts,
-                    },
-                    &payload,
-                )
-                .unwrap();
-        }
-        writer.finish().unwrap();
-        writer.into_inner().into_inner()
-    }
-
-    #[test]
-    fn fetch_range_applies_min_max_decimation_for_scalar() {
-        let bytes = long_scalar_mcap(1000);
-        let r = McapReader::open(&bytes).expect("open");
-        let id = "/long/scalar".to_string();
-
-        let ipc = r
-            .fetch_range(
-                &id,
-                r.meta().time_range,
-                FetchOpts {
-                    max_points: Some(200),
-                    include_prev: false,
-                },
-            )
-            .expect("fetch");
-        let batch = parse_ipc(&ipc);
-        assert!(
-            batch.num_rows() <= 200,
-            "decimated batch must honour max_points; got {}",
-            batch.num_rows(),
-        );
-        // Decimation saves ≥ 50% of rows for a 5× reduction target.
-        assert!(batch.num_rows() < 1000);
-
-        let vals = batch
-            .column(1)
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .unwrap();
-        let samples: Vec<f64> = (0..vals.len()).map(|i| vals.value(i)).collect();
-        // Per-bucket extrema preservation: global min and max from the
-        // input must survive into the decimated output.
-        let out_min = samples.iter().cloned().fold(f64::INFINITY, f64::min);
-        let out_max = samples.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-        assert!((out_min - -42.0).abs() < 1e-9, "lost global min");
-        assert!((out_max - 99.0).abs() < 1e-9, "lost global max");
-    }
-
-    #[test]
-    fn fetch_range_passes_through_when_max_points_exceeds_range() {
-        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
-        let r = McapReader::open(&bytes).expect("open");
-        let id = "/vehicle/speed".to_string();
-
-        // 10 samples, ask for 1000 → no decimation; all 10 rows returned.
-        let ipc = r
-            .fetch_range(
-                &id,
-                r.meta().time_range,
-                FetchOpts {
-                    max_points: Some(1000),
-                    include_prev: false,
-                },
-            )
-            .expect("fetch");
-        let batch = parse_ipc(&ipc);
-        assert_eq!(batch.num_rows(), 10);
-    }
-
-    #[test]
-    fn fetch_range_preserves_include_prev_with_decimation() {
-        let bytes = long_scalar_mcap(500);
-        let r = McapReader::open(&bytes).expect("open");
-        let id = "/long/scalar".to_string();
-
-        // Request a mid-range window with a known leading sample.
-        let range = TimeRange {
-            start_ns: T0 + 100 * 1_000_000,
-            end_ns: T0 + 400 * 1_000_000,
-        };
-        let ipc = r
-            .fetch_range(
-                &id,
-                range,
-                FetchOpts {
-                    max_points: Some(40),
-                    include_prev: true,
-                },
-            )
-            .expect("fetch");
-        let batch = parse_ipc(&ipc);
-        assert!(batch.num_rows() >= 1, "at least the prev sample is returned");
-
-        let ts = batch
-            .column(0)
-            .as_any()
-            .downcast_ref::<TimestampNanosecondArray>()
-            .unwrap();
-        // Leading row must be the sample strictly before start_ns.
-        assert_eq!(ts.value(0), T0 + 99 * 1_000_000);
-        // Subsequent rows all inside [start_ns, end_ns).
-        for i in 1..ts.len() {
-            assert!(ts.value(i) >= range.start_ns);
-            assert!(ts.value(i) < range.end_ns);
-        }
-    }
-
-    #[test]
-    fn fetch_range_ignores_max_points_for_vector_and_enum() {
-        // Vector/enum channels pass through the full slice (T4.3 scope
-        // note in the module comment): max_points must not truncate them.
-        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
-        let r = McapReader::open(&bytes).expect("open");
-
-        let vec_ipc = r
-            .fetch_range(
-                &"/imu/accel".to_string(),
-                r.meta().time_range,
-                FetchOpts {
-                    max_points: Some(2),
-                    include_prev: false,
-                },
-            )
-            .expect("fetch");
-        assert_eq!(parse_ipc(&vec_ipc).num_rows(), 5);
-
-        let enum_ipc = r
-            .fetch_range(
-                &"/control/mode".to_string(),
-                r.meta().time_range,
-                FetchOpts {
-                    max_points: Some(1),
-                    include_prev: false,
-                },
-            )
-            .expect("fetch");
-        assert_eq!(parse_ipc(&enum_ipc).num_rows(), 3);
     }
 
     #[test]
