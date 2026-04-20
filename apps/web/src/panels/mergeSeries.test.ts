@@ -65,4 +65,19 @@ describe("mergeSeries", () => {
     expect(out.ys[0]).toEqual([null, null]);
     expect(out.ys[1]).toEqual([100, 200]);
   });
+
+  it("merges three series with partial overlap into a single union", () => {
+    // k = 3 exercises the k-way merge cursor loop that k = 2 can
+    // collapse to a single interleave. Union timestamps are
+    // [1, 2, 3, 4, 5]; each series supplies the values it owns and
+    // gets `null` everywhere else.
+    const a = mk([1, 3, 5], [10, 30, 50]);
+    const b = mk([2, 3, 4], [200, 300, 400]);
+    const c = mk([5], [5000]);
+    const out = mergeSeries([a, b, c]);
+    expect(Array.from(out.xs)).toEqual([1, 2, 3, 4, 5]);
+    expect(out.ys[0]).toEqual([10, null, 30, null, 50]);
+    expect(out.ys[1]).toEqual([null, 200, 300, 400, null]);
+    expect(out.ys[2]).toEqual([null, null, null, null, 5000]);
+  });
 });
