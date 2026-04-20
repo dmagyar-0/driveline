@@ -145,11 +145,8 @@ test.describe("signal alignment (T6.3)", () => {
     expect(mcap, `mcap stats missing from ${JSON.stringify(stats)}`).toBeTruthy();
     expect(mf4, `mf4 stats missing from ${JSON.stringify(stats)}`).toBeTruthy();
 
-    // Both channels are 100 Hz × 10 s = 1000 samples on the raw path.
-    // uPlot may have decoded a decimated view depending on container
-    // width, but for min/max-over-window the stats helper reads the raw
-    // `PlotSeries.ys` buffer. Sanity-check the count lines up with the
-    // raw data rather than the decimation output.
+    // Both channels are 100 Hz × 10 s = 1000 samples on the raw path. The
+    // stats helper reads the raw `PlotSeries.ys` buffer.
     expect(mcap.count).toBeGreaterThan(0);
     expect(mf4.count).toBeGreaterThan(0);
 

@@ -36,8 +36,8 @@ SHA-256 hashes are committed for drift detection.
 
 ### Rust unit / integration (`cargo test --workspace`)
 
-Covers every `Reader` implementation plus the decimation and
-fixture-generation helpers. Representative tests:
+Covers every `Reader` implementation plus the fixture-generation
+helpers. Representative tests:
 
 - `reader::tests::infers_channel_kind_from_schema`
 - `mcap::tests::builds_keyframe_index_from_fixture`
@@ -46,8 +46,6 @@ fixture-generation helpers. Representative tests:
 - `mf4::tests::translates_cg_time_to_ns_utc`
 - `mf4::tests::fetch_range_returns_expected_arrow_schema`
 - `mp4_sidecar::tests::rejects_length_mismatch`
-- `decimate::tests::{min_before_max,max_before_min}_order_preserved`
-- `decimate::tests::partial_nan_bucket_picks_finite_extrema`
 
 Runs natively — no wasm toolchain needed. A full workspace run takes a
 few seconds.
@@ -116,7 +114,7 @@ for frame timing.
 | Playback — dropped frames | < 1% over 10 s at 1× speed |
 | Scrub seek settle | < 250 ms from drop to correct frame |
 | Cursor tick end-to-end latency | < 16 ms (one rAF) |
-| Signal panel render, 1 M points | < 16 ms redraw |
+| Signal panel render, 1 M points | deferred — decimation removed; revisit with LTTB/downsample if large logs become jittery |
 | Memory after session load | < 300 MB RSS for the tab |
 
 A regression in any of these is a blocking release issue. A

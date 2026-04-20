@@ -128,7 +128,7 @@ animation frame:
   panel's visible `xRange` (starts equal to `globalRange`).
 - Data fetch:
   - On bind or on `xRange` change, call `dataCore.fetch_range(channelId,
-    t0, t1, { max_points: canvas_px_width * 2 })`.
+    t0, t1)`. Every in-range sample is returned verbatim.
   - Receive Arrow IPC bytes; parse via `apache-arrow` JS; hand
     `[ts_array, value_array]` to uPlot as a Float64 series.
   - Cache the last fetched batch; re-fetch on pan/zoom beyond the cached

@@ -20,7 +20,6 @@ pub struct SourceMeta {
 }
 
 pub struct FetchOpts {
-    pub max_points: Option<u32>,
     pub include_prev: bool,
 }
 
@@ -76,7 +75,6 @@ Built on the [`mcap`](https://crates.io/crates/mcap) crate.
   - Use the MCAP chunk index to locate chunks overlapping `[t0, t1)`.
   - Decode messages of the target channel; build Arrow columns according
     to the channel's `kind`/`dtype`.
-  - Apply `opts.max_points` decimation (min-max per bucket).
 - `video_stream`:
   - Binary search the keyframe table for `pts ≤ from_pts_ns`.
   - Iterate messages from there, emitting `EncodedChunk`s.

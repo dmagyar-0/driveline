@@ -1,5 +1,5 @@
-// T4.2 · PlotPanel — multi-series and channel picker (T4.3: Rust-side
-// min-max decimation). T6.2 wired bindings into the store.
+// T4.2 · PlotPanel — multi-series and channel picker. T6.2 wired
+// bindings into the store.
 //
 // Up to 8 scalar channels bound via a popover tree (`ChannelPicker`).
 // Colour per channel is deterministic (`palette.colorFor`). Data for
@@ -7,11 +7,6 @@
 // with `seriesFromArrow`, then k-way merged onto a shared x array so
 // uPlot can render them as aligned series. The cursor overlay lives on
 // a separate canvas so cursor ticks never rebuild the plot.
-//
-// Each fetch passes `maxPoints = canvas_px * 2` per
-// docs/06-ui-and-panels.md:131, which triggers min-max bucket decimation
-// in Rust so PlotPanel can render 1 M-sample windows under the 16 ms
-// budget in docs/09-verification-plan.md:146.
 //
 // Bindings live in the Zustand store keyed by `panelId` (T6.2) so they
 // round-trip through FlexLayout serialisation and `localStorage`.
@@ -301,13 +296,6 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       return;
     }
 
-    // `canvas_px_width * 2` per docs/06-ui-and-panels.md:131. Floor at
-    // 256 so a not-yet-laid-out container still triggers decimation
-    // rather than pulling the full range over Comlink.
-    const containerWidth =
-      containerRef.current?.getBoundingClientRect().width ?? 0;
-    const maxPoints = Math.max(256, Math.round(containerWidth) * 2);
-
     let aborted = false;
     void (async () => {
       try {
@@ -319,7 +307,6 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
               globalRange.startNs,
               globalRange.endNs,
               false,
-              maxPoints,
             ),
           ),
         );
