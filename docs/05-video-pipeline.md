@@ -125,21 +125,24 @@ encoded into the mp4's (wall-clock-agnostic) track timeline.
 
 ### Sidecar format (MVP)
 
-- A file with the same basename as the mp4 and extension `.ts.bin` (if
-  `foo.mp4`, then `foo.mp4.ts.bin`).
-- Contents: raw binary, little-endian `i64` values. No header, no magic,
-  no padding.
-- One entry per video sample (access unit) in the track's **decode order**
+- A file with the same basename as the mp4 and extension `.timestamps`
+  (if `foo.mp4`, then `foo.mp4.timestamps`).
+- Contents: plain UTF-8 text. No header, no magic, no padding.
+- One line per video sample (access unit) in the track's **decode order**
   (matching the order of entries in the mp4 `stsz` table).
-- Each value is absolute nanoseconds UTC at the capture instant for that
-  frame.
-- Length-in-bytes = `8 * sample_count`. Any mismatch with the mp4's
-  sample count fails the file open with a descriptive error.
+- Each line is `<frame_index>\t<timestamp_ns>\n`, where `frame_index` is
+  the 0-based row number and `timestamp_ns` is absolute nanoseconds UTC
+  at the capture instant for that frame.
+- The reader accepts `\n` or `\r\n` line endings and an optional trailing
+  newline. The frame column must equal the row's 0-based index — any
+  skipped, reordered, or duplicated row fails the file open with a
+  `sidecar line N: ...` error. A mismatch between the line count and the
+  mp4's sample count also fails the open with a descriptive error.
 
 ### Open flow
 
-1. User drops both `drive.mp4` and `drive.mp4.ts.bin`. The UI pairs them by
-   basename. If only one is dropped, the UI prompts for the other.
+1. User drops both `drive.mp4` and `drive.mp4.timestamps`. The UI pairs
+   them by basename. If only one is dropped, the UI prompts for the other.
 2. `Mp4SidecarReader::open` parses the mp4's `moov` to get the sample
    table and codec extradata.
 3. The sidecar array becomes the source of truth for `pts_ns` / `dts_ns`.

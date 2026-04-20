@@ -5,7 +5,7 @@ Produces the fixtures called for by docs/09-verification-plan.md:
   sample-data/out.h264              (regenerated, not committed)
   sample-data/short.mcap            (regenerated, not committed)
   sample-data/short.mp4             (regenerated, not committed)
-  sample-data/short.mp4.ts.bin      (committed, 300 x i64)
+  sample-data/short.mp4.timestamps  (committed, 300 text lines: `frame\tts_ns`)
   sample-data/short.mf4             (committed, LFS)
   sample-data/refs/t_*.png          (committed, LFS)
   sample-data/EXPECTED_HASHES.txt   (committed, SHA256 of out.h264)
@@ -362,9 +362,11 @@ def write_mp4(h264: Path, mp4: Path, sidecar: Path) -> None:
         "-movflags", "+faststart",
         str(mp4),
     ])
-    with open(sidecar, "wb") as f:
+    # UTF-8 text, one line per frame: `<frame_index>\t<ts_ns>\n`.
+    # See docs/05-video-pipeline.md §"Sidecar format".
+    with open(sidecar, "w", encoding="utf-8", newline="\n") as f:
         for i in range(TOTAL_FRAMES):
-            f.write(struct.pack("<q", frame_ts(i)))
+            f.write(f"{i}\t{frame_ts(i)}\n")
 
 
 def assert_no_b_frames(mp4: Path) -> None:
@@ -467,7 +469,7 @@ def main() -> None:
     mcap = HERE / "short.mcap"
     mf4 = HERE / "short.mf4"
     mp4 = HERE / "short.mp4"
-    sidecar = HERE / "short.mp4.ts.bin"
+    sidecar = HERE / "short.mp4.timestamps"
 
     if args.check:
         if not h264.exists():

@@ -272,13 +272,14 @@ pub fn short_mp4_bytes() -> crate::Result<Vec<u8>> {
     Ok(writer.into_writer().into_inner())
 }
 
-/// Packed little-endian i64 ns timestamps matching `short_mp4_bytes`:
-/// `T0_MP4_NS + i * STEP_MP4_NS` for `i in 0..MP4_SAMPLE_COUNT`.
+/// Text sidecar payload matching `short_mp4_bytes`: one line per frame of
+/// the form `<frame_index>\t<ts_ns>\n`, where `ts_ns = T0_MP4_NS + i *
+/// STEP_MP4_NS` for `i in 0..MP4_SAMPLE_COUNT`. UTF-8, no header.
 pub fn short_sidecar_bytes() -> Vec<u8> {
-    let mut out = Vec::with_capacity(MP4_SAMPLE_COUNT * 8);
+    let mut out = String::with_capacity(MP4_SAMPLE_COUNT * 32);
     for i in 0..MP4_SAMPLE_COUNT {
         let t = T0_MP4_NS + (i as i64) * STEP_MP4_NS;
-        out.extend_from_slice(&t.to_le_bytes());
+        out.push_str(&format!("{i}\t{t}\n"));
     }
-    out
+    out.into_bytes()
 }

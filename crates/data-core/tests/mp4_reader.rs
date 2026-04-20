@@ -6,7 +6,7 @@
 use data_core::{ChannelKind, Mp4SidecarReader, Reader, SourceKind};
 
 const MP4: &[u8] = include_bytes!("../../../test-fixtures/short.mp4");
-const SIDECAR: &[u8] = include_bytes!("../../../test-fixtures/short.mp4.ts.bin");
+const SIDECAR: &[u8] = include_bytes!("../../../test-fixtures/short.mp4.timestamps");
 
 #[test]
 fn opens_and_describes_fixture_pair() {

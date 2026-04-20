@@ -14,11 +14,11 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it("pairs a .mp4 with its .mp4.ts.bin sidecar", () => {
-    const r = bucketFiles([f("short.mp4"), f("short.mp4.ts.bin")]);
+  it("pairs a .mp4 with its .mp4.timestamps sidecar", () => {
+    const r = bucketFiles([f("short.mp4"), f("short.mp4.timestamps")]);
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.mp4Pairs[0].mp4.name).toBe("short.mp4");
-    expect(r.mp4Pairs[0].ts.name).toBe("short.mp4.ts.bin");
+    expect(r.mp4Pairs[0].ts.name).toBe("short.mp4.timestamps");
     expect(r.errors).toHaveLength(0);
   });
 
@@ -26,15 +26,15 @@ describe("bucketFiles", () => {
     const r = bucketFiles([f("drive.mp4")]);
     expect(r.mp4Pairs).toHaveLength(0);
     expect(r.errors).toEqual([
-      { name: "drive.mp4", reason: "missing sidecar drive.mp4.ts.bin" },
+      { name: "drive.mp4", reason: "missing sidecar drive.mp4.timestamps" },
     ]);
   });
 
   it("reports an orphan sidecar as an error", () => {
-    const r = bucketFiles([f("drive.mp4.ts.bin")]);
+    const r = bucketFiles([f("drive.mp4.timestamps")]);
     expect(r.mp4Pairs).toHaveLength(0);
     expect(r.errors).toEqual([
-      { name: "drive.mp4.ts.bin", reason: "orphan sidecar; no drive.mp4 in drop" },
+      { name: "drive.mp4.timestamps", reason: "orphan sidecar; no drive.mp4 in drop" },
     ]);
   });
 
@@ -50,7 +50,7 @@ describe("bucketFiles", () => {
       f("short.mcap"),
       f("short.mf4"),
       f("short.mp4"),
-      f("short.mp4.ts.bin"),
+      f("short.mp4.timestamps"),
     ]);
     expect(r.mcap).toHaveLength(1);
     expect(r.mf4).toHaveLength(1);

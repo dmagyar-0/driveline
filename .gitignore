@@ -23,7 +23,7 @@ sample-data/*
 !sample-data/README.md
 !sample-data/generate.py
 !sample-data/EXPECTED_HASHES.txt
-!sample-data/short.mp4.ts.bin
+!sample-data/short.mp4.timestamps
 !sample-data/short.mf4
 !sample-data/schemas/
 !sample-data/refs/
