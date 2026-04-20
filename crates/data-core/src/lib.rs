@@ -2,7 +2,7 @@
 //!
 //! M2 introduces the three concrete `Reader` implementations: `Mf4Reader`
 //! on top of `mf4-rs`, `McapReader` on top of the `mcap` crate, and
-//! `Mp4SidecarReader` for mp4 + `.ts.bin` sidecar pairs.
+//! `Mp4SidecarReader` for mp4 + `.mp4.timestamps` sidecar pairs.
 
 pub mod fixtures;
 pub mod mcap;
@@ -52,15 +52,18 @@ pub enum Error {
 
     #[error(
         "mp4 video track has {mp4_count} samples but sidecar has {sidecar_count} entries; \
-         the sidecar must contain exactly one i64 ns timestamp per mp4 sample"
+         the sidecar must contain exactly one `frame\\ttimestamp_ns` line per mp4 sample"
     )]
     SidecarLengthMismatch {
         mp4_count: usize,
         sidecar_count: usize,
     },
 
-    #[error("sidecar byte length {0} is not a multiple of 8; expected a packed i64 LE array")]
-    SidecarByteLengthNotMultipleOf8(usize),
+    #[error("sidecar is not valid UTF-8: {0}")]
+    SidecarNotUtf8(#[from] std::str::Utf8Error),
+
+    #[error("sidecar line {line_no}: {reason}")]
+    SidecarMalformedLine { line_no: usize, reason: String },
 
     #[error(
         "mp4+sidecar MVP requires exactly one video track, found {0}; \

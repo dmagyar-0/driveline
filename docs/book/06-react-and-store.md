@@ -89,7 +89,7 @@ export function App() {
       <h1>Driveline</h1>
       <p>{ready ? "workers ready" : "workers initialising"}</p>
       <div className={styles.dropZone} onDrop={onDrop} onDragOver={...} onDragLeave={...}>
-        Drop .mcap, .mf4, or .mp4 (+ .mp4.ts.bin) files here
+        Drop .mcap, .mf4, or .mp4 (+ .mp4.timestamps) files here
       </div>
       <SessionSummary />
       <Workspace ref={workspaceRef} />
@@ -227,7 +227,7 @@ The flow is:
 
 1. `bucketFiles` categorises the drop by extension. See
    [`apps/web/src/state/bucket.ts`](../../apps/web/src/state/bucket.ts)
-   — it pairs `foo.mp4` with `foo.mp4.ts.bin`, reports unknown
+   — it pairs `foo.mp4` with `foo.mp4.timestamps`, reports unknown
    extensions as errors.
 2. For each file, read the bytes (`File.arrayBuffer()` is a standard
    browser API — it reads the drop without ever uploading anything).

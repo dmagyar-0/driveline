@@ -1,4 +1,4 @@
-//! One-shot generator for `test-fixtures/short.mp4` + `test-fixtures/short.mp4.ts.bin`.
+//! One-shot generator for `test-fixtures/short.mp4` + `test-fixtures/short.mp4.timestamps`.
 //! Run with: `cargo run -p data-core --example gen_mp4_fixture`
 //!
 //! Produces the canonical mp4+sidecar pair consumed by
@@ -15,7 +15,7 @@ fn main() {
         .unwrap_or_else(|| "test-fixtures/short.mp4".to_string());
     let sidecar_path = std::env::args()
         .nth(2)
-        .unwrap_or_else(|| "test-fixtures/short.mp4.ts.bin".to_string());
+        .unwrap_or_else(|| "test-fixtures/short.mp4.timestamps".to_string());
 
     std::fs::File::create(&mp4_path)
         .expect("create mp4")

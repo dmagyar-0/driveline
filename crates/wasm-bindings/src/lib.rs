@@ -138,10 +138,11 @@ struct Mp4SidecarSummary {
 }
 
 /// Parse an mp4 + sidecar pair and register the resulting `Mp4SidecarReader`
-/// in the thread-local slab. The sidecar is a packed little-endian `i64` array
-/// with one entry per mp4 video sample (see `docs/05-video-pipeline.md`);
-/// length mismatch or an mp4 without exactly one video track fails the open
-/// with a descriptive error.
+/// in the thread-local slab. The sidecar is a UTF-8 text file with no header,
+/// one `<frame_index>\t<ts_ns>\n` line per mp4 video sample (see
+/// `docs/05-video-pipeline.md`); length mismatch, a malformed line, or an
+/// mp4 without exactly one video track fails the open with a descriptive
+/// error.
 #[wasm_bindgen]
 pub fn open_mp4_sidecar(mp4_bytes: &[u8], sidecar_bytes: &[u8]) -> Result<u32, JsError> {
     let reader = Mp4SidecarReader::open_pair(mp4_bytes, sidecar_bytes)

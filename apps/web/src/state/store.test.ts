@@ -184,7 +184,7 @@ describe("session store", () => {
       file("short.mcap"),
       file("short.mf4"),
       file("short.mp4"),
-      file("short.mp4.ts.bin"),
+      file("short.mp4.timestamps"),
     ]);
     expect(r.opened.sort()).toEqual(["short.mcap", "short.mf4", "short.mp4"]);
     expect(r.errors).toHaveLength(0);
@@ -418,7 +418,7 @@ describe("fetchChannelRange", () => {
     useSession.getState().setWorker(worker);
     await useSession
       .getState()
-      .openFiles([file("short.mp4"), file("short.mp4.ts.bin")]);
+      .openFiles([file("short.mp4"), file("short.mp4.timestamps")]);
     await expect(
       useSession.getState().fetchChannelRange("1/video", 0n, 1n, false),
     ).rejects.toThrow(/channel kind not plottable/);

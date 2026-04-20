@@ -362,7 +362,7 @@ export function App() {
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
       >
-        Drop .mcap, .mf4, or .mp4 (+ .mp4.ts.bin) files here to load a session.
+        Drop .mcap, .mf4, or .mp4 (+ .mp4.timestamps) files here to load a session.
       </div>
       <SessionSummary />
       {recentErrors.length > 0 && (

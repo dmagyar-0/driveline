@@ -112,19 +112,17 @@ the WASM port of `mf4-rs` itself (Task T0.1).
 
 Built on an mp4 parsing crate (`mp4` or a minimal in-crate parser).
 
-- `open` takes two inputs: the mp4 blob and the `.timestamps` sidecar blob.
+- `open` takes two inputs: the mp4 blob and the `.mp4.timestamps` sidecar
+  blob.
 - Parse the mp4 `moov` atom, build per-sample tables (`stsz`/`stco`/`stts`/
   `stss`).
-- Parse sidecar: MVP format is **binary, little-endian `i64` array**, one
-  entry per sample in decode order. Length must match the track's sample
-  count; mismatch fails the open.
+- Parse sidecar: **UTF-8 text, no header**, one line per sample of the form
+  `<frame_index>\t<timestamp_ns>\n`, in decode order. Line count must match
+  the track's sample count and the `frame_index` column must equal the
+  0-based row index; mismatch fails the open.
 - `meta.channels` contains one `Video` channel per mp4 track.
 - `fetch_range`: unsupported.
 - `video_stream`: yields `EncodedChunk { pts_ns = sidecar[i], data = sample_i }`.
-
-We will also support a text sidecar (one decimal ns per line) if the binary
-form turns out to be inconvenient in practice, but MVP documents only the
-binary form to pin it down.
 
 ## Why a trait
 

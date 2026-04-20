@@ -1,8 +1,8 @@
 // Pure file-bucketing helper for T2.4. Takes a flat `File[]` (from either a
 // real `DataTransfer` drop or the Playwright dev-hook) and returns the inputs
-// grouped by reader format. mp4 + `.mp4.ts.bin` pairing follows the naming
+// grouped by reader format. mp4 + `.mp4.timestamps` pairing follows the naming
 // convention in `docs/05-video-pipeline.md:127-131`: `foo.mp4` pairs with
-// `foo.mp4.ts.bin` in the same drop batch.
+// `foo.mp4.timestamps` in the same drop batch.
 
 export interface Mp4Pair {
   mp4: File;
@@ -21,7 +21,7 @@ export interface Buckets {
   errors: BucketError[];
 }
 
-const SIDECAR_SUFFIX = ".mp4.ts.bin";
+const SIDECAR_SUFFIX = ".mp4.timestamps";
 
 export function bucketFiles(files: File[]): Buckets {
   const mcap: File[] = [];
@@ -34,9 +34,9 @@ export function bucketFiles(files: File[]): Buckets {
     const name = f.name;
     const lower = name.toLowerCase();
     if (lower.endsWith(SIDECAR_SUFFIX)) {
-      // "drive.mp4.ts.bin" -> "drive.mp4". Preserve the original (unlowered)
+      // "drive.mp4.timestamps" -> "drive.mp4". Preserve the original (unlowered)
       // casing of the mp4 name so equality matching stays strict.
-      const mp4Name = name.slice(0, -".ts.bin".length);
+      const mp4Name = name.slice(0, -".timestamps".length);
       sidecars.set(mp4Name, f);
     } else if (lower.endsWith(".mp4")) {
       mp4s.push(f);
@@ -58,7 +58,7 @@ export function bucketFiles(files: File[]): Buckets {
     } else {
       errors.push({
         name: mp4.name,
-        reason: `missing sidecar ${mp4.name}.ts.bin`,
+        reason: `missing sidecar ${mp4.name}.timestamps`,
       });
     }
   }

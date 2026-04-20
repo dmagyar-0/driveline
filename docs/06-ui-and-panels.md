@@ -170,9 +170,9 @@ Not a FlexLayout panel, a global overlay anchored to the bottom.
 
 - The whole app is a drop target. On drop:
   - Collect `File`s, bucket by extension (`.mcap`, `.mf4`, `.mp4`,
-    `.mp4.ts.bin`).
+    `.mp4.timestamps`).
   - `.mcap` and `.mf4` files open immediately.
-  - `.mp4` files wait for their matching `.mp4.ts.bin` (or the user is
+  - `.mp4` files wait for their matching `.mp4.timestamps` (or the user is
     prompted). Once paired, open as `mp4+ts` source.
 - Errors surface as toast notifications (basename + reason).
 

@@ -36,7 +36,7 @@ test("drop three fixtures: UI shows sources, counts, and global range", async ({
   await expect(page.getByTestId("worker-status")).toHaveText("workers ready");
 
   const result = await page.evaluate(async () => {
-    const names = ["short.mcap", "short.mf4", "short.mp4", "short.mp4.ts.bin"];
+    const names = ["short.mcap", "short.mf4", "short.mp4", "short.mp4.timestamps"];
     const descs = await Promise.all(
       names.map(async (n) => {
         const r = await fetch(`/sample-data/${n}`);

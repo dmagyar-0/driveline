@@ -27,8 +27,9 @@ SHA-256 hashes are committed for drift detection.
   `/control/mode` enum).
 - **`short.mf4`** — the same three signal channels, no video. Same
   `start_time` so overlays match the MCAP signals sample-for-sample.
-- **`short.mp4` + `short.mp4.ts.bin`** — the same 10-second video as
-  a standalone mp4 plus a 300-entry `i64` sidecar of absolute `log_time`s.
+- **`short.mp4` + `short.mp4.timestamps`** — the same 10-second video as
+  a standalone mp4 plus a 300-line text sidecar of absolute `log_time`s
+  (`<frame_index>\t<ts_ns>\n` per line).
 - **Reference PNGs** under `sample-data/refs/t_<ms>.png` for five
   known-frame times. Used by Playwright pixel-compare assertions.
 

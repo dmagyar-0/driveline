@@ -1,7 +1,7 @@
 // T5.3 acceptance test.
 //
 // Mirrors `videoSeek.spec.ts` but drops the committed mp4 + sidecar
-// pair (`short.mp4` + `short.mp4.ts.bin`) instead of the mcap fixture.
+// pair (`short.mp4` + `short.mp4.timestamps`) instead of the mcap fixture.
 // Runs against the real 10 s 4K H.264 corpus produced by
 // `sample-data/generate.py` (T0.3).
 
@@ -115,7 +115,7 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
 
     const result = await page.evaluate(async () => {
-      const names = ["short.mp4", "short.mp4.ts.bin"];
+      const names = ["short.mp4", "short.mp4.timestamps"];
       const descs = await Promise.all(
         names.map(async (n) => {
           const r = await fetch(`/sample-data/${n}`);

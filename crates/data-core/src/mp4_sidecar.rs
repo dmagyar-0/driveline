@@ -1,6 +1,6 @@
 //! `Mp4SidecarReader`: implementation of a video-only `Reader` whose timestamps
-//! come from a separate `.ts.bin` sidecar blob rather than the mp4's own
-//! `stts`/`ctts` tables.
+//! come from a separate `.mp4.timestamps` sidecar blob rather than the mp4's
+//! own `stts`/`ctts` tables.
 //!
 //! Covers T2.3 of `docs/10-task-breakdown.md`. See `docs/05-video-pipeline.md`
 //! §"mp4 + sidecar timestamp path" for the format and rationale, and
@@ -9,9 +9,10 @@
 //! T5.3 adds `Reader::video_stream`, producing Annex-B access units from the
 //! cached mp4 samples. `fetch_range` on the video channel still returns
 //! `Err(UnsupportedKind)` — scalar/vector APIs don't apply to video. The
-//! MVP sidecar format is a single-track spec (one i64 LE per sample, no
-//! header), so an mp4 with zero or multiple video tracks is rejected up
-//! front.
+//! sidecar is a plain UTF-8 text file with no header: one line per mp4
+//! video sample in decode order, `<frame_index>\t<timestamp_ns>\n`, where
+//! `frame_index` is the 0-based row index and `timestamp_ns` is absolute
+//! ns-UTC. An mp4 with zero or multiple video tracks is rejected up front.
 //!
 //! ## Annex-B vs AVCC
 //!
@@ -63,15 +64,18 @@ pub struct Mp4SidecarReader {
 impl Mp4SidecarReader {
     /// Open an mp4 + sidecar pair. Parses the mp4 `moov`, locates the single
     /// video track, and validates that the sidecar contains exactly one
-    /// little-endian `i64` ns-UTC timestamp per mp4 sample.
+    /// `<frame_index>\t<timestamp_ns>\n` line per mp4 sample with frame
+    /// indices equal to the 0-based row number.
     ///
     /// Errors:
     /// - [`crate::Error::Mp4`] — mp4 parse failed (malformed box structure).
     /// - [`crate::Error::Mp4VideoTrackCount`] — mp4 had zero or multiple
     ///   video tracks. The MVP sidecar format only addresses a single track.
-    /// - [`crate::Error::SidecarByteLengthNotMultipleOf8`] — sidecar byte
-    ///   length is not `8 * N`.
-    /// - [`crate::Error::SidecarLengthMismatch`] — sidecar entry count does
+    /// - [`crate::Error::SidecarNotUtf8`] — sidecar is not valid UTF-8.
+    /// - [`crate::Error::SidecarMalformedLine`] — a line does not have
+    ///   exactly two tab-separated fields, a field fails to parse, or the
+    ///   frame index does not equal the line's 0-based row number.
+    /// - [`crate::Error::SidecarLengthMismatch`] — sidecar line count does
     ///   not match the video track's sample count. This is the named
     ///   acceptance-criterion failure from `docs/10-task-breakdown.md` T2.3.
     pub fn open_pair(mp4_bytes: &[u8], sidecar_bytes: &[u8]) -> crate::Result<Self> {
@@ -103,24 +107,7 @@ impl Mp4SidecarReader {
             )
         };
 
-        if !sidecar_bytes.len().is_multiple_of(8) {
-            return Err(crate::Error::SidecarByteLengthNotMultipleOf8(
-                sidecar_bytes.len(),
-            ));
-        }
-        let sidecar_count = sidecar_bytes.len() / 8;
-        if sidecar_count != mp4_count {
-            return Err(crate::Error::SidecarLengthMismatch {
-                mp4_count,
-                sidecar_count,
-            });
-        }
-
-        let mut pts_ns = Vec::with_capacity(sidecar_count);
-        for chunk in sidecar_bytes.chunks_exact(8) {
-            let arr: [u8; 8] = chunk.try_into().expect("chunks_exact(8) yields 8-byte slices");
-            pts_ns.push(i64::from_le_bytes(arr));
-        }
+        let pts_ns = parse_sidecar_text(sidecar_bytes, mp4_count)?;
 
         // Read every sample into memory now so `video_stream` can be a pure
         // iterator over owned bytes — no self-referential `Cursor` lifetimes
@@ -182,6 +169,74 @@ impl Mp4SidecarReader {
     pub fn pts_ns(&self) -> &[i64] {
         &self.pts_ns
     }
+}
+
+/// Parse the text sidecar payload into a `Vec<i64>` of absolute ns-UTC
+/// timestamps, one per mp4 video sample in decode order.
+///
+/// Format: UTF-8 text, no header, one line per sample, `<frame>\t<ts_ns>\n`.
+/// `str::lines()` accepts `\n` or `\r\n` and tolerates an optional trailing
+/// line terminator. The `frame` column must equal the line's 0-based row
+/// index — this catches reordered / skipped / duplicated rows cheaply at
+/// open time.
+fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>> {
+    let text = std::str::from_utf8(bytes)?;
+
+    let mut pts_ns: Vec<i64> = Vec::with_capacity(mp4_count);
+    for (idx, line) in text.lines().enumerate() {
+        if line.is_empty() {
+            return Err(crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: "empty line".to_string(),
+            });
+        }
+
+        let mut parts = line.splitn(3, '\t');
+        let frame_str = parts.next().expect("splitn yields at least one element");
+        let ts_str = parts.next().ok_or_else(|| crate::Error::SidecarMalformedLine {
+            line_no: idx,
+            reason: "missing timestamp column (expected `<frame>\\t<ts_ns>`)".to_string(),
+        })?;
+        if parts.next().is_some() {
+            return Err(crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: "expected exactly two tab-separated fields".to_string(),
+            });
+        }
+
+        let frame: usize =
+            frame_str
+                .parse()
+                .map_err(|_| crate::Error::SidecarMalformedLine {
+                    line_no: idx,
+                    reason: format!("frame column {frame_str:?} is not a non-negative integer"),
+                })?;
+        if frame != pts_ns.len() {
+            return Err(crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: format!(
+                    "frame index {frame} does not match expected row index {}",
+                    pts_ns.len()
+                ),
+            });
+        }
+
+        let ts_ns: i64 = ts_str
+            .parse()
+            .map_err(|_| crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: format!("timestamp column {ts_str:?} is not an i64"),
+            })?;
+        pts_ns.push(ts_ns);
+    }
+
+    if pts_ns.len() != mp4_count {
+        return Err(crate::Error::SidecarLengthMismatch {
+            mp4_count,
+            sidecar_count: pts_ns.len(),
+        });
+    }
+    Ok(pts_ns)
 }
 
 /// 4-byte big-endian length-prefixed NAL → Annex-B start-coded NAL.
@@ -406,14 +461,14 @@ mod tests {
         writer.into_writer().into_inner()
     }
 
-    /// `n` i64 LE entries of the form `base + i * step_ns`.
+    /// `n` text lines of the form `"{i}\t{base + i*step}\n"`.
     fn synth_sidecar(base_ns: i64, step_ns: i64, n: usize) -> Vec<u8> {
-        let mut out = Vec::with_capacity(n * 8);
+        let mut out = String::new();
         for i in 0..n {
             let t = base_ns + (i as i64) * step_ns;
-            out.extend_from_slice(&t.to_le_bytes());
+            out.push_str(&format!("{i}\t{t}\n"));
         }
-        out
+        out.into_bytes()
     }
 
     #[test]
@@ -470,15 +525,79 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sidecar_not_aligned_to_i64() {
+    fn rejects_sidecar_with_non_utf8_bytes() {
         let mp4 = synth_mp4(3);
-        // 7 bytes — clearly not a multiple of 8.
-        let sidecar = vec![0u8; 7];
+        // 0xFF is never a valid leading byte in UTF-8.
+        let sidecar = vec![0xFFu8, 0xFE, 0xFD];
         let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
-        assert!(matches!(
-            err,
-            crate::Error::SidecarByteLengthNotMultipleOf8(7)
-        ));
+        assert!(matches!(err, crate::Error::SidecarNotUtf8(_)));
+    }
+
+    #[test]
+    fn rejects_sidecar_line_with_missing_tab() {
+        let mp4 = synth_mp4(1);
+        // No tab separator — should fail with a clear message on line 0.
+        let sidecar = b"0 1700000000000000000\n".to_vec();
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
+        match err {
+            crate::Error::SidecarMalformedLine { line_no, reason } => {
+                assert_eq!(line_no, 0);
+                assert!(
+                    reason.contains("missing timestamp column"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected SidecarMalformedLine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_sidecar_with_wrong_frame_index() {
+        let mp4 = synth_mp4(2);
+        // Second line's frame column is 2 but should be 1.
+        let sidecar = b"0\t100\n2\t200\n".to_vec();
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
+        match err {
+            crate::Error::SidecarMalformedLine { line_no, reason } => {
+                assert_eq!(line_no, 1);
+                assert!(
+                    reason.contains("frame index 2"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected SidecarMalformedLine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_sidecar_with_non_integer_timestamp() {
+        let mp4 = synth_mp4(1);
+        let sidecar = b"0\tnot_a_number\n".to_vec();
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
+        match err {
+            crate::Error::SidecarMalformedLine { line_no, reason } => {
+                assert_eq!(line_no, 0);
+                assert!(reason.contains("timestamp"), "unexpected reason: {reason}");
+            }
+            other => panic!("expected SidecarMalformedLine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn accepts_sidecar_without_trailing_newline() {
+        let mp4 = synth_mp4(2);
+        // Deliberately omit the trailing `\n` on the last line.
+        let sidecar = b"0\t100\n1\t200".to_vec();
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+        assert_eq!(r.pts_ns(), &[100i64, 200]);
+    }
+
+    #[test]
+    fn accepts_sidecar_with_crlf_line_endings() {
+        let mp4 = synth_mp4(2);
+        let sidecar = b"0\t100\r\n1\t200\r\n".to_vec();
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+        assert_eq!(r.pts_ns(), &[100i64, 200]);
     }
 
     #[test]

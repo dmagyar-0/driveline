@@ -31,7 +31,7 @@ export function fixturePath(name: string): string {
 export const MCAP = fixturePath("short.mcap");
 export const MF4 = fixturePath("short.mf4");
 export const MP4 = fixturePath("short.mp4");
-export const MP4_SIDECAR = fixturePath("short.mp4.ts.bin");
+export const MP4_SIDECAR = fixturePath("short.mp4.timestamps");
 
 export const REFS_DIR = resolve(SAMPLE_DATA_DIR, "refs");
 
