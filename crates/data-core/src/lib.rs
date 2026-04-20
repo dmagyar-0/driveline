@@ -4,7 +4,6 @@
 //! on top of `mf4-rs`, `McapReader` on top of the `mcap` crate, and
 //! `Mp4SidecarReader` for mp4 + `.ts.bin` sidecar pairs.
 
-mod decimate;
 pub mod fixtures;
 pub mod mcap;
 pub mod mf4;

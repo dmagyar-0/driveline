@@ -125,11 +125,10 @@ Why Arrow:
 - Typed, including proper timestamp semantics, so UI code does not shuffle
   units.
 
-`opts` controls decimation and bounds:
+`opts` controls range-expansion:
 
 ```
 FetchOpts {
-  max_points:   u32 | null   // server-side LTTB/min-max if set
   include_prev: bool         // include one sample <= t0 for step-hold lines
 }
 ```

@@ -208,7 +208,6 @@ export function App() {
           startNs,
           endNs,
           includePrev,
-          undefined,
         );
         const table = tableFromIPC(bytes);
         const ts = table.getChild("ts")!;

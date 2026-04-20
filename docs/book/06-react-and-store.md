@@ -159,7 +159,7 @@ export interface SessionState {
   fetchChannelRange(
     channelId: string,
     startNs: bigint, endNs: bigint,
-    includePrev: boolean, maxPoints?: number,
+    includePrev: boolean,
   ): Promise<Uint8Array>;
   // ... a few more actions for layout and bindings ...
 }
@@ -267,13 +267,13 @@ up which source owns the channel and dispatches to the right worker
 method:
 
 ```ts
-fetchChannelRange: async (channelId, startNs, endNs, includePrev, maxPoints) => {
+fetchChannelRange: async (channelId, startNs, endNs, includePrev) => {
   const src = findOwningSource(get().sources, channelId);
   const worker = get().worker!;
   if (src.kind === "mcap") {
-    return worker.mcapFetchRange(src.handle, channelId, startNs, endNs, includePrev, maxPoints);
+    return worker.mcapFetchRange(src.handle, channelId, startNs, endNs, includePrev);
   }
-  return worker.mf4FetchRange(src.handle, channelId, startNs, endNs, includePrev, maxPoints);
+  return worker.mf4FetchRange(src.handle, channelId, startNs, endNs, includePrev);
 },
 ```
 

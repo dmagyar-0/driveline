@@ -82,7 +82,6 @@ pub enum SourceKind {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FetchOpts {
-    pub max_points: Option<u32>,
     pub include_prev: bool,
 }
 
