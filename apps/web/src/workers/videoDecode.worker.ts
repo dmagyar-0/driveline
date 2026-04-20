@@ -197,6 +197,15 @@ async function pullAndFeed(): Promise<void> {
   }
   for (const c of batch) {
     if (!session) return;
+    // `openInternal` awaits `ops.next` before calling
+    // `configureFromFirstKeyframe`, which leaves a window where the
+    // session is live but the decoder is still `unconfigured`. A
+    // frame callback firing during that window (from a prior decode
+    // cycle) would queue another pull here and hit WebCodecs'
+    // `Cannot call 'decode' on an unconfigured codec`. Treat that as
+    // benign — the post-configure initial-batch decode below will
+    // pick up again.
+    if (session.decoder.state !== "configured") return;
     const chunk = new EncodedVideoChunk({
       type: c.is_keyframe ? "key" : "delta",
       timestamp: ptsToMicros(c.pts_ns),
@@ -291,11 +300,6 @@ async function openInternal(
       timestamp: ptsToMicros(c.pts_ns),
       data: c.data,
     });
-    // `decode()` can throw synchronously when a key chunk's payload lacks an
-    // IDR slice (e.g. the synthetic mp4 fixture, whose samples are just AUD
-    // NALs). Async decoder faults already surface via the `error:` callback
-    // without blowing up `open()`, so mirror that behaviour here — the codec
-    // is resolved, the HUD can reflect it, and the session stays navigable.
     try {
       decoder.decode(chunk);
     } catch (e) {

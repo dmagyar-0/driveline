@@ -15,8 +15,18 @@ apps/web/.vite
 apps/web/src/wasm/*
 !apps/web/src/wasm/.gitkeep
 
-# Sample corpus (generated locally; see docs/spike-T0.3-sample-corpus.md)
-sample-data/
+# Sample corpus (T0.3). Committed scripts, schemas, and small fixtures
+# are tracked via explicit un-ignores below; large regenerated outputs
+# (out.h264, short.mcap, short.mp4) are excluded by sample-data/.gitignore.
+sample-data/*
+!sample-data/.gitignore
+!sample-data/README.md
+!sample-data/generate.py
+!sample-data/EXPECTED_HASHES.txt
+!sample-data/short.mp4.ts.bin
+!sample-data/short.mf4
+!sample-data/schemas/
+!sample-data/refs/
 
 # Editor / OS
 .DS_Store

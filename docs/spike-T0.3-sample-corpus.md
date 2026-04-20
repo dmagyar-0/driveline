@@ -7,7 +7,14 @@
 
 ---
 
-## 1. Verdict — GO
+## 1. Verdict — GO, verified
+
+Implemented inline as part of T6.3 on branch
+`claude/implement-t6-3-JL33j`. The pipeline described in this spike
+now ships as `sample-data/generate.py`; outputs hash-match
+`sample-data/EXPECTED_HASHES.txt`; the full verification plan runs
+green against the produced corpus. See
+[`verification-t6.3-run.md`](./verification-t6.3-run.md).
 
 Feasible end-to-end with mainstream open-source tooling. Recommended
 stack, pinned for reproducibility:
@@ -312,7 +319,7 @@ Task acceptance from `10-task-breakdown.md`:
 - `sample-data/EXPECTED_HASHES.txt` with SHA256 of `out.h264` (the
   bit-identical cornerstone all other outputs derive from).
 - Update this doc's verdict to `GO, verified` after the first run
-  passes unit-test-level checks.
+  passes unit-test-level checks. **Done** — see §1.
 
 ## 12. References
 

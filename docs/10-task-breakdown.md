@@ -58,9 +58,9 @@ Legend:
 
 ### T0.3 · Sample corpus generation
 
-- **Status:** **investigated — GO**. See
-  [`spike-T0.3-sample-corpus.md`](./spike-T0.3-sample-corpus.md).
-  Implementation still pending.
+- **Status:** **done** (implemented inline as part of T6.3; see
+  [`verification-t6.3-run.md`](./verification-t6.3-run.md) and
+  [`spike-T0.3-sample-corpus.md`](./spike-T0.3-sample-corpus.md) §11).
 - **Summary:** Produce `sample-data/short.mcap`, `short.mf4`, and
   `short.mp4` + `short.mp4.ts.bin` per `09-verification-plan.md`.
 - **Depends on:** nothing.
@@ -280,6 +280,8 @@ Legend:
 
 ### T6.3 · Full verification pass
 
+- **Status:** **done**. See
+  [`verification-t6.3-run.md`](./verification-t6.3-run.md).
 - **Summary:** Run every check in `09-verification-plan.md`: unit,
   contract, e2e, manual, perf targets. Fix anything that fails.
 - **Depends on:** all above.

@@ -18,6 +18,7 @@ import { create } from "zustand";
 import { bucketFiles, type BucketError } from "./bucket";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { loadLayoutFromStorage } from "../layout/persist";
+import { mark, measure, timed } from "../perf";
 import type {
   ChannelKindWire,
   DataCoreApi,
@@ -310,31 +311,39 @@ export const useSession = create<SessionState>((set, get) => {
       if (!channel) throw new Error(`unknown channel: ${channelId}`);
       const source = sources.find((s) => s.id === channel.sourceId);
       if (!source) throw new Error(`unknown source for channel: ${channelId}`);
-      if (source.kind === "mcap") {
-        return worker.mcapFetchRange(
-          source.handle,
-          channel.id,
-          startNs,
-          endNs,
-          includePrev,
-          maxPoints,
-        );
+      const perfStart = `fetch-range:${channelId}:start`;
+      const perfEnd = `fetch-range:${channelId}:end`;
+      mark(perfStart);
+      try {
+        if (source.kind === "mcap") {
+          return await worker.mcapFetchRange(
+            source.handle,
+            channel.id,
+            startNs,
+            endNs,
+            includePrev,
+            maxPoints,
+          );
+        }
+        if (source.kind === "mf4") {
+          return await worker.mf4FetchRange(
+            source.handle,
+            channel.id,
+            startNs,
+            endNs,
+            includePrev,
+            maxPoints,
+          );
+        }
+        throw new Error(`channel kind not plottable: ${source.kind}`);
+      } finally {
+        mark(perfEnd);
+        measure(`fetch-range:${channelId}`, perfStart, perfEnd);
       }
-      if (source.kind === "mf4") {
-        return worker.mf4FetchRange(
-          source.handle,
-          channel.id,
-          startNs,
-          endNs,
-          includePrev,
-          maxPoints,
-        );
-      }
-      throw new Error(`channel kind not plottable: ${source.kind}`);
     },
 
     async openFiles(files) {
-      const run = async (): Promise<OpenResult> => {
+      const run = (): Promise<OpenResult> => timed("open", async () => {
         if (!worker) throw new Error("session store: worker not initialised");
         const w = worker;
 
@@ -434,7 +443,7 @@ export const useSession = create<SessionState>((set, get) => {
         }
 
         return { opened, errors };
-      };
+      });
 
       const next = pending.then(run, run);
       // Keep the chain alive even if `run` throws so the next caller still

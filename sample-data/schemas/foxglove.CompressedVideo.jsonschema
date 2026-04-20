@@ -1,0 +1,28 @@
+{
+  "title": "foxglove.CompressedVideo",
+  "description": "A single frame of a compressed video bitstream",
+  "type": "object",
+  "properties": {
+    "timestamp": {
+      "title": "time",
+      "type": "object",
+      "properties": {
+        "sec": { "type": "integer", "minimum": 0 },
+        "nsec": { "type": "integer", "minimum": 0, "maximum": 999999999 }
+      }
+    },
+    "frame_id": {
+      "type": "string",
+      "description": "Frame of reference for the image"
+    },
+    "data": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Compressed video frame data (Annex-B H.264 for H.264)"
+    },
+    "format": {
+      "type": "string",
+      "description": "Video format: \"h264\" for H.264 Annex-B"
+    }
+  }
+}

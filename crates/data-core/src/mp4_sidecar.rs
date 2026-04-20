@@ -218,6 +218,32 @@ fn push_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
     out.extend_from_slice(nal);
 }
 
+/// True when `annex_b` contains a NAL of type 7 (SPS). Scans for
+/// start codes and inspects the first NAL byte of each.
+fn annex_b_has_sps(annex_b: &[u8]) -> bool {
+    let mut i = 0;
+    while i + 3 < annex_b.len() {
+        let is4 = annex_b[i] == 0
+            && annex_b[i + 1] == 0
+            && annex_b[i + 2] == 0
+            && annex_b[i + 3] == 1;
+        let is3 = annex_b[i] == 0 && annex_b[i + 1] == 0 && annex_b[i + 2] == 1;
+        if !is4 && !is3 {
+            i += 1;
+            continue;
+        }
+        let nal_start = i + if is4 { 4 } else { 3 };
+        if nal_start >= annex_b.len() {
+            return false;
+        }
+        if annex_b[nal_start] & 0x1f == 7 {
+            return true;
+        }
+        i = nal_start + 1;
+    }
+    false
+}
+
 impl Reader for Mp4SidecarReader {
     /// The mp4+sidecar format inherently takes two blobs; the single-slice
     /// trait constructor cannot represent that. Callers must use
@@ -296,16 +322,19 @@ impl Reader for Mp4SidecarReader {
 
         // Prepend SPS+PPS (Annex-B framed) onto the first emitted chunk so
         // `videoDecode.worker.ts::findSps` finds the extradata inline, just
-        // as it does for MCAP. Every subsequent chunk is the raw mp4 sample
-        // converted from AVCC to Annex-B.
+        // as it does for MCAP. Skip the prepend when the sample already
+        // carries an inline SPS (x264 `repeat-headers=1`): the redundant
+        // SPS/PPS BEFORE the sample's AUD violates the Annex-B ordering
+        // WebCodecs expects and causes `DataError: key frame required`.
         let mut out: Vec<EncodedChunk> = Vec::with_capacity(self.samples.len() - start_idx);
         for (i, sample) in self.samples[start_idx..].iter().enumerate() {
             let mut data = Vec::with_capacity(sample.bytes.len() + 16);
-            if i == 0 {
+            let annex_b = avcc_to_annexb(&sample.bytes);
+            if i == 0 && !annex_b_has_sps(&annex_b) {
                 push_annexb_nal(&mut data, &self.sps);
                 push_annexb_nal(&mut data, &self.pps);
             }
-            data.extend_from_slice(&avcc_to_annexb(&sample.bytes));
+            data.extend_from_slice(&annex_b);
             out.push(EncodedChunk {
                 pts_ns: self.pts_ns[start_idx + i],
                 is_keyframe: sample.is_sync,

@@ -16,6 +16,7 @@ import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
+import { mark } from "../perf";
 import styles from "./VideoPanel.module.css";
 
 interface VideoPanelProps {
@@ -209,6 +210,9 @@ export function VideoPanel({
           canvas.width,
           canvas.height,
         );
+        if (lastBlitPtsRef.current === null) {
+          mark("video:first-frame");
+        }
         window.__drivelineVideoLastBlitPtsNs = target.ptsNs;
         lastBlitPtsRef.current = target.ptsNs;
         target.frame.close();

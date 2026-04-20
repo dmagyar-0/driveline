@@ -1,0 +1,20 @@
+{
+  "title": "driveline.ControlMode",
+  "description": "Sparse enum channel: 0 = Manual, 1 = Auto",
+  "type": "object",
+  "properties": {
+    "timestamp": {
+      "title": "time",
+      "type": "object",
+      "properties": {
+        "sec": { "type": "integer", "minimum": 0 },
+        "nsec": { "type": "integer", "minimum": 0, "maximum": 999999999 }
+      }
+    },
+    "value": {
+      "type": "integer",
+      "enum": [0, 1],
+      "description": "0 = Manual, 1 = Auto"
+    }
+  }
+}
