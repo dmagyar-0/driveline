@@ -20,157 +20,38 @@ import init, {
   mp4_video_next_batch,
   mp4_video_close,
 } from "../wasm/wasm_bindings.js";
+import {
+  normaliseEncodedChunk,
+  normaliseMcap,
+  normaliseMf4,
+  normaliseMp4,
+  type EncodedChunkWire,
+  type McapSummary,
+  type Mf4Summary,
+  type Mp4SidecarSummary,
+  type RawEncodedChunk,
+  type RawMcapSummary,
+  type RawMf4Summary,
+  type RawMp4Summary,
+} from "./normalise";
+
+// Re-export the wire types so existing `workerClient` imports keep working.
+export type {
+  ChannelKindWire,
+  EncodedChunkWire,
+  McapChannelInfo,
+  McapSummary,
+  Mf4ChannelInfo,
+  Mf4Summary,
+  Mp4SidecarChannelInfo,
+  Mp4SidecarSummary,
+} from "./normalise";
 
 // Register the Comlink listener BEFORE awaiting wasm init. A top-level await
 // here would suspend module evaluation; any messages posted by the main
 // thread during that window fire on an empty listener list and are lost.
 // Each API method awaits the init promise instead.
 const ready = init();
-
-export interface Mf4ChannelInfo {
-  id: string;
-  name: string;
-  unit: string | null;
-  sample_count: number;
-  start_ns: bigint;
-  end_ns: bigint;
-}
-
-export interface Mf4Summary {
-  start_ns: bigint;
-  end_ns: bigint;
-  channels: Mf4ChannelInfo[];
-}
-
-export type ChannelKindWire =
-  | "scalar"
-  | "vector"
-  | "video"
-  | "enum"
-  | "bytes";
-
-export interface McapChannelInfo {
-  id: string;
-  name: string;
-  kind: ChannelKindWire;
-  dtype: string | null;
-  unit: string | null;
-  sample_count: number;
-  start_ns: bigint;
-  end_ns: bigint;
-}
-
-export interface McapSummary {
-  start_ns: bigint;
-  end_ns: bigint;
-  channels: McapChannelInfo[];
-}
-
-export interface Mp4SidecarChannelInfo {
-  id: string;
-  name: string;
-  sample_count: number;
-  start_ns: bigint;
-  end_ns: bigint;
-}
-
-export interface Mp4SidecarSummary {
-  start_ns: bigint;
-  end_ns: bigint;
-  channels: Mp4SidecarChannelInfo[];
-}
-
-/// One encoded access unit pulled from a video stream. Annex-B framing per
-/// the MCAP `foxglove.CompressedVideo` payload; the TS video-decode worker
-/// feeds these directly to `VideoDecoder.decode`.
-export interface EncodedChunkWire {
-  pts_ns: bigint;
-  is_keyframe: boolean;
-  data: Uint8Array;
-}
-
-// serde_wasm_bindgen serialises i64 as JS `number` when the value fits in a
-// safe integer, otherwise it may appear as a `bigint`. The mp4 fixture uses
-// ns timestamps around 1.7e18 which exceed Number.MAX_SAFE_INTEGER, so every
-// summary crossing the boundary normalises through BigInt() once here. JS
-// consumers always get `bigint`, matching the type declarations.
-function toBig(n: unknown): bigint {
-  return typeof n === "bigint" ? n : BigInt(n as number | string);
-}
-
-interface RawMf4Channel extends Omit<Mf4ChannelInfo, "start_ns" | "end_ns"> {
-  start_ns: number | bigint;
-  end_ns: number | bigint;
-}
-interface RawMf4Summary {
-  start_ns: number | bigint;
-  end_ns: number | bigint;
-  channels: RawMf4Channel[];
-}
-function normaliseMf4(raw: RawMf4Summary): Mf4Summary {
-  return {
-    start_ns: toBig(raw.start_ns),
-    end_ns: toBig(raw.end_ns),
-    channels: raw.channels.map((c) => ({
-      id: c.id,
-      name: c.name,
-      unit: c.unit,
-      sample_count: Number(c.sample_count),
-      start_ns: toBig(c.start_ns),
-      end_ns: toBig(c.end_ns),
-    })),
-  };
-}
-
-interface RawMcapChannel extends Omit<McapChannelInfo, "start_ns" | "end_ns"> {
-  start_ns: number | bigint;
-  end_ns: number | bigint;
-}
-interface RawMcapSummary {
-  start_ns: number | bigint;
-  end_ns: number | bigint;
-  channels: RawMcapChannel[];
-}
-function normaliseMcap(raw: RawMcapSummary): McapSummary {
-  return {
-    start_ns: toBig(raw.start_ns),
-    end_ns: toBig(raw.end_ns),
-    channels: raw.channels.map((c) => ({
-      id: c.id,
-      name: c.name,
-      kind: c.kind,
-      dtype: c.dtype,
-      unit: c.unit,
-      sample_count: Number(c.sample_count),
-      start_ns: toBig(c.start_ns),
-      end_ns: toBig(c.end_ns),
-    })),
-  };
-}
-
-interface RawMp4Channel
-  extends Omit<Mp4SidecarChannelInfo, "start_ns" | "end_ns"> {
-  start_ns: number | bigint;
-  end_ns: number | bigint;
-}
-interface RawMp4Summary {
-  start_ns: number | bigint;
-  end_ns: number | bigint;
-  channels: RawMp4Channel[];
-}
-function normaliseMp4(raw: RawMp4Summary): Mp4SidecarSummary {
-  return {
-    start_ns: toBig(raw.start_ns),
-    end_ns: toBig(raw.end_ns),
-    channels: raw.channels.map((c) => ({
-      id: c.id,
-      name: c.name,
-      sample_count: Number(c.sample_count),
-      start_ns: toBig(c.start_ns),
-      end_ns: toBig(c.end_ns),
-    })),
-  };
-}
 
 export const dataCoreApi = {
   async ping(): Promise<string> {
@@ -270,11 +151,7 @@ export const dataCoreApi = {
   ): Promise<EncodedChunkWire[]> {
     await ready;
     const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
-    return raw.map((c) => ({
-      pts_ns: toBig(c.pts_ns),
-      is_keyframe: !!c.is_keyframe,
-      data: c.data,
-    }));
+    return raw.map(normaliseEncodedChunk);
   },
   async closeMcapVideoStream(streamId: number): Promise<void> {
     await ready;
@@ -294,23 +171,13 @@ export const dataCoreApi = {
   ): Promise<EncodedChunkWire[]> {
     await ready;
     const raw = mp4_video_next_batch(streamId, maxN) as RawEncodedChunk[];
-    return raw.map((c) => ({
-      pts_ns: toBig(c.pts_ns),
-      is_keyframe: !!c.is_keyframe,
-      data: c.data,
-    }));
+    return raw.map(normaliseEncodedChunk);
   },
   async closeMp4VideoStream(streamId: number): Promise<void> {
     await ready;
     mp4_video_close(streamId);
   },
 };
-
-interface RawEncodedChunk {
-  pts_ns: number | bigint;
-  is_keyframe: boolean;
-  data: Uint8Array;
-}
 
 export type DataCoreApi = typeof dataCoreApi;
 
