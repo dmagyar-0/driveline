@@ -57,4 +57,29 @@ describe("bucketFiles", () => {
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.errors).toHaveLength(0);
   });
+
+  it("matches extensions case-insensitively", () => {
+    // macOS Finder and some archives upper-case extensions. The code
+    // lower-cases the name for matching; uppercase drops must still
+    // bucket rather than land in `errors`.
+    const r = bucketFiles([f("LOG.MCAP"), f("SENSOR.MF4")]);
+    expect(r.mcap.map((x) => x.name)).toEqual(["LOG.MCAP"]);
+    expect(r.mf4.map((x) => x.name)).toEqual(["SENSOR.MF4"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("pairs the matching mp4 and errors on the unpaired one", () => {
+    // Two mp4s but only one sidecar — the paired one succeeds, the
+    // other is reported as missing its sidecar.
+    const r = bucketFiles([
+      f("a.mp4"),
+      f("b.mp4"),
+      f("a.mp4.timestamps"),
+    ]);
+    expect(r.mp4Pairs).toHaveLength(1);
+    expect(r.mp4Pairs[0].mp4.name).toBe("a.mp4");
+    expect(r.errors).toEqual([
+      { name: "b.mp4", reason: "missing sidecar b.mp4.timestamps" },
+    ]);
+  });
 });
