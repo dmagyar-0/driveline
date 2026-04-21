@@ -74,12 +74,12 @@ describe("bucketFiles", () => {
     const r = bucketFiles([
       f("a.mp4"),
       f("b.mp4"),
-      f("a.mp4.ts.bin"),
+      f("a.mp4.timestamps"),
     ]);
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.mp4Pairs[0].mp4.name).toBe("a.mp4");
     expect(r.errors).toEqual([
-      { name: "b.mp4", reason: "missing sidecar b.mp4.ts.bin" },
+      { name: "b.mp4", reason: "missing sidecar b.mp4.timestamps" },
     ]);
   });
 });

@@ -48,7 +48,6 @@ None. No test in the audited range was demonstrably wrong.
 
 ### Missing coverage
 
-- **`crates/data-core/src/decimate.rs:48,54` — `min_max_decimate` may violate its `output.len() <= max_points` guarantee at `max_points == 1`.** The doc comment at lines 13-18 promises "Output length is `<= max_points`". With `max_points = 1`, `bucket_count = (1/2).max(1) = 1`, and a single non-constant bucket emits two rows (min + max). Severity: **Low** (UI calls with `canvas_width * 2`, which is always ≫ 1, so it's dead-path in practice). Suggestion: either tighten the doc comment to "`<= max_points` when `max_points >= 2`", or add an explicit `if (m == 1) return pick_one(ts, vals);` branch. Can't be covered by an integration test because `min_max_decimate` is `pub(crate)`.
 - **`apps/web/src/panels/seriesFromArrow.ts:26-30` — zero-row and missing-column branches are uncovered.** `seriesFromArrow.test.ts` only exercises a populated fixture. A zero-row Arrow IPC and a schema without the `ts` / `value` columns both go down the `return EMPTY` path with no test. Severity: **Low**. Suggestion: build a minimal Arrow IPC via `apache-arrow` in-test (a zero-row RecordBatch for the first case, a mislabelled schema for the second) and assert `.xs.length === 0`.
 - **`apps/web/src/unsupportedSplash.ts:34-37` — `renderUnsupportedSplash(root)` is uncovered.** Vitest's env is `node`, so a `HTMLElement` mock would be needed (`{ set innerHTML(v: string) { … }, set className(v: string) { … } }`). Severity: **Low**. The HTML constant `unsupportedSplashHtml` is covered.
 - **`apps/web/src/panels/palette.ts:22-30` — `colorFor` coverage verifies only "is in palette" and "is deterministic".** A known-input → known-output check for at least one channel id would pin the FNV-1a constants; right now any reshuffle of the palette or changing the seed goes undetected as long as a collision keeps the palette covered. Severity: **Very low** (colour assignment is cosmetic).
@@ -66,14 +65,13 @@ None. No test in the audited range was demonstrably wrong.
 
 ### Edge cases
 
-- **`bucketFiles` has no test for mixed-case sidecars.** E.g., `drive.MP4` + `drive.mp4.ts.bin` — the current implementation keys sidecars by the (case-preserved) mp4 name slice, so this pair would NOT match. Intentional? Unclear from the code or docs. Left as a finding rather than a test.
+- **`bucketFiles` has no test for mixed-case sidecars.** E.g., `drive.MP4` + `drive.mp4.timestamps` — the current implementation keys sidecars by the (case-preserved) mp4 name slice, so this pair would NOT match. Intentional? Unclear from the code or docs. Left as a finding rather than a test.
 - **`formatAbsolute(ns)` with negative ns.** Not tested. Current behaviour: `ns / 1_000_000n` for negative `ns` is Number-safe (bigint division rounds toward zero), so `Date(-N)` returns a pre-1970 wall-clock. Behavior is defined but undocumented. Severity: **Very low**.
 
 ## Skipped
 
 - **`renderUnsupportedSplash` DOM mock.** Could mock `HTMLElement` but the return is void and the only observable is the mutation of the passed-in element. Single-line coverage gain vs. test brittleness — left as a finding.
 - **`seriesFromArrow` zero-row path.** Would require building a zero-row Arrow IPC in the test rather than loading the existing fixture. Do-able but the extra surface competes with an in-fixture representation; left as a finding.
-- **`min_max_decimate` `max_points == 1` edge.** Cannot be tested from outside the crate (`pub(crate)`), and fixing the doc vs. the implementation is a judgement call for the human reviewer. Left as a finding.
 - **`VideoPanel`, `VideoPanelContainer`, `PlotPanel`, `Workspace`, `ChannelPicker`, `Transport`, `App` React components.** No component-render tests exist (vitest env is `node`, no jsdom). Adding JSX rendering tests would require introducing `@testing-library/react` + jsdom — new tooling, out of scope per audit policy.
 - **Worker entry points (`dataCore.worker.ts`, `videoDecode.worker.ts`) and `workerClient.ts`.** Exercised by Playwright e2e specs; no unit test layer. Out of scope.
 
