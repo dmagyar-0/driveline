@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { tableFromIPC } from "apache-arrow";
+import * as Comlink from "comlink";
 import { makeDataCoreClient, makeVideoDecodeClient } from "./workerClient";
 import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
@@ -173,9 +174,11 @@ export function App() {
   >([]);
 
   useEffect(() => {
-    dataCore.current = makeDataCoreClient();
-    videoDecode.current = makeVideoDecodeClient();
-    useSession.getState().setWorker(dataCore.current);
+    const { proxy: dc, worker: dcWorker } = makeDataCoreClient();
+    const { proxy: vd, worker: vdWorker } = makeVideoDecodeClient();
+    dataCore.current = dc;
+    videoDecode.current = vd;
+    useSession.getState().setWorker(dc);
     installPerfHooks();
     // T6.2 — start saving `layoutJson` / `videoBindings` / `plotBindings`
     // to localStorage on every change. The store was hydrated from the
@@ -183,26 +186,27 @@ export function App() {
     const detachPersistence = attachLayoutPersistence(useSession);
 
     window.__drivelineDevHooks = {
-      ping: async () => await dataCore.current!.ping(),
-      pingVideo: async () => await videoDecode.current!.ping(),
+      ping: async () => await dc.ping(),
+      pingVideo: async () => await vd.ping(),
       fetchScalar: async () => {
-        const bytes = await dataCore.current!.fetchRangeStub();
+        const bytes = await dc.fetchRangeStub();
         const table = tableFromIPC(bytes);
-        const value = table.getChild("value")!;
+        const value = table.getChild("value");
+        if (!value) throw new Error("arrow table missing 'value' column");
         let sum = 0;
         for (let i = 0; i < value.length; i++) sum += Number(value.get(i));
         return { rows: table.numRows, sum };
       },
       openMf4: async (bytes) => {
-        const handle = await dataCore.current!.openMf4(bytes);
-        const summary = await dataCore.current!.mf4Summary(handle);
+        const handle = await dc.openMf4(bytes);
+        const summary = await dc.mf4Summary(handle);
         return { handle, summary };
       },
       closeMf4: async (handle) => {
-        await dataCore.current!.closeMf4(handle);
+        await dc.closeMf4(handle);
       },
       mf4FetchRange: async (handle, channelId, startNs, endNs, includePrev) => {
-        const bytes = await dataCore.current!.mf4FetchRange(
+        const bytes = await dc.mf4FetchRange(
           handle,
           channelId,
           startNs,
@@ -210,8 +214,10 @@ export function App() {
           includePrev,
         );
         const table = tableFromIPC(bytes);
-        const ts = table.getChild("ts")!;
-        const value = table.getChild("value")!;
+        const ts = table.getChild("ts");
+        if (!ts) throw new Error("arrow table missing 'ts' column");
+        const value = table.getChild("value");
+        if (!value) throw new Error("arrow table missing 'value' column");
         let valueSum = 0;
         for (let i = 0; i < value.length; i++) valueSum += Number(value.get(i));
         return {
@@ -323,6 +329,14 @@ export function App() {
     setReady(true);
     return () => {
       detachPersistence();
+      delete window.__drivelineDevHooks;
+      useSession.getState().setWorker(null);
+      dataCore.current = null;
+      videoDecode.current = null;
+      dc[Comlink.releaseProxy]();
+      vd[Comlink.releaseProxy]();
+      dcWorker.terminate();
+      vdWorker.terminate();
     };
   }, []);
 

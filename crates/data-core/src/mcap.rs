@@ -173,7 +173,12 @@ fn parse_vector3_json(data: &[u8]) -> Option<(f64, f64, f64)> {
 
 fn parse_enum_json(data: &[u8]) -> Option<i32> {
     let v: serde_json::Value = serde_json::from_slice(data).ok()?;
-    v.get("value").and_then(|f| f.as_i64()).map(|i| i as i32)
+    // Drop the sample on i32 overflow rather than silently truncating —
+    // a malformed MCAP payload with e.g. `"value": 0x1_0000_0000` would
+    // otherwise surface as a valid-looking `0` enum code.
+    v.get("value")
+        .and_then(|f| f.as_i64())
+        .and_then(|i| i32::try_from(i).ok())
 }
 
 /// Decode the base64 `data` field out of a Foxglove `CompressedVideo` JSON
@@ -994,5 +999,35 @@ mod tests {
         ]));
         // Non-IDR VCL slice header (type 1): not a keyframe.
         assert!(!is_keyframe(&[0x00, 0x00, 0x00, 0x01, 0x41, 0xaa]));
+    }
+
+    #[test]
+    fn parse_enum_json_in_range() {
+        assert_eq!(parse_enum_json(br#"{"value": 0}"#), Some(0));
+        assert_eq!(parse_enum_json(br#"{"value": -1}"#), Some(-1));
+        assert_eq!(
+            parse_enum_json(br#"{"value": 2147483647}"#),
+            Some(i32::MAX)
+        );
+        assert_eq!(
+            parse_enum_json(br#"{"value": -2147483648}"#),
+            Some(i32::MIN)
+        );
+    }
+
+    #[test]
+    fn parse_enum_json_drops_out_of_range() {
+        // 0x1_0000_0000 — one past i32::MAX. Previously truncated to 0.
+        assert_eq!(parse_enum_json(br#"{"value": 4294967296}"#), None);
+        // i32::MAX + 1.
+        assert_eq!(parse_enum_json(br#"{"value": 2147483648}"#), None);
+        // i32::MIN - 1.
+        assert_eq!(parse_enum_json(br#"{"value": -2147483649}"#), None);
+    }
+
+    #[test]
+    fn parse_enum_json_rejects_malformed() {
+        assert_eq!(parse_enum_json(b"not-json"), None);
+        assert_eq!(parse_enum_json(br#"{"other": 1}"#), None);
     }
 }
