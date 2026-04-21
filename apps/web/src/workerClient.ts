@@ -25,18 +25,28 @@ export type {
   VideoDecodeApi,
 };
 
-export function makeDataCoreClient(): Comlink.Remote<DataCoreApi> {
+export interface DataCoreClient {
+  proxy: Comlink.Remote<DataCoreApi>;
+  worker: Worker;
+}
+
+export interface VideoDecodeClient {
+  proxy: Comlink.Remote<VideoDecodeApi>;
+  worker: Worker;
+}
+
+export function makeDataCoreClient(): DataCoreClient {
   const worker = new Worker(
     new URL("./workers/dataCore.worker.ts", import.meta.url),
     { type: "module", name: "dataCore" },
   );
-  return Comlink.wrap<DataCoreApi>(worker);
+  return { proxy: Comlink.wrap<DataCoreApi>(worker), worker };
 }
 
-export function makeVideoDecodeClient(): Comlink.Remote<VideoDecodeApi> {
+export function makeVideoDecodeClient(): VideoDecodeClient {
   const worker = new Worker(
     new URL("./workers/videoDecode.worker.ts", import.meta.url),
     { type: "module", name: "videoDecode" },
   );
-  return Comlink.wrap<VideoDecodeApi>(worker);
+  return { proxy: Comlink.wrap<VideoDecodeApi>(worker), worker };
 }

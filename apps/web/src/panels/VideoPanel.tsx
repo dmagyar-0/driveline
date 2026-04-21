@@ -72,6 +72,7 @@ export function VideoPanel({
   const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sizedRef = useRef<boolean>(false);
   const videoDecodeRef = useRef<Comlink.Remote<VideoDecodeApi> | null>(null);
+  const videoDecodeWorkerRef = useRef<Worker | null>(null);
 
   // HUD refs. We keep them off React state so metric updates don't churn
   // the reconciler; the rAF loop writes directly into the HUD DOM.
@@ -103,8 +104,10 @@ export function VideoPanel({
     const ctx = canvas.getContext("2d", { alpha: false });
     if (!ctx) return;
 
-    const videoDecode = makeVideoDecodeClient();
+    const { proxy: videoDecode, worker: videoDecodeWorker } =
+      makeVideoDecodeClient();
     videoDecodeRef.current = videoDecode;
+    videoDecodeWorkerRef.current = videoDecodeWorker;
     const channel = new MessageChannel();
     const port = channel.port1;
 
@@ -258,8 +261,19 @@ export function VideoPanel({
       lastBlitPtsRef.current = null;
       window.__drivelineVideoHud = undefined;
       const dc = videoDecodeRef.current;
+      const w = videoDecodeWorkerRef.current;
       videoDecodeRef.current = null;
-      if (dc) void dc.close().catch(() => undefined);
+      videoDecodeWorkerRef.current = null;
+      if (dc) {
+        dc.close()
+          .catch(() => undefined)
+          .finally(() => {
+            dc[Comlink.releaseProxy]();
+            w?.terminate();
+          });
+      } else {
+        w?.terminate();
+      }
     };
   }, [sourceKind, sourceHandle, channelId, globalRange?.startNs]);
 

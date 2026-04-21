@@ -75,3 +75,9 @@
   margin: 0.5rem 0 0;
   color: #b23a00;
 }
+
+@media (prefers-color-scheme: dark) {
+  .errors {
+    color: #ff8a5c;
+  }
+}

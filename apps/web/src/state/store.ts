@@ -82,8 +82,12 @@ export interface SessionState {
   openFiles(files: File[]): Promise<OpenResult>;
   /** Close every loaded wasm handle and reset to the empty session. */
   clear(): Promise<void>;
-  /** Test / dev seam: inject the Comlink worker proxy exactly once. */
-  setWorker(worker: Remote<DataCoreApi>): void;
+  /**
+   * Test / dev seam: inject the Comlink worker proxy. Pass `null` on
+   * teardown so `VideoPanel.tsx` and other consumers don't keep a handle
+   * to a terminated worker across `<StrictMode>` unmount/remount.
+   */
+  setWorker(worker: Remote<DataCoreApi> | null): void;
   /**
    * Expose the injected worker proxy to other modules that need a direct
    * dataCore handle — specifically `VideoPanel`, which has to bridge the
@@ -454,9 +458,15 @@ export const useSession = create<SessionState>((set, get) => {
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
             else await w.closeMp4Sidecar(s.handle);
-          } catch {
-            // Swallow close errors — the slab entry either stays for the
-            // lifetime of the worker, or was already freed.
+          } catch (err) {
+            // The slab entry either stays for the lifetime of the worker
+            // or was already freed, so we always continue resetting the
+            // session — but surface the failure so worker panics / dropped
+            // postMessage replies aren't silent.
+            console.warn(
+              `[session.clear] close failed for ${s.kind}#${s.handle}`,
+              err,
+            );
           }
         }
         // Wipe session + transport + per-panel bindings, but keep
