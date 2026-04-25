@@ -768,6 +768,59 @@ mod tests {
     }
 
     #[test]
+    fn rejects_sidecar_with_extra_tab_field() {
+        // `splitn(3, '\t')` followed by `parts.next().is_some()` is the
+        // guard against `<frame>\t<ts>\t<extra>` lines. Existing tests
+        // cover missing-tab and wrong-frame-index but leave the extra-
+        // column branch unverified.
+        let mp4 = synth_mp4(1);
+        let sidecar = b"0\t100\textra\n".to_vec();
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
+        match err {
+            crate::Error::SidecarMalformedLine { line_no, reason } => {
+                assert_eq!(line_no, 0);
+                assert!(
+                    reason.contains("expected exactly two"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected SidecarMalformedLine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_sidecar_with_embedded_empty_line() {
+        // `str::lines()` will yield an empty string for the blank line
+        // between two real entries; the parser treats that as a
+        // structural error rather than silently skipping.
+        let mp4 = synth_mp4(2);
+        let sidecar = b"0\t100\n\n1\t200\n".to_vec();
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
+        match err {
+            crate::Error::SidecarMalformedLine { line_no, reason } => {
+                assert_eq!(line_no, 1);
+                assert!(reason.contains("empty line"), "unexpected reason: {reason}");
+            }
+            other => panic!("expected SidecarMalformedLine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn avcc_to_annexb_drops_zero_length_nals() {
+        // The AVCC `nal_len == 0` branch silently skips a degenerate
+        // length-prefixed NAL. Without this guard the function would
+        // emit an Annex-B start code followed by the next 0 bytes,
+        // which decoders read as a malformed unit; the explicit
+        // `continue` keeps the output well-formed.
+        let input = [
+            0x00, 0x00, 0x00, 0x00, // len=0, skipped
+            0x00, 0x00, 0x00, 0x01, 0x05, // len=1, NAL=0x05
+        ];
+        let out = avcc_to_annexb(&input);
+        assert_eq!(out, vec![0x00, 0x00, 0x00, 0x01, 0x05]);
+    }
+
+    #[test]
     fn avcc_to_annexb_walks_multiple_nals_and_tolerates_truncation() {
         // Two NALs: [0x05] and [0xAA, 0xBB]. Well-formed input.
         let input = [
