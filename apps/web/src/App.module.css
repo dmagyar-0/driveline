@@ -1,32 +1,18 @@
-.shell {
-  font-family: system-ui, sans-serif;
-  padding: 1rem 1rem 0;
-  height: 100vh;
-  box-sizing: border-box;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.shell > h1 {
-  margin: 0;
-  font-size: 1.1rem;
-  font-weight: 600;
-}
-
-.dropZone {
-  border: 2px dashed var(--color-fg-6);
-  border-radius: 6px;
-  padding: 0.5rem 1rem;
-  color: var(--color-fg-5);
-  background: var(--color-bg-3);
-  font-size: 0.85rem;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.dropZoneActive {
-  border-color: var(--color-accent-blue);
-  background: var(--color-accent-blue-tint);
+/* Phase 1 compat shim — keeps the legacy <SessionSummary> DOM alive for
+ * the e2e specs that still select on `source-count`, `source-name`,
+ * `channel-count`, `source-range`, `global-range`. Phase 2 (Sources
+ * drawer) deletes <SessionSummary> entirely and migrates those specs to
+ * the new drawer testids, at which point this whole file goes away.
+ */
+.legacyShim {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  pointer-events: none;
 }
 
 .sources {
@@ -36,48 +22,40 @@
 }
 
 .source {
-  border: 1px solid #ddd;
-  border-radius: 6px;
-  padding: 0.75rem 1rem;
-  margin-bottom: 0.5rem;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-6);
+  padding: var(--sp-6);
 }
 
 .sourceHeader {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  gap: 1rem;
+  gap: var(--sp-7);
 }
 
 .sourceName {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .sourceKind {
-  font-size: 0.85rem;
+  font-size: var(--fs-13);
   color: var(--color-fg-6);
 }
 
 .meta {
-  font-size: 0.85rem;
-  color: #444;
-  margin: 0.25rem 0 0;
+  font-size: var(--fs-13);
+  color: var(--color-fg-5);
 }
 
 .global {
-  margin: 1rem 0 0;
-  font-size: 0.9rem;
+  margin: var(--sp-7) 0 0;
+  font-size: var(--fs-14);
 }
 
 .errors {
   list-style: none;
   padding: 0;
-  margin: 0.5rem 0 0;
-  color: var(--color-error);
-}
-
-@media (prefers-color-scheme: dark) {
-  .errors {
-    color: var(--color-error-dark);
-  }
+  margin: var(--sp-4) 0 0;
+  color: var(--color-error-dark);
 }

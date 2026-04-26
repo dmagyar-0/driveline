@@ -1,0 +1,34 @@
+.drawer {
+  flex: 0 0 220px;
+  width: 220px;
+  background: var(--color-bg-3);
+  border-right: 1px solid var(--color-border-subtle);
+  padding: var(--sp-6);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.placeholder {
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+  line-height: var(--lh-snug);
+}
+
+@media (max-width: 699px) {
+  .drawer {
+    position: absolute;
+    top: 0;
+    left: 40px;
+    bottom: 0;
+    z-index: 5;
+    box-shadow: var(--shadow-1);
+  }
+}

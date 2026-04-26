@@ -6,6 +6,7 @@ import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
+import type { RailTab } from "./state/persist/ui";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { startPlaybackLoop } from "./timeline/playback";
@@ -13,7 +14,9 @@ import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
 import type { WorkspaceHandle } from "./layout/Workspace";
 import { attachLayoutPersistence } from "./layout/persist";
+import { attachUiPersistence } from "./state/persist/ui";
 import { installPerfHooks } from "./perf";
+import { Shell } from "./shell/Shell";
 import styles from "./App.module.css";
 
 export interface OpenMf4Result {
@@ -118,6 +121,10 @@ declare global {
         unit: string | null;
         sampleCount: number;
       }>;
+      // Phase 1 (V1 shell) — drive the rail/drawer state from e2e.
+      setActiveRailTab: (tab: RailTab | null) => void;
+      getActiveRailTab: () => RailTab | null;
+      setRailCollapsed: (collapsed: boolean) => void;
     };
   }
 }
@@ -127,6 +134,10 @@ function formatRange(r: TimeRange | null): string {
   return `[${r.startNs.toString()}, ${r.endNs.toString()})`;
 }
 
+// Phase 1 compat: kept alive (off-screen) to satisfy session-drop and
+// videoMp4 e2e specs that still select on these testids. Phase 2
+// migrates those specs to the new Sources drawer and deletes both this
+// component and `App.module.css`.
 function SessionSummary() {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -184,6 +195,9 @@ export function App() {
     // to localStorage on every change. The store was hydrated from the
     // same key at module load, so the first render already matches.
     const detachPersistence = attachLayoutPersistence(useSession);
+    // Phase 1 — persist `activeRailTab` / `railCollapsed` to
+    // `driveline.ui.v1` so the rail state survives reloads.
+    const detachUiPersistence = attachUiPersistence(useSession);
 
     window.__drivelineDevHooks = {
       ping: async () => await dc.ping(),
@@ -325,10 +339,16 @@ export function App() {
           unit: c.unit,
           sampleCount: c.sampleCount,
         })),
+      setActiveRailTab: (tab) =>
+        useSession.getState().setActiveRailTab(tab),
+      getActiveRailTab: () => useSession.getState().activeRailTab,
+      setRailCollapsed: (collapsed) =>
+        useSession.getState().setRailCollapsed(collapsed),
     };
     setReady(true);
     return () => {
       detachPersistence();
+      detachUiPersistence();
       delete window.__drivelineDevHooks;
       useSession.getState().setWorker(null);
       dataCore.current = null;
@@ -345,7 +365,7 @@ export function App() {
   // tied to the App component.
   useEffect(() => startPlaybackLoop(useSession), []);
 
-  const onDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  const onDrop = async (e: React.DragEvent<HTMLElement>) => {
     e.preventDefault();
     setDragActive(false);
     const files = Array.from(e.dataTransfer?.files ?? []);
@@ -354,42 +374,41 @@ export function App() {
     setRecentErrors(result.errors);
   };
 
-  const onDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+  const onDragOver = (e: React.DragEvent<HTMLElement>) => {
     e.preventDefault();
     setDragActive(true);
   };
-  const onDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+  const onDragLeave = (e: React.DragEvent<HTMLElement>) => {
     e.preventDefault();
     setDragActive(false);
   };
 
   return (
-    <main className={styles.shell}>
-      <h1>Driveline</h1>
-      <p data-testid="worker-status">
-        {ready ? "workers ready" : "workers initialising"}
-      </p>
-      <div
-        className={`${styles.dropZone} ${dragActive ? styles.dropZoneActive : ""}`}
-        data-testid="drop-zone"
+    <>
+      <Shell
+        ready={ready}
+        dragActive={dragActive}
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
+        transport={<Transport />}
       >
-        Drop .mcap, .mf4, or .mp4 (+ .mp4.timestamps) files here to load a session.
+        <Workspace ref={workspaceRef} />
+      </Shell>
+      {/* Phase 1 compat shim — see SessionSummary docstring. Phase 2
+          deletes this entire block. */}
+      <div className={styles.legacyShim} aria-hidden="true">
+        <SessionSummary />
+        {recentErrors.length > 0 && (
+          <ul className={styles.errors} data-testid="session-errors">
+            {recentErrors.map((e, i) => (
+              <li key={i}>
+                {e.name}: {e.reason}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      <SessionSummary />
-      {recentErrors.length > 0 && (
-        <ul className={styles.errors} data-testid="session-errors">
-          {recentErrors.map((e, i) => (
-            <li key={i}>
-              {e.name}: {e.reason}
-            </li>
-          ))}
-        </ul>
-      )}
-      <Workspace ref={workspaceRef} />
-      <Transport />
-    </main>
+    </>
   );
 }
