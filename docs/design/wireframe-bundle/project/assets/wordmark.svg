@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 64" width="320" height="64">
+  <rect width="320" height="64" fill="#0b0b0b"></rect>
+  
+  <rect x="12" y="30" width="44" height="4" rx="2" fill="#2a2a2a"></rect>
+  <rect x="12" y="30" width="22" height="4" rx="2" fill="#f97316"></rect>
+  <path d="M32 18 L44 32 L32 46" fill="none" stroke="#f97316" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter"></path>
+  
+  <text x="72" y="42" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="26" font-weight="600" fill="#e0e0e0" letter-spacing="-0.5">driveline</text>
+</svg>
