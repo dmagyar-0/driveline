@@ -584,6 +584,27 @@ mod tests {
     }
 
     #[test]
+    fn rejects_sidecar_with_non_integer_frame_column() {
+        // The frame column is parsed via `frame_str.parse::<usize>()`. A
+        // non-numeric value must surface as `SidecarMalformedLine` with the
+        // documented `frame column ...` reason. Existing tests cover bad
+        // timestamp and missing tab but not bad frame.
+        let mp4 = synth_mp4(1);
+        let sidecar = b"abc\t100\n".to_vec();
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
+        match err {
+            crate::Error::SidecarMalformedLine { line_no, reason } => {
+                assert_eq!(line_no, 0);
+                assert!(
+                    reason.contains("frame column"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("expected SidecarMalformedLine, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn accepts_sidecar_without_trailing_newline() {
         let mp4 = synth_mp4(2);
         // Deliberately omit the trailing `\n` on the last line.
