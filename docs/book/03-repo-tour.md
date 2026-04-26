@@ -154,8 +154,7 @@ docs/
 ├── 09-verification-plan.md
 ├── 10-task-breakdown.md
 ├── book/              # You are here
-├── reviews/           # Per-PR code review records
-└── verification-t6.3-run.md   # The M6 release-gate report
+└── reviews/           # Per-PR code review records and verification audit trail
 ```
 
 The numbered `NN-*.md` files are *design docs*: they describe the
