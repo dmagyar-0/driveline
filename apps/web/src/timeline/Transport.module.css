@@ -52,7 +52,7 @@
 }
 
 .track:focus {
-  outline: 2px solid #2a6df4;
+  outline: 2px solid var(--color-accent-blue);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -60,7 +60,7 @@
 .trackStrip {
   width: 100%;
   height: 6px;
-  background: #e0e0e0;
+  background: var(--color-fg-2);
   border-radius: 3px;
   position: relative;
 }
@@ -70,7 +70,7 @@
   left: 0;
   top: 0;
   height: 100%;
-  background: #2a6df4;
+  background: var(--color-accent-blue);
   border-radius: 3px;
   pointer-events: none;
 }
@@ -81,7 +81,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #2a6df4;
+  background: var(--color-accent-blue);
   transform: translate(-50%, -50%);
   pointer-events: none;
   transition: width 0.1s, height 0.1s;
@@ -119,7 +119,7 @@
 }
 
 .speedLabel {
-  color: #555;
+  color: var(--color-border-hover);
   font-size: 0.85rem;
 }
 
