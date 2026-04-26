@@ -1,12 +1,8 @@
-// Coverage for the `perf.ts` shim added in this audit range. The module
-// is brand-new and consumed by `state/store.ts`, `timeline/playback.ts`,
-// and the video / plot panels — every seam imports `mark` / `measure` /
-// `timed`, so a regression here would reshape the e2e perf-budget
-// payload silently.
-//
-// Vitest's default environment is `node`; Node 18+ ships
-// `performance.mark` / `measure` / `getEntries` natively, so no jsdom
-// or polyfill is required.
+// @vitest-environment node
+
+// Coverage for the `perf.ts` shim. The `installPerfHooks` test below
+// asserts `typeof window === "undefined"`, so the env directive above
+// pins the file to `node` even if the workspace default ever flips.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -46,12 +42,7 @@ describe("measure", () => {
   });
 
   it("swallows the DOMException when the start mark is missing", () => {
-    // No marks set; `performance.measure` would normally throw
-    // "Failed to execute 'measure' ... mark name not found". The shim
-    // wraps the call in try/catch so a missing perf seam never breaks
-    // user code. Calling raw would throw — the shim must not.
     expect(() => measure("missing-start", "no-such-mark")).not.toThrow();
-    // And no spurious measure entry was recorded.
     expect(performance.getEntriesByName("missing-start")).toHaveLength(0);
   });
 });
@@ -71,10 +62,8 @@ describe("timed", () => {
         throw new Error("boom");
       }),
     ).rejects.toThrow("boom");
-    // The `finally` block must have emitted the end mark + measure even
-    // on rejection — otherwise a failing fetch path would leave a
-    // dangling `:start` mark and the e2e perf assertion couldn't pair
-    // it up.
+    // `finally` must run on rejection so the e2e perf assertion can
+    // pair `:start` with `:end`.
     expect(performance.getEntriesByName("op-throw:start")).toHaveLength(1);
     expect(performance.getEntriesByName("op-throw:end")).toHaveLength(1);
     expect(performance.getEntriesByName("op-throw")).toHaveLength(1);
@@ -85,32 +74,21 @@ describe("snapshot", () => {
   it("returns the current entries plus a memory placeholder", () => {
     mark("snap-test");
     const snap = snapshot();
-    // Entries is a structural copy with the four documented fields.
     const our = snap.entries.find((e) => e.name === "snap-test");
     expect(our).toBeDefined();
     expect(our!.entryType).toBe("mark");
     expect(typeof our!.startTime).toBe("number");
     expect(typeof our!.duration).toBe("number");
     // `performance.memory` is Chromium-only; the shim coerces the missing
-    // shape to `null` so consumers don't have to branch. Under Node we
-    // expect `null`; under Chromium-flavoured runtimes it'd be a number.
-    expect(snap.memory).toHaveProperty("usedJSHeapSize");
-    expect(snap.memory).toHaveProperty("totalJSHeapSize");
-    expect(
-      snap.memory.usedJSHeapSize === null ||
-        typeof snap.memory.usedJSHeapSize === "number",
-    ).toBe(true);
-    expect(
-      snap.memory.totalJSHeapSize === null ||
-        typeof snap.memory.totalJSHeapSize === "number",
-    ).toBe(true);
+    // shape to `null` so consumers don't have to branch.
+    const isNumOrNull = (v: unknown) => v === null || typeof v === "number";
+    expect(isNumOrNull(snap.memory.usedJSHeapSize)).toBe(true);
+    expect(isNumOrNull(snap.memory.totalJSHeapSize)).toBe(true);
   });
 });
 
 describe("installPerfHooks", () => {
   it("is a silent no-op when `window` is undefined", () => {
-    // vitest `environment: "node"` already guarantees this; the explicit
-    // assertion pins the early-return guard.
     expect(typeof window).toBe("undefined");
     expect(() => installPerfHooks()).not.toThrow();
   });
