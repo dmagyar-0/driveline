@@ -1,0 +1,42 @@
+.bar {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 var(--sp-6);
+  gap: var(--sp-5);
+  background: var(--color-bg-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--fs-13);
+}
+
+.logo {
+  display: block;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+.wordmark {
+  font-weight: var(--fw-semibold);
+  font-size: var(--fs-13);
+  color: var(--color-fg-2);
+  letter-spacing: var(--tracking-tight);
+}
+
+.meta {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+  font-variant-numeric: tabular-nums;
+}
+
+.metaSep {
+  color: var(--color-fg-6);
+}
+
+.workerStatus {
+  color: var(--color-fg-4);
+}

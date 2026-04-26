@@ -1,0 +1,53 @@
+.shell {
+  display: grid;
+  grid-template-rows: 36px 1fr 32px;
+  grid-template-columns: 1fr;
+  height: 100vh;
+  width: 100vw;
+  background: var(--color-bg-1);
+  color: var(--color-fg-2);
+  overflow: hidden;
+  position: relative;
+}
+
+.work {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.workMain {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Drag overlay — only visible while a drag is hovering the shell. The
+ * <main> root is the drop target (it carries the testid and the dnd
+ * handlers). The overlay is purely visual feedback. */
+.dragOverlay {
+  position: absolute;
+  inset: 36px 0 32px 0;
+  pointer-events: none;
+  background: var(--color-accent-blue-tint);
+  border: 2px dashed var(--color-accent-blue);
+  display: grid;
+  place-items: center;
+  font-size: var(--fs-15);
+  color: var(--color-fg-2);
+  z-index: 10;
+}
+
+/* Narrow viewport: drawer overlays the work area instead of pushing it
+ * (integration plan §Risks 6). The drawer is `position: absolute` from
+ * <700px so the workspace doesn't get squeezed. */
+@media (max-width: 699px) {
+  .work {
+    position: relative;
+  }
+}

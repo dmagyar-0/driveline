@@ -18,6 +18,7 @@ import { create } from "zustand";
 import { bucketFiles, type BucketError } from "./bucket";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { loadLayoutFromStorage } from "../layout/persist";
+import { loadUiFromStorage, type RailTab } from "./persist/ui";
 import { mark, measure, timed } from "../perf";
 import type {
   ChannelKindWire,
@@ -78,6 +79,12 @@ export interface SessionState {
   layoutJson: unknown | null;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
+  // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
+  // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
+  // panel-chrome work in Phase 7.
+  activeRailTab: RailTab | null;
+  railCollapsed: boolean;
+  selectedPanelId: string | null;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Close every loaded wasm handle and reset to the empty session. */
@@ -113,6 +120,12 @@ export interface SessionState {
   addPlotChannel(panelId: string, channelId: string): void;
   /** Remove one channel from a plot panel (no-op if absent). */
   removePlotChannel(panelId: string, channelId: string): void;
+  /** Switch the rail's open drawer; pass `null` to close. */
+  setActiveRailTab(tab: RailTab | null): void;
+  /** Hide / show the entire rail column. */
+  setRailCollapsed(collapsed: boolean): void;
+  /** Mark a panel as selected for the Panel drawer (Phase 7). */
+  setSelectedPanelId(id: string | null): void;
   /**
    * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
    * Dispatches to the right reader based on the owning source's kind so
@@ -206,6 +219,7 @@ export const useSession = create<SessionState>((set, get) => {
   // saved layout. Missing / malformed storage → `null` and empty maps; the
   // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
   const hydrated = loadLayoutFromStorage();
+  const hydratedUi = loadUiFromStorage();
 
   return {
     sources: [],
@@ -217,6 +231,9 @@ export const useSession = create<SessionState>((set, get) => {
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
+    activeRailTab: hydratedUi?.activeRailTab ?? null,
+    railCollapsed: hydratedUi?.railCollapsed ?? false,
+    selectedPanelId: null,
 
     setWorker(w) {
       worker = w;
@@ -301,6 +318,21 @@ export const useSession = create<SessionState>((set, get) => {
           [panelId]: existing.filter((x) => x !== channelId),
         },
       });
+    },
+
+    setActiveRailTab(tab) {
+      if (get().activeRailTab === tab) return;
+      set({ activeRailTab: tab });
+    },
+
+    setRailCollapsed(collapsed) {
+      if (get().railCollapsed === collapsed) return;
+      set({ railCollapsed: collapsed });
+    },
+
+    setSelectedPanelId(id) {
+      if (get().selectedPanelId === id) return;
+      set({ selectedPanelId: id });
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {
