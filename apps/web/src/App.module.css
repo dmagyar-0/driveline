@@ -15,18 +15,18 @@
 }
 
 .dropZone {
-  border: 2px dashed #666;
+  border: 2px dashed var(--color-fg-6);
   border-radius: 6px;
   padding: 0.5rem 1rem;
-  color: #888;
-  background: #151515;
+  color: var(--color-fg-5);
+  background: var(--color-bg-3);
   font-size: 0.85rem;
   transition: border-color 0.15s, background 0.15s;
 }
 
 .dropZoneActive {
-  border-color: #2a6df4;
-  background: rgba(42, 109, 244, 0.06);
+  border-color: var(--color-accent-blue);
+  background: var(--color-accent-blue-tint);
 }
 
 .sources {
@@ -55,7 +55,7 @@
 
 .sourceKind {
   font-size: 0.85rem;
-  color: #666;
+  color: var(--color-fg-6);
 }
 
 .meta {
@@ -73,11 +73,11 @@
   list-style: none;
   padding: 0;
   margin: 0.5rem 0 0;
-  color: #b23a00;
+  color: var(--color-error);
 }
 
 @media (prefers-color-scheme: dark) {
   .errors {
-    color: #ff8a5c;
+    color: var(--color-error-dark);
   }
 }

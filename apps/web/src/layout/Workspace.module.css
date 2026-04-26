@@ -3,8 +3,8 @@
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  background: #0b0b0b;
-  border: 1px solid #2a2a2a;
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border-subtle);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -13,15 +13,15 @@
   display: flex;
   gap: 0.5rem;
   padding: 0.35rem 0.5rem;
-  background: #151515;
-  border-bottom: 1px solid #2a2a2a;
+  background: var(--color-bg-3);
+  border-bottom: 1px solid var(--color-border-subtle);
   font-size: 0.85rem;
 }
 
 .toolbarBtn {
-  background: #1a1a1a;
-  border: 1px solid #333;
-  color: #e0e0e0;
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-2);
   padding: 0.25rem 0.6rem;
   border-radius: 4px;
   cursor: pointer;
@@ -29,14 +29,14 @@
 }
 
 .toolbarBtn:hover {
-  background: #222;
-  border-color: #555;
+  background: var(--color-bg-6);
+  border-color: var(--color-border-hover);
 }
 
 .toolbarBtnSecondary {
   composes: toolbarBtn;
   margin-left: auto;
-  color: #aaa;
+  color: var(--color-fg-4);
 }
 
 .flexContainer {
@@ -53,7 +53,7 @@
   align-items: center;
   justify-content: center;
   gap: 1rem;
-  color: #888;
+  color: var(--color-fg-5);
 }
 
 /*
@@ -64,13 +64,16 @@
  * vars that the installed 0.8.x `dark.css` documents are overridden.
  */
 .flexContainer :global(.flexlayout__layout) {
-  --color-background: #0b0b0b;
-  --color-text: #e0e0e0;
-  --color-tabset-background: #151515;
-  --color-tabset-background-selected: #1a1a1a;
-  --color-tab-selected: #f97316;
-  --color-tab-selected-background: #151515;
-  --color-splitter: #2a2a2a;
+  --color-background: var(--color-bg-1);
+  --color-text: var(--color-fg-2);
+  --color-tabset-background: var(--color-bg-3);
+  --color-tabset-background-selected: var(--color-bg-4);
+  --color-tab-selected: var(--color-accent-orange);
+  --color-tab-selected-background: var(--color-bg-3);
+  --color-splitter: var(--color-border-subtle);
+  /* Name collides with our token (--color-splitter-hover); inline the
+   * hex to avoid a self-referential `var()` cycle. Same value as the
+   * driveline token. */
   --color-splitter-hover: #3a3a3a;
-  --color-splitter-drag: #f97316;
+  --color-splitter-drag: var(--color-accent-orange);
 }
