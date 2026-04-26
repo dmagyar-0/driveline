@@ -114,4 +114,36 @@ describe("installPerfHooks", () => {
     expect(typeof window).toBe("undefined");
     expect(() => installPerfHooks()).not.toThrow();
   });
+
+  it("attaches `__drivelinePerf` with snapshot/clear/now when `window` exists", () => {
+    // The early-return guard is keyed on `typeof window`; stubbing a
+    // bare object on `globalThis` is enough to drive the install path
+    // without pulling in jsdom. The shim only assigns one property —
+    // no DOM features are touched — so this stays environment-agnostic.
+    const fakeWindow: Record<string, unknown> = {};
+    (globalThis as unknown as { window: unknown }).window = fakeWindow;
+    try {
+      installPerfHooks();
+      const hook = fakeWindow.__drivelinePerf as
+        | { snapshot: () => unknown; clear: () => void; now: () => number }
+        | undefined;
+      expect(hook).toBeDefined();
+      expect(typeof hook!.snapshot).toBe("function");
+      expect(typeof hook!.clear).toBe("function");
+      expect(typeof hook!.now).toBe("function");
+
+      // `now` must return a finite number from `performance.now()`.
+      const t = hook!.now();
+      expect(Number.isFinite(t)).toBe(true);
+
+      // `clear` must remove existing marks/measures so Playwright can
+      // reset between scenarios.
+      mark("install-clear-test");
+      expect(performance.getEntriesByName("install-clear-test")).toHaveLength(1);
+      hook!.clear();
+      expect(performance.getEntriesByName("install-clear-test")).toHaveLength(0);
+    } finally {
+      delete (globalThis as unknown as { window?: unknown }).window;
+    }
+  });
 });
