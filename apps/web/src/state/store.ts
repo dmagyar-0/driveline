@@ -19,6 +19,10 @@ import { bucketFiles, type BucketError } from "./bucket";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { loadLayoutFromStorage } from "../layout/persist";
 import { loadUiFromStorage, type RailTab } from "./persist/ui";
+import {
+  loadNamedLayoutsFromStorage,
+  type NamedLayout,
+} from "./persist/namedLayouts";
 import { mark, measure, timed } from "../perf";
 import type {
   ChannelKindWire,
@@ -85,6 +89,14 @@ export interface SessionState {
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
   selectedPanelId: string | null;
+  // Named-layouts slice (Phase 4). User-saved snapshots of `layoutJson`
+  // plus the binding maps; persists to `driveline.layouts.named.v1` and
+  // outlives a session (untouched by `clear()`). `activeNamedLayoutId`
+  // tracks the orange-bordered "active" row in the Layout drawer; the
+  // drawer also computes a separate `live` pill from a stringified
+  // layoutJson compare.
+  namedLayouts: NamedLayout[];
+  activeNamedLayoutId: string | null;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Close every loaded wasm handle and reset to the empty session. */
@@ -126,6 +138,24 @@ export interface SessionState {
   setRailCollapsed(collapsed: boolean): void;
   /** Mark a panel as selected for the Panel drawer (Phase 7). */
   setSelectedPanelId(id: string | null): void;
+  /**
+   * Snapshot the current `layoutJson` + binding maps into a new
+   * `NamedLayout` entry. Returns the freshly-minted id so callers (and
+   * the dev hook) can correlate the row.
+   */
+  saveCurrentLayoutAs(name: string): string;
+  /**
+   * Restore a previously-saved layout: writes `layoutJson`, both
+   * binding maps, and `activeNamedLayoutId` in one `set` so the
+   * persistence adapter and the FlexLayout rebuild path see a single
+   * coherent snapshot. No-op if `id` does not match a saved entry.
+   */
+  restoreNamedLayout(id: string): void;
+  /**
+   * Drop a saved layout from the slice. If the removed entry was the
+   * active one, `activeNamedLayoutId` resets to `null`.
+   */
+  removeNamedLayout(id: string): void;
   /**
    * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
    * Dispatches to the right reader based on the owning source's kind so
@@ -220,6 +250,7 @@ export const useSession = create<SessionState>((set, get) => {
   // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
   const hydrated = loadLayoutFromStorage();
   const hydratedUi = loadUiFromStorage();
+  const hydratedNamedLayouts = loadNamedLayoutsFromStorage();
 
   return {
     sources: [],
@@ -234,6 +265,8 @@ export const useSession = create<SessionState>((set, get) => {
     activeRailTab: hydratedUi?.activeRailTab ?? null,
     railCollapsed: hydratedUi?.railCollapsed ?? false,
     selectedPanelId: null,
+    namedLayouts: hydratedNamedLayouts?.layouts ?? [],
+    activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
 
     setWorker(w) {
       worker = w;
@@ -277,7 +310,13 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setLayoutJson(json) {
-      set({ layoutJson: json });
+      // Any out-of-band layout edit (FlexLayout `onModelChange` after a
+      // user drag, dev hook, reset) breaks the "active named layout"
+      // identity — clear it so the Layout drawer's orange border no
+      // longer points at a layout the user has since diverged from.
+      // `restoreNamedLayout` writes both fields in a single `set` so it
+      // is unaffected by this clearing.
+      set({ layoutJson: json, activeNamedLayoutId: null });
     },
 
     setVideoBinding(panelId, channelId) {
@@ -333,6 +372,53 @@ export const useSession = create<SessionState>((set, get) => {
     setSelectedPanelId(id) {
       if (get().selectedPanelId === id) return;
       set({ selectedPanelId: id });
+    },
+
+    saveCurrentLayoutAs(name) {
+      const id =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `nl-${Math.random().toString(36).slice(2)}`;
+      const { layoutJson, videoBindings, plotBindings, namedLayouts } = get();
+      const entry: NamedLayout = {
+        id,
+        name,
+        layoutJson,
+        videoBindings: { ...videoBindings },
+        plotBindings: { ...plotBindings },
+        createdAt: Date.now(),
+      };
+      set({
+        namedLayouts: [...namedLayouts, entry],
+        activeNamedLayoutId: id,
+      });
+      return id;
+    },
+
+    restoreNamedLayout(id) {
+      const entry = get().namedLayouts.find((l) => l.id === id);
+      if (!entry) return;
+      // Single `set` so the persist adapter writes one snapshot and
+      // FlexLayout's external-rebuild effect sees the restored JSON
+      // alongside the active-id update (no race with the `setLayoutJson`
+      // clearing path).
+      set({
+        layoutJson: entry.layoutJson,
+        videoBindings: { ...entry.videoBindings },
+        plotBindings: { ...entry.plotBindings },
+        activeNamedLayoutId: id,
+      });
+    },
+
+    removeNamedLayout(id) {
+      const prev = get().namedLayouts;
+      const next = prev.filter((l) => l.id !== id);
+      if (next.length === prev.length) return;
+      set({
+        namedLayouts: next,
+        activeNamedLayoutId:
+          get().activeNamedLayoutId === id ? null : get().activeNamedLayoutId,
+      });
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {

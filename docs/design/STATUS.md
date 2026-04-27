@@ -148,7 +148,84 @@ the end of each shipped phase so future sessions know where to resume.
       53–62. None of the Phase 3 changes touch the video decode pipeline
       that flake covers. Perf project skipped per its dependency on
       chromium.
-- [ ] **Phase 4 · Layout drawer**
+- [x] **Phase 4 · Layout drawer** —
+      `apps/web/src/shell/drawers/LayoutDrawer.{tsx,module.css}` added.
+      Reads `layoutJson`, `namedLayouts`, and `activeNamedLayoutId` via
+      discrete single-key selectors; the inline "save current as…" name
+      input is local `useState`. Two sections: **Saved layouts** (rows
+      from the new slice with click-to-restore and a hover-revealed × to
+      remove; orange-bordered active style on `activeNamedLayoutId`; a
+      separate `live` meta pill driven by per-row
+      `JSON.stringify(l.layoutJson) === JSON.stringify(currentLayoutJson)`)
+      and **Add panel** (`+ video` / `+ plot` wired to the existing
+      `WorkspaceHandle`; `+ 3D scene` / `+ map` / `+ table` / `+ enum`
+      rendered as `aria-disabled` rows with `title="Available in Phase 6"`;
+      a `Reset layout` row at the bottom). New `namedLayouts` slice in
+      `state/store.ts` holds `NamedLayout[]` plus `activeNamedLayoutId`;
+      hydrated synchronously at create time from the new persistence
+      adapter. Three new store actions:
+      `saveCurrentLayoutAs(name)` snapshots `{layoutJson, videoBindings,
+      plotBindings}` (shallow-copying the binding maps so subsequent
+      mutations don't bleed into the saved entry) and marks the new id
+      active; `restoreNamedLayout(id)` writes layout + bindings + active
+      id in a single `set` so the FlexLayout external-rebuild effect at
+      `Workspace.tsx:93-99` and the persistence subscriber both see one
+      coherent snapshot; `removeNamedLayout(id)` drops the entry and
+      clears `activeNamedLayoutId` only when the removed id was the
+      active one. `setLayoutJson` was extended to clear
+      `activeNamedLayoutId` so any out-of-band layout edit (FlexLayout
+      `onModelChange` after a user drag, dev hook, reset) drops the
+      orange-active style on the saved row that the user has since
+      diverged from. New persistence adapter at
+      `apps/web/src/state/persist/namedLayouts.ts` (storage key
+      `driveline.layouts.named.v1`, schema version 1, fail-closed
+      validation, reference-equality early-return in
+      `attachNamedLayoutsPersistence` mirror of
+      `layout/persist.ts:attachLayoutPersistence`). The persisted
+      payload's `activeNamedLayoutId` is null'd at load time when it
+      points at a removed entry rather than rejecting the whole slice.
+      `clear()` (existing) still leaves `namedLayouts` and
+      `activeNamedLayoutId` alone — saved layouts outlive a session,
+      same posture as bookmarks will in Phase 8. Wired through:
+      `Drawer.tsx` switches `layout` → `<LayoutDrawer />` (the `layout`
+      arm is removed from `STUBS` so the typed `Exclude<RailTab, …>`
+      keys narrow correctly); `Shell.tsx` extends `ShellProps` with
+      `addVideoPanel` / `addPlotPanel` / `resetLayout` callbacks
+      forwarded to `<Drawer>`; `App.tsx` minted those callbacks off the
+      existing `workspaceRef` (same indirection pattern as
+      `ensurePlotPanel` already uses). Three new dev hooks in
+      `App.tsx`: `saveCurrentLayoutAs(name): string`,
+      `restoreNamedLayout(id)`, and `listNamedLayouts()` returning
+      `{id, name, createdAt, isLive, isActive}[]` (deliberately omits
+      `layoutJson` and the binding maps — tests assert on names / live
+      / active, not on the raw FlexLayout snapshot). The legacy
+      `Workspace.tsx` toolbar block (`+ Video panel`, `+ Plot panel`,
+      `Reset layout`, `data-testid="workspace-toolbar"`) was deleted
+      per integration plan §Phase 4.5; the `rootEmpty` empty-shell
+      fallback stayed and its inline button was renamed to use a new
+      local `.restoreBtn` class so the obsolete `.toolbar`,
+      `.toolbarBtn`, and `.toolbarBtnSecondary` rules in
+      `Workspace.module.css` could go. Verified pre-deletion that no
+      e2e selects on `add-video-panel` / `add-plot-panel` /
+      `reset-layout` / `workspace-toolbar` (`grep -rn` apps/e2e returns
+      nothing); the e2e specs that drive `resetLayout` /
+      `addVideoPanel` (`videoMp4`, `videoSeek`, `crossPanelSync`,
+      `signalAlignment`, `perfBudgets`) call them via the unchanged
+      `__drivelineDevHooks`, and the new LayoutDrawer's `+ video` /
+      `+ plot` / `Reset layout` buttons re-introduce the same testids
+      so any future spec can reach them through the DOM as well.
+      Verification: `pnpm --filter web build` passes (gzipped initial
+      JS 191.86 KB, +1.75 KB vs. Phase 3's 190.11 KB baseline, well
+      under the 350 KB budget); `pnpm --filter web test --run` 177/177
+      pass (153 base + 16 new `namedLayouts.test.ts` + 8 new
+      `store.test.ts` cases covering all three new actions, the
+      `setLayoutJson`-clears-active path, the deep-copy contract on
+      save, and the `clear()` preservation contract); full chromium +
+      perf e2e suite 31/31 pass on this run — including the previously
+      sandbox-flaky `crossPanelSync.spec.ts:212`. None of the Phase 4
+      changes touch the cursor hot path, the video decode pipeline, or
+      the FlexLayout rebuild branch in any way that would affect the
+      perf budgets.
 - [ ] **Phase 5 · Panel drawer**
 - [ ] **Phase 6 · New panel kinds (Scene / Map / Table / Enum)**
 - [ ] **Phase 7 · Per-panel chrome via FlexLayout customisation**
@@ -158,47 +235,62 @@ the end of each shipped phase so future sessions know where to resume.
 
 ## Where to continue
 
-Next phase: **Phase 4 · Layout drawer.** Read
-`docs/design/v1-shell-integration.md` § Phase 4 (lines 178-199) for
-the two-section layout (Saved layouts + Add panel), the `namedLayouts`
-slice and persistence shape, and the move of the existing
-`Workspace.tsx` toolbar into the drawer. Concretely:
+Next phase: **Phase 5 · Panel drawer.** Read
+`docs/design/v1-shell-integration.md` § Phase 5 (lines 201-222) for
+the per-panel settings drawer that switches body on the selected
+panel's kind. Concretely:
 
-1. Create `apps/web/src/shell/drawers/LayoutDrawer.{tsx,module.css}`.
-   Replace `Drawer.tsx`'s `STUBS.layout` arm with `<LayoutDrawer />`.
-2. **Add panel section** — wire through the existing `WorkspaceHandle`
-   ref (already plumbed for Phase 3 as `ensurePlotPanel`; broaden to
-   forward the full handle, OR keep a narrow callback per row).
-   `+ video`, `+ plot` map to `addVideoPanel()` / `addPlotPanel()`. The
-   four new kinds (`+ 3D scene`, `+ map`, `+ table`, `+ enum`) block on
-   Phase 6 implementations — render disabled rows in Phase 4 with a
-   `title="Available in Phase 6"` tooltip until then. `Reset layout`
-   maps to `resetLayout()`.
-3. **Saved layouts section** — add a `namedLayouts` slice plus
-   `apps/web/src/state/persist/namedLayouts.ts` adapter (storage key
-   `driveline.layouts.named.v1`, schema-versioned, BigInt-safe via
-   serialise-as-string mirroring `state/persist/ui.ts` and
-   `layout/persist.ts`). Each row = name + meta tag (`live` if its
-   layout JSON matches the current one). Click = restore (`setLayoutJson`
-   + restore stored binding maps). `+ save current as…` opens a small
-   inline name input that calls a new store action
-   `saveCurrentLayoutAs(name)`.
-4. Remove the toolbar block at `Workspace.tsx:181-207` (`+ Video panel`,
-   `+ Plot panel`, `Reset layout`). Keep the empty-shell fallback
-   (`rootEmpty` branch).
-5. Add dev hooks: `saveCurrentLayoutAs(name)`, `restoreNamedLayout(id)`,
-   `listNamedLayouts()`. The Phase 3 hooks (`setSelectedPanelId`,
-   `getSelectedPanelId`) are already exposed.
-6. Update e2e specs that select on `data-testid="add-video-panel" /
-   "add-plot-panel" / "reset-layout"` or on `workspace-toolbar` — those
-   nodes move out of `Workspace`. Prefer the dev hooks
-   (`addVideoPanel`, `addPlotPanel`, `resetLayout`) over DOM selectors.
+1. Create `apps/web/src/shell/drawers/PanelDrawer.{tsx,module.css}`.
+   Replace `Drawer.tsx`'s `STUBS.panel` arm with `<PanelDrawer />`.
+   Read `selectedPanelId` via a single-key selector and discriminate
+   on it with the existing `layout/panelId.ts:panelKindOf` (added in
+   Phase 3) — no FlexLayout JSON parsing needed for plot/video.
+2. **Empty state** — when `selectedPanelId === null`, render a
+   compact callout: "Select a panel to configure it" with a hint to
+   click any panel header. The actual click-to-select wiring lands in
+   Phase 7 (`onPointerDown` on the panel container in
+   `panelFactory.tsx`); for Phase 5 the e2e spec drives selection via
+   `setSelectedPanelId(id)` (already a dev hook).
+3. **Plot kind body** — list each `plotBindings[panelId]` channel with
+   the swatch + `removePlotChannel` × button (mirror the row primitive
+   from `ChannelsDrawer.module.css:.row` per rule-of-three). `+ add
+   channel…` reuses the existing `panels/ChannelPicker.tsx` popover so
+   we don't reimplement the picker.
+4. **Video kind body** — show `decoder` (read-only label sourced from
+   `videoHudStats().codec` if a fixture is loaded, otherwise "—"),
+   the bound channel under "Channels in panel" with a × that calls
+   `setVideoBinding(panelId, null)`, and a `step-hold` /
+   `HUD overlay` toggle pair. The HUD toggle currently lives as a
+   per-panel ref in `VideoPanel.tsx` (`hudOn` state); Phase 5
+   promotes it to the store keyed by panel id (new
+   `videoHudOn: Record<panelId, boolean>` slice, default `false`,
+   persisted via the existing layout adapter — bump
+   `LAYOUT_SCHEMA_VERSION` to 2 and migrate v1 reads with a default).
+   `step-hold` is a similar one-bit-per-panel knob if it exists in
+   `VideoPanel`; otherwise defer it to the same slice.
+5. **3D / Map / Table / Enum kind bodies** — render kind-specific
+   minimal options per integration plan §Phase 5.3 bullet 3, but
+   stub them as "Configured in Phase 6" callouts since the panel
+   implementations land then. The discrimination just needs new
+   prefixes/checks in `layout/panelId.ts:panelKindOf` once Phase 6
+   mints them.
+6. Add dev hook(s) only if a body needs an internal-state observation
+   that DOM can't cover: `videoHudStats().hudOn` already exposes the
+   HUD bit, so the Panel drawer's HUD toggle is observable; no new
+   hook needed for Phase 5.
+7. The integration plan calls out Phase 7 as the right place to
+   actually wire `onClick`/`onFocus` on each panel container to set
+   `selectedPanelId`. Phase 5 ships with selection driven only by
+   the dev hook + (eventually) a settings icon click; the manual UX
+   path lights up in Phase 7.
 
-The Phase 3 dev hooks (`setSelectedPanelId`, `getSelectedPanelId`),
-`panelId.ts:panelKindOf`, and the existing `addPlotChannel` /
-`setVideoBinding` actions cover everything Phase 3 needs — Phase 4 only
-introduces the `namedLayouts` slice and its persistence adapter on top
-of these.
+The Phase 4 dev hooks (`saveCurrentLayoutAs`, `restoreNamedLayout`,
+`listNamedLayouts`) and the existing
+`setSelectedPanelId`/`getSelectedPanelId` cover everything Phase 5
+needs to test programmatically. No new persistence adapter unless the
+HUD slice lands in Phase 5 — if it does, fold it into the existing
+`layout/persist.ts` schema bump rather than introducing a new adapter
+file.
 
 ## Carry-over notes for later phases
 
@@ -233,3 +325,15 @@ of these.
   `tokens.css` (`--plot-1..8`) hold the same 8 hex values in two
   systems. Keep them in sync if either changes; unification is not
   worth the indirection cost.
+- **Drawer row primitive duplication (Phases 2/3/4)**: `SourcesDrawer`,
+  `ChannelsDrawer`, and `LayoutDrawer` each duplicate the `.row` /
+  `.rowActive` / `.swatch` / `.kind` rule set locally per the explicit
+  rule-of-three deferral first noted in Phase 2 STATUS. With three
+  copies now live (Phase 4 takes the count to three for `.row` /
+  `.rowActive` / `.kind` / 8×8 swatch — though LayoutDrawer's rows
+  carry no swatch), Phase 5's PanelDrawer would push to four. Lift the
+  shared primitive to `apps/web/src/shell/drawers/_row.module.css`
+  (or a `<DrawerRow>` component if the markup also stabilises) at the
+  start of Phase 5 before duplicating again. Keep the orange-active
+  border-left + rounded right corners exactly as-is; the visual is
+  consistent across all three current drawers.

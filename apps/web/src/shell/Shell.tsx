@@ -25,6 +25,12 @@ export interface ShellProps {
    *  when the user clicks a channel without a panel selected. App
    *  owns the FlexLayout `WorkspaceHandle`; Shell only forwards. */
   ensurePlotPanel: () => string | null;
+  /** Forwarded to the Layout drawer's `+ video` row. */
+  addVideoPanel: () => void;
+  /** Forwarded to the Layout drawer's `+ plot` row. */
+  addPlotPanel: () => void;
+  /** Forwarded to the Layout drawer's `Reset layout` row. */
+  resetLayout: () => void;
   transport: ReactNode;
   children: ReactNode;
 }
@@ -36,6 +42,9 @@ export function Shell({
   onDragOver,
   onDragLeave,
   ensurePlotPanel,
+  addVideoPanel,
+  addPlotPanel,
+  resetLayout,
   transport,
   children,
 }: ShellProps) {
@@ -50,7 +59,12 @@ export function Shell({
       <TopBar ready={ready} />
       <div className={styles.work}>
         <Rail />
-        <Drawer ensurePlotPanel={ensurePlotPanel} />
+        <Drawer
+          ensurePlotPanel={ensurePlotPanel}
+          addVideoPanel={addVideoPanel}
+          addPlotPanel={addPlotPanel}
+          resetLayout={resetLayout}
+        />
         <div className={styles.workMain}>{children}</div>
       </div>
       {transport}

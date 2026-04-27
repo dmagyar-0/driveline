@@ -179,40 +179,13 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
 
   return (
     <section className={styles.workspace} data-testid="workspace">
-      <div className={styles.toolbar} data-testid="workspace-toolbar">
-        <button
-          type="button"
-          className={styles.toolbarBtn}
-          onClick={() => addVideoPanel()}
-          data-testid="add-video-panel"
-        >
-          + Video panel
-        </button>
-        <button
-          type="button"
-          className={styles.toolbarBtn}
-          onClick={() => addPlotPanel()}
-          data-testid="add-plot-panel"
-        >
-          + Plot panel
-        </button>
-        <button
-          type="button"
-          className={styles.toolbarBtnSecondary}
-          onClick={resetLayout}
-          data-testid="reset-layout"
-          title="Reset to the default video+plot split"
-        >
-          Reset layout
-        </button>
-      </div>
       <div className={styles.flexContainer}>
         {rootEmpty ? (
           <div className={styles.emptyShell} data-testid="workspace-empty">
             <p>No panels open.</p>
             <button
               type="button"
-              className={styles.toolbarBtn}
+              className={styles.restoreBtn}
               onClick={resetLayout}
             >
               Restore default layout

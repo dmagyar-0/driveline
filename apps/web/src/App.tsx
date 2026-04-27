@@ -15,6 +15,7 @@ import { Workspace } from "./layout/Workspace";
 import type { WorkspaceHandle } from "./layout/Workspace";
 import { attachLayoutPersistence } from "./layout/persist";
 import { attachUiPersistence } from "./state/persist/ui";
+import { attachNamedLayoutsPersistence } from "./state/persist/namedLayouts";
 import { installPerfHooks } from "./perf";
 import { Shell } from "./shell/Shell";
 
@@ -139,6 +140,19 @@ declare global {
       // the Channels drawer (and, in Phase 5+, the Panel drawer).
       setSelectedPanelId: (id: string | null) => void;
       getSelectedPanelId: () => string | null;
+      // Phase 4 (Layout drawer) — drive saved-layout actions from e2e.
+      // `saveCurrentLayoutAs` returns the freshly-minted id;
+      // `listNamedLayouts` deliberately omits the heavy `layoutJson`
+      // and binding maps — tests assert on names / live / active.
+      saveCurrentLayoutAs: (name: string) => string;
+      restoreNamedLayout: (id: string) => void;
+      listNamedLayouts: () => Array<{
+        id: string;
+        name: string;
+        createdAt: number;
+        isLive: boolean;
+        isActive: boolean;
+      }>;
     };
   }
 }
@@ -164,6 +178,10 @@ export function App() {
     // Phase 1 — persist `activeRailTab` / `railCollapsed` to
     // `driveline.ui.v1` so the rail state survives reloads.
     const detachUiPersistence = attachUiPersistence(useSession);
+    // Phase 4 — persist `namedLayouts` and `activeNamedLayoutId` to
+    // `driveline.layouts.named.v1`. Saved layouts outlive a session.
+    const detachNamedLayoutsPersistence =
+      attachNamedLayoutsPersistence(useSession);
 
     window.__drivelineDevHooks = {
       ping: async () => await dc.ping(),
@@ -327,11 +345,27 @@ export function App() {
       setSelectedPanelId: (id) =>
         useSession.getState().setSelectedPanelId(id),
       getSelectedPanelId: () => useSession.getState().selectedPanelId,
+      saveCurrentLayoutAs: (name) =>
+        useSession.getState().saveCurrentLayoutAs(name),
+      restoreNamedLayout: (id) =>
+        useSession.getState().restoreNamedLayout(id),
+      listNamedLayouts: () => {
+        const st = useSession.getState();
+        const currentJsonStr = JSON.stringify(st.layoutJson ?? null);
+        return st.namedLayouts.map((l) => ({
+          id: l.id,
+          name: l.name,
+          createdAt: l.createdAt,
+          isLive: JSON.stringify(l.layoutJson ?? null) === currentJsonStr,
+          isActive: st.activeNamedLayoutId === l.id,
+        }));
+      },
     };
     setReady(true);
     return () => {
       detachPersistence();
       detachUiPersistence();
+      detachNamedLayoutsPersistence();
       delete window.__drivelineDevHooks;
       useSession.getState().setWorker(null);
       dataCore.current = null;
@@ -374,6 +408,20 @@ export function App() {
   const ensurePlotPanel = (): string | null =>
     workspaceRef.current?.addPlotPanel() ?? null;
 
+  // Phase 4 — the Layout drawer's add-panel and reset rows. Same
+  // indirection as `ensurePlotPanel`: App owns the WorkspaceHandle and
+  // exposes narrow callbacks so Shell/Drawer/LayoutDrawer don't have
+  // to know about the FlexLayout ref.
+  const addVideoPanel = (): void => {
+    workspaceRef.current?.addVideoPanel();
+  };
+  const addPlotPanel = (): void => {
+    workspaceRef.current?.addPlotPanel();
+  };
+  const resetLayout = (): void => {
+    workspaceRef.current?.resetLayout();
+  };
+
   return (
     <Shell
       ready={ready}
@@ -382,6 +430,9 @@ export function App() {
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
       ensurePlotPanel={ensurePlotPanel}
+      addVideoPanel={addVideoPanel}
+      addPlotPanel={addPlotPanel}
+      resetLayout={resetLayout}
       transport={<Transport />}
     >
       <Workspace ref={workspaceRef} />
