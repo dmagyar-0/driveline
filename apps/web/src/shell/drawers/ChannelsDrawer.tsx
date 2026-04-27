@@ -22,6 +22,7 @@ import { useSession, type Channel } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { panelKindOf } from "../../layout/panelId";
 import drawerStyles from "../Drawer.module.css";
+import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./ChannelsDrawer.module.css";
 
 const HEADING_ID = "drawer-channels-h";
@@ -100,6 +101,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
 
   return (
     <aside
+      id={DRAWER_REGION_ID}
       className={drawerStyles.drawer}
       role="region"
       aria-labelledby={HEADING_ID}

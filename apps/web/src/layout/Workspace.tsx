@@ -247,7 +247,9 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
           <span className={styles.tabGrip} aria-hidden="true">
             <GripIcon />
           </span>
-          <span className={styles.tabName}>{node.getName()}</span>
+          <span className={styles.tabName} title={node.getName()}>
+            {node.getName()}
+          </span>
           {kind !== null && (
             <span
               className={styles.tabKind}
@@ -275,6 +277,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
             <button
               type="button"
               className={`${styles.tabActionBtn} ${styles.tabActionDisabled}`}
+              aria-label="Collapse panel — coming soon"
               aria-disabled="true"
               tabIndex={-1}
               title="Collapse — coming in a later phase"

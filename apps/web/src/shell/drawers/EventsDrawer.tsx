@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
 import { formatRelative } from "../../timeline/formatTime";
 import drawerStyles from "../Drawer.module.css";
+import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./EventsDrawer.module.css";
 
 const HEADING_ID = "drawer-events-h";
@@ -118,6 +119,7 @@ export function EventsDrawer() {
 
   return (
     <aside
+      id={DRAWER_REGION_ID}
       className={drawerStyles.drawer}
       role="region"
       aria-labelledby={HEADING_ID}
@@ -155,7 +157,16 @@ export function EventsDrawer() {
                     className={s.row}
                     onClick={() => onSeek(b.ns)}
                     data-testid={`bookmark-seek-${b.id}`}
-                    aria-label={`Seek to ${b.label}`}
+                    aria-label={
+                      outOfRange
+                        ? `Out of range — Seek to ${b.label}`
+                        : `Seek to ${b.label}`
+                    }
+                    title={
+                      outOfRange
+                        ? "Outside the current session's range"
+                        : b.label
+                    }
                   >
                     <span
                       className={s.swatch}

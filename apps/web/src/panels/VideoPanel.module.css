@@ -17,12 +17,12 @@
   right: 6px;
   z-index: 2;
   padding: 2px 6px;
-  font-size: 11px;
-  font-family: ui-monospace, Menlo, monospace;
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
   background: var(--scrim-toggle);
-  color: #ddd;
+  color: var(--color-fg-3);
   border: 1px solid var(--color-border-strong);
-  border-radius: 3px;
+  border-radius: var(--radius-3);
   cursor: pointer;
 }
 
