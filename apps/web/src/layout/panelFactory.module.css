@@ -1,0 +1,9 @@
+/* Phase 7 · click-to-select wrapper. `display: contents` keeps the
+ * panel's own root the layout child of FlexLayout's panel slot — the
+ * wrapper exists only to capture pointer events anywhere in the panel
+ * body. Pointer events bubble through `display: contents` boxes
+ * normally, so existing Resize/Pointer handlers in PlotPanel /
+ * VideoPanel / MapPanel continue to receive their events. */
+.panelBody {
+  display: contents;
+}

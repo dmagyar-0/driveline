@@ -22,7 +22,7 @@ import { useSession } from "../state/store";
 import type { Channel, SourceMeta, TimeRange } from "../state/store";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
-import { cursorXPx } from "./cursorOverlay";
+import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
@@ -365,7 +365,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     const x = cursorXPx(cursorNs, range, width);
     if (x === null) return;
 
-    ctx.strokeStyle = "#f97316";
+    ctx.strokeStyle = cursorStrokeColor();
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(left + x + 0.5, top);

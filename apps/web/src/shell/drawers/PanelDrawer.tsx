@@ -27,6 +27,7 @@ import { useSession, type Channel, type SourceMeta } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { ChannelPicker } from "../../panels/ChannelPicker";
 import {
+  kindLabel,
   panelKindOf,
   panelNameFor,
   type PanelKind,
@@ -75,23 +76,6 @@ export function PanelDrawer() {
       )}
     </aside>
   );
-}
-
-function kindLabel(kind: PanelKind): string {
-  switch (kind) {
-    case "plot":
-      return "PLOT";
-    case "video":
-      return "VIDEO";
-    case "scene":
-      return "SCENE";
-    case "map":
-      return "MAP";
-    case "table":
-      return "TABLE";
-    case "enum":
-      return "ENUM";
-  }
 }
 
 function PanelBody({

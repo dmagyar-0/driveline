@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { panelKindOf, panelNameFor } from "./panelId";
+import { kindLabel, panelKindOf, panelNameFor } from "./panelId";
 
 describe("panelKindOf", () => {
   it("recognises plot/video prefixes", () => {
@@ -70,5 +70,16 @@ describe("panelNameFor", () => {
         "x",
       ),
     ).toBeNull();
+  });
+});
+
+describe("kindLabel", () => {
+  it("maps every PanelKind to its uppercase badge text", () => {
+    expect(kindLabel("plot")).toBe("PLOT");
+    expect(kindLabel("video")).toBe("VIDEO");
+    expect(kindLabel("scene")).toBe("SCENE");
+    expect(kindLabel("map")).toBe("MAP");
+    expect(kindLabel("table")).toBe("TABLE");
+    expect(kindLabel("enum")).toBe("ENUM");
   });
 });

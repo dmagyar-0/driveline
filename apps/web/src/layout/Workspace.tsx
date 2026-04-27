@@ -25,8 +25,13 @@ import {
   DockLocation,
   Layout,
   Model,
+  type BorderNode,
   type IJsonModel,
   type IJsonTabNode,
+  type ITabRenderValues,
+  type ITabSetRenderValues,
+  type TabNode,
+  type TabSetNode,
 } from "flexlayout-react";
 import "flexlayout-react/style/dark.css";
 import { useSession } from "../state/store";
@@ -47,6 +52,8 @@ import {
   SCENE_PREFIX,
   TABLE_PREFIX,
   VIDEO_PREFIX,
+  kindLabel,
+  panelKindOf,
 } from "./panelId";
 import styles from "./Workspace.module.css";
 
@@ -222,6 +229,104 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
     setLayoutJson(null);
   }, [setLayoutJson]);
 
+  // Phase 7 · Custom tab chrome. Replace FlexLayout's stock tab content
+  // with grip + name + kind badge + four-icon cluster (settings,
+  // collapse [disabled], maximize, close). The cluster is **always**
+  // rendered (no hover/selection predicate) per the wireframe and the
+  // frontend skill's "thing disappears when status changes" trap.
+  // Settings click flips the rail to the Panel drawer for the clicked
+  // tab; maximize/close dispatch stock FlexLayout actions.
+  const onRenderTab = useCallback(
+    (node: TabNode, renderValues: ITabRenderValues) => {
+      const panelId = node.getId();
+      const kind = panelKindOf(panelId);
+      const tabsetId = node.getParent()?.getId();
+      renderValues.buttons = [];
+      renderValues.content = (
+        <span className={styles.tab}>
+          <span className={styles.tabGrip} aria-hidden="true">
+            <GripIcon />
+          </span>
+          <span className={styles.tabName}>{node.getName()}</span>
+          {kind !== null && (
+            <span
+              className={styles.tabKind}
+              data-testid="tab-kind-badge"
+            >
+              {kindLabel(kind)}
+            </span>
+          )}
+          <span className={styles.tabActions}>
+            <button
+              type="button"
+              className={styles.tabActionBtn}
+              aria-label="Configure panel"
+              data-testid="tab-settings"
+              onPointerDown={stopPointer}
+              onClick={(e) => {
+                e.stopPropagation();
+                const st = useSession.getState();
+                st.setSelectedPanelId(panelId);
+                st.setActiveRailTab("panel");
+              }}
+            >
+              <SettingsIcon />
+            </button>
+            <button
+              type="button"
+              className={`${styles.tabActionBtn} ${styles.tabActionDisabled}`}
+              aria-disabled="true"
+              tabIndex={-1}
+              title="Collapse — coming in a later phase"
+              data-testid="tab-collapse"
+              onPointerDown={stopPointer}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <CollapseIcon />
+            </button>
+            <button
+              type="button"
+              className={styles.tabActionBtn}
+              aria-label="Maximize panel"
+              data-testid="tab-maximize"
+              onPointerDown={stopPointer}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!tabsetId) return;
+                model.doAction(Actions.maximizeToggle(tabsetId));
+              }}
+            >
+              <MaximizeIcon />
+            </button>
+            <button
+              type="button"
+              className={styles.tabActionBtn}
+              aria-label="Close panel"
+              data-testid="tab-close"
+              onPointerDown={stopPointer}
+              onClick={(e) => {
+                e.stopPropagation();
+                model.doAction(Actions.deleteTab(panelId));
+              }}
+            >
+              <CloseIcon />
+            </button>
+          </span>
+        </span>
+      );
+    },
+    [model],
+  );
+
+  const onRenderTabSet = useCallback(
+    (_node: TabSetNode | BorderNode, _renderValues: ITabSetRenderValues) => {
+      // Single-tab tabsets already match the wireframe — leave the
+      // tabset action cluster (the maximize/restore button on the right
+      // edge) alone for now. Hook reserved for later phases.
+    },
+    [],
+  );
+
   useImperativeHandle(
     ref,
     () => ({
@@ -268,9 +373,74 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
             model={model}
             factory={panelFactory}
             onModelChange={onModelChange}
+            onRenderTab={onRenderTab}
+            onRenderTabSet={onRenderTabSet}
           />
         )}
       </div>
     </section>
   );
 });
+
+// FlexLayout's default `onPointerDown` on a tab activates / drags it.
+// We want the per-button clicks inside the tab chrome to act locally
+// without also seeding a drag, so block pointerdown bubbling on every
+// icon button.
+function stopPointer(e: React.PointerEvent) {
+  e.stopPropagation();
+}
+
+function GripIcon() {
+  return (
+    <svg width="8" height="14" viewBox="0 0 8 14" fill="currentColor">
+      <circle cx="2" cy="3" r="1" />
+      <circle cx="6" cy="3" r="1" />
+      <circle cx="2" cy="7" r="1" />
+      <circle cx="6" cy="7" r="1" />
+      <circle cx="2" cy="11" r="1" />
+      <circle cx="6" cy="11" r="1" />
+    </svg>
+  );
+}
+
+function SettingsIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true">
+      <circle cx="8" cy="8" r="2" />
+      <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4" />
+    </svg>
+  );
+}
+
+function CollapseIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6l5-3 5 3" />
+      <path d="M3 13h10" />
+    </svg>
+  );
+}
+
+function MaximizeIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3h4M3 3v4M13 3h-4M13 3v4M3 13h4M3 13v-4M13 13h-4M13 13v-4" />
+    </svg>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"
+      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
+      strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 3l10 10M13 3L3 13" />
+    </svg>
+  );
+}

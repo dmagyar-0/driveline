@@ -17,7 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta } from "../state/store";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
-import { cursorXPx } from "./cursorOverlay";
+import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 import { colorFor } from "./palette";
 import styles from "./EnumPanel.module.css";
 
@@ -190,7 +190,7 @@ export function EnumPanel({ panelId }: EnumPanelProps) {
     ctx.clearRect(0, 0, w, h);
     const x = cursorXPx(cursorNs, globalRange, w);
     if (x === null) return;
-    ctx.strokeStyle = "#f97316";
+    ctx.strokeStyle = cursorStrokeColor();
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(x + 0.5, 0);
