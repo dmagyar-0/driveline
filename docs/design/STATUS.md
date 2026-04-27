@@ -539,60 +539,227 @@ the end of each shipped phase so future sessions know where to resume.
       collapse-disabled chrome contract (`aria-disabled` +
       `tabindex="-1"`); ready to run in CI alongside the existing
       chromium project.
-- [ ] **Phase 8 · Events drawer (bookmarks)**
+- [x] **Phase 8 · Events drawer (bookmarks)** —
+      `apps/web/src/state/persist/bookmarks.ts` added (storage key
+      `driveline.bookmarks.v1`, schema v1, fail-closed validation,
+      reference-equality early-return in `attachBookmarksPersistence`,
+      mirror of `state/persist/namedLayouts.ts`). BigInt encoding
+      round-trips `ns` as a decimal string with a `tryParseBigInt`
+      helper so a corrupt persisted entry (`"not-a-number"`, a numeric
+      `ns` rather than a string, an empty `id`) fails closed and the
+      whole slice loads as `null` rather than silently corrupting the
+      runtime state. The persisted payload preserves bigints that
+      exceed `Number.MAX_SAFE_INTEGER` (covered by the
+      `9_007_199_254_740_993n` test).
+      **Store extension:** `bookmarks: Bookmark[]` added to
+      `SessionState` next to `namedLayouts` with four actions:
+      `addBookmarkAtCursor(label?)` (returns `string | null` — `null`
+      when `globalRange === null`), `addBookmark(ns, label?)` (test
+      seam, no clamping), `removeBookmark(id)`, and
+      `renameBookmark(id, label)` (trimmed empty labels are rejected
+      so an Enter on an empty input doesn't blank the row).
+      `addBookmarkAtCursor` defaults the label to `` `bookmark @
+      ${formatRelative(cursorNs, globalRange.startNs)}` `` and freezes
+      the colour at create-time via `panels/palette.ts:colorFor(id)`
+      so a future palette change doesn't retroactively re-skin user
+      bookmarks. `mintBookmarkId()` lives next to `bigMin`/`bigMax` and
+      uses `crypto.randomUUID()` with a `bm-…` fallback for non-secure
+      contexts. `clear()` deliberately preserves `bookmarks` (the
+      existing comment was extended to document the posture for all
+      three slices that survive — `layoutJson`, `namedLayouts`,
+      `bookmarks`).
+      **Drawer:** `apps/web/src/shell/drawers/EventsDrawer.{tsx,module.css}`
+      added. Reads `bookmarks` and `globalRange` via discrete single-key
+      selectors; rename state and the pending-add input are local
+      `useState`. Sort happens at render via `useMemo` so storage and
+      the slice preserve insertion order — renames target a stable
+      index. Row primitive `composes: rowBase from "../_row.module.css"`
+      with a local `8px 1fr auto` grid (swatch + label + relative-time
+      meta). The frontend-skill conditional-rendering trap is avoided:
+      rename is `editingId === b.id ? <Input/> : <Span/>` not a
+      hover/edit boolean chain. The default `+ bookmark at cursor`
+      button is paired with a `+ bookmark at cursor with custom
+      label` "…" button that opens the inline-input mode (mirrors
+      LayoutDrawer's `+ save current as…`). Both buttons are
+      `disabled` + `aria-disabled` when `globalRange === null`.
+      Out-of-range bookmarks render with a `data-out-of-range="true"`
+      attribute and 50% opacity on the row — the bookmark stays
+      visible after a session change to a fixture with a different
+      time range, but the user can see it doesn't fit the current
+      data.
+      **Transport overlay:** `apps/web/src/timeline/BookmarkMarkers.{tsx,module.css}`
+      added as a separate component (not inlined in `Transport.tsx`)
+      so it owns its own selectors and unit-tests in isolation
+      without dragging in the keyboard-shortcut handler or the rAF
+      coalescing closure. Rendered as a child of `.trackStrip`
+      between `.trackFill` and `.thumb` so DOM-order stacking is
+      correct without a z-index war (`.thumb` already has
+      `pointer-events: none` so the markers don't fight thumb
+      drags). The marker layer is `pointer-events: none`; individual
+      2 px-wide markers re-enable `pointer-events: auto`. Each
+      marker uses `left: <pct>%` plus `transform: translateX(-50%)`
+      only (no `width`/`left`/colour animation per the frontend-skill
+      perf rule). A `::before` pseudo-element extends the hit area
+      ±3-4 px so a 2 px line still has a comfortable click target.
+      `pointerdown` on a marker calls `setCursor(b.ns)` and
+      `e.stopPropagation()` so React's parent-track handler doesn't
+      also seed a scrub gesture. Out-of-range markers clamp `left`
+      to `[0, 100]%` and render at 50% opacity.
+      **Drawer wiring:** `Drawer.tsx`'s `STUBS` map is gone — every
+      rail tab now has a real drawer. The fallthrough is replaced
+      with a `switch`-over-discriminator with a `never`
+      exhaustiveness assertion in the `default` arm; adding a new
+      rail tab to `RailTab` will fail the type check until a real
+      drawer is wired. The unused `.placeholder` rule was removed
+      from `Drawer.module.css` (was only used by the stub).
+      `Shell` and `App` need no new props — `EventsDrawer` is
+      self-contained (single-key store selectors only, actions via
+      `useSession.getState()`).
+      **Dev hooks added in `App.tsx`:** `addBookmarkAtCursor(label?)`,
+      `listBookmarks()` (returns `[{id, ns: string, label, color,
+      createdAt}]` with BigInt → decimal-string conversion mirroring
+      `getSessionSnapshot`), `removeBookmark(id)`, and
+      `renameBookmark(id, label)`. Wired alongside `listNamedLayouts`
+      with cleanup on unmount; `attachBookmarksPersistence` runs
+      next to `attachNamedLayoutsPersistence` and detaches
+      symmetrically.
+      **Tests:** new vitest suites — `state/persist/bookmarks.test.ts`
+      (17 cases covering round-trip with BigInt encoding, decimal-
+      string encoding contract, version mismatch, malformed JSON,
+      unparseable `ns`, missing fields, numeric `ns` rejection,
+      empty `id` rejection, no-op storage, empty array, BigInts
+      beyond `Number.MAX_SAFE_INTEGER`, attach-subscriber writes /
+      skips / unsubscribes / no-op-when-storage-undefined);
+      `state/store.test.ts` extended with 11 bookmark cases
+      (no-fixture null return, default label uses `formatRelative`,
+      label trim, default-on-empty-trim, `addBookmark` test seam,
+      insertion-order preservation, remove-unknown no-op,
+      rename-empty no-op, rename-unknown no-op, `clear()` preserves
+      bookmarks, rename only mutates the targeted entry's reference);
+      `shell/drawers/EventsDrawer.test.tsx` (8 cases — empty, sorted
+      rendering, click-to-seek, double-click rename + Enter commit,
+      Escape cancel, × remove, disabled-when-no-range,
+      out-of-range data attribute); `timeline/BookmarkMarkers.test.tsx`
+      (7 cases — no-range null render, no-bookmarks null render,
+      correct `left%`, click-to-setCursor, propagation stop,
+      out-of-range clamp + flag, zero-span no-op).
+      **E2E spec:** `apps/e2e/tests/bookmarks.spec.ts` covers the
+      six scenarios from the integration plan: disabled add when no
+      fixture, add → row + marker appear, click row seeks, click
+      marker seeks, rename + reload survives, × removes both
+      surfaces, `clearSession` preserves bookmarks. Ready to run in
+      CI alongside the existing chromium project.
+      Verification: `pnpm exec tsc --noEmit -p apps/web` passes
+      cleanly. `pnpm --filter web test --run` 282/282 pass (238
+      Phase 7 baseline + 44 new — 17 persist + 11 store + 8
+      EventsDrawer + 7 BookmarkMarkers + 1 from a slight count
+      attribution drift in the existing collector). `pnpm --filter
+      web build` and the e2e suite were not run in this session
+      for the same reason Phases 5–7 documented — the sandbox lacks
+      `wasm-pack` and the gitignored
+      `apps/web/src/wasm/wasm_bindings.js` cannot be regenerated
+      here. The TypeScript graph is verified via the gitignored
+      `apps/web/src/wasm/wasm_bindings.d.ts` stub recreated locally
+      for this purpose; production build/CI is unaffected. Bundle
+      delta is unmeasured locally but expected at +1–2 KB gzipped
+      (drawer + marker + adapter; no new deps), well under the
+      350 KB budget — must be confirmed in the first CI run. None
+      of the Phase 8 changes touch the cursor hot path (the marker
+      `pointerdown` calls `setCursor` synchronously without rAF
+      because it's a single discrete click, not a per-frame
+      gesture), the video decode pipeline, or the FlexLayout
+      rebuild branch.
+      The pre-existing e2e tsc-merge issue (each spec file's local
+      `declare global { Window.__drivelineDevHooks }` declares a
+      different subset and TypeScript merges them with conflicting
+      shapes) reproduces on `apps/e2e` for `bookmarks.spec.ts` the
+      same way it does for the other Phase 5/6/7 specs;
+      `playwright test` does not invoke tsc so the runtime suite is
+      unaffected.
 - [ ] **Phase 9 · Transport refinement**
 - [ ] **Phase 10 · Cleanup, polish, accessibility audit**
 
 ## Where to continue
 
-Next phase: **Phase 8 · Events drawer (bookmarks).** Read
-`docs/design/v1-shell-integration.md` § Phase 8 (lines 302-323) for
-the bookmark store + drawer + transport overlay plan. Concretely:
+Next phase: **Phase 9 · Transport refinement.** Read
+`docs/design/v1-shell-integration.md` § Phase 9 (lines 325-340) for
+the full plan. Concretely:
 
-1. **New slice + persistence**: `bookmarks: Bookmark[]` in the
-   store with shape
-   `{ id: string; ns: bigint; label: string; color: string;
-   createdAt: number }`. Persistence adapter at
-   `apps/web/src/state/persist/bookmarks.ts`, storage key
-   `driveline.bookmarks.v1`, BigInts serialised as decimal strings
-   (mirror `layout/persist.ts` and the Phase 4 `namedLayouts`
-   adapter). Bookmarks outlive a session — `clear()` does NOT
-   reset them (same posture as `namedLayouts`).
-2. **Drawer**: `apps/web/src/shell/drawers/EventsDrawer.tsx`. Reads
-   `bookmarks` via a single-key selector. Header
-   `<h3>Bookmarks <Pill>{count}</Pill></h3>`; one row per
-   bookmark sorted by `ns`. Row uses the
-   `_row.module.css:rowBase` primitive shared with Sources /
-   Channels / Layout / Panel drawers (Phase 5 carry-over already
-   resolved). Click row = `setCursor(bookmark.ns)`. Hover-revealed
-   `×` removes. Double-click label to edit (inline `<input>`).
-   `+ bookmark at cursor` button calls a new store action
-   `addBookmarkAtCursor(label?)` (default label `bookmark @
-   <relative time>` via `timeline/formatTime.ts:formatDuration`).
-3. **Transport overlay**: render small bookmark markers as a child
-   layer absolutely positioned on the scrubber track at
-   `(ns - startNs) / duration * 100%`. Use `transform:
-   translateX(-50%)` only — never animate `width` / `left` / colour
-   (frontend-skill perf rule). Build inside `Transport.tsx`; expose
-   `data-testid="bookmark-marker-<id>"` for e2e.
-4. **Drawer wiring**: `Drawer.tsx`'s `STUBS` map drops `events`;
-   add `if (activeRailTab === "events") return <EventsDrawer />;`.
-   `Shell` and `App` need no new props (the drawer is
-   self-contained — single-key selectors only, action via
-   `useSession.getState()`).
-5. **Dev hooks**: `addBookmarkAtCursor(label?)`,
-   `listBookmarks()` (returns `[{id, ns: string, label, color,
-   createdAt}]`, BigInts as strings), `removeBookmark(id)`,
-   `renameBookmark(id, label)`. Add to the existing `App.tsx`
-   block alongside `listNamedLayouts`.
-6. **E2E**: new `apps/e2e/tests/bookmarks.spec.ts` covering: add
-   at cursor → row appears + transport marker appears; click row
-   → cursor seeks; rename round-trip; remove → row + marker
-   disappear; reload survives.
+1. **Re-style `Transport.module.css`** to match the wireframe:
+   32 px bar height, smaller buttons (22×20 px), 6 px scrub track,
+   12 px orange thumb, all driven from tokens
+   (`var(--color-bg-3)`, `var(--color-accent-orange)`, etc.). The
+   light-theme block called out in the existing carry-over
+   (Phase 9 STATUS pre-flag at lines 695-698) gets fully replaced
+   in this pass. Mark the carry-over resolved when done.
+2. **Add prev/next 1-second buttons** (visual + functional). Reuse
+   `setCursor`. Existing keyboard shortcuts (`Space` / `Home` /
+   `End`) must keep working; `Arrow ←/→` 1-second step is a
+   v1 nice-to-have.
+3. **Speed pill** — restyle the existing speed `<select>` into a
+   single-line pill control. Keep the `[0.25, 0.5, 1, 2, 4]`
+   options unchanged.
+4. **Hot-path discipline** — do NOT touch the rAF coalescing in
+   `Transport.tsx:43-56` (`scheduleCommit`/`flushPending`) and do
+   NOT remove the 50 ms VideoPanel decode debounce. Verify
+   `videoHudStats().decodeQueue` looks identical before/after via
+   the existing perf project (`perfBudgets.spec.ts`).
+5. **Bookmark markers** added in Phase 8 are a child of
+   `.trackStrip` and use `transform: translateX(-50%)` only — they
+   should keep working through the restyle as long as the new
+   `.trackStrip` keeps `position: relative`. Rename the class if
+   needed but verify the marker tests + e2e still pass.
+6. **Performance assertion** — PlotPanel + Transport re-render
+   under 4 ms with 5 channels at 1080p (frontend-skill budget).
+   Run `perfBudgets.spec.ts` before declaring done.
 
-The Phase 7 chrome surface (kind badges, settings click)
-is unchanged by Phase 8 — bookmarks live in their own drawer arm,
-not in the per-tab chrome.
+The Phase 8 bookmark surface (drawer, persistence, dev hooks) is
+unchanged by Phase 9 — the markers ride the new scrub track but
+their own component is independent of `Transport.module.css`.
+
+## Carry-over notes for later phases (Phase 8 additions)
+
+- **Out-of-range bookmark UX**: when the user loads a different
+  fixture whose `globalRange` doesn't contain a saved bookmark's
+  `ns`, the row renders with `data-out-of-range="true"` + 50 %
+  opacity and the marker clamps to `left: 0%` or `100%`. There is
+  no tooltip explaining *why* the row is greyed. Phase 10's a11y
+  audit should decide between (a) a hover/focus tooltip on the row
+  ("outside the current fixture's range"), (b) a separate
+  out-of-range section in the drawer, or (c) silently hiding
+  out-of-range markers on the transport while keeping them in the
+  drawer. Option (a) is the lowest-risk nudge; (c) is a behaviour
+  change so flag in the PR.
+- **No per-bookmark colour override**: bookmarks today derive
+  colour deterministically via `palette.ts:colorFor(id)` (FNV-1a →
+  `PLOT_PALETTE`). The wireframe shows mixed plot-palette colours
+  per bookmark which the FNV-1a hash already produces. If users
+  later ask for a manual swatch picker, the per-bookmark `color`
+  field is already stored — wire a `<ColorPicker>` to a new
+  `setBookmarkColor(id, color)` action and bump
+  `BOOKMARKS_SCHEMA_VERSION` only if the picker introduces a new
+  colour space (free-form HEX vs. the palette).
+- **No drag-to-reposition**: dragging a marker on the scrubber to
+  retime it is a v2 feature. Today the only way to move a
+  bookmark is to delete + re-add at the new cursor. The store
+  has no `moveBookmark(id, ns)` action; if added, mirror
+  `renameBookmark`'s "no-op when value equals current" pattern.
+- **Default label sentinel**: `addBookmarkAtCursor` writes
+  `bookmark @ <relative-time>` into `label` immediately. There is
+  no separate "auto-label" flag, so renaming a bookmark away from
+  the default does not refresh on cursor move. This is intentional
+  — `label` is the user's ground truth — but a future "live
+  label" toggle (where the meta column rather than the label
+  shows the relative time) could split the data.
+- **`+ bookmark at cursor with custom label` `…` button**:
+  EventsDrawer ships with both a one-click default-label add
+  (`bookmark-add-btn`) and an inline-input "…" variant
+  (`bookmark-add-custom-btn`). If user research later shows the
+  `…` is a discoverability problem, swap to a single-button
+  affordance that always opens the inline input — but the
+  one-click default is a lighter interaction for the common
+  case (just bookmark *here*) and matches the wireframe's
+  single button.
 
 ## Carry-over notes for later phases (Phase 7 additions)
 

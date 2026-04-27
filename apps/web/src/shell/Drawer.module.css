@@ -16,12 +16,6 @@
   gap: var(--sp-3);
 }
 
-.placeholder {
-  font-size: var(--fs-12);
-  color: var(--color-fg-5);
-  line-height: var(--lh-snug);
-}
-
 @media (max-width: 699px) {
   .drawer {
     position: absolute;

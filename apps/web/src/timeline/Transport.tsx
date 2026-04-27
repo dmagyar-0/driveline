@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { TimeRange } from "../state/store";
 import { formatAbsolute, formatDuration, formatRelative } from "./formatTime";
+import { BookmarkMarkers } from "./BookmarkMarkers";
 import styles from "./Transport.module.css";
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4] as const;
@@ -203,6 +204,7 @@ export function Transport() {
               className={styles.trackFill}
               style={{ width: `${fillPct}%` }}
             />
+            <BookmarkMarkers />
             <div
               className={styles.thumb}
               data-testid="scrubber-thumb"

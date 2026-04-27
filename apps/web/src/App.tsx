@@ -17,6 +17,7 @@ import type { WorkspaceHandle } from "./layout/Workspace";
 import { attachLayoutPersistence } from "./layout/persist";
 import { attachUiPersistence } from "./state/persist/ui";
 import { attachNamedLayoutsPersistence } from "./state/persist/namedLayouts";
+import { attachBookmarksPersistence } from "./state/persist/bookmarks";
 import { installPerfHooks } from "./perf";
 import { Shell } from "./shell/Shell";
 
@@ -184,6 +185,20 @@ declare global {
         isLive: boolean;
         isActive: boolean;
       }>;
+      // Phase 8 (Events drawer) — drive bookmark actions from e2e.
+      // `addBookmarkAtCursor` returns the freshly-minted id, or `null`
+      // when no fixture is loaded. `listBookmarks` serialises `ns` as
+      // a decimal string (mirror `getSessionSnapshot`'s BigInt convention).
+      addBookmarkAtCursor: (label?: string) => string | null;
+      listBookmarks: () => Array<{
+        id: string;
+        ns: string;
+        label: string;
+        color: string;
+        createdAt: number;
+      }>;
+      removeBookmark: (id: string) => void;
+      renameBookmark: (id: string, label: string) => void;
     };
   }
 }
@@ -213,6 +228,9 @@ export function App() {
     // `driveline.layouts.named.v1`. Saved layouts outlive a session.
     const detachNamedLayoutsPersistence =
       attachNamedLayoutsPersistence(useSession);
+    // Phase 8 — persist `bookmarks` to `driveline.bookmarks.v1`.
+    // Bookmarks outlive a session (same posture as `namedLayouts`).
+    const detachBookmarksPersistence = attachBookmarksPersistence(useSession);
 
     window.__drivelineDevHooks = {
       ping: async () => await dc.ping(),
@@ -407,12 +425,26 @@ export function App() {
           isActive: st.activeNamedLayoutId === l.id,
         }));
       },
+      addBookmarkAtCursor: (label) =>
+        useSession.getState().addBookmarkAtCursor(label),
+      listBookmarks: () =>
+        useSession.getState().bookmarks.map((b) => ({
+          id: b.id,
+          ns: b.ns.toString(),
+          label: b.label,
+          color: b.color,
+          createdAt: b.createdAt,
+        })),
+      removeBookmark: (id) => useSession.getState().removeBookmark(id),
+      renameBookmark: (id, label) =>
+        useSession.getState().renameBookmark(id, label),
     };
     setReady(true);
     return () => {
       detachPersistence();
       detachUiPersistence();
       detachNamedLayoutsPersistence();
+      detachBookmarksPersistence();
       delete window.__drivelineDevHooks;
       useSession.getState().setWorker(null);
       dataCore.current = null;

@@ -26,6 +26,12 @@ import {
   loadNamedLayoutsFromStorage,
   type NamedLayout,
 } from "./persist/namedLayouts";
+import {
+  loadBookmarksFromStorage,
+  type Bookmark,
+} from "./persist/bookmarks";
+import { colorFor } from "../panels/palette";
+import { formatRelative } from "../timeline/formatTime";
 import { mark, measure, timed } from "../perf";
 import type {
   ChannelKindWire,
@@ -112,6 +118,13 @@ export interface SessionState {
   // layoutJson compare.
   namedLayouts: NamedLayout[];
   activeNamedLayoutId: string | null;
+  // Bookmarks slice (Phase 8). User-placed time markers; persists to
+  // `driveline.bookmarks.v1` and outlives a session — `clear()` does
+  // not reset, mirroring `namedLayouts`. `ns` is `bigint`; the persist
+  // adapter encodes it as a decimal string. Display-time sorting
+  // happens in the drawer/marker components — storage and slice
+  // preserve insertion order so renames target a stable index.
+  bookmarks: Bookmark[];
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Close every loaded wasm handle and reset to the empty session. */
@@ -188,6 +201,27 @@ export interface SessionState {
    */
   removeNamedLayout(id: string): void;
   /**
+   * Add a bookmark at the current cursor with an optional label
+   * (default: `bookmark @ <relative-time>`). Returns the new id, or
+   * `null` when `globalRange === null` (no fixture loaded — cursor
+   * has no meaningful position to bookmark).
+   */
+  addBookmarkAtCursor(label?: string): string | null;
+  /**
+   * Test seam: add a bookmark at an explicit `ns`. No clamping;
+   * caller is responsible for keeping `ns` inside `globalRange`.
+   * Returns the new id.
+   */
+  addBookmark(ns: bigint, label?: string): string;
+  /** Remove a bookmark; no-op on unknown id. */
+  removeBookmark(id: string): void;
+  /**
+   * Rename a bookmark in-place. Trimmed empty labels are rejected
+   * (no-op) so an accidental Enter on an empty input doesn't blank
+   * the row.
+   */
+  renameBookmark(id: string, label: string): void;
+  /**
    * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
    * Dispatches to the right reader based on the owning source's kind so
    * panels never see the worker shape directly.
@@ -208,6 +242,12 @@ function bigMin(a: bigint, b: bigint): bigint {
 }
 function bigMax(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
+}
+
+function mintBookmarkId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `bm-${Math.random().toString(36).slice(2)}`;
 }
 
 function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
@@ -282,6 +322,7 @@ export const useSession = create<SessionState>((set, get) => {
   const hydrated = loadLayoutFromStorage();
   const hydratedUi = loadUiFromStorage();
   const hydratedNamedLayouts = loadNamedLayoutsFromStorage();
+  const hydratedBookmarks = loadBookmarksFromStorage();
 
   return {
     sources: [],
@@ -303,6 +344,7 @@ export const useSession = create<SessionState>((set, get) => {
     selectedPanelId: null,
     namedLayouts: hydratedNamedLayouts?.layouts ?? [],
     activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
+    bookmarks: hydratedBookmarks ?? [],
 
     setWorker(w) {
       worker = w;
@@ -551,6 +593,64 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
+    addBookmarkAtCursor(label) {
+      const { globalRange, cursorNs } = get();
+      if (!globalRange) return null;
+      const id = mintBookmarkId();
+      const finalLabel =
+        label !== undefined && label.trim().length > 0
+          ? label.trim()
+          : `bookmark @ ${formatRelative(cursorNs, globalRange.startNs)}`;
+      const entry: Bookmark = {
+        id,
+        ns: cursorNs,
+        label: finalLabel,
+        color: colorFor(id),
+        createdAt: Date.now(),
+      };
+      set({ bookmarks: [...get().bookmarks, entry] });
+      return id;
+    },
+
+    addBookmark(ns, label) {
+      const id = mintBookmarkId();
+      const finalLabel =
+        label !== undefined && label.trim().length > 0
+          ? label.trim()
+          : `bookmark @ ${formatRelative(ns, 0n)}`;
+      const entry: Bookmark = {
+        id,
+        ns,
+        label: finalLabel,
+        color: colorFor(id),
+        createdAt: Date.now(),
+      };
+      set({ bookmarks: [...get().bookmarks, entry] });
+      return id;
+    },
+
+    removeBookmark(id) {
+      const prev = get().bookmarks;
+      const next = prev.filter((b) => b.id !== id);
+      if (next.length === prev.length) return;
+      set({ bookmarks: next });
+    },
+
+    renameBookmark(id, label) {
+      const trimmed = label.trim();
+      if (trimmed.length === 0) return;
+      const prev = get().bookmarks;
+      let changed = false;
+      const next = prev.map((b) => {
+        if (b.id !== id) return b;
+        if (b.label === trimmed) return b;
+        changed = true;
+        return { ...b, label: trimmed };
+      });
+      if (!changed) return;
+      set({ bookmarks: next });
+    },
+
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {
       if (!worker) throw new Error("session store: worker not initialised");
       const { channels, sources } = get();
@@ -718,8 +818,11 @@ export const useSession = create<SessionState>((set, get) => {
           }
         }
         // Wipe session + transport + per-panel bindings, but keep
-        // `layoutJson` so the user's dock layout survives a clear (T6.2 —
-        // layout outlives a session, per docs/06-ui-and-panels.md:167).
+        // `layoutJson`, `namedLayouts`, and `bookmarks` so the user's
+        // dock layout, saved layouts, and bookmarks survive a clear
+        // (T6.2 — layout outlives a session, per
+        // docs/06-ui-and-panels.md:167; bookmarks follow the same
+        // posture per Phase 8).
         set({
           sources: [],
           channels: [],

@@ -1,0 +1,41 @@
+/* Phase 8 · Bookmark markers overlay for the scrubber.
+ *
+ * Sits inside `.trackStrip` (sibling of `.trackFill` and `.thumb`).
+ * Layer is `pointer-events: none` so the parent track keeps drag
+ * capture; individual markers opt back in via `auto` and stop
+ * propagation in their handlers.
+ *
+ * `.thumb` keeps a higher stacking context so a 12px thumb stays
+ * draggable over a 2px marker. */
+
+.markerLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.marker {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  pointer-events: auto;
+  cursor: pointer;
+  transform: translateX(-50%);
+  border-radius: 1px;
+}
+
+.marker::before {
+  content: "";
+  position: absolute;
+  inset: -3px -4px;
+}
+
+.marker:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.marker[data-out-of-range="true"] {
+  opacity: 0.5;
+}

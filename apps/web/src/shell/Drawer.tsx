@@ -1,53 +1,17 @@
 // Drawer host.
 //
 // Switches on `activeRailTab` and renders the corresponding drawer
-// component. Phases 2-5 and 8 each replace one inline stub with a real
-// `shell/drawers/<Name>Drawer.tsx`. Phases 2-5 wired the real Sources,
-// Channels, Layout, and Panel drawers; only Events is still a stub.
+// component. Phases 2-5 and 8 each replaced one inline stub with a
+// real `shell/drawers/<Name>Drawer.tsx`. As of Phase 8 every rail tab
+// has a real drawer — the stub fallthrough has been removed and the
+// final branch is an exhaustiveness check.
 
-import type { RailTab } from "../state/persist/ui";
 import { useSession } from "../state/store";
 import { SourcesDrawer } from "./drawers/SourcesDrawer";
 import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
 import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import { PanelDrawer } from "./drawers/PanelDrawer";
-import styles from "./Drawer.module.css";
-
-interface StubProps {
-  title: string;
-  phase: number;
-  what: string;
-}
-
-function DrawerStub({ title, phase, what }: StubProps) {
-  const headingId = `drawer-${title.toLowerCase()}-h`;
-  return (
-    <aside
-      className={styles.drawer}
-      role="region"
-      aria-labelledby={headingId}
-      data-testid={`drawer-${title.toLowerCase()}`}
-    >
-      <div className={styles.heading}>
-        <h3 id={headingId}>{title}</h3>
-      </div>
-      <p className={styles.placeholder}>
-        {what} Lands in Phase {phase}.
-      </p>
-    </aside>
-  );
-}
-
-const STUBS: Record<
-  Exclude<RailTab, "sources" | "channels" | "layout" | "panel">,
-  { title: string; phase: number; what: string }
-> = {
-  events: {
-    title: "Events",
-    phase: 8,
-    what: "Bookmarks at points in time, with cursor jump.",
-  },
-};
+import { EventsDrawer } from "./drawers/EventsDrawer";
 
 export interface DrawerProps {
   /** Mints (or returns) a plot panel id when the Channels drawer's
@@ -83,21 +47,31 @@ export function Drawer({
 }: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
   if (activeRailTab === null) return null;
-  if (activeRailTab === "sources") return <SourcesDrawer />;
-  if (activeRailTab === "channels")
-    return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
-  if (activeRailTab === "layout")
-    return (
-      <LayoutDrawer
-        addVideoPanel={addVideoPanel}
-        addPlotPanel={addPlotPanel}
-        addScenePanel={addScenePanel}
-        addMapPanel={addMapPanel}
-        addTablePanel={addTablePanel}
-        addEnumPanel={addEnumPanel}
-        resetLayout={resetLayout}
-      />
-    );
-  if (activeRailTab === "panel") return <PanelDrawer />;
-  return <DrawerStub {...STUBS[activeRailTab]} />;
+  switch (activeRailTab) {
+    case "sources":
+      return <SourcesDrawer />;
+    case "channels":
+      return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
+    case "layout":
+      return (
+        <LayoutDrawer
+          addVideoPanel={addVideoPanel}
+          addPlotPanel={addPlotPanel}
+          addScenePanel={addScenePanel}
+          addMapPanel={addMapPanel}
+          addTablePanel={addTablePanel}
+          addEnumPanel={addEnumPanel}
+          resetLayout={resetLayout}
+        />
+      );
+    case "panel":
+      return <PanelDrawer />;
+    case "events":
+      return <EventsDrawer />;
+    default: {
+      const _exhaustive: never = activeRailTab;
+      void _exhaustive;
+      return null;
+    }
+  }
 }
