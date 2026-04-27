@@ -196,4 +196,68 @@ describe("Transport", () => {
     });
     expect(mode.textContent).toBe("absolute");
   });
+
+  it("prev-1s steps cursor by 1 s and clamps at startNs", () => {
+    useSession.setState({ cursorNs: 1_500_000_000n });
+    const { getByTestId } = render(<Transport />);
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-prev-1s"));
+    });
+    // Mid-step would be 0.5e9, but setCursor clamps at startNs (1e9).
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-prev-1s"));
+    });
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+  });
+
+  it("next-1s clamps at endNs and auto-pauses", () => {
+    useSession.setState({ cursorNs: 10_500_000_000n, playing: true });
+    const { getByTestId } = render(<Transport />);
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-next-1s"));
+    });
+    expect(useSession.getState().cursorNs).toBe(11_000_000_000n);
+    expect(useSession.getState().playing).toBe(false);
+  });
+
+  it("ArrowLeft / ArrowRight step ±1 s and respect input focus", () => {
+    const { getByTestId } = render(
+      <div>
+        <input data-testid="sink" />
+        <Transport />
+      </div>,
+    );
+
+    // Body-focused: ArrowRight advances cursor by 1 s.
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+    act(() => {
+      fireEvent.keyDown(window, { code: "ArrowRight" });
+    });
+    expect(useSession.getState().cursorNs).toBe(2_000_000_000n);
+
+    act(() => {
+      fireEvent.keyDown(window, { code: "ArrowLeft" });
+    });
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+
+    // Input-focused: arrow keys are ignored by the transport handler.
+    const input = getByTestId("sink") as HTMLInputElement;
+    input.focus();
+    act(() => {
+      fireEvent.keyDown(input, { code: "ArrowRight" });
+    });
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+  });
+
+  it("speed pill renders all 5 options", () => {
+    const { getByTestId } = render(<Transport />);
+    const select = getByTestId("transport-speed") as HTMLSelectElement;
+    expect(select.options.length).toBe(5);
+    const values = Array.from(select.options).map((o) => Number(o.value));
+    expect(values).toEqual([0.25, 0.5, 1, 2, 4]);
+  });
 });

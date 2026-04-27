@@ -1,68 +1,109 @@
+/* Phase 9 · Transport refinement.
+ *
+ * Dark-theme bar styled against `apps/web/src/styles/tokens.css`.
+ * Wireframe reference: docs/design/wireframe-bundle/project/wireframes.css
+ * lines 419-477 (.wf-transport).
+ *
+ * Layout: primary row (32 px) carries the prev / play / next button
+ * group, two flanking time spans, the scrub track, and the speed
+ * pill. A meta row (22 px) below holds the cursor readout and the
+ * absolute/relative mode toggle.
+ *
+ * `.trackStrip` is `position: relative` because BookmarkMarkers
+ * (Phase 8) layers absolutely against it (BookmarkMarkers.module.css
+ * `inset: 0`).
+ */
+
 .bar {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
   margin-top: auto;
   position: sticky;
   bottom: 0;
-  background: #fff;
-  border-top: 1px solid #ddd;
-  font-family: system-ui, sans-serif;
-  font-size: 0.9rem;
+  background: var(--color-bg-2);
+  border-top: 1px solid var(--color-border-subtle);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  color: var(--color-fg-4);
+  padding: 0 var(--sp-5);
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: var(--sp-4);
+  height: 32px;
 }
 
-.playButton {
-  width: 2.25rem;
-  height: 2.25rem;
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: #f6f6f6;
-  font-size: 1rem;
-  line-height: 1;
-  cursor: pointer;
+.metaRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  height: 22px;
+  padding-bottom: var(--sp-2);
+}
+
+.btnGroup {
+  display: flex;
+  gap: var(--sp-1);
+}
+
+.btnT {
+  width: 22px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-3);
+  border-radius: var(--radius-3);
+  font-size: 10px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
 }
 
-.playButton:hover:not(:disabled) {
-  background: #eee;
+.btnT:hover:not(:disabled) {
+  background: var(--color-bg-6);
 }
 
-.playButton:disabled {
+.btnT:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.btnT:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+.play {
+  color: var(--color-accent-orange);
 }
 
 .track {
   position: relative;
   flex: 1;
-  height: 1.25rem;
+  height: 20px;
   display: flex;
   align-items: center;
   cursor: pointer;
   touch-action: none;
 }
 
-.track:focus {
-  outline: 2px solid var(--color-accent-blue);
-  outline-offset: 2px;
-  border-radius: 4px;
+.track:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-3);
 }
 
 .trackStrip {
+  position: relative;
   width: 100%;
   height: 6px;
-  background: var(--color-fg-2);
-  border-radius: 3px;
-  position: relative;
+  background: var(--color-bg-4);
+  border-radius: var(--radius-3);
 }
 
 .trackFill {
@@ -71,7 +112,8 @@
   top: 0;
   height: 100%;
   background: var(--color-accent-blue);
-  border-radius: 3px;
+  opacity: 0.55;
+  border-radius: var(--radius-3);
   pointer-events: none;
 }
 
@@ -81,16 +123,9 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--color-accent-blue);
+  background: var(--color-fg-2);
   transform: translate(-50%, -50%);
   pointer-events: none;
-  transition: width 0.1s, height 0.1s;
-}
-
-.track:hover .thumb,
-.track:active .thumb {
-  width: 16px;
-  height: 16px;
 }
 
 .disabled {
@@ -99,34 +134,68 @@
   cursor: not-allowed;
 }
 
-.readout {
+.time {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-fg-3);
   font-variant-numeric: tabular-nums;
-  color: #333;
-  min-width: 12ch;
+  white-space: nowrap;
+}
+
+.speed {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-fg-4);
+  height: 20px;
+  padding: 0 var(--sp-5);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  appearance: none;
+  cursor: pointer;
+}
+
+.speed:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.speed:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.readout {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-fg-3);
+  font-variant-numeric: tabular-nums;
+  min-width: 18ch;
 }
 
 .modeButton {
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: #f6f6f6;
-  font-size: 0.8rem;
-  padding: 0.15rem 0.5rem;
+  height: 20px;
+  padding: 0 var(--sp-4);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-4);
+  border-radius: var(--radius-3);
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1;
   cursor: pointer;
 }
 
 .modeButton:hover:not(:disabled) {
-  background: #eee;
+  background: var(--color-bg-6);
 }
 
-.speedLabel {
-  color: var(--color-border-hover);
-  font-size: 0.85rem;
+.modeButton:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
-.speedSelect {
-  border: 1px solid #bbb;
-  border-radius: 4px;
-  background: #fff;
-  padding: 0.15rem 0.35rem;
-  font-size: 0.85rem;
+.modeButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }

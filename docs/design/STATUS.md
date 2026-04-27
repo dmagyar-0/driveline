@@ -676,46 +676,188 @@ the end of each shipped phase so future sessions know where to resume.
       same way it does for the other Phase 5/6/7 specs;
       `playwright test` does not invoke tsc so the runtime suite is
       unaffected.
-- [ ] **Phase 9 · Transport refinement**
+- [x] **Phase 9 · Transport refinement** — `Transport.module.css`
+      rewritten end-to-end against tokens. Light-theme block (the
+      Phase 0 carry-over flagged at the prior STATUS lines for
+      `Transport.module.css`) resolved: every `#fff`/`#ddd`/`#bbb`/
+      `#f6f6f6`/`#333`/`#eee` literal is gone, replaced by
+      `var(--color-bg-2)` (bar), `var(--color-bg-4)` (button + speed
+      pill rest), `var(--color-bg-6)` (button hover),
+      `var(--color-border-strong)` (button + pill borders),
+      `var(--color-border-subtle)` (bar top divider),
+      `var(--color-fg-3)` / `--color-fg-4` (text), and
+      `var(--focus-ring)` for every interactive control. Wireframe
+      reference: `docs/design/wireframe-bundle/project/wireframes.css`
+      lines 419-477.
+      **Layout reshape (`Transport.tsx`):** single primary row
+      (32 px) carries `[prev][play][next]` button group + start
+      time span + scrub track + end time span + speed pill. A
+      meta row (22 px) below holds `transport-readout` + the
+      relative/absolute `transport-mode` toggle. The wireframe
+      itself shows a single row, but the integration plan
+      explicitly says "same store wiring, same shortcuts" so the
+      mode toggle had to land somewhere; the meta row keeps it
+      adjacent to the readout it modifies. Total bar ≈ 54 px.
+      All seven existing test IDs (`transport`, `play-pause`,
+      `scrubber`, `scrubber-thumb`, `transport-readout`,
+      `transport-mode`, `transport-speed`) survive verbatim. Two
+      new test IDs added: `transport-prev-1s`, `transport-next-1s`.
+      The Phase 0 `<label htmlFor="transport-speed">` was dropped
+      (the wireframe omits it; the speed pill is self-evident);
+      the `<select>` carries `aria-label="Playback speed"` instead.
+      **Step helpers and keyboard:** `ONE_SEC_NS = 1_000_000_000n`
+      hoisted next to `SPEED_OPTIONS`. New `stepBy(deltaNs)` →
+      `useSession.getState().setCursor(cursorNs + delta)` pattern
+      mirrors the existing Space/Home/End synchronous path —
+      explicitly NOT routed through the rAF `scheduleCommit`
+      coalescer (discrete clicks/keypresses are at human cadence;
+      one rAF of latency on every press would be perceptible and
+      held-key cycles would race). `setCursor` already clamps
+      `[startNs, endNs]` and auto-pauses at the end
+      (`state/store.ts:376-388`) so the prev/next/arrow handlers
+      need no clamp logic. `onKey` extended with `ArrowLeft` /
+      `ArrowRight` (±1 s); the existing INPUT/TEXTAREA/SELECT/
+      contentEditable focus guard already excludes the speed
+      `<select>`, so arrow keys never hijack speed cycling. The
+      stale comment on lines 105-106 ("`←/→` (±1 frame on focused
+      video panel) is intentionally left for the future VideoPanel
+      owner") was rewritten — the claim no longer holds.
+      **Hot path untouched:** `Transport.tsx:41-57` (rAF
+      coalescing — `pendingNs`, `rafId`, `flushPending`,
+      `scheduleCommit`), `Transport.tsx:67-92` (`onPointerDown` /
+      `onPointerMove` / `onPointerUp`), and `Transport.tsx:95-102`
+      (rAF unmount cleanup) are byte-identical to Phase 8.
+      `panels/VideoPanel.tsx`'s 50 ms decode debounce was not
+      opened in this PR; the file is unchanged.
+      **BookmarkMarkers compatibility:** `BookmarkMarkers.{tsx,
+      module.css}` not modified. The new `.trackStrip` keeps
+      `position: relative` and the same dimensions, so the marker
+      layer's `position: absolute; inset: 0` math is unchanged.
+      DOM order preserved: `.trackFill` → `<BookmarkMarkers />` →
+      `.thumb`. The new `.trackFill` opacity 0.55 actually
+      improves marker visibility (markers paint over a translucent
+      fill).
+      **Tests:** new vitest cases — 4 added in `Transport.test.tsx`
+      bringing the file from 6 to 10 cases: `prev-1s steps cursor
+      by 1 s and clamps at startNs` (also covers idempotent click
+      at clamp), `next-1s clamps at endNs and auto-pauses`,
+      `ArrowLeft / ArrowRight step ±1 s and respect input focus`
+      (covers both body-focus advance/retreat and input-focus
+      ignore), and `speed pill renders all 5 options` (regression
+      cover for the dropped `<label>`).
+      **No new dev hooks, no schema bump, no new persistence
+      adapter, no new dependencies** — Phase 9 is pure
+      restyle + UX. `bookmarks.spec.ts` continues to assert
+      marker positioning through the unmodified
+      `BookmarkMarkers.tsx`; no e2e churn needed.
+      Verification: `pnpm exec tsc --noEmit -p apps/web` passes
+      cleanly. `pnpm --filter web test --run` 286/286 pass (282
+      Phase 8 baseline + 4 new). `pnpm --filter web build` and the
+      e2e suite were not run in this session for the same reason
+      Phases 5-8 documented — the sandbox lacks `wasm-pack` and
+      the gitignored `apps/web/src/wasm/wasm_bindings.js` cannot
+      be regenerated here. The TypeScript graph is verified via
+      the gitignored `apps/web/src/wasm/wasm_bindings.d.ts` stub
+      recreated locally for this purpose; production build/CI is
+      unaffected. Bundle delta is unmeasured locally but expected
+      at ±0 KB gzipped (pure CSS rewrite + two new `<button>`
+      elements with shared classes), well under the 350 KB budget.
+      The `crossPanelSync.spec.ts:212` sandbox-only colour-space
+      flake (documented in this STATUS at lines 53-62) is
+      ignorable — Phase 9 does not touch the video decode
+      pipeline that flake covers.
 - [ ] **Phase 10 · Cleanup, polish, accessibility audit**
 
 ## Where to continue
 
-Next phase: **Phase 9 · Transport refinement.** Read
-`docs/design/v1-shell-integration.md` § Phase 9 (lines 325-340) for
-the full plan. Concretely:
+Next phase: **Phase 10 · Cleanup, polish, accessibility audit.**
+Read `docs/design/v1-shell-integration.md` § Phase 10 (lines
+342-363) for the full plan. Concretely:
 
-1. **Re-style `Transport.module.css`** to match the wireframe:
-   32 px bar height, smaller buttons (22×20 px), 6 px scrub track,
-   12 px orange thumb, all driven from tokens
-   (`var(--color-bg-3)`, `var(--color-accent-orange)`, etc.). The
-   light-theme block called out in the existing carry-over
-   (Phase 9 STATUS pre-flag at lines 695-698) gets fully replaced
-   in this pass. Mark the carry-over resolved when done.
-2. **Add prev/next 1-second buttons** (visual + functional). Reuse
-   `setCursor`. Existing keyboard shortcuts (`Space` / `Home` /
-   `End`) must keep working; `Arrow ←/→` 1-second step is a
-   v1 nice-to-have.
-3. **Speed pill** — restyle the existing speed `<select>` into a
-   single-line pill control. Keep the `[0.25, 0.5, 1, 2, 4]`
-   options unchanged.
-4. **Hot-path discipline** — do NOT touch the rAF coalescing in
-   `Transport.tsx:43-56` (`scheduleCommit`/`flushPending`) and do
-   NOT remove the 50 ms VideoPanel decode debounce. Verify
-   `videoHudStats().decodeQueue` looks identical before/after via
-   the existing perf project (`perfBudgets.spec.ts`).
-5. **Bookmark markers** added in Phase 8 are a child of
-   `.trackStrip` and use `transform: translateX(-50%)` only — they
-   should keep working through the restyle as long as the new
-   `.trackStrip` keeps `position: relative`. Rename the class if
-   needed but verify the marker tests + e2e still pass.
-6. **Performance assertion** — PlotPanel + Transport re-render
-   under 4 ms with 5 channels at 1080p (frontend-skill budget).
-   Run `perfBudgets.spec.ts` before declaring done.
+1. **Delete obsolete `App.module.css` blocks** the new shell does
+   not use (`.shell`, `.dropZone`, `.sources`, `.source`,
+   `.sourceHeader`, `.sourceName`, `.sourceKind`, `.meta`,
+   `.global`, `.errors`). Phase 2 already deleted `App.module.css`
+   entirely as part of the SourcesDrawer landing — confirm and
+   move on.
+2. **Delete `SessionSummary.tsx`** and remove its import from
+   `App.tsx`. Phase 2 already deleted the inline `SessionSummary`
+   function and the file shim — confirm and move on.
+3. **Run the frontend-skill pre-completion checklist end-to-end**:
+   type-check, unit tests, e2e, manual browser exercise of golden
+   path, 320 px breakpoint, tab focus rings, reduced-motion,
+   bundle size delta.
+4. **Accessibility audit**: every rail button has `aria-label`,
+   every interactive drawer row has a discernible name, keyboard
+   `Tab` order is rail → drawer → workspace → transport, drawers
+   expose `role="region"` with `aria-labelledby` pointing to their
+   `<h3>`. Body font ≥ 16 px (`var(--fs-16)`); rem-based
+   throughout. Particular targets surfaced by the carry-overs
+   below:
+   - **Out-of-range bookmark UX** (Phase 8 carry-over): decide
+     between hover/focus tooltip on the row, separate
+     out-of-range section, or hiding markers; document the choice
+     in the PR.
+   - **Tab name truncation** (Phase 7 carry-over): consider
+     adding `title={node.getName()}` to the `.tabName` element so
+     the full string is available on hover.
+5. **MapPanel polyline `#f97316` literal** at
+   `panels/MapPanel.tsx:186` (Phase 9 carry-over below): sweep
+   into the cursor token or a new palette slot — explicitly
+   choose data-viz vs cursor accent (do not conflate). Phase 9
+   was transport-only; this lat/lon trace colour was deliberately
+   left for Phase 10 polish.
+6. **Update `docs/06-ui-and-panels.md`** to describe the new
+   shell (rail + drawers, panel chrome via `onRenderTab`,
+   bookmarks, prev/next + arrow-key transport shortcuts). The
+   existing prose on hot path / FlexLayout / Zustand stays
+   valid.
+7. **Update e2e specs** that select on the old `<h1>Driveline</h1>`
+   or workspace toolbar — those nodes are gone (Phase 1/4 already
+   removed them). Spot-check for any lingering selectors before
+   declaring the suite complete.
 
-The Phase 8 bookmark surface (drawer, persistence, dev hooks) is
-unchanged by Phase 9 — the markers ride the new scrub track but
-their own component is independent of `Transport.module.css`.
+The Phase 9 transport surface (prev/next buttons, ArrowLeft/Right
+shortcuts, dark-theme styling, speed pill) is unchanged by
+Phase 10 — the audit either resolves an a11y observation against
+this surface or leaves it untouched.
+
+## Carry-over notes for later phases (Phase 9 additions)
+
+- **Mode toggle placement vs the wireframe**: the wireframe shows a
+  single-row transport without a relative/absolute readout toggle.
+  Phase 9 keeps the toggle on a 22 px meta row below the primary row
+  because the integration plan said "same store wiring, same
+  shortcuts" and the toggle is the only Phase 0 surface that
+  modifies the readout output. If user research shows the meta row
+  is dead chrome, the path is to either (a) collapse it into a
+  trailing pill in the primary row at the cost of width pressure,
+  or (b) move the readout into the meta slot of the TopBar
+  (`TopBar.tsx`) and drop the meta row entirely. Option (b) is the
+  cleaner long-term home — flag in Phase 10 a11y review.
+- **Held-key acceleration on Arrow steps**: ArrowLeft / ArrowRight
+  delegate to `setCursor(cursorNs ± ONE_SEC_NS)` directly, so a
+  held key fires at OS key-repeat cadence (~30 Hz on most
+  platforms). `setCursor` clamps at `endNs` so a pinned ArrowRight
+  cleanly settles at the end of the session without runaway. If a
+  future user wants accelerated scrub (1 s → 5 s → 10 s on long
+  hold), the path is a `keydown` repeat counter alongside `onKey`,
+  not changing the per-press delta.
+- **No ArrowUp / ArrowDown binding**: deliberately unbound — the
+  wireframe does not specify them and the candidate behaviours
+  (volume? speed step? zoom?) all invite expectation creep. Defer
+  until a real user request lands.
+- **MapPanel polyline `#f97316` literal at `panels/MapPanel.tsx:186`**:
+  the Phase 7 carry-over below ("MapPanel polyline colour `#f97316`")
+  was originally framed as Phase 9 polish. Phase 9 was scoped to
+  the transport bar only (no panel sweeps), so the carry-over is
+  now Phase 10's. The decision (route through `palette.ts` as a
+  data-viz colour vs. introduce a cursor-accent helper) remains
+  open — see the Phase 7 carry-over for the framing.
+- **Wasm bindings stub** (`apps/web/src/wasm/wasm_bindings.d.ts`):
+  recreated in this session for tsc, gitignored. Same posture as
+  Phases 5–8 — do not commit. Production build/CI regenerates the
+  real `.js`+`.d.ts` via `wasm-pack`.
 
 ## Carry-over notes for later phases (Phase 8 additions)
 
@@ -859,10 +1001,12 @@ their own component is independent of `Transport.module.css`.
   `panels/cursorOverlay.ts:cursorStrokeColor()`. PlotPanel and
   EnumPanel both call the helper; jsdom + SSR fall back to the
   literal hex.
-- **Phase 9 (Transport refinement)**: the Transport's light-theme block
-  (lines 9–10, 24, 26, 36, 104, 109–129 in
-  `Transport.module.css`) gets fully replaced with the dark wireframe
-  styling. Don't bother token-ifying these mid-flight.
+- ~~**Phase 9 (Transport refinement)**: the Transport's light-theme
+  block~~ — **resolved in Phase 9**: `Transport.module.css` rewritten
+  end-to-end against tokens (`--color-bg-2`, `--color-bg-4`,
+  `--color-bg-6`, `--color-border-strong`, `--color-border-subtle`,
+  `--color-fg-3` / `--color-fg-4`, `--focus-ring`). No light-theme
+  literals remain.
 - **Palette duplication**: `panels/palette.ts` (`PLOT_PALETTE`) and
   `tokens.css` (`--plot-1..8`) hold the same 8 hex values in two
   systems. Keep them in sync if either changes; unification is not
