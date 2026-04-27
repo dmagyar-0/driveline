@@ -180,6 +180,11 @@ beforeEach(async () => {
   for (const l of [...useSession.getState().namedLayouts]) {
     useSession.getState().removeNamedLayout(l.id);
   }
+  // Phase 8: bookmarks survive `clear()` for the same reason (saved
+  // bookmarks outlive a session), so wipe explicitly per-test.
+  for (const b of [...useSession.getState().bookmarks]) {
+    useSession.getState().removeBookmark(b.id);
+  }
 });
 
 describe("session store", () => {
@@ -851,5 +856,119 @@ describe("Phase 6 panel bindings", () => {
     });
     useSession.getState().setEnumBinding("enum-1", null);
     expect(useSession.getState().enumBindings).toEqual({ "enum-1": null });
+  });
+});
+
+describe("bookmarks (Phase 8)", () => {
+  async function loadMf4(): Promise<void> {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("seed.mf4")]);
+  }
+
+  it("addBookmarkAtCursor returns null when no fixture is loaded", () => {
+    expect(useSession.getState().globalRange).toBeNull();
+    const id = useSession.getState().addBookmarkAtCursor();
+    expect(id).toBeNull();
+    expect(useSession.getState().bookmarks).toEqual([]);
+  });
+
+  it("addBookmarkAtCursor stamps cursorNs, default label, and a stored color", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_234n);
+    const id = useSession.getState().addBookmarkAtCursor();
+    expect(id).not.toBeNull();
+    const bms = useSession.getState().bookmarks;
+    expect(bms).toHaveLength(1);
+    expect(bms[0].id).toBe(id);
+    expect(bms[0].ns).toBe(1_234n);
+    // Default label uses formatRelative against the globalRange start
+    // (500n → 1234n is 734ns rounded down to 0ms in formatDuration).
+    expect(bms[0].label).toMatch(/^bookmark @ /);
+    // Color is a non-empty string from the palette.
+    expect(typeof bms[0].color).toBe("string");
+    expect(bms[0].color.length).toBeGreaterThan(0);
+    expect(bms[0].createdAt).toBeGreaterThan(0);
+  });
+
+  it("addBookmarkAtCursor honours a custom label and trims whitespace", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_000n);
+    useSession.getState().addBookmarkAtCursor("  hard brake  ");
+    expect(useSession.getState().bookmarks[0].label).toBe("hard brake");
+  });
+
+  it("addBookmarkAtCursor falls back to default when label trims to empty", async () => {
+    await loadMf4();
+    useSession.getState().addBookmarkAtCursor("   ");
+    expect(useSession.getState().bookmarks[0].label).toMatch(/^bookmark @ /);
+  });
+
+  it("addBookmark seeds with an explicit ns (test seam)", () => {
+    const id = useSession.getState().addBookmark(42n, "x");
+    const bms = useSession.getState().bookmarks;
+    expect(bms).toHaveLength(1);
+    expect(bms[0].id).toBe(id);
+    expect(bms[0].ns).toBe(42n);
+    expect(bms[0].label).toBe("x");
+  });
+
+  it("addBookmark preserves insertion order (no implicit sort in storage)", () => {
+    useSession.getState().addBookmark(2_000n, "second-by-ns");
+    useSession.getState().addBookmark(1_000n, "first-by-ns");
+    const bms = useSession.getState().bookmarks;
+    expect(bms.map((b) => b.label)).toEqual(["second-by-ns", "first-by-ns"]);
+  });
+
+  it("removeBookmark drops the entry; unknown id is a no-op", () => {
+    const id = useSession.getState().addBookmark(1n);
+    useSession.getState().removeBookmark("ghost-id");
+    expect(useSession.getState().bookmarks).toHaveLength(1);
+    useSession.getState().removeBookmark(id);
+    expect(useSession.getState().bookmarks).toHaveLength(0);
+  });
+
+  it("renameBookmark updates the label in-place", () => {
+    const id = useSession.getState().addBookmark(1n, "old");
+    useSession.getState().renameBookmark(id, "new");
+    expect(useSession.getState().bookmarks[0].label).toBe("new");
+  });
+
+  it("renameBookmark trims and rejects empty labels", () => {
+    const id = useSession.getState().addBookmark(1n, "keep");
+    useSession.getState().renameBookmark(id, "   ");
+    expect(useSession.getState().bookmarks[0].label).toBe("keep");
+    useSession.getState().renameBookmark(id, "  trimmed  ");
+    expect(useSession.getState().bookmarks[0].label).toBe("trimmed");
+  });
+
+  it("renameBookmark is a no-op for an unknown id", () => {
+    const before = useSession.getState().bookmarks;
+    useSession.getState().renameBookmark("ghost-id", "x");
+    expect(useSession.getState().bookmarks).toBe(before);
+  });
+
+  it("clear() preserves bookmarks (matches namedLayouts posture)", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_000n);
+    const id = useSession.getState().addBookmarkAtCursor("survives");
+    expect(id).not.toBeNull();
+    await useSession.getState().clear();
+    const bms = useSession.getState().bookmarks;
+    expect(bms).toHaveLength(1);
+    expect(bms[0].label).toBe("survives");
+  });
+
+  it("renameBookmark only touches the targeted entry's reference", () => {
+    const a = useSession.getState().addBookmark(1n, "a");
+    const b = useSession.getState().addBookmark(2n, "b");
+    const before = useSession.getState().bookmarks;
+    useSession.getState().renameBookmark(a, "A");
+    const after = useSession.getState().bookmarks;
+    expect(after).not.toBe(before);
+    // Untouched entry is the same object reference.
+    expect(after.find((x) => x.id === b)).toBe(
+      before.find((x) => x.id === b),
+    );
   });
 });
