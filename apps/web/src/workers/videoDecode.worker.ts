@@ -28,6 +28,15 @@ import {
 
 const PULL_BATCH = 8;
 const REFILL_LOW_WATER = 4;
+// Decoder pacing watermark. The pull loop is gated so that the most
+// recently emitted frame's PTS is no further than this beyond the
+// main-thread cursor. Without this, a HW-accelerated 4K decoder will
+// drain the entire encoded stream in a fraction of real-time, the
+// panel's bounded queue drops the surplus, and once the queue empties
+// the cursor never finds a frame ≤ itself again — the canvas freezes
+// on whatever was last blit. ~500 ms keeps a smooth lookahead while
+// letting realtime playback do the throttling.
+const LOOKAHEAD_NS: bigint = 500_000_000n;
 
 export type { VideoSourceKind };
 
@@ -58,7 +67,15 @@ interface SessionState {
   // `fromPtsNs` used at the last `openInternal` call. Used by `seek()` to
   // short-circuit when the debounce fires on an unchanged target.
   lastOpenedFromNs: bigint;
+  // Most recent PTS emitted to the sink (post-discard). Used by the
+  // pacing gate in `maybeRefill` so a fast decoder does not run more
+  // than `LOOKAHEAD_NS` ahead of the main-thread cursor.
+  lastEmittedPtsNs: bigint | null;
 }
+
+// Cursor watermark from the main thread. Updated via `setCursor`;
+// the pull loop gates on `lastEmittedPtsNs - cursorNs < LOOKAHEAD_NS`.
+let cursorNs: bigint = 0n;
 
 let dataCore: Comlink.Remote<DataCorePortApi> | null = null;
 let session: SessionState | null = null;
@@ -115,6 +132,16 @@ async function maybeRefill(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
   if (session.inFlight >= REFILL_LOW_WATER) return;
+  // Pacing gate: avoid running more than LOOKAHEAD_NS past the cursor.
+  // `lastEmittedPtsNs === null` means we haven't emitted any post-
+  // discard frames yet — keep priming the decoder so seek/open
+  // converges quickly.
+  if (
+    session.lastEmittedPtsNs !== null &&
+    session.lastEmittedPtsNs - cursorNs > LOOKAHEAD_NS
+  ) {
+    return;
+  }
   await pullAndFeed();
 }
 
@@ -150,6 +177,10 @@ async function openInternal(
   fromPtsNs: bigint,
 ): Promise<OpenResult> {
   await closeInternal();
+  // Re-seed the cursor watermark so the first pull respects the open
+  // target. Without this, a stale `cursorNs` from a previous stream
+  // would either over-pace or stall the new decode.
+  if (cursorNs < fromPtsNs) cursorNs = fromPtsNs;
   const dc = getDataCore();
   const ops = videoStreamOps(dc, sourceKind);
   const streamId = await ops.open(sourceHandle, channelId, fromPtsNs);
@@ -175,6 +206,7 @@ async function openInternal(
     ended: false,
     frameIndex: 0,
     lastOpenedFromNs: fromPtsNs,
+    lastEmittedPtsNs: null,
   };
 
   const initial = (await ops.next(streamId, PULL_BATCH)) as EncodedChunkWire[];
@@ -224,6 +256,7 @@ function onFrame(frame: VideoFrame): void {
   // keeps `frameIndex` a "visible frames since open" counter even when a
   // seek primes the decoder with pre-target frames.
   session.frameIndex += 1;
+  session.lastEmittedPtsNs = ptsNs;
   // `decodeQueueSize` is a hint per spec; some backends report 0 even with
   // chunks in flight. Surface it anyway — it's the metric `T5.2` asks for.
   const decodeQueue = session.decoder.decodeQueueSize;
@@ -273,6 +306,13 @@ export const videoDecodeApi = {
     if (session) session.sink = port;
     // If set before open(), the latest port wins and will be adopted at open().
     pendingSink = port;
+  },
+  setCursor(ns: bigint): void {
+    cursorNs = ns;
+    // Wake the pull loop in case the pacing gate was the only reason it
+    // stopped — `maybeRefill` is otherwise driven by `onFrame`, which a
+    // gated decoder no longer fires.
+    void maybeRefill();
   },
   async open(
     sourceKind: VideoSourceKind,

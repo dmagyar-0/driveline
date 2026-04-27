@@ -103,9 +103,10 @@ export function VideoPanel({
   const toggleHud = () =>
     useSession.getState().toggleVideoHudOn(panelId);
 
-  const cursorNs = useSession((s) => s.cursorNs);
+  // Only re-render this panel when the open() inputs change. Cursor and
+  // playing state are read non-reactively below via `useSession.subscribe`
+  // so a 60 Hz cursor tick during playback doesn't churn the React tree.
   const globalRange = useSession((s) => s.globalRange);
-  cursorRef.current = cursorNs;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -134,19 +135,34 @@ export function VideoPanel({
       const { ptsNs, frame, frameIndex, decodeQueue } = data;
       lastFrameIndexRef.current = frameIndex;
       lastDecodeQueueRef.current = decodeQueue;
-      // Drop the oldest when the queue saturates — a stalled blit is never
-      // worth starving the GPU pool. Count it as a user-visible drop.
-      if (queueRef.current.length >= MAX_QUEUE) {
-        const dropped = queueRef.current.shift();
-        dropped?.frame.close();
-        droppedFramesRef.current += 1;
-      }
-      queueRef.current.push({ ptsNs, frame, frameIndex, decodeQueue });
       if (!sizedRef.current) {
         canvas.width = frame.displayWidth;
         canvas.height = frame.displayHeight;
         sizedRef.current = true;
       }
+      // The decoder produces frames in PTS order, often far faster than
+      // real-time on a 4K stream with HW acceleration. A naïve
+      // drop-oldest policy lets the queue's PTS window slide past the
+      // cursor, after which the blit loop (which picks the newest
+      // frame ≤ cursor) has nothing to draw — the canvas stays frozen
+      // on the first frame for the rest of playback. Only evict the
+      // head once the cursor has passed it; otherwise drop the
+      // incoming frame, which keeps the queue anchored at / behind
+      // the cursor.
+      if (queueRef.current.length >= MAX_QUEUE) {
+        const cursor = cursorRef.current;
+        const oldest = queueRef.current[0];
+        if (oldest.ptsNs < cursor) {
+          queueRef.current.shift();
+          oldest.frame.close();
+          droppedFramesRef.current += 1;
+        } else {
+          frame.close();
+          droppedFramesRef.current += 1;
+          return;
+        }
+      }
+      queueRef.current.push({ ptsNs, frame, frameIndex, decodeQueue });
     };
 
     let cancelled = false;
@@ -287,26 +303,62 @@ export function VideoPanel({
     };
   }, [sourceKind, sourceHandle, channelId, globalRange?.startNs]);
 
-  // Seek side effect: trailing-debounce on cursorNs changes. Skips the
-  // fire when the target duplicates the most recent one — this is what
-  // suppresses the redundant seek-on-mount (when the effect first runs,
-  // the stream is already opened to that exact cursor).
+  // Cursor + seek side effect.
+  //
+  // Subscribed to the store directly (not via a reactive selector) so
+  // cursor ticks at 60 Hz don't re-render this panel — the rAF blit
+  // loop reads `cursorRef.current` imperatively. Seeks are debounced
+  // for scrub / step actions, but **suppressed while `playing` is
+  // true**: during playback the decoder is already advancing the
+  // stream forward; firing a seek tears the decoder down and re-opens
+  // it from a keyframe, which is the root cause of the "4K playback
+  // lag" — a slow render frame lets the 50 ms timer fire mid-play and
+  // every restart drops the in-flight queue.
   useEffect(() => {
-    if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
-    seekTimerRef.current = setTimeout(() => {
-      const client = videoDecodeRef.current;
-      if (!client) return;
-      if (lastSeekTargetRef.current === cursorNs) return;
-      lastSeekTargetRef.current = cursorNs;
-      // Drop stale frames ahead of the seek so the blit loop converges fast.
-      for (const e of queueRef.current) e.frame.close();
-      queueRef.current = [];
-      void client.seek(cursorNs).catch(() => undefined);
-    }, SEEK_DEBOUNCE_MS);
-    return () => {
+    cursorRef.current = useSession.getState().cursorNs;
+    const unsubscribe = useSession.subscribe((state, prev) => {
+      cursorRef.current = state.cursorNs;
+      if (state.cursorNs !== prev.cursorNs) {
+        // Push the cursor watermark to the worker so the decoder can
+        // pace itself against playback — without this the decoder
+        // races to the end of the encoded stream, frames pile up past
+        // the cursor, and the bounded queue empties while the cursor
+        // is still mid-session.
+        const client = videoDecodeRef.current;
+        if (client) void client.setCursor(state.cursorNs).catch(() => undefined);
+      }
+      // Cancel any pending pre-play scrub seek the moment playback
+      // starts — the natural decoder advance makes it redundant.
+      if (state.playing) {
+        if (seekTimerRef.current !== null) {
+          clearTimeout(seekTimerRef.current);
+          seekTimerRef.current = null;
+        }
+        return;
+      }
+      if (state.cursorNs === prev.cursorNs) return;
       if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
+      seekTimerRef.current = setTimeout(() => {
+        seekTimerRef.current = null;
+        const client = videoDecodeRef.current;
+        if (!client) return;
+        const target = useSession.getState().cursorNs;
+        if (lastSeekTargetRef.current === target) return;
+        lastSeekTargetRef.current = target;
+        // Drop stale frames ahead of the seek so the blit loop converges fast.
+        for (const e of queueRef.current) e.frame.close();
+        queueRef.current = [];
+        void client.seek(target).catch(() => undefined);
+      }, SEEK_DEBOUNCE_MS);
+    });
+    return () => {
+      unsubscribe();
+      if (seekTimerRef.current !== null) {
+        clearTimeout(seekTimerRef.current);
+        seekTimerRef.current = null;
+      }
     };
-  }, [cursorNs]);
+  }, []);
 
   // `h` toggles the HUD, but only when focus is inside the panel wrapper —
   // we don't want to hijack the key when the drop zone or a form input
