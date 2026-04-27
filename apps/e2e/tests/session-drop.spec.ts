@@ -1,21 +1,30 @@
 // T2.4 acceptance test. Drops the three M2 fixtures into the page via the
 // `__drivelineDevHooks.openFiles` path (same store action the real onDrop
-// handler uses) and asserts the rendered session summary matches:
+// handler uses) and asserts the loaded session matches:
 //
-// - three sources listed
-// - mcap=4 channels, mf4=1 channel, mp4+sidecar=1 channel
+// - three sources reported by `listSources()`
+// - mcap=4 channels, mf4=3 channels, mp4+sidecar=1 channel (via channelIds
+//   on each source)
 // - global range is the union of all three per-source ranges
 //
-// Raw DataTransfer drops are unreliable across headless-chromium versions;
-// driving the production store action through a dev hook is both simpler
-// and covers the exact code path that real drops exercise after the
-// `onDrop` handler converts the `FileList`.
+// Phase 2 of the V1-shell migration replaced the legacy `SessionSummary`
+// off-screen shim with the Sources drawer; e2e assertions read state via
+// the new `listSources` / `getGlobalRange` dev hooks rather than DOM
+// testids (frontend-skill "hook over selector" rule).
 
 import { test, expect } from "@playwright/test";
 
 interface DevOpenResult {
   opened: string[];
   errors: { name: string; reason: string }[];
+}
+
+interface DevSource {
+  id: string;
+  kind: "mcap" | "mf4" | "mp4+sidecar";
+  name: string;
+  timeRange: { startNs: string; endNs: string };
+  channelIds: string[];
 }
 
 declare global {
@@ -25,11 +34,13 @@ declare global {
         descs: { name: string; bytes: Uint8Array }[],
       ) => Promise<DevOpenResult>;
       clearSession: () => Promise<void>;
+      listSources: () => DevSource[];
+      getGlobalRange: () => { startNs: string; endNs: string } | null;
     };
   }
 }
 
-test("drop three fixtures: UI shows sources, counts, and global range", async ({
+test("drop three fixtures: sources, channel counts, global range", async ({
   page,
 }) => {
   await page.goto("/");
@@ -50,44 +61,31 @@ test("drop three fixtures: UI shows sources, counts, and global range", async ({
   expect(result.errors).toEqual([]);
   expect(result.opened.sort()).toEqual(["short.mcap", "short.mf4", "short.mp4"]);
 
-  await expect(page.getByTestId("source-count")).toHaveText("Sources: 3");
+  const sourcesAfter = await page.evaluate(() =>
+    window.__drivelineDevHooks!.listSources(),
+  );
+  expect(sourcesAfter).toHaveLength(3);
 
-  const mcapSource = page.getByTestId("source-short.mcap");
-  const mf4Source = page.getByTestId("source-short.mf4");
-  const mp4Source = page.getByTestId("source-short.mp4");
+  const byId = new Map(sourcesAfter.map((s) => [s.id, s]));
+  // Real T0.3 corpus: MCAP has /camera/front + /vehicle/speed + /imu/accel
+  // + /control/mode; MF4 has vehicle_speed + imu_accel + control_mode;
+  // MP4+sidecar has a single video track.
+  expect(byId.get("short.mcap")?.channelIds).toHaveLength(4);
+  expect(byId.get("short.mf4")?.channelIds).toHaveLength(3);
+  expect(byId.get("short.mp4")?.channelIds).toHaveLength(1);
 
-  // Real T0.3 corpus: MCAP has /camera/front + /vehicle/speed +
-  // /imu/accel + /control/mode; MF4 has vehicle_speed + imu_accel +
-  // control_mode; MP4+sidecar has a single video track.
-  await expect(mcapSource.getByTestId("channel-count")).toHaveText(
-    "4 channels",
+  const gr = await page.evaluate(() =>
+    window.__drivelineDevHooks!.getGlobalRange(),
   );
-  await expect(mf4Source.getByTestId("channel-count")).toHaveText(
-    "3 channels",
-  );
-  await expect(mp4Source.getByTestId("channel-count")).toHaveText("1 channel");
-
-  // The mp4 sidecar encodes per-frame ns timestamps starting at
-  // `START_NS = 1_704_067_200_000_000_000` (exceeds
-  // Number.MAX_SAFE_INTEGER), validating the BigInt-coercion path.
-  const parseRange = (text: string | null): [bigint, bigint] => {
-    const m = text!.match(/\[(\d+), (\d+)\)/);
-    if (!m) throw new Error(`bad range text: ${text}`);
-    return [BigInt(m[1]), BigInt(m[2])];
-  };
-
-  const [globalStart, globalEnd] = parseRange(
-    await page.getByTestId("global-range").textContent(),
-  );
-  const [mcapStart, mcapEnd] = parseRange(
-    await mcapSource.getByTestId("source-range").textContent(),
-  );
-  const [mf4Start, mf4End] = parseRange(
-    await mf4Source.getByTestId("source-range").textContent(),
-  );
-  const [mp4Start, mp4End] = parseRange(
-    await mp4Source.getByTestId("source-range").textContent(),
-  );
+  if (!gr) throw new Error("expected globalRange after drop");
+  const globalStart = BigInt(gr.startNs);
+  const globalEnd = BigInt(gr.endNs);
+  const mcapStart = BigInt(byId.get("short.mcap")!.timeRange.startNs);
+  const mcapEnd = BigInt(byId.get("short.mcap")!.timeRange.endNs);
+  const mf4Start = BigInt(byId.get("short.mf4")!.timeRange.startNs);
+  const mf4End = BigInt(byId.get("short.mf4")!.timeRange.endNs);
+  const mp4Start = BigInt(byId.get("short.mp4")!.timeRange.startNs);
+  const mp4End = BigInt(byId.get("short.mp4")!.timeRange.endNs);
 
   // Global range must be the union of the three per-source ranges.
   const min = (a: bigint, b: bigint) => (a < b ? a : b);
@@ -95,9 +93,10 @@ test("drop three fixtures: UI shows sources, counts, and global range", async ({
   expect(globalStart).toBe(min(min(mcapStart, mf4Start), mp4Start));
   expect(globalEnd).toBe(max(max(mcapEnd, mf4End), mp4End));
 
-  // The mp4 source's ns values must survive the JS/WASM boundary
-  // intact. 1.704e18 exceeds Number.MAX_SAFE_INTEGER, so this fails
-  // if the Rust→JS→store pipeline ever lossy-casts through `number`.
+  // The mp4 sidecar encodes per-frame ns timestamps starting at
+  // `START_NS = 1_704_067_200_000_000_000` (exceeds
+  // Number.MAX_SAFE_INTEGER), validating the BigInt-coercion path through
+  // the JS/WASM/store boundary.
   const START_NS = 1_704_067_200_000_000_000n;
   const FRAME_NS = 33_333_333n;
   const TOTAL_FRAMES = 300n;
@@ -107,5 +106,8 @@ test("drop three fixtures: UI shows sources, counts, and global range", async ({
   await page.evaluate(async () => {
     await window.__drivelineDevHooks!.clearSession();
   });
-  await expect(page.getByTestId("source-count")).toHaveText("Sources: 0");
+  const cleared = await page.evaluate(() =>
+    window.__drivelineDevHooks!.listSources(),
+  );
+  expect(cleared).toEqual([]);
 });

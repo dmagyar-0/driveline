@@ -5,7 +5,7 @@ import { makeDataCoreClient, makeVideoDecodeClient } from "./workerClient";
 import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
 import type { Remote } from "comlink";
 import { useSession } from "./state/store";
-import type { OpenResult, SourceMeta, TimeRange } from "./state/store";
+import type { OpenResult } from "./state/store";
 import type { RailTab } from "./state/persist/ui";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
@@ -17,7 +17,6 @@ import { attachLayoutPersistence } from "./layout/persist";
 import { attachUiPersistence } from "./state/persist/ui";
 import { installPerfHooks } from "./perf";
 import { Shell } from "./shell/Shell";
-import styles from "./App.module.css";
 
 export interface OpenMf4Result {
   handle: number;
@@ -121,6 +120,17 @@ declare global {
         unit: string | null;
         sampleCount: number;
       }>;
+      // Phase 2 (Sources drawer) — enumerate loaded sources and the
+      // session's global range. BigInts are serialised as decimal
+      // strings so `page.evaluate` can return them.
+      listSources: () => Array<{
+        id: string;
+        kind: "mcap" | "mf4" | "mp4+sidecar";
+        name: string;
+        timeRange: { startNs: string; endNs: string };
+        channelIds: string[];
+      }>;
+      getGlobalRange: () => { startNs: string; endNs: string } | null;
       // Phase 1 (V1 shell) — drive the rail/drawer state from e2e.
       setActiveRailTab: (tab: RailTab | null) => void;
       getActiveRailTab: () => RailTab | null;
@@ -129,60 +139,12 @@ declare global {
   }
 }
 
-function formatRange(r: TimeRange | null): string {
-  if (!r) return "(empty)";
-  return `[${r.startNs.toString()}, ${r.endNs.toString()})`;
-}
-
-// Phase 1 compat: kept alive (off-screen) to satisfy session-drop and
-// videoMp4 e2e specs that still select on these testids. Phase 2
-// migrates those specs to the new Sources drawer and deletes both this
-// component and `App.module.css`.
-function SessionSummary() {
-  const sources = useSession((s) => s.sources);
-  const globalRange = useSession((s) => s.globalRange);
-  return (
-    <section data-testid="session-summary">
-      <p className={styles.global} data-testid="global-range">
-        Global range: {formatRange(globalRange)}
-      </p>
-      <p data-testid="source-count">Sources: {sources.length}</p>
-      <ul className={styles.sources} data-testid="sources">
-        {sources.map((s: SourceMeta) => (
-          <li
-            key={s.id}
-            className={styles.source}
-            data-testid={`source-${s.id}`}
-          >
-            <div className={styles.sourceHeader}>
-              <span className={styles.sourceName} data-testid="source-name">
-                {s.name}
-              </span>
-              <span className={styles.sourceKind}>{s.kind}</span>
-            </div>
-            <p className={styles.meta}>
-              <span data-testid="channel-count">
-                {s.channels.length} channel{s.channels.length === 1 ? "" : "s"}
-              </span>
-              {" · "}
-              <span data-testid="source-range">{formatRange(s.timeRange)}</span>
-            </p>
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
 export function App() {
   const dataCore = useRef<Remote<DataCoreApi> | null>(null);
   const videoDecode = useRef<Remote<VideoDecodeApi> | null>(null);
   const workspaceRef = useRef<WorkspaceHandle | null>(null);
   const [ready, setReady] = useState(false);
   const [dragActive, setDragActive] = useState(false);
-  const [recentErrors, setRecentErrors] = useState<
-    { name: string; reason: string }[]
-  >([]);
 
   useEffect(() => {
     const { proxy: dc, worker: dcWorker } = makeDataCoreClient();
@@ -247,13 +209,10 @@ export function App() {
         const files = descs.map(
           (d) => new File([d.bytes as BlobPart], d.name),
         );
-        const result = await useSession.getState().openFiles(files);
-        setRecentErrors(result.errors);
-        return result;
+        return await useSession.getState().openFiles(files);
       },
       clearSession: async () => {
         await useSession.getState().clear();
-        setRecentErrors([]);
       },
       videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
       videoHudStats: () => {
@@ -339,6 +298,23 @@ export function App() {
           unit: c.unit,
           sampleCount: c.sampleCount,
         })),
+      listSources: () =>
+        useSession.getState().sources.map((s) => ({
+          id: s.id,
+          kind: s.kind,
+          name: s.name,
+          timeRange: {
+            startNs: s.timeRange.startNs.toString(),
+            endNs: s.timeRange.endNs.toString(),
+          },
+          channelIds: s.channels.map((c) => c.id),
+        })),
+      getGlobalRange: () => {
+        const r = useSession.getState().globalRange;
+        return r === null
+          ? null
+          : { startNs: r.startNs.toString(), endNs: r.endNs.toString() };
+      },
       setActiveRailTab: (tab) =>
         useSession.getState().setActiveRailTab(tab),
       getActiveRailTab: () => useSession.getState().activeRailTab,
@@ -370,8 +346,7 @@ export function App() {
     setDragActive(false);
     const files = Array.from(e.dataTransfer?.files ?? []);
     if (files.length === 0) return;
-    const result = await useSession.getState().openFiles(files);
-    setRecentErrors(result.errors);
+    await useSession.getState().openFiles(files);
   };
 
   const onDragOver = (e: React.DragEvent<HTMLElement>) => {
@@ -384,31 +359,15 @@ export function App() {
   };
 
   return (
-    <>
-      <Shell
-        ready={ready}
-        dragActive={dragActive}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        transport={<Transport />}
-      >
-        <Workspace ref={workspaceRef} />
-      </Shell>
-      {/* Phase 1 compat shim — see SessionSummary docstring. Phase 2
-          deletes this entire block. */}
-      <div className={styles.legacyShim} aria-hidden="true">
-        <SessionSummary />
-        {recentErrors.length > 0 && (
-          <ul className={styles.errors} data-testid="session-errors">
-            {recentErrors.map((e, i) => (
-              <li key={i}>
-                {e.name}: {e.reason}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </>
+    <Shell
+      ready={ready}
+      dragActive={dragActive}
+      onDrop={onDrop}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      transport={<Transport />}
+    >
+      <Workspace ref={workspaceRef} />
+    </Shell>
   );
 }

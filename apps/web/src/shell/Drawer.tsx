@@ -1,13 +1,13 @@
-// Phase 1 · Drawer host.
+// Drawer host.
 //
-// Switches on `activeRailTab` and renders one of 5 inline stub bodies.
-// Phases 2-5 and 8 each replace one stub with a real
-// `shell/drawers/<Name>Drawer.tsx` file. Phase 1 keeps them inline so
-// follow-up phases can add a single file and swap one branch of the
-// switch rather than fight an existing scaffold.
+// Switches on `activeRailTab` and renders the corresponding drawer
+// component. Phases 2-5 and 8 each replace one inline stub with a real
+// `shell/drawers/<Name>Drawer.tsx`. Phase 2 wired the real Sources
+// drawer; the other four are still stubs.
 
 import type { RailTab } from "../state/persist/ui";
 import { useSession } from "../state/store";
+import { SourcesDrawer } from "./drawers/SourcesDrawer";
 import styles from "./Drawer.module.css";
 
 interface StubProps {
@@ -35,38 +35,35 @@ function DrawerStub({ title, phase, what }: StubProps) {
   );
 }
 
-const STUBS: Record<RailTab, { title: string; phase: number; what: string }> =
-  {
-    sources: {
-      title: "Sources",
-      phase: 2,
-      what: "List of loaded files with kind badges and the global range.",
-    },
-    channels: {
-      title: "Channels",
-      phase: 3,
-      what: "Per-source channel list with click-to-bind to the active panel.",
-    },
-    layout: {
-      title: "Layout",
-      phase: 4,
-      what: "Saved layouts and the add-panel buttons.",
-    },
-    panel: {
-      title: "Panel",
-      phase: 5,
-      what: "Settings for the currently selected panel.",
-    },
-    events: {
-      title: "Events",
-      phase: 8,
-      what: "Bookmarks at points in time, with cursor jump.",
-    },
-  };
+const STUBS: Record<
+  Exclude<RailTab, "sources">,
+  { title: string; phase: number; what: string }
+> = {
+  channels: {
+    title: "Channels",
+    phase: 3,
+    what: "Per-source channel list with click-to-bind to the active panel.",
+  },
+  layout: {
+    title: "Layout",
+    phase: 4,
+    what: "Saved layouts and the add-panel buttons.",
+  },
+  panel: {
+    title: "Panel",
+    phase: 5,
+    what: "Settings for the currently selected panel.",
+  },
+  events: {
+    title: "Events",
+    phase: 8,
+    what: "Bookmarks at points in time, with cursor jump.",
+  },
+};
 
 export function Drawer() {
   const activeRailTab = useSession((s) => s.activeRailTab);
   if (activeRailTab === null) return null;
-  const stub = STUBS[activeRailTab];
-  return <DrawerStub {...stub} />;
+  if (activeRailTab === "sources") return <SourcesDrawer />;
+  return <DrawerStub {...STUBS[activeRailTab]} />;
 }
