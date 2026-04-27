@@ -59,6 +59,14 @@ export interface DrawerProps {
   addVideoPanel: () => void;
   /** Forwarded to the Layout drawer's `+ plot` row. */
   addPlotPanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ 3D scene` row. */
+  addScenePanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ map` row. */
+  addMapPanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ table` row. */
+  addTablePanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ enum` row. */
+  addEnumPanel: () => void;
   /** Forwarded to the Layout drawer's `Reset layout` row. */
   resetLayout: () => void;
 }
@@ -67,6 +75,10 @@ export function Drawer({
   ensurePlotPanel,
   addVideoPanel,
   addPlotPanel,
+  addScenePanel,
+  addMapPanel,
+  addTablePanel,
+  addEnumPanel,
   resetLayout,
 }: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
@@ -79,6 +91,10 @@ export function Drawer({
       <LayoutDrawer
         addVideoPanel={addVideoPanel}
         addPlotPanel={addPlotPanel}
+        addScenePanel={addScenePanel}
+        addMapPanel={addMapPanel}
+        addTablePanel={addTablePanel}
+        addEnumPanel={addEnumPanel}
         resetLayout={resetLayout}
       />
     );

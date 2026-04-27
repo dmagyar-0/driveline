@@ -307,7 +307,119 @@ the end of each shipped phase so future sessions know where to resume.
       the three-surface HUD toggle path with reload-survival, and the
       plot × remove path — ready to run in CI alongside the existing
       chromium project.
-- [ ] **Phase 6 · New panel kinds (Scene / Map / Table / Enum)**
+- [x] **Phase 6 · New panel kinds (Scene / Map / Table / Enum)** —
+      `apps/web/src/panels/{Scene,Map,Table,Enum}Panel.{tsx,module.css}`
+      added; each panel is intentionally minimal at v1. ScenePanel
+      ships as an empty-state placeholder with the integration plan's
+      "rendering pending point-cloud format" copy; the
+      `sceneBindings[panelId]` slot is allocated for forward compat so
+      the panel upgrades in place once the rust core defines the
+      schema (no `three` added). MapPanel uses Leaflet (`leaflet@^1.9.4`
+      + `react-leaflet@^5.0.0` + `@types/leaflet@^1.9.21`) — the only
+      new runtime dep this phase. v5 of react-leaflet was chosen over
+      the integration plan's v4.x because the project is on React 19
+      and v4 declares peer `react@^18`; v5's surface is identical for
+      our usage (`MapContainer`/`TileLayer`/`Polyline`/`useMap`). OSM
+      tile layer + orange polyline + auto-fit-to-bounds. Lat/lon are
+      explicitly bound through PanelDrawer (no `*.lat`/`*.lon` magic
+      per integration plan §6 open-question 2). Polyline downsampled
+      to ≤ 5000 points in `panels/MapPanel.tsx:downsample` so a 1 kHz
+      10 s fixture stays cheap. TablePanel is a hand-rolled value
+      table (header + 8-row body) — frontend-skill ban on new component
+      libraries means no `react-virtuoso`; at the binding cap of 8
+      rows the windowed list is unnecessary. Sample-at-cursor uses the
+      same `lastIndexAtOrBefore` binary-search pattern as PlotPanel's
+      T6.1 sync snapshot. EnumPanel renders a hand-rolled canvas strip
+      (extend-uPlot-or-stay-native; native is simpler than fighting
+      uPlot's step-plot mode for this use case) layered with the
+      shared `cursorOverlay` cursor line. Each enum value gets a
+      deterministic colour via `colorFor(String(value))` so two strips
+      reading the same channel agree.
+      **Store extensions:** `SessionState` gains `sceneBindings`
+      (`Record<panelId, channelId | null>`), `mapBindings`
+      (`Record<panelId, { latChannelId, lonChannelId } | null>`),
+      `tableBindings` (`Record<panelId, channelId[]>`), and
+      `enumBindings` (`Record<panelId, channelId | null>`) plus 7 new
+      actions: `setSceneBinding`, `setMapBinding` (deep-equal short-
+      circuit on lat/lon pair), `setTableBinding`/`addTableChannel`/
+      `removeTableChannel` (mirrors the plot triple, capped at
+      `MAX_PLOT_SERIES = 8`), and `setEnumBinding`. `clear()` resets
+      all four maps; `saveCurrentLayoutAs`/`restoreNamedLayout` deep-
+      copy and round-trip them.
+      **Persistence v2 → v3 (layout) + v1 → v2 (namedLayouts):**
+      `LAYOUT_SCHEMA_VERSION` bumped to `3`, `LAYOUT_STORAGE_KEY` to
+      `"driveline.layout.v3"`. `NAMED_LAYOUTS_SCHEMA_VERSION` bumped
+      to `2`, `NAMED_LAYOUTS_STORAGE_KEY` to
+      `"driveline.layouts.named.v2"`. Both `validate()` paths reject
+      legacy payloads (fail-closed; same posture as the Phase 5 v1→v2
+      bump documented above). `attachLayoutPersistence`'s reference-
+      equality short-circuit gets four new field checks. `MapBinding`
+      type is exported from `layout/persist.ts` so the store + the
+      named-layouts adapter both consume the same shape.
+      **Panel-id prefixes:** `SCENE_PREFIX`, `MAP_PREFIX`,
+      `TABLE_PREFIX`, `ENUM_PREFIX` added to `layout/panelId.ts`;
+      `PanelKind` widened to include the four new discriminators;
+      `panelKindOf()` extended.
+      **`Workspace.tsx` ref API:** `WorkspaceHandle` gains
+      `addScenePanel`/`addMapPanel`/`addTablePanel`/`addEnumPanel`,
+      mirroring `addPlotPanel`'s shape (`newPanelId(prefix)` →
+      `addTab(...)`). `panelFactory.tsx` switches on the four new
+      `PANEL_COMPONENT_*` constants from `defaultLayout.ts`.
+      **LayoutDrawer:** the four `PHASE_6_KINDS` `aria-disabled` rows
+      were replaced with real `+ video / + plot / + 3D scene / + map
+      / + table / + enum` buttons driven by callbacks forwarded from
+      `App.tsx` through `Shell` → `Drawer`. Existing `add-video-panel`
+      / `add-plot-panel` testids preserved verbatim; new testids are
+      `add-scene-panel`, `add-map-panel`, `add-table-panel`,
+      `add-enum-panel` (the `-disabled` variants are gone).
+      **PanelDrawer:** `UnknownKind` is now a true fallback for
+      unrecognised id prefixes (testid `panel-drawer-unknown`); the
+      kind switch is a `switch (kind)` over the discriminated union
+      with TypeScript exhaustiveness through the union member list.
+      Four new bodies: `SceneBody` (single-channel binding via
+      `<ChannelPicker maxSelected={1}>` + forward-compat callout),
+      `MapBody` (two `<ChannelPicker>` instances for lat/lon), `TableBody`
+      (mirrors `PlotBody` with the table actions), `EnumBody` (single-
+      channel binding). Kind pill text comes from a single
+      `kindLabel(kind)` switch.
+      **Dev hooks added in `App.tsx`:** `addScenePanel` / `addMapPanel`
+      / `addTablePanel` / `addEnumPanel` (return the new tab id);
+      `setSceneChannelBinding`, `setMapChannelBinding` (takes the full
+      `MapBinding` object or `null`), `addTableChannelBinding`,
+      `removeTableChannelBinding`, `setEnumChannelBinding`. The
+      `MapBinding` type is exported through `layout/persist.ts` so
+      tests can construct typed payloads.
+      **Tests:** new vitest suites cover the four panels (`ScenePanel`/
+      `MapPanel`/`TablePanel`/`EnumPanel.test.tsx` — MapPanel mocks
+      `react-leaflet` because Leaflet crashes under jsdom; the others
+      use a small ResizeObserver shim consistent with PlotPanel's
+      existing pattern). `panelDrawer.test.tsx` extended with
+      8 new cases (one per kind body + the new `UnknownKind` fallback
+      with a `widget-orphan` id). `store.test.ts` extended with the
+      Phase 6 binding actions, the deep-copy contract on save, and the
+      restore round-trip. `persist.test.ts` rewrote SAMPLE for v3,
+      added a v2-rejection assertion alongside the existing v1
+      rejection, and added a "missing v3 binding map" case. The
+      named-layouts persist test mirrors the same v1-rejection +
+      missing-Phase-6-map cases.
+      Verification: `pnpm exec tsc --noEmit -p apps/web` passes
+      cleanly. `pnpm --filter web test --run` passes 232/232 (197
+      Phase 5 baseline + 35 new). New e2e spec
+      `apps/e2e/tests/panelKinds.spec.ts` covers the LayoutDrawer
+      add-button mint path, the kind-specific PanelDrawer body, and
+      the v3 reload-survival path; ready to run in CI alongside the
+      existing chromium project. `pnpm --filter web build` and the
+      e2e suite were not run in this session for the same reason
+      Phase 5 documented — the sandbox lacks `wasm-pack` and the
+      gitignored `apps/web/src/wasm/wasm_bindings.js` cannot be
+      regenerated here. The TypeScript graph is verified via the
+      gitignored `apps/web/src/wasm/wasm_bindings.d.ts` stub recreated
+      locally for this purpose; production build/CI is unaffected.
+      Bundle delta is unmeasured locally but expected at ≈ 230 KB
+      gzipped initial JS (192 KB Phase 5 baseline + ~40 KB Leaflet),
+      well under the 350 KB budget — must be confirmed in the first CI
+      run. None of the Phase 6 changes touch the cursor hot path or
+      the video decode pipeline.
 - [ ] **Phase 7 · Per-panel chrome via FlexLayout customisation**
 - [ ] **Phase 8 · Events drawer (bookmarks)**
 - [ ] **Phase 9 · Transport refinement**
@@ -315,51 +427,73 @@ the end of each shipped phase so future sessions know where to resume.
 
 ## Where to continue
 
-Next phase: **Phase 6 · New panel kinds (Scene / Map / Table / Enum).**
-Read `docs/design/v1-shell-integration.md` § Phase 6 (lines 224-266)
-for the four new panel kinds, each with a folder under
-`apps/web/src/panels/`. Concretely:
+Next phase: **Phase 7 · Per-panel chrome via FlexLayout
+customisation.** Read `docs/design/v1-shell-integration.md` § Phase 7
+(lines 268-300) for the `onRenderTab` / `onRenderTabSet` work plus
+click-to-select-panel wiring. Concretely:
 
-1. **Store extensions** — add `sceneBindings`, `mapBindings`,
-   `tableBindings`, `enumBindings` keyed by panel id. Persist via the
-   existing layout adapter (bump `LAYOUT_SCHEMA_VERSION` to 3 and
-   migrate v2 reads with empty defaults). The Phase 5 schema bump
-   already established the v1→v2 fail-closed pattern.
-2. **`PANEL_COMPONENT_*` constants** — extend
-   `apps/web/src/layout/defaultLayout.ts` with `_SCENE | _MAP | _TABLE
-   | _ENUM`; wire into `panelFactory.tsx`. Extend
-   `apps/web/src/layout/panelId.ts:panelKindOf` with new prefixes so
-   the PanelDrawer's discriminator picks them up — currently the
-   drawer renders an "Available in Phase 6" callout for unknown
-   kinds.
-3. **`Workspace.tsx` ref API** — mirror `addPlotPanel()` for each new
-   kind. Forward through `Shell` → `Drawer` → `LayoutDrawer` to
-   un-`aria-disable` the four currently-stubbed `+ <kind>` rows in
-   `LayoutDrawer.tsx` (Phase 4 left them as `aria-disabled` with a
-   "Available in Phase 6" title).
-4. **ScenePanel / MapPanel / TablePanel / EnumPanel** — each is
-   intentionally minimal for v1. ScenePanel is a placeholder canvas
-   with an empty-state callout (no three.js until the rust core
-   defines a point-cloud format). MapPanel pulls in `leaflet` +
-   `react-leaflet` (~40 KB gzipped — justify in PR; honour the 350 KB
-   budget). TablePanel is a hand-rolled windowed list (frontend skill
-   bans new component libraries). EnumPanel uses uPlot in step-plot
-   mode — extend uPlot, do not add a new charting library.
-5. **PanelDrawer body extensions** — once `panelKindOf` recognises
-   the new kinds, replace the `UnknownKind` fallback in
-   `PanelDrawer.tsx` with kind-specific option bodies (point size for
-   scene, lat/lon channel pickers for map, column visibility for
-   table, lane channel binding for enum). Reuse the row primitive in
-   `_row.module.css` and the section / toggle styles already in
-   `PanelDrawer.module.css`.
-6. **Worker-side fetch entry points** — each new panel kind needs an
-   Arrow IPC fetch path. For v1, scene/map/table/enum can call the
-   existing `mf4FetchRange` or a new `fetchEnumStateChanges`; do not
-   add Rust-side work for formats that aren't defined yet.
+1. **`onRenderTab(node, renderValues)` in `Workspace.tsx`** — replace
+   `renderValues.content` with a flex row containing: grip SVG,
+   panel name, kind tag (badge from `panelKindOf(node.getId())`),
+   then a four-icon cluster (settings, collapse, fullscreen, close).
+   Use FlexLayout's `Actions.maximizeToggle` for fullscreen and
+   `Actions.deleteTab` for close. Settings calls
+   `setSelectedPanelId(node.getId())` then
+   `setActiveRailTab('panel')`. Set `renderValues.buttons = []` to
+   suppress FlexLayout's default close icon.
+2. **Click-to-select panel** — wrap each panel body in
+   `panelFactory.tsx` with `<div onPointerDown={() =>
+   setSelectedPanelId(panelId)}>` so any click on the panel body
+   marks it selected.
+3. **CSS overrides in `Workspace.module.css`** — flip
+   `--color-tab-selected` from `var(--color-accent-orange)` (the
+   carry-over note at `Workspace.module.css:71`) to
+   `var(--color-fg-2)`; selected tabset border becomes
+   `var(--color-border-hover)`, NOT orange (explicit user pushback in
+   `wireframe-bundle/chats/chat1.md`).
+4. **`PlotPanel.tsx:368` cursor token** — the carry-over note for
+   `ctx.strokeStyle = "#f97316"` rolls into Phase 7. Read the
+   computed CSS variable at draw-time
+   (`getComputedStyle(...).getPropertyValue('--color-accent-orange')`).
+5. **Collapse icon** — there is no first-class collapse in
+   flexlayout-react. Phase 7's plan picks "grey the icon and ship
+   without collapse" for the first cut; flag in the PR.
+6. **`onRenderTabSet`** — empty for now (single-tab tabsets look like
+   the wireframe out of the box).
 
-The Phase 5 dev hooks (`getVideoHudOn`) and the new `panelNameFor`
-helper transfer cleanly. No new persistence adapter — fold the four
-binding maps into the existing `layout/persist.ts` v2 → v3 bump.
+The Phase 6 dev hooks (`add*Panel`, `set*ChannelBinding`) and the
+Phase 5 `getSelectedPanelId` / `setSelectedPanelId` hooks are the
+test seam; no new persistence adapter or schema bump expected.
+
+## Carry-over notes for later phases (Phase 6 additions)
+
+- **MapPanel polyline merge for distinct-cadence channels**:
+  `MapPanel.tsx` zips lat/lon by index, which assumes both channels
+  are sampled on the same cadence (true for the MCAP/MF4 fixtures we
+  ship). When a fixture pairs two channels with different cadences,
+  resample one against the other before zipping — `mergeSeries` in
+  `panels/mergeSeries.ts` already does this for plots. Until then,
+  flag mismatched cadences in PR review.
+- **ScenePanel data path**: still gated on the rust core defining a
+  `point_cloud` Arrow channel kind. When that lands, swap the
+  `<canvas>` placeholder for the real renderer (probably `three.js`
+  via dynamic import to keep the synchronous bundle small) and
+  enrich the PanelDrawer SceneBody with point-size / colour-scheme
+  options. The binding shape is already the right one
+  (`Record<panelId, channelId | null>`) — no schema bump expected.
+- **react-leaflet v5 vs the integration plan's v4.x**: chose v5
+  because v4 declares peer `react@^18` and we're on React 19. v5's
+  surface for our usage (`MapContainer`/`TileLayer`/`Polyline`/
+  `useMap`) is identical. Document the deviation in the Phase 6 PR.
+- **MAX_POINTS=5000 polyline cap** in `MapPanel.tsx:downsample`: a
+  cheap stride-based downsample. If a future fixture exposes the
+  cap (>5 k true points) and the downsampled polyline visibly
+  staircases, swap to RDP simplification (Ramer–Douglas–Peucker) at
+  the same cap. Defer to Phase 9 polish.
+- **EnumPanel value-as-state colouring**: assumes integer values.
+  When a channel's `dtype` is widened to a string-enum format the
+  panel can read `colorFor(stateName)` directly without a schema
+  change — `colorFor()` already accepts any string.
 
 ## Carry-over notes for later phases (Phase 5 additions)
 
@@ -407,15 +541,7 @@ binding maps into the existing `layout/persist.ts` v2 → v3 bump.
   `tokens.css` (`--plot-1..8`) hold the same 8 hex values in two
   systems. Keep them in sync if either changes; unification is not
   worth the indirection cost.
-- **Drawer row primitive duplication (Phases 2/3/4)**: `SourcesDrawer`,
-  `ChannelsDrawer`, and `LayoutDrawer` each duplicate the `.row` /
-  `.rowActive` / `.swatch` / `.kind` rule set locally per the explicit
-  rule-of-three deferral first noted in Phase 2 STATUS. With three
-  copies now live (Phase 4 takes the count to three for `.row` /
-  `.rowActive` / `.kind` / 8×8 swatch — though LayoutDrawer's rows
-  carry no swatch), Phase 5's PanelDrawer would push to four. Lift the
-  shared primitive to `apps/web/src/shell/drawers/_row.module.css`
-  (or a `<DrawerRow>` component if the markup also stabilises) at the
-  start of Phase 5 before duplicating again. Keep the orange-active
-  border-left + rounded right corners exactly as-is; the visual is
-  consistent across all three current drawers.
+- **Drawer row primitive duplication (Phases 2/3/4)**: lifted in
+  Phase 5 to `apps/web/src/shell/drawers/_row.module.css`. Sources,
+  Channels, Layout, Panel, and the four Phase 6 PanelDrawer bodies all
+  `composes: rowBase` from this primitive. Carry-over resolved.

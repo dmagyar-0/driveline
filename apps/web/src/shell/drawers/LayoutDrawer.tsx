@@ -30,25 +30,31 @@ interface Props {
   addVideoPanel: () => void;
   /** Mints a new plot panel. Same indirection as `addVideoPanel`. */
   addPlotPanel: () => void;
+  /** Phase 6 · mints a 3D scene panel. */
+  addScenePanel: () => void;
+  /** Phase 6 · mints a map panel. */
+  addMapPanel: () => void;
+  /** Phase 6 · mints a table panel. */
+  addTablePanel: () => void;
+  /** Phase 6 · mints an enum strip panel. */
+  addEnumPanel: () => void;
   /** Resets the FlexLayout model to the default split. */
   resetLayout: () => void;
 }
 
-interface DisabledKindRow {
+interface AddRow {
   label: string;
   testid: string;
+  onClick: () => void;
 }
-
-const PHASE_6_KINDS: readonly DisabledKindRow[] = [
-  { label: "+ 3D scene", testid: "add-scene-panel-disabled" },
-  { label: "+ map", testid: "add-map-panel-disabled" },
-  { label: "+ table", testid: "add-table-panel-disabled" },
-  { label: "+ enum", testid: "add-enum-panel-disabled" },
-];
 
 export function LayoutDrawer({
   addVideoPanel,
   addPlotPanel,
+  addScenePanel,
+  addMapPanel,
+  addTablePanel,
+  addEnumPanel,
   resetLayout,
 }: Props) {
   const layoutJson = useSession((st) => st.layoutJson);
@@ -204,37 +210,24 @@ export function LayoutDrawer({
         </div>
 
         <ul className={s.addList} data-testid="layout-add-list">
-          <li>
-            <button
-              type="button"
-              className={s.addRow}
-              onClick={addVideoPanel}
-              data-testid="add-video-panel"
-            >
-              + video
-            </button>
-          </li>
-          <li>
-            <button
-              type="button"
-              className={s.addRow}
-              onClick={addPlotPanel}
-              data-testid="add-plot-panel"
-            >
-              + plot
-            </button>
-          </li>
-          {PHASE_6_KINDS.map((k) => (
-            <li key={k.testid}>
+          {(
+            [
+              { label: "+ video", testid: "add-video-panel", onClick: addVideoPanel },
+              { label: "+ plot", testid: "add-plot-panel", onClick: addPlotPanel },
+              { label: "+ 3D scene", testid: "add-scene-panel", onClick: addScenePanel },
+              { label: "+ map", testid: "add-map-panel", onClick: addMapPanel },
+              { label: "+ table", testid: "add-table-panel", onClick: addTablePanel },
+              { label: "+ enum", testid: "add-enum-panel", onClick: addEnumPanel },
+            ] as readonly AddRow[]
+          ).map((row) => (
+            <li key={row.testid}>
               <button
                 type="button"
                 className={s.addRow}
-                aria-disabled="true"
-                title="Available in Phase 6"
-                onClick={(e) => e.preventDefault()}
-                data-testid={k.testid}
+                onClick={row.onClick}
+                data-testid={row.testid}
               >
-                {k.label}
+                {row.label}
               </button>
             </li>
           ))}

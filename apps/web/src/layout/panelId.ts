@@ -1,20 +1,35 @@
-// Phase 3 · Panel-id convention.
+// Phase 3 · Panel-id convention. Phase 6 extended the discriminator to
+// the four new panel kinds (scene / map / table / enum).
 //
 // Panel ids are minted in `Workspace.tsx` as `${prefix}-${uuid}` with
-// `prefix` ∈ {"plot", "video"}. Centralising the prefix and the
-// discriminator here lets drawers identify a panel's kind from its id
-// alone, without parsing the FlexLayout JSON model on every click.
-// `Workspace.tsx` consumes the same constants when minting ids so the
-// two stay in lockstep.
+// `prefix` ∈ {plot, video, scene, map, table, enum}. Centralising the
+// prefix and the discriminator here lets drawers identify a panel's
+// kind from its id alone, without parsing the FlexLayout JSON model on
+// every click. `Workspace.tsx` consumes the same constants when minting
+// ids so the two stay in lockstep.
 
 export const PLOT_PREFIX = "plot";
 export const VIDEO_PREFIX = "video";
+export const SCENE_PREFIX = "scene";
+export const MAP_PREFIX = "map";
+export const TABLE_PREFIX = "table";
+export const ENUM_PREFIX = "enum";
 
-export type PanelKind = "plot" | "video";
+export type PanelKind =
+  | "plot"
+  | "video"
+  | "scene"
+  | "map"
+  | "table"
+  | "enum";
 
 export function panelKindOf(id: string): PanelKind | null {
   if (id.startsWith(`${PLOT_PREFIX}-`)) return "plot";
   if (id.startsWith(`${VIDEO_PREFIX}-`)) return "video";
+  if (id.startsWith(`${SCENE_PREFIX}-`)) return "scene";
+  if (id.startsWith(`${MAP_PREFIX}-`)) return "map";
+  if (id.startsWith(`${TABLE_PREFIX}-`)) return "table";
+  if (id.startsWith(`${ENUM_PREFIX}-`)) return "enum";
   return null;
 }
 

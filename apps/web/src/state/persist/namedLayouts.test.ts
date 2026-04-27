@@ -34,11 +34,17 @@ const SAMPLE_LAYOUT: NamedLayout = {
   layoutJson: { layout: { type: "row", weight: 100, children: [] } },
   videoBindings: { "video-1": "/cam/front" },
   plotBindings: { "plot-1": ["/vehicle/speed"] },
+  sceneBindings: { "scene-1": null },
+  mapBindings: {
+    "map-1": { latChannelId: "/gps/lat", lonChannelId: "/gps/lon" },
+  },
+  tableBindings: { "table-1": ["/vehicle/speed"] },
+  enumBindings: { "enum-1": "/state/gear" },
   createdAt: 1_700_000_000_000,
 };
 
 const SAMPLE: PersistedNamedLayouts = {
-  version: 1,
+  version: 2,
   layouts: [SAMPLE_LAYOUT],
   activeNamedLayoutId: "uuid-default",
 };
@@ -64,34 +70,12 @@ describe("namedLayouts persist", () => {
     const s = makeStorage();
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 2 }),
+      JSON.stringify({ ...SAMPLE, version: 3 }),
     );
     expect(loadNamedLayoutsFromStorage(s)).toBeNull();
   });
 
-  it("returns null when layouts is not an array", () => {
-    const s = makeStorage();
-    s.setItem(
-      NAMED_LAYOUTS_STORAGE_KEY,
-      JSON.stringify({ version: 1, layouts: {}, activeNamedLayoutId: null }),
-    );
-    expect(loadNamedLayoutsFromStorage(s)).toBeNull();
-  });
-
-  it("returns null when an entry is missing required fields", () => {
-    const s = makeStorage();
-    s.setItem(
-      NAMED_LAYOUTS_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        layouts: [{ id: "x", name: "x" }], // missing bindings, createdAt
-        activeNamedLayoutId: null,
-      }),
-    );
-    expect(loadNamedLayoutsFromStorage(s)).toBeNull();
-  });
-
-  it("returns null when bindings have wrong shape", () => {
+  it("returns null for legacy v1 payloads (Phase 6 schema bump)", () => {
     const s = makeStorage();
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
@@ -102,8 +86,82 @@ describe("namedLayouts persist", () => {
             id: "x",
             name: "x",
             layoutJson: null,
+            videoBindings: {},
+            plotBindings: {},
+            createdAt: 0,
+          },
+        ],
+        activeNamedLayoutId: null,
+      }),
+    );
+    expect(loadNamedLayoutsFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when layouts is not an array", () => {
+    const s = makeStorage();
+    s.setItem(
+      NAMED_LAYOUTS_STORAGE_KEY,
+      JSON.stringify({ version: 2, layouts: {}, activeNamedLayoutId: null }),
+    );
+    expect(loadNamedLayoutsFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when an entry is missing required fields", () => {
+    const s = makeStorage();
+    s.setItem(
+      NAMED_LAYOUTS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layouts: [{ id: "x", name: "x" }], // missing bindings, createdAt
+        activeNamedLayoutId: null,
+      }),
+    );
+    expect(loadNamedLayoutsFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when video bindings have wrong shape", () => {
+    const s = makeStorage();
+    s.setItem(
+      NAMED_LAYOUTS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layouts: [
+          {
+            id: "x",
+            name: "x",
+            layoutJson: null,
             videoBindings: { "video-1": 123 },
             plotBindings: {},
+            sceneBindings: {},
+            mapBindings: {},
+            tableBindings: {},
+            enumBindings: {},
+            createdAt: 0,
+          },
+        ],
+        activeNamedLayoutId: null,
+      }),
+    );
+    expect(loadNamedLayoutsFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when a Phase 6 binding map is missing", () => {
+    const s = makeStorage();
+    s.setItem(
+      NAMED_LAYOUTS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layouts: [
+          {
+            id: "x",
+            name: "x",
+            layoutJson: null,
+            videoBindings: {},
+            plotBindings: {},
+            sceneBindings: {},
+            mapBindings: {},
+            tableBindings: {},
+            // enumBindings missing
             createdAt: 0,
           },
         ],
@@ -127,7 +185,7 @@ describe("namedLayouts persist", () => {
   it("accepts an explicitly null layoutJson on a saved entry", () => {
     const s = makeStorage();
     const payload: PersistedNamedLayouts = {
-      version: 1,
+      version: 2,
       layouts: [{ ...SAMPLE_LAYOUT, layoutJson: null }],
       activeNamedLayoutId: SAMPLE_LAYOUT.id,
     };
@@ -143,7 +201,7 @@ describe("namedLayouts persist", () => {
   it("accepts an empty layouts array", () => {
     const s = makeStorage();
     const empty: PersistedNamedLayouts = {
-      version: 1,
+      version: 2,
       layouts: [],
       activeNamedLayoutId: null,
     };
@@ -195,7 +253,7 @@ describe("attachNamedLayoutsPersistence", () => {
       activeNamedLayoutId: SAMPLE_LAYOUT.id,
     });
     expect(loadNamedLayoutsFromStorage(s)).toEqual({
-      version: 1,
+      version: 2,
       layouts: [SAMPLE_LAYOUT],
       activeNamedLayoutId: SAMPLE_LAYOUT.id,
     });

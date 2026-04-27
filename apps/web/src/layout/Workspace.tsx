@@ -31,17 +31,32 @@ import {
 import "flexlayout-react/style/dark.css";
 import { useSession } from "../state/store";
 import {
+  PANEL_COMPONENT_ENUM,
+  PANEL_COMPONENT_MAP,
   PANEL_COMPONENT_PLOT,
+  PANEL_COMPONENT_SCENE,
+  PANEL_COMPONENT_TABLE,
   PANEL_COMPONENT_VIDEO,
   defaultLayoutModel,
 } from "./defaultLayout";
 import { panelFactory } from "./panelFactory";
-import { PLOT_PREFIX, VIDEO_PREFIX } from "./panelId";
+import {
+  ENUM_PREFIX,
+  MAP_PREFIX,
+  PLOT_PREFIX,
+  SCENE_PREFIX,
+  TABLE_PREFIX,
+  VIDEO_PREFIX,
+} from "./panelId";
 import styles from "./Workspace.module.css";
 
 export interface WorkspaceHandle {
   addVideoPanel(channelId?: string): string | undefined;
   addPlotPanel(): string | undefined;
+  addScenePanel(): string | undefined;
+  addMapPanel(): string | undefined;
+  addTablePanel(): string | undefined;
+  addEnumPanel(): string | undefined;
   resetLayout(): void;
 }
 
@@ -163,14 +178,70 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
     });
   }, [addTab]);
 
+  const addScenePanel = useCallback(() => {
+    const id = newPanelId(SCENE_PREFIX);
+    return addTab({
+      type: "tab",
+      id,
+      name: "Scene",
+      component: PANEL_COMPONENT_SCENE,
+    });
+  }, [addTab]);
+
+  const addMapPanel = useCallback(() => {
+    const id = newPanelId(MAP_PREFIX);
+    return addTab({
+      type: "tab",
+      id,
+      name: "Map",
+      component: PANEL_COMPONENT_MAP,
+    });
+  }, [addTab]);
+
+  const addTablePanel = useCallback(() => {
+    const id = newPanelId(TABLE_PREFIX);
+    return addTab({
+      type: "tab",
+      id,
+      name: "Table",
+      component: PANEL_COMPONENT_TABLE,
+    });
+  }, [addTab]);
+
+  const addEnumPanel = useCallback(() => {
+    const id = newPanelId(ENUM_PREFIX);
+    return addTab({
+      type: "tab",
+      id,
+      name: "Enum",
+      component: PANEL_COMPONENT_ENUM,
+    });
+  }, [addTab]);
+
   const resetLayout = useCallback(() => {
     setLayoutJson(null);
   }, [setLayoutJson]);
 
   useImperativeHandle(
     ref,
-    () => ({ addVideoPanel, addPlotPanel, resetLayout }),
-    [addVideoPanel, addPlotPanel, resetLayout],
+    () => ({
+      addVideoPanel,
+      addPlotPanel,
+      addScenePanel,
+      addMapPanel,
+      addTablePanel,
+      addEnumPanel,
+      resetLayout,
+    }),
+    [
+      addVideoPanel,
+      addPlotPanel,
+      addScenePanel,
+      addMapPanel,
+      addTablePanel,
+      addEnumPanel,
+      resetLayout,
+    ],
   );
 
   // If the user has somehow closed every tab (FlexLayout does allow an

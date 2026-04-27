@@ -17,7 +17,10 @@ import type { Remote } from "comlink";
 import { create } from "zustand";
 import { bucketFiles, type BucketError } from "./bucket";
 import { MAX_PLOT_SERIES } from "../panels/palette";
-import { loadLayoutFromStorage } from "../layout/persist";
+import {
+  loadLayoutFromStorage,
+  type MapBinding,
+} from "../layout/persist";
 import { loadUiFromStorage, type RailTab } from "./persist/ui";
 import {
   loadNamedLayoutsFromStorage,
@@ -88,6 +91,13 @@ export interface SessionState {
   // the panel. Persisted via the layout adapter (schema v2). Default
   // `false` for any panelId not present in the map.
   videoHudOn: Record<string, boolean>;
+  // Phase 6 · per-panel bindings for the four new panel kinds. Each
+  // round-trips through layout persistence (v3) so a reload restores the
+  // full panel set. `clear()` resets all four maps.
+  sceneBindings: Record<string, string | null>;
+  mapBindings: Record<string, MapBinding | null>;
+  tableBindings: Record<string, string[]>;
+  enumBindings: Record<string, string | null>;
   // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
   // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
   // panel-chrome work in Phase 7.
@@ -141,6 +151,18 @@ export interface SessionState {
   addPlotChannel(panelId: string, channelId: string): void;
   /** Remove one channel from a plot panel (no-op if absent). */
   removePlotChannel(panelId: string, channelId: string): void;
+  /** Bind a 3D scene panel to a single channel; `null` clears. */
+  setSceneBinding(panelId: string, channelId: string | null): void;
+  /** Bind a map panel to lat/lon channels; pass `null` to clear. */
+  setMapBinding(panelId: string, binding: MapBinding | null): void;
+  /** Replace a table panel's bound channels wholesale (capped, deduped). */
+  setTableBinding(panelId: string, ids: string[]): void;
+  /** Append one channel to a table panel (no-op if present or at cap). */
+  addTableChannel(panelId: string, channelId: string): void;
+  /** Remove one channel from a table panel (no-op if absent). */
+  removeTableChannel(panelId: string, channelId: string): void;
+  /** Bind an enum strip panel to a single channel; `null` clears. */
+  setEnumBinding(panelId: string, channelId: string | null): void;
   /** Switch the rail's open drawer; pass `null` to close. */
   setActiveRailTab(tab: RailTab | null): void;
   /** Hide / show the entire rail column. */
@@ -272,6 +294,10 @@ export const useSession = create<SessionState>((set, get) => {
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
     videoHudOn: hydrated?.videoHudOn ?? {},
+    sceneBindings: hydrated?.sceneBindings ?? {},
+    mapBindings: hydrated?.mapBindings ?? {},
+    tableBindings: hydrated?.tableBindings ?? {},
+    enumBindings: hydrated?.enumBindings ?? {},
     activeRailTab: hydratedUi?.activeRailTab ?? null,
     railCollapsed: hydratedUi?.railCollapsed ?? false,
     selectedPanelId: null,
@@ -382,6 +408,70 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
+    setSceneBinding(panelId, channelId) {
+      const prev = get().sceneBindings;
+      if ((prev[panelId] ?? null) === channelId) return;
+      set({ sceneBindings: { ...prev, [panelId]: channelId } });
+    },
+
+    setMapBinding(panelId, binding) {
+      const prev = get().mapBindings;
+      const cur = prev[panelId] ?? null;
+      // Deep-equal short-circuit so re-binding the same lat/lon pair is
+      // a no-op (avoids spurious persistence writes from the drawer's
+      // double-bind path).
+      if (
+        cur === binding ||
+        (cur !== null &&
+          binding !== null &&
+          cur.latChannelId === binding.latChannelId &&
+          cur.lonChannelId === binding.lonChannelId)
+      ) {
+        return;
+      }
+      set({ mapBindings: { ...prev, [panelId]: binding } });
+    },
+
+    setTableBinding(panelId, ids) {
+      const seen = new Set<string>();
+      const next: string[] = [];
+      for (const id of ids) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        next.push(id);
+        if (next.length >= MAX_PLOT_SERIES) break;
+      }
+      set({ tableBindings: { ...get().tableBindings, [panelId]: next } });
+    },
+
+    addTableChannel(panelId, channelId) {
+      const prev = get().tableBindings;
+      const existing = prev[panelId] ?? [];
+      if (existing.includes(channelId)) return;
+      if (existing.length >= MAX_PLOT_SERIES) return;
+      set({
+        tableBindings: { ...prev, [panelId]: [...existing, channelId] },
+      });
+    },
+
+    removeTableChannel(panelId, channelId) {
+      const prev = get().tableBindings;
+      const existing = prev[panelId];
+      if (!existing || !existing.includes(channelId)) return;
+      set({
+        tableBindings: {
+          ...prev,
+          [panelId]: existing.filter((x) => x !== channelId),
+        },
+      });
+    },
+
+    setEnumBinding(panelId, channelId) {
+      const prev = get().enumBindings;
+      if ((prev[panelId] ?? null) === channelId) return;
+      set({ enumBindings: { ...prev, [panelId]: channelId } });
+    },
+
     setActiveRailTab(tab) {
       if (get().activeRailTab === tab) return;
       set({ activeRailTab: tab });
@@ -402,13 +492,26 @@ export const useSession = create<SessionState>((set, get) => {
         typeof crypto !== "undefined" && "randomUUID" in crypto
           ? crypto.randomUUID()
           : `nl-${Math.random().toString(36).slice(2)}`;
-      const { layoutJson, videoBindings, plotBindings, namedLayouts } = get();
+      const {
+        layoutJson,
+        videoBindings,
+        plotBindings,
+        sceneBindings,
+        mapBindings,
+        tableBindings,
+        enumBindings,
+        namedLayouts,
+      } = get();
       const entry: NamedLayout = {
         id,
         name,
         layoutJson,
         videoBindings: { ...videoBindings },
         plotBindings: { ...plotBindings },
+        sceneBindings: { ...sceneBindings },
+        mapBindings: { ...mapBindings },
+        tableBindings: { ...tableBindings },
+        enumBindings: { ...enumBindings },
         createdAt: Date.now(),
       };
       set({
@@ -429,6 +532,10 @@ export const useSession = create<SessionState>((set, get) => {
         layoutJson: entry.layoutJson,
         videoBindings: { ...entry.videoBindings },
         plotBindings: { ...entry.plotBindings },
+        sceneBindings: { ...entry.sceneBindings },
+        mapBindings: { ...entry.mapBindings },
+        tableBindings: { ...entry.tableBindings },
+        enumBindings: { ...entry.enumBindings },
         activeNamedLayoutId: id,
       });
     },
@@ -623,6 +730,10 @@ export const useSession = create<SessionState>((set, get) => {
           videoBindings: {},
           plotBindings: {},
           videoHudOn: {},
+          sceneBindings: {},
+          mapBindings: {},
+          tableBindings: {},
+          enumBindings: {},
         });
       };
       const next = pending.then(run, run);
