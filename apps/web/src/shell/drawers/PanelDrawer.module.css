@@ -1,8 +1,27 @@
-/* Inner content for the Layout drawer. The 220px wrapper, padding,
- * scroll behaviour, and gap come from `Drawer.module.css:.drawer`.
- * Row / active primitives `composes:` from `_row.module.css` (Phase
- * 5a). LayoutDrawer rows do not carry a swatch — `grid-template-columns`
- * is the local override. */
+/* Phase 5 · Panel drawer styling. Row primitive composes from
+ * `_row.module.css`; the rest is local (sections, header subtitle,
+ * toggle pills, codec label). */
+
+.kindPill {
+  display: inline-block;
+  padding: 0 var(--sp-3);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  line-height: 1.6;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--color-fg-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .section {
   display: flex;
@@ -10,7 +29,22 @@
   gap: var(--sp-3);
 }
 
-.pill {
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--color-fg-3);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.countPill {
   display: inline-block;
   padding: 0 var(--sp-3);
   min-width: 20px;
@@ -42,29 +76,20 @@
 
 .row {
   composes: rowBase from "./_row.module.css";
-  grid-template-columns: 1fr auto;
-  gap: var(--sp-3);
-  font-size: var(--fs-13);
+  grid-template-columns: 8px 1fr;
+  gap: var(--sp-4);
+  cursor: default;
 }
 
-.rowActive {
-  composes: rowActive from "./_row.module.css";
+.swatch {
+  composes: swatch from "./_row.module.css";
 }
 
 .name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.liveTag {
-  font-size: var(--fs-11);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--color-fg-5);
-  padding: 0 var(--sp-3);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-3);
+  font-size: var(--fs-13);
 }
 
 .removeBtn {
@@ -130,111 +155,81 @@
   color: var(--color-fg-6);
 }
 
-.addList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-
-.resetRow {
-  composes: addRow;
-  color: var(--color-fg-5);
-  border-style: solid;
-  margin-top: var(--sp-2);
-}
-
-.savePending {
+.toggle {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: var(--sp-2);
+  grid-template-columns: 1fr auto;
   align-items: center;
-}
-
-.nameInput {
+  gap: var(--sp-3);
   width: 100%;
-  background: var(--color-bg-5);
-  color: var(--color-fg-2);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--color-bg-4);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-3);
-  padding: var(--sp-3) var(--sp-4);
+  color: var(--color-fg-2);
+  cursor: pointer;
   font: inherit;
   font-size: var(--fs-13);
-  transition: border-color var(--motion-base);
+  text-align: left;
+  transition: border-color var(--motion-base), background var(--motion-base);
 }
 
-.nameInput::placeholder {
+.toggle:hover {
+  border-color: var(--color-border-hover);
+}
+
+.toggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.toggleOn {
+  background: var(--color-bg-5);
+  border-color: var(--color-accent-orange);
+}
+
+.toggleState {
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-3);
+}
+
+.toggleOn .toggleState {
+  color: var(--color-accent-orange);
+}
+
+.toggleDisabled {
+  cursor: not-allowed;
   color: var(--color-fg-6);
 }
 
-.nameInput:hover {
-  border-color: var(--color-border-hover);
+.toggleDisabled:hover {
+  border-color: var(--color-border-subtle);
 }
 
-.nameInput:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.saveBtn {
-  background: var(--color-bg-4);
+.codec {
+  margin: 0;
+  font-size: var(--fs-13);
   color: var(--color-fg-2);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-3);
-  padding: var(--sp-3) var(--sp-4);
-  cursor: pointer;
-  font: inherit;
-  font-size: var(--fs-12);
-}
-
-.saveBtn:hover {
-  background: var(--color-bg-6);
-  border-color: var(--color-border-hover);
-}
-
-.saveBtn:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.cancelBtn {
-  background: transparent;
-  color: var(--color-fg-5);
-  border: 0;
-  cursor: pointer;
-  font-size: var(--fs-14);
-  padding: var(--sp-2) var(--sp-3);
-  border-radius: var(--radius-3);
-}
-
-.cancelBtn:hover {
-  background: var(--color-bg-5);
-  color: var(--color-fg-2);
-}
-
-.cancelBtn:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.separator {
-  border: 0;
-  border-top: 1px solid var(--color-border-subtle);
-  margin: var(--sp-3) 0;
-  width: 100%;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
 }
 
 .empty {
   font-size: var(--fs-12);
   color: var(--color-fg-6);
+  margin: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .addRow,
   .removeBtn,
-  .nameInput {
+  .addRow,
+  .toggle {
     transition: none;
   }
 }

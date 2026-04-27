@@ -83,6 +83,11 @@ export interface SessionState {
   layoutJson: unknown | null;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
+  // Per-video-panel HUD overlay bit (Phase 5). Lifted out of
+  // `VideoPanel` local state so the Panel drawer can flip it from outside
+  // the panel. Persisted via the layout adapter (schema v2). Default
+  // `false` for any panelId not present in the map.
+  videoHudOn: Record<string, boolean>;
   // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
   // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
   // panel-chrome work in Phase 7.
@@ -126,6 +131,10 @@ export interface SessionState {
   setLayoutJson(json: unknown | null): void;
   /** Bind a video panel to a channel, or `null` to clear. */
   setVideoBinding(panelId: string, channelId: string | null): void;
+  /** Set a video panel's HUD overlay bit. */
+  setVideoHudOn(panelId: string, on: boolean): void;
+  /** Toggle a video panel's HUD overlay bit (default false → true). */
+  toggleVideoHudOn(panelId: string): void;
   /** Replace a plot panel's bound channels wholesale (capped, deduped). */
   setPlotBinding(panelId: string, ids: string[]): void;
   /** Append one channel to a plot panel (no-op if present or at cap). */
@@ -262,6 +271,7 @@ export const useSession = create<SessionState>((set, get) => {
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
+    videoHudOn: hydrated?.videoHudOn ?? {},
     activeRailTab: hydratedUi?.activeRailTab ?? null,
     railCollapsed: hydratedUi?.railCollapsed ?? false,
     selectedPanelId: null,
@@ -323,6 +333,19 @@ export const useSession = create<SessionState>((set, get) => {
       const prev = get().videoBindings;
       if (prev[panelId] === channelId) return;
       set({ videoBindings: { ...prev, [panelId]: channelId } });
+    },
+
+    setVideoHudOn(panelId, on) {
+      const prev = get().videoHudOn;
+      const cur = prev[panelId] ?? false;
+      if (cur === on) return;
+      set({ videoHudOn: { ...prev, [panelId]: on } });
+    },
+
+    toggleVideoHudOn(panelId) {
+      const prev = get().videoHudOn;
+      const cur = prev[panelId] ?? false;
+      set({ videoHudOn: { ...prev, [panelId]: !cur } });
     },
 
     setPlotBinding(panelId, ids) {
@@ -599,6 +622,7 @@ export const useSession = create<SessionState>((set, get) => {
           speed: 1,
           videoBindings: {},
           plotBindings: {},
+          videoHudOn: {},
         });
       };
       const next = pending.then(run, run);

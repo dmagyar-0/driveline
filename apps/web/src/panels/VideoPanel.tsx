@@ -11,7 +11,7 @@
 // blit queue, dropped frames, codec) and guards that skip seeks that
 // duplicate the open target or the last-issued target.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
@@ -23,6 +23,9 @@ interface VideoPanelProps {
   sourceKind: "mcap" | "mp4";
   sourceHandle: number;
   channelId: string;
+  /** FlexLayout panel id — keys per-panel UI state in the store
+   *  (HUD overlay bit, future per-panel toggles). */
+  panelId: string;
 }
 
 interface QueueEntry {
@@ -64,6 +67,7 @@ export function VideoPanel({
   sourceKind,
   sourceHandle,
   channelId,
+  panelId,
 }: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const queueRef = useRef<QueueEntry[]>([]);
@@ -90,8 +94,14 @@ export function VideoPanel({
   // mount when the cursor equals `globalRange.startNs`.
   const lastSeekTargetRef = useRef<bigint | null>(null);
 
-  const [hudOn, setHudOn] = useState<boolean>(false);
+  // Phase 5: HUD bit lives in the store (`videoHudOn[panelId]`) so the
+  // Panel drawer can flip it from outside the panel. The local ref stays
+  // — the rAF loop reads it every tick to decide whether to repaint the
+  // HUD textContent without rerendering the React tree.
+  const hudOn = useSession((s) => s.videoHudOn[panelId] ?? false);
   hudOnRef.current = hudOn;
+  const toggleHud = () =>
+    useSession.getState().toggleVideoHudOn(panelId);
 
   const cursorNs = useSession((s) => s.cursorNs);
   const globalRange = useSession((s) => s.globalRange);
@@ -305,7 +315,7 @@ export function VideoPanel({
     if (e.key !== "h" && e.key !== "H") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     e.preventDefault();
-    setHudOn((v) => !v);
+    toggleHud();
   };
 
   return (
@@ -320,7 +330,7 @@ export function VideoPanel({
         data-testid="video-hud-toggle"
         className={styles.hudToggle}
         aria-pressed={hudOn}
-        onClick={() => setHudOn((v) => !v)}
+        onClick={toggleHud}
       >
         HUD
       </button>

@@ -1,0 +1,59 @@
+/* Phase 5 · Shared drawer row primitive.
+ *
+ * The Sources, Channels, Layout, and Panel drawers all render a list of
+ * clickable rows with the same visual chrome: transparent left-border
+ * that turns orange when the row is active, hover/focus background,
+ * `font: inherit`, etc. The rule-of-three carry-over from Phase 4
+ * STATUS.md says: lift this primitive before PanelDrawer becomes the
+ * fourth duplicate.
+ *
+ * `grid-template-columns`, `gap`, and `font-size` deliberately stay in
+ * each drawer's local module — Sources and Channels use
+ * `8px 1fr auto`, Layout uses `1fr auto`, and the row's swatch is only
+ * present where a per-id colour exists. Each drawer's `.row` rule
+ * `composes: rowBase from "./_row.module.css";` and overrides those
+ * three properties locally. */
+
+.rowBase {
+  display: grid;
+  align-items: center;
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--color-fg-2);
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--radius-4);
+  transition: background var(--motion-base);
+  font: inherit;
+}
+
+.rowBase:hover {
+  background: var(--color-bg-5);
+}
+
+.rowBase:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.rowActive {
+  background: var(--color-bg-4);
+  border-left-color: var(--color-accent-orange);
+  border-radius: 0 var(--radius-4) var(--radius-4) 0;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-2);
+  display: inline-block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rowBase {
+    transition: none;
+  }
+}

@@ -10,20 +10,26 @@
 // back to the default layout. Bumping the version means bumping the key
 // too so stale v1 payloads don't collide with future reads.
 //
+// Phase 5 bumped to v2 to add `videoHudOn` (per-panel HUD overlay bit
+// lifted out of `VideoPanel` local state). v1 payloads return `null` from
+// `validate()`, which intentionally drops the user's old layout/bindings
+// — acceptable per the existing fail-closed posture; pre-v1 app stage.
+//
 // `attachLayoutPersistence` wires the Zustand subscribe → Storage write
 // loop; the first post-hydration fire is skipped so we don't rewrite the
 // exact payload we just loaded.
 
 import type { useSession } from "../state/store";
 
-export const LAYOUT_STORAGE_KEY = "driveline.layout.v1";
-export const LAYOUT_SCHEMA_VERSION = 1 as const;
+export const LAYOUT_STORAGE_KEY = "driveline.layout.v2";
+export const LAYOUT_SCHEMA_VERSION = 2 as const;
 
 export interface PersistedLayout {
   version: typeof LAYOUT_SCHEMA_VERSION;
   layoutJson: unknown | null;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
+  videoHudOn: Record<string, boolean>;
 }
 
 function defaultStorage(): Storage | undefined {
@@ -43,7 +49,9 @@ function validate(raw: unknown): PersistedLayout | null {
   if (raw.version !== LAYOUT_SCHEMA_VERSION) return null;
   const vb = raw.videoBindings;
   const pb = raw.plotBindings;
-  if (!isPlainObject(vb) || !isPlainObject(pb)) return null;
+  const hud = raw.videoHudOn;
+  if (!isPlainObject(vb) || !isPlainObject(pb) || !isPlainObject(hud))
+    return null;
   for (const k of Object.keys(vb)) {
     const v = vb[k];
     if (v !== null && typeof v !== "string") return null;
@@ -51,11 +59,15 @@ function validate(raw: unknown): PersistedLayout | null {
   for (const k of Object.keys(pb)) {
     if (!isStringArray(pb[k])) return null;
   }
+  for (const k of Object.keys(hud)) {
+    if (typeof hud[k] !== "boolean") return null;
+  }
   return {
     version: LAYOUT_SCHEMA_VERSION,
     layoutJson: raw.layoutJson ?? null,
     videoBindings: vb as Record<string, string | null>,
     plotBindings: pb as Record<string, string[]>,
+    videoHudOn: hud as Record<string, boolean>,
   };
 }
 
@@ -98,6 +110,7 @@ export interface LayoutSlice {
   layoutJson: unknown | null;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
+  videoHudOn: Record<string, boolean>;
 }
 
 function snapshot(s: LayoutSlice): PersistedLayout {
@@ -106,6 +119,7 @@ function snapshot(s: LayoutSlice): PersistedLayout {
     layoutJson: s.layoutJson,
     videoBindings: s.videoBindings,
     plotBindings: s.plotBindings,
+    videoHudOn: s.videoHudOn,
   };
 }
 
@@ -123,7 +137,8 @@ export function attachLayoutPersistence(
     if (
       s.layoutJson === last.layoutJson &&
       s.videoBindings === last.videoBindings &&
-      s.plotBindings === last.plotBindings
+      s.plotBindings === last.plotBindings &&
+      s.videoHudOn === last.videoHudOn
     ) {
       return;
     }

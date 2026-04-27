@@ -553,13 +553,44 @@ describe("layout + bindings (T6.2)", () => {
     useSession.getState().setLayoutJson(model);
     useSession.getState().setVideoBinding("video-1", "/cam");
     useSession.getState().addPlotChannel("plot-1", "/a");
+    useSession.getState().setVideoHudOn("video-1", true);
 
     await useSession.getState().clear();
     const s = useSession.getState();
     expect(s.videoBindings).toEqual({});
     expect(s.plotBindings).toEqual({});
+    expect(s.videoHudOn).toEqual({});
     // layout survives
     expect(s.layoutJson).toBe(model);
+  });
+
+  it("setVideoHudOn sets per-panel without touching siblings", () => {
+    useSession.getState().setVideoHudOn("video-1", true);
+    expect(useSession.getState().videoHudOn).toEqual({ "video-1": true });
+    useSession.getState().setVideoHudOn("video-2", true);
+    expect(useSession.getState().videoHudOn).toEqual({
+      "video-1": true,
+      "video-2": true,
+    });
+    useSession.getState().setVideoHudOn("video-1", false);
+    expect(useSession.getState().videoHudOn).toEqual({
+      "video-1": false,
+      "video-2": true,
+    });
+  });
+
+  it("setVideoHudOn is a no-op when the bit already matches", () => {
+    useSession.getState().setVideoHudOn("video-1", true);
+    const before = useSession.getState().videoHudOn;
+    useSession.getState().setVideoHudOn("video-1", true);
+    expect(useSession.getState().videoHudOn).toBe(before);
+  });
+
+  it("toggleVideoHudOn flips the bit, defaulting absent panels to true", () => {
+    useSession.getState().toggleVideoHudOn("video-1");
+    expect(useSession.getState().videoHudOn["video-1"]).toBe(true);
+    useSession.getState().toggleVideoHudOn("video-1");
+    expect(useSession.getState().videoHudOn["video-1"]).toBe(false);
   });
 });
 

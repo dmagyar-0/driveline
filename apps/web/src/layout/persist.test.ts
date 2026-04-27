@@ -28,12 +28,13 @@ function makeStorage(): Storage {
 }
 
 const SAMPLE: PersistedLayout = {
-  version: 1,
+  version: 2,
   layoutJson: {
     layout: { type: "row", weight: 100, children: [] },
   },
   videoBindings: { "video-1": "/cam/front", "video-2": null },
   plotBindings: { "plot-1": ["/vehicle/speed", "/vehicle/rpm"] },
+  videoHudOn: { "video-1": true },
 };
 
 describe("layout persist", () => {
@@ -58,7 +59,21 @@ describe("layout persist", () => {
     const s = makeStorage();
     s.setItem(
       LAYOUT_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 2 }),
+      JSON.stringify({ ...SAMPLE, version: 3 }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null for legacy v1 payloads (Phase 5 schema bump)", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        layoutJson: null,
+        videoBindings: {},
+        plotBindings: {},
+      }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
   });
@@ -68,10 +83,11 @@ describe("layout persist", () => {
     s.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: 2,
         layoutJson: null,
         videoBindings: { "video-1": 123 },
         plotBindings: {},
+        videoHudOn: {},
       }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
@@ -82,10 +98,40 @@ describe("layout persist", () => {
     s.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: 2,
         layoutJson: null,
         videoBindings: {},
         plotBindings: { "plot-1": ["ok", 42] },
+        videoHudOn: {},
+      }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null for non-boolean videoHudOn values", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layoutJson: null,
+        videoBindings: {},
+        plotBindings: {},
+        videoHudOn: { "video-1": "yes" },
+      }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when videoHudOn is missing entirely", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layoutJson: null,
+        videoBindings: {},
+        plotBindings: {},
       }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
@@ -99,10 +145,11 @@ describe("layout persist", () => {
   it("accepts an explicitly null layoutJson", () => {
     const s = makeStorage();
     const payload: PersistedLayout = {
-      version: 1,
+      version: 2,
       layoutJson: null,
       videoBindings: {},
       plotBindings: {},
+      videoHudOn: {},
     };
     saveLayoutToStorage(payload, s);
     expect(loadLayoutFromStorage(s)).toEqual(payload);
@@ -138,6 +185,7 @@ describe("attachLayoutPersistence", () => {
     layoutJson: null,
     videoBindings: {},
     plotBindings: {},
+    videoHudOn: {},
   };
 
   it("writes the current slice when any of the three tracked refs change", () => {
@@ -207,10 +255,27 @@ describe("attachLayoutPersistence", () => {
       layoutJson: null,
       videoBindings: {},
       plotBindings: {},
+      videoHudOn: {},
     });
     const loaded = loadLayoutFromStorage(s);
     expect(loaded).not.toBeNull();
     expect(loaded?.plotBindings).toEqual({});
+    stop();
+  });
+
+  it("writes when videoHudOn is a new object", () => {
+    const s = makeStorage();
+    const store = makeFakeStore(initialSlice);
+    const stop = attachLayoutPersistence(
+      store as unknown as typeof useSession,
+      s,
+    );
+    store.push({
+      ...initialSlice,
+      videoHudOn: { "video-1": true },
+    });
+    const loaded = loadLayoutFromStorage(s);
+    expect(loaded?.videoHudOn).toEqual({ "video-1": true });
     stop();
   });
 

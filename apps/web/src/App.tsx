@@ -140,6 +140,11 @@ declare global {
       // the Channels drawer (and, in Phase 5+, the Panel drawer).
       setSelectedPanelId: (id: string | null) => void;
       getSelectedPanelId: () => string | null;
+      // Phase 5 — read the per-panel HUD overlay bit straight from the
+      // store (decoupled from the rAF-published `__drivelineVideoHud`
+      // snapshot so persistence-survival e2e doesn't have to wait for a
+      // VideoPanel remount + republish after reload).
+      getVideoHudOn: (panelId: string) => boolean;
       // Phase 4 (Layout drawer) — drive saved-layout actions from e2e.
       // `saveCurrentLayoutAs` returns the freshly-minted id;
       // `listNamedLayouts` deliberately omits the heavy `layoutJson`
@@ -345,6 +350,8 @@ export function App() {
       setSelectedPanelId: (id) =>
         useSession.getState().setSelectedPanelId(id),
       getSelectedPanelId: () => useSession.getState().selectedPanelId,
+      getVideoHudOn: (panelId) =>
+        useSession.getState().videoHudOn[panelId] ?? false,
       saveCurrentLayoutAs: (name) =>
         useSession.getState().saveCurrentLayoutAs(name),
       restoreNamedLayout: (id) =>
