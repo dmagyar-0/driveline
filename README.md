@@ -19,6 +19,18 @@ pnpm dev                # http://localhost:5173
 
 ## Tests
 
+To run the full test suite locally — including the Playwright e2e — first
+make sure ffmpeg, the WASM bundle, the Python fixture toolchain, the
+generated MCAP/MP4 fixtures, and Playwright's chromium are all in place.
+[`scripts/setup-test-env.sh`](./scripts/setup-test-env.sh) installs every
+prerequisite (idempotent, safe to re-run):
+
+```sh
+scripts/setup-test-env.sh
+```
+
+Then:
+
 ```sh
 cargo test --workspace        # Rust unit + contract tests
 pnpm --filter web test        # JS unit + Arrow contract test
