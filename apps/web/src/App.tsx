@@ -135,6 +135,10 @@ declare global {
       setActiveRailTab: (tab: RailTab | null) => void;
       getActiveRailTab: () => RailTab | null;
       setRailCollapsed: (collapsed: boolean) => void;
+      // Phase 3 — set/read the panel marked active for click-to-bind in
+      // the Channels drawer (and, in Phase 5+, the Panel drawer).
+      setSelectedPanelId: (id: string | null) => void;
+      getSelectedPanelId: () => string | null;
     };
   }
 }
@@ -320,6 +324,9 @@ export function App() {
       getActiveRailTab: () => useSession.getState().activeRailTab,
       setRailCollapsed: (collapsed) =>
         useSession.getState().setRailCollapsed(collapsed),
+      setSelectedPanelId: (id) =>
+        useSession.getState().setSelectedPanelId(id),
+      getSelectedPanelId: () => useSession.getState().selectedPanelId,
     };
     setReady(true);
     return () => {
@@ -358,6 +365,15 @@ export function App() {
     setDragActive(false);
   };
 
+  // Phase 3 — the Channels drawer auto-adds a plot panel when the user
+  // clicks a channel with no panel selected. The drawer can't reach
+  // FlexLayout directly; App owns `workspaceRef`, so it forwards a
+  // narrow callback. `addPlotPanel` is synchronous (it mutates the
+  // FlexLayout model and returns the new tab id), so reading the id
+  // here is safe.
+  const ensurePlotPanel = (): string | null =>
+    workspaceRef.current?.addPlotPanel() ?? null;
+
   return (
     <Shell
       ready={ready}
@@ -365,6 +381,7 @@ export function App() {
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
+      ensurePlotPanel={ensurePlotPanel}
       transport={<Transport />}
     >
       <Workspace ref={workspaceRef} />
