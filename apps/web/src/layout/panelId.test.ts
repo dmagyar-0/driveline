@@ -7,9 +7,16 @@ describe("panelKindOf", () => {
     expect(panelKindOf("video-1")).toBe("video");
   });
 
+  it("recognises Phase 6 prefixes", () => {
+    expect(panelKindOf("scene-abc")).toBe("scene");
+    expect(panelKindOf("map-abc")).toBe("map");
+    expect(panelKindOf("table-abc")).toBe("table");
+    expect(panelKindOf("enum-abc")).toBe("enum");
+  });
+
   it("returns null for ids that don't carry a known prefix", () => {
-    expect(panelKindOf("scene-1")).toBeNull();
     expect(panelKindOf("plot")).toBeNull(); // missing the dash
+    expect(panelKindOf("widget-1")).toBeNull();
     expect(panelKindOf("")).toBeNull();
   });
 });

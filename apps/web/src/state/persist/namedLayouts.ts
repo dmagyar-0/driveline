@@ -1,4 +1,6 @@
-// Phase 4 · Named-layouts persistence.
+// Phase 4 · Named-layouts persistence. Phase 6 bumped to v2 to carry
+// the four new panel-kind binding maps in saved layouts so a restore
+// brings back scene/map/table/enum panels intact.
 //
 // Mirrors `state/persist/ui.ts` and `layout/persist.ts`: schema-versioned
 // JSON in a single `localStorage` key, fail-closed validation, write-on-
@@ -11,9 +13,10 @@
 // (future) bookmarks adapter no string-encoding round-trip is needed.
 
 import type { useSession } from "../store";
+import type { MapBinding } from "../../layout/persist";
 
-export const NAMED_LAYOUTS_STORAGE_KEY = "driveline.layouts.named.v1";
-export const NAMED_LAYOUTS_SCHEMA_VERSION = 1 as const;
+export const NAMED_LAYOUTS_STORAGE_KEY = "driveline.layouts.named.v2";
+export const NAMED_LAYOUTS_SCHEMA_VERSION = 2 as const;
 
 export interface NamedLayout {
   id: string;
@@ -21,6 +24,10 @@ export interface NamedLayout {
   layoutJson: unknown;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
+  sceneBindings: Record<string, string | null>;
+  mapBindings: Record<string, MapBinding | null>;
+  tableBindings: Record<string, string[]>;
+  enumBindings: Record<string, string | null>;
   createdAt: number;
 }
 
@@ -42,25 +49,39 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
-function validateBindings(
-  vb: unknown,
-  pb: unknown,
-): {
-  videoBindings: Record<string, string | null>;
-  plotBindings: Record<string, string[]>;
-} | null {
-  if (!isPlainObject(vb) || !isPlainObject(pb)) return null;
-  for (const k of Object.keys(vb)) {
-    const v = vb[k];
-    if (v !== null && typeof v !== "string") return null;
+function validateNullableStringMap(
+  v: unknown,
+): Record<string, string | null> | null {
+  if (!isPlainObject(v)) return null;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (x !== null && typeof x !== "string") return null;
   }
-  for (const k of Object.keys(pb)) {
-    if (!isStringArray(pb[k])) return null;
+  return v as Record<string, string | null>;
+}
+
+function validateStringArrayMap(
+  v: unknown,
+): Record<string, string[]> | null {
+  if (!isPlainObject(v)) return null;
+  for (const k of Object.keys(v)) {
+    if (!isStringArray(v[k])) return null;
   }
-  return {
-    videoBindings: vb as Record<string, string | null>,
-    plotBindings: pb as Record<string, string[]>,
-  };
+  return v as Record<string, string[]>;
+}
+
+function validateMapBindingMap(
+  v: unknown,
+): Record<string, MapBinding | null> | null {
+  if (!isPlainObject(v)) return null;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (x === null) continue;
+    if (!isPlainObject(x)) return null;
+    if (typeof x.latChannelId !== "string") return null;
+    if (typeof x.lonChannelId !== "string") return null;
+  }
+  return v as Record<string, MapBinding | null>;
 }
 
 function validateLayout(raw: unknown): NamedLayout | null {
@@ -70,14 +91,28 @@ function validateLayout(raw: unknown): NamedLayout | null {
   if (typeof raw.createdAt !== "number" || !Number.isFinite(raw.createdAt)) {
     return null;
   }
-  const bindings = validateBindings(raw.videoBindings, raw.plotBindings);
-  if (!bindings) return null;
+  const videoBindings = validateNullableStringMap(raw.videoBindings);
+  if (!videoBindings) return null;
+  const plotBindings = validateStringArrayMap(raw.plotBindings);
+  if (!plotBindings) return null;
+  const sceneBindings = validateNullableStringMap(raw.sceneBindings);
+  if (!sceneBindings) return null;
+  const mapBindings = validateMapBindingMap(raw.mapBindings);
+  if (!mapBindings) return null;
+  const tableBindings = validateStringArrayMap(raw.tableBindings);
+  if (!tableBindings) return null;
+  const enumBindings = validateNullableStringMap(raw.enumBindings);
+  if (!enumBindings) return null;
   return {
     id: raw.id,
     name: raw.name,
     layoutJson: raw.layoutJson ?? null,
-    videoBindings: bindings.videoBindings,
-    plotBindings: bindings.plotBindings,
+    videoBindings,
+    plotBindings,
+    sceneBindings,
+    mapBindings,
+    tableBindings,
+    enumBindings,
     createdAt: raw.createdAt,
   };
 }

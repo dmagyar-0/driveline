@@ -7,6 +7,7 @@ import type { Remote } from "comlink";
 import { useSession } from "./state/store";
 import type { OpenResult } from "./state/store";
 import type { RailTab } from "./state/persist/ui";
+import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { startPlaybackLoop } from "./timeline/playback";
@@ -86,6 +87,13 @@ declare global {
       setLayoutJson: (json: unknown | null) => void;
       addVideoPanel: (channelId?: string) => string | undefined;
       addPlotPanel: () => string | undefined;
+      // Phase 6 — mint new panel kinds. Each returns the freshly-minted
+      // tab id so e2e specs can correlate the binding flow with the
+      // panel that was just added.
+      addScenePanel: () => string | undefined;
+      addMapPanel: () => string | undefined;
+      addTablePanel: () => string | undefined;
+      addEnumPanel: () => string | undefined;
       resetLayout: () => void;
       // T6.1 — bind panels programmatically and read the per-panel
       // sync snapshot so e2e specs can assert the cross-panel
@@ -95,6 +103,24 @@ declare global {
         channelId: string | null,
       ) => void;
       addPlotChannelBinding: (panelId: string, channelId: string) => void;
+      // Phase 6 — bind new panel kinds programmatically from e2e.
+      setSceneChannelBinding: (
+        panelId: string,
+        channelId: string | null,
+      ) => void;
+      setMapChannelBinding: (
+        panelId: string,
+        binding: MapBinding | null,
+      ) => void;
+      addTableChannelBinding: (panelId: string, channelId: string) => void;
+      removeTableChannelBinding: (
+        panelId: string,
+        channelId: string,
+      ) => void;
+      setEnumChannelBinding: (
+        panelId: string,
+        channelId: string | null,
+      ) => void;
       getPlotPanelSync: (panelId: string) => {
         cursorNs: string;
         boundChannelIds: string[];
@@ -275,11 +301,25 @@ export function App() {
       addVideoPanel: (channelId) =>
         workspaceRef.current?.addVideoPanel(channelId),
       addPlotPanel: () => workspaceRef.current?.addPlotPanel(),
+      addScenePanel: () => workspaceRef.current?.addScenePanel(),
+      addMapPanel: () => workspaceRef.current?.addMapPanel(),
+      addTablePanel: () => workspaceRef.current?.addTablePanel(),
+      addEnumPanel: () => workspaceRef.current?.addEnumPanel(),
       resetLayout: () => workspaceRef.current?.resetLayout(),
       setVideoChannelBinding: (panelId, channelId) =>
         useSession.getState().setVideoBinding(panelId, channelId),
       addPlotChannelBinding: (panelId, channelId) =>
         useSession.getState().addPlotChannel(panelId, channelId),
+      setSceneChannelBinding: (panelId, channelId) =>
+        useSession.getState().setSceneBinding(panelId, channelId),
+      setMapChannelBinding: (panelId, binding) =>
+        useSession.getState().setMapBinding(panelId, binding),
+      addTableChannelBinding: (panelId, channelId) =>
+        useSession.getState().addTableChannel(panelId, channelId),
+      removeTableChannelBinding: (panelId, channelId) =>
+        useSession.getState().removeTableChannel(panelId, channelId),
+      setEnumChannelBinding: (panelId, channelId) =>
+        useSession.getState().setEnumBinding(panelId, channelId),
       getPlotPanelSync: (panelId) => {
         const snap: PlotSyncSnapshot | undefined =
           window.__drivelinePlotPanels?.[panelId];
@@ -425,6 +465,18 @@ export function App() {
   const addPlotPanel = (): void => {
     workspaceRef.current?.addPlotPanel();
   };
+  const addScenePanel = (): void => {
+    workspaceRef.current?.addScenePanel();
+  };
+  const addMapPanel = (): void => {
+    workspaceRef.current?.addMapPanel();
+  };
+  const addTablePanel = (): void => {
+    workspaceRef.current?.addTablePanel();
+  };
+  const addEnumPanel = (): void => {
+    workspaceRef.current?.addEnumPanel();
+  };
   const resetLayout = (): void => {
     workspaceRef.current?.resetLayout();
   };
@@ -439,6 +491,10 @@ export function App() {
       ensurePlotPanel={ensurePlotPanel}
       addVideoPanel={addVideoPanel}
       addPlotPanel={addPlotPanel}
+      addScenePanel={addScenePanel}
+      addMapPanel={addMapPanel}
+      addTablePanel={addTablePanel}
+      addEnumPanel={addEnumPanel}
       resetLayout={resetLayout}
       transport={<Transport />}
     >

@@ -156,4 +156,67 @@ describe("PanelDrawer", () => {
       "plot-orphan",
     );
   });
+
+  it("renders the scene body with a forward-compat callout", () => {
+    useSession.getState().setSelectedPanelId("scene-1");
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("SCENE");
+    expect(screen.getByTestId("panel-scene-status")).toBeTruthy();
+    expect(screen.getByTestId("panel-scene-add-channel")).toBeTruthy();
+  });
+
+  it("scene binding persists through setSceneBinding", () => {
+    useSession.getState().setSelectedPanelId("scene-1");
+    useSession.getState().setSceneBinding("scene-1", "chan-a");
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("panel-scene-remove-chan-a")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("panel-scene-remove-chan-a"));
+    expect(useSession.getState().sceneBindings["scene-1"]).toBeNull();
+  });
+
+  it("renders the map body with two pickers", () => {
+    useSession.getState().setSelectedPanelId("map-1");
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("MAP");
+    expect(screen.getByTestId("panel-map-pick-lat")).toBeTruthy();
+    expect(screen.getByTestId("panel-map-pick-lon")).toBeTruthy();
+  });
+
+  it("map removes both axes when either × is clicked", () => {
+    useSession.getState().setSelectedPanelId("map-1");
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "chan-a",
+      lonChannelId: "chan-a",
+    });
+    render(<PanelDrawer />);
+    fireEvent.click(screen.getByTestId("panel-map-remove-lat"));
+    expect(useSession.getState().mapBindings["map-1"]).toBeNull();
+  });
+
+  it("renders the table body and remove fires removeTableChannel", () => {
+    useSession.getState().setSelectedPanelId("table-1");
+    useSession.getState().addTableChannel("table-1", "chan-a");
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("TABLE");
+    expect(screen.getByTestId("panel-table-count").textContent).toBe(
+      "1 / 8",
+    );
+    fireEvent.click(screen.getByTestId("panel-table-remove-chan-a"));
+    expect(useSession.getState().tableBindings["table-1"]).toEqual([]);
+  });
+
+  it("renders the enum body with the bound channel and clears via ×", () => {
+    useSession.getState().setSelectedPanelId("enum-1");
+    useSession.getState().setEnumBinding("enum-1", "chan-a");
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("ENUM");
+    fireEvent.click(screen.getByTestId("panel-enum-remove-chan-a"));
+    expect(useSession.getState().enumBindings["enum-1"]).toBeNull();
+  });
+
+  it("falls back to UnknownKind for an unrecognised id prefix", () => {
+    useSession.getState().setSelectedPanelId("widget-orphan");
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("panel-drawer-unknown")).toBeTruthy();
+  });
 });

@@ -554,12 +554,23 @@ describe("layout + bindings (T6.2)", () => {
     useSession.getState().setVideoBinding("video-1", "/cam");
     useSession.getState().addPlotChannel("plot-1", "/a");
     useSession.getState().setVideoHudOn("video-1", true);
+    useSession.getState().setSceneBinding("scene-1", "/cloud");
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/gps/lat",
+      lonChannelId: "/gps/lon",
+    });
+    useSession.getState().addTableChannel("table-1", "/a");
+    useSession.getState().setEnumBinding("enum-1", "/state");
 
     await useSession.getState().clear();
     const s = useSession.getState();
     expect(s.videoBindings).toEqual({});
     expect(s.plotBindings).toEqual({});
     expect(s.videoHudOn).toEqual({});
+    expect(s.sceneBindings).toEqual({});
+    expect(s.mapBindings).toEqual({});
+    expect(s.tableBindings).toEqual({});
+    expect(s.enumBindings).toEqual({});
     // layout survives
     expect(s.layoutJson).toBe(model);
   });
@@ -703,5 +714,142 @@ describe("named layouts (Phase 4)", () => {
     const s = useSession.getState();
     expect(s.namedLayouts.map((l) => l.id)).toEqual([id]);
     expect(s.activeNamedLayoutId).toBe(id);
+  });
+
+  it("saveCurrentLayoutAs / restoreNamedLayout round-trip Phase 6 bindings", () => {
+    useSession.getState().setSceneBinding("scene-1", "/cloud");
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/gps/lat",
+      lonChannelId: "/gps/lon",
+    });
+    useSession.getState().addTableChannel("table-1", "/a");
+    useSession.getState().setEnumBinding("enum-1", "/state");
+
+    const id = useSession.getState().saveCurrentLayoutAs("phase6");
+
+    // Drift live state away.
+    useSession.getState().setSceneBinding("scene-1", null);
+    useSession.getState().setMapBinding("map-1", null);
+    useSession.getState().removeTableChannel("table-1", "/a");
+    useSession.getState().setEnumBinding("enum-1", null);
+
+    useSession.getState().restoreNamedLayout(id);
+    const s = useSession.getState();
+    expect(s.sceneBindings).toEqual({ "scene-1": "/cloud" });
+    expect(s.mapBindings).toEqual({
+      "map-1": { latChannelId: "/gps/lat", lonChannelId: "/gps/lon" },
+    });
+    expect(s.tableBindings).toEqual({ "table-1": ["/a"] });
+    expect(s.enumBindings).toEqual({ "enum-1": "/state" });
+  });
+
+  it("saveCurrentLayoutAs deep-copies Phase 6 binding maps", () => {
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/lat",
+      lonChannelId: "/lon",
+    });
+    useSession.getState().addTableChannel("table-1", "/a");
+    const id = useSession.getState().saveCurrentLayoutAs("snap");
+
+    // Mutate live; the snapshot must not see the change.
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/changed",
+      lonChannelId: "/changed",
+    });
+    useSession.getState().addTableChannel("table-1", "/b");
+
+    const entry = useSession
+      .getState()
+      .namedLayouts.find((l) => l.id === id)!;
+    expect(entry.mapBindings).toEqual({
+      "map-1": { latChannelId: "/lat", lonChannelId: "/lon" },
+    });
+    expect(entry.tableBindings).toEqual({ "table-1": ["/a"] });
+  });
+});
+
+describe("Phase 6 panel bindings", () => {
+  it("setSceneBinding sets and clears", () => {
+    useSession.getState().setSceneBinding("scene-1", "/cloud");
+    expect(useSession.getState().sceneBindings).toEqual({
+      "scene-1": "/cloud",
+    });
+    useSession.getState().setSceneBinding("scene-1", null);
+    expect(useSession.getState().sceneBindings).toEqual({ "scene-1": null });
+  });
+
+  it("setSceneBinding is a no-op when the channel id matches", () => {
+    useSession.getState().setSceneBinding("scene-1", "/cloud");
+    const before = useSession.getState().sceneBindings;
+    useSession.getState().setSceneBinding("scene-1", "/cloud");
+    expect(useSession.getState().sceneBindings).toBe(before);
+  });
+
+  it("setMapBinding round-trips lat/lon and clears via null", () => {
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/lat",
+      lonChannelId: "/lon",
+    });
+    expect(useSession.getState().mapBindings).toEqual({
+      "map-1": { latChannelId: "/lat", lonChannelId: "/lon" },
+    });
+    useSession.getState().setMapBinding("map-1", null);
+    expect(useSession.getState().mapBindings["map-1"]).toBeNull();
+  });
+
+  it("setMapBinding deep-equal short-circuits when lat/lon are unchanged", () => {
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/lat",
+      lonChannelId: "/lon",
+    });
+    const before = useSession.getState().mapBindings;
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/lat",
+      lonChannelId: "/lon",
+    });
+    expect(useSession.getState().mapBindings).toBe(before);
+  });
+
+  it("addTableChannel dedupes and caps at MAX_PLOT_SERIES (8)", () => {
+    const ids = Array.from({ length: 10 }, (_, i) => `/c${i}`);
+    for (const id of ids) useSession.getState().addTableChannel("table-1", id);
+    expect(useSession.getState().tableBindings["table-1"]).toEqual(
+      ids.slice(0, 8),
+    );
+    // Duplicate add is a no-op.
+    useSession.getState().addTableChannel("table-1", "/c0");
+    expect(useSession.getState().tableBindings["table-1"]).toEqual(
+      ids.slice(0, 8),
+    );
+  });
+
+  it("removeTableChannel filters out by id", () => {
+    useSession.getState().setTableBinding("table-1", ["/a", "/b"]);
+    useSession.getState().removeTableChannel("table-1", "/a");
+    expect(useSession.getState().tableBindings["table-1"]).toEqual(["/b"]);
+    // Removing absent id is a no-op.
+    const before = useSession.getState().tableBindings;
+    useSession.getState().removeTableChannel("table-1", "/ghost");
+    expect(useSession.getState().tableBindings).toBe(before);
+  });
+
+  it("setTableBinding dedupes and caps wholesale replace", () => {
+    useSession
+      .getState()
+      .setTableBinding("table-1", ["/a", "/a", "/b", "/c"]);
+    expect(useSession.getState().tableBindings["table-1"]).toEqual([
+      "/a",
+      "/b",
+      "/c",
+    ]);
+  });
+
+  it("setEnumBinding sets and clears", () => {
+    useSession.getState().setEnumBinding("enum-1", "/state");
+    expect(useSession.getState().enumBindings).toEqual({
+      "enum-1": "/state",
+    });
+    useSession.getState().setEnumBinding("enum-1", null);
+    expect(useSession.getState().enumBindings).toEqual({ "enum-1": null });
   });
 });

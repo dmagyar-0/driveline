@@ -28,13 +28,22 @@ function makeStorage(): Storage {
 }
 
 const SAMPLE: PersistedLayout = {
-  version: 2,
+  version: 3,
   layoutJson: {
     layout: { type: "row", weight: 100, children: [] },
   },
   videoBindings: { "video-1": "/cam/front", "video-2": null },
   plotBindings: { "plot-1": ["/vehicle/speed", "/vehicle/rpm"] },
   videoHudOn: { "video-1": true },
+  sceneBindings: { "scene-1": "/cloud/front", "scene-2": null },
+  mapBindings: {
+    "map-1": { latChannelId: "/gps/lat", lonChannelId: "/gps/lon" },
+    "map-2": null,
+  },
+  tableBindings: {
+    "table-1": ["/vehicle/speed", "/vehicle/rpm"],
+  },
+  enumBindings: { "enum-1": "/state/gear", "enum-2": null },
 };
 
 describe("layout persist", () => {
@@ -59,7 +68,7 @@ describe("layout persist", () => {
     const s = makeStorage();
     s.setItem(
       LAYOUT_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 3 }),
+      JSON.stringify({ ...SAMPLE, version: 4 }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
   });
@@ -78,16 +87,28 @@ describe("layout persist", () => {
     expect(loadLayoutFromStorage(s)).toBeNull();
   });
 
-  it("returns null when bindings have wrong shape", () => {
+  it("returns null for legacy v2 payloads (Phase 6 schema bump)", () => {
     const s = makeStorage();
     s.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({
         version: 2,
         layoutJson: null,
-        videoBindings: { "video-1": 123 },
+        videoBindings: {},
         plotBindings: {},
         videoHudOn: {},
+      }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when bindings have wrong shape", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        ...SAMPLE,
+        videoBindings: { "video-1": 123 },
       }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
@@ -98,11 +119,8 @@ describe("layout persist", () => {
     s.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
-        layoutJson: null,
-        videoBindings: {},
+        ...SAMPLE,
         plotBindings: { "plot-1": ["ok", 42] },
-        videoHudOn: {},
       }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
@@ -113,25 +131,40 @@ describe("layout persist", () => {
     s.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
-        layoutJson: null,
-        videoBindings: {},
-        plotBindings: {},
+        ...SAMPLE,
         videoHudOn: { "video-1": "yes" },
       }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
   });
 
-  it("returns null when videoHudOn is missing entirely", () => {
+  it("returns null when any v3 binding map is missing", () => {
+    const s = makeStorage();
+    const { sceneBindings: _scene, ...partial } = SAMPLE;
+    void _scene;
+    s.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(partial));
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when mapBindings is missing required fields", () => {
     const s = makeStorage();
     s.setItem(
       LAYOUT_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
-        layoutJson: null,
-        videoBindings: {},
-        plotBindings: {},
+        ...SAMPLE,
+        mapBindings: { "map-1": { latChannelId: "/gps/lat" } },
+      }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when tableBindings entries contain non-strings", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        ...SAMPLE,
+        tableBindings: { "table-1": [42] },
       }),
     );
     expect(loadLayoutFromStorage(s)).toBeNull();
@@ -145,11 +178,15 @@ describe("layout persist", () => {
   it("accepts an explicitly null layoutJson", () => {
     const s = makeStorage();
     const payload: PersistedLayout = {
-      version: 2,
+      version: 3,
       layoutJson: null,
       videoBindings: {},
       plotBindings: {},
       videoHudOn: {},
+      sceneBindings: {},
+      mapBindings: {},
+      tableBindings: {},
+      enumBindings: {},
     };
     saveLayoutToStorage(payload, s);
     expect(loadLayoutFromStorage(s)).toEqual(payload);
@@ -180,28 +217,30 @@ function makeFakeStore(initial: LayoutSlice): FakeStore {
   };
 }
 
-describe("attachLayoutPersistence", () => {
-  const initialSlice: LayoutSlice = {
-    layoutJson: null,
-    videoBindings: {},
-    plotBindings: {},
-    videoHudOn: {},
-  };
+const EMPTY_SLICE: LayoutSlice = {
+  layoutJson: null,
+  videoBindings: {},
+  plotBindings: {},
+  videoHudOn: {},
+  sceneBindings: {},
+  mapBindings: {},
+  tableBindings: {},
+  enumBindings: {},
+};
 
-  it("writes the current slice when any of the three tracked refs change", () => {
+describe("attachLayoutPersistence", () => {
+  it("writes the current slice when any tracked ref changes", () => {
     const s = makeStorage();
-    const store = makeFakeStore(initialSlice);
+    const store = makeFakeStore(EMPTY_SLICE);
     const stop = attachLayoutPersistence(
       store as unknown as typeof useSession,
       s,
     );
-    // No write yet — zustand only fires subscribe on mutation.
     expect(loadLayoutFromStorage(s)).toBeNull();
 
-    // Change layoutJson: a new reference must trigger a write.
     const nextLayout = { layout: { type: "row", weight: 100, children: [] } };
     store.push({
-      ...initialSlice,
+      ...EMPTY_SLICE,
       layoutJson: nextLayout,
     });
     const loaded = loadLayoutFromStorage(s);
@@ -209,23 +248,21 @@ describe("attachLayoutPersistence", () => {
     stop();
   });
 
-  it("skips the write when the tracked refs are all identical to the snapshot", () => {
+  it("skips the write when the tracked refs are all identical", () => {
     const s = makeStorage();
-    const store = makeFakeStore(initialSlice);
+    const store = makeFakeStore(EMPTY_SLICE);
     const stop = attachLayoutPersistence(
       store as unknown as typeof useSession,
       s,
     );
-    // Push the *same* refs back through — attachLayoutPersistence
-    // seeds `last` with the initial state, so this should early-return.
-    store.push(initialSlice);
+    store.push(EMPTY_SLICE);
     expect(loadLayoutFromStorage(s)).toBeNull();
     stop();
   });
 
   it("unsubscribes on the returned dispose handle", () => {
     const s = makeStorage();
-    const store = makeFakeStore(initialSlice);
+    const store = makeFakeStore(EMPTY_SLICE);
     const stop = attachLayoutPersistence(
       store as unknown as typeof useSession,
       s,
@@ -233,9 +270,8 @@ describe("attachLayoutPersistence", () => {
     expect(store.listenerCount()).toBe(1);
     stop();
     expect(store.listenerCount()).toBe(0);
-    // Further mutations must not land in storage.
     store.push({
-      ...initialSlice,
+      ...EMPTY_SLICE,
       plotBindings: { "plot-1": ["x"] },
     });
     expect(loadLayoutFromStorage(s)).toBeNull();
@@ -243,19 +279,14 @@ describe("attachLayoutPersistence", () => {
 
   it("writes when plotBindings is a new object, even with equal contents", () => {
     const s = makeStorage();
-    const store = makeFakeStore(initialSlice);
+    const store = makeFakeStore(EMPTY_SLICE);
     const stop = attachLayoutPersistence(
       store as unknown as typeof useSession,
       s,
     );
-    // A fresh `{}` is reference-distinct from the initial `{}`, so
-    // the persist layer conservatively flushes. This documents that
-    // the adapter is reference-based, not deep-equal.
     store.push({
-      layoutJson: null,
-      videoBindings: {},
+      ...EMPTY_SLICE,
       plotBindings: {},
-      videoHudOn: {},
     });
     const loaded = loadLayoutFromStorage(s);
     expect(loaded).not.toBeNull();
@@ -265,13 +296,13 @@ describe("attachLayoutPersistence", () => {
 
   it("writes when videoHudOn is a new object", () => {
     const s = makeStorage();
-    const store = makeFakeStore(initialSlice);
+    const store = makeFakeStore(EMPTY_SLICE);
     const stop = attachLayoutPersistence(
       store as unknown as typeof useSession,
       s,
     );
     store.push({
-      ...initialSlice,
+      ...EMPTY_SLICE,
       videoHudOn: { "video-1": true },
     });
     const loaded = loadLayoutFromStorage(s);
@@ -279,18 +310,36 @@ describe("attachLayoutPersistence", () => {
     stop();
   });
 
+  it("writes when any Phase 6 binding map changes ref", () => {
+    const s = makeStorage();
+    const store = makeFakeStore(EMPTY_SLICE);
+    const stop = attachLayoutPersistence(
+      store as unknown as typeof useSession,
+      s,
+    );
+    store.push({
+      ...EMPTY_SLICE,
+      mapBindings: {
+        "map-1": { latChannelId: "/gps/lat", lonChannelId: "/gps/lon" },
+      },
+    });
+    const loaded = loadLayoutFromStorage(s);
+    expect(loaded?.mapBindings["map-1"]).toEqual({
+      latChannelId: "/gps/lat",
+      lonChannelId: "/gps/lon",
+    });
+    stop();
+  });
+
   it("is a no-op when storage is undefined", () => {
-    const store = makeFakeStore(initialSlice);
+    const store = makeFakeStore(EMPTY_SLICE);
     const stop = attachLayoutPersistence(
       store as unknown as typeof useSession,
       undefined,
     );
-    // When storage is missing the adapter returns an inert dispose
-    // and never subscribes — pushing does nothing and no error is
-    // thrown on dispose.
     expect(store.listenerCount()).toBe(0);
     store.push({
-      ...initialSlice,
+      ...EMPTY_SLICE,
       videoBindings: { "video-1": "/c" },
     });
     expect(() => stop()).not.toThrow();

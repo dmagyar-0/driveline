@@ -29,6 +29,14 @@ export interface ShellProps {
   addVideoPanel: () => void;
   /** Forwarded to the Layout drawer's `+ plot` row. */
   addPlotPanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ 3D scene` row. */
+  addScenePanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ map` row. */
+  addMapPanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ table` row. */
+  addTablePanel: () => void;
+  /** Phase 6 · forwarded to the Layout drawer's `+ enum` row. */
+  addEnumPanel: () => void;
   /** Forwarded to the Layout drawer's `Reset layout` row. */
   resetLayout: () => void;
   transport: ReactNode;
@@ -44,6 +52,10 @@ export function Shell({
   ensurePlotPanel,
   addVideoPanel,
   addPlotPanel,
+  addScenePanel,
+  addMapPanel,
+  addTablePanel,
+  addEnumPanel,
   resetLayout,
   transport,
   children,
@@ -63,6 +75,10 @@ export function Shell({
           ensurePlotPanel={ensurePlotPanel}
           addVideoPanel={addVideoPanel}
           addPlotPanel={addPlotPanel}
+          addScenePanel={addScenePanel}
+          addMapPanel={addMapPanel}
+          addTablePanel={addTablePanel}
+          addEnumPanel={addEnumPanel}
           resetLayout={resetLayout}
         />
         <div className={styles.workMain}>{children}</div>
