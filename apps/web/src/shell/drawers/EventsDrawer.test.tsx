@@ -117,4 +117,26 @@ describe("EventsDrawer", () => {
     const row = screen.getByTestId(`bookmark-row-${id}`);
     expect(row.getAttribute("data-out-of-range")).toBe("true");
   });
+
+  it("explains the out-of-range state via title and aria-label", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(20_000_000_000n, "future");
+    render(<EventsDrawer />);
+    const seek = screen.getByTestId(`bookmark-seek-${id}`);
+    expect(seek.getAttribute("title")).toBe(
+      "Outside the current session's range",
+    );
+    expect(seek.getAttribute("aria-label")).toBe(
+      "Out of range — Seek to future",
+    );
+  });
+
+  it("uses the bookmark label as title for in-range rows", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(5_000_000_000n, "midpoint");
+    render(<EventsDrawer />);
+    const seek = screen.getByTestId(`bookmark-seek-${id}`);
+    expect(seek.getAttribute("title")).toBe("midpoint");
+    expect(seek.getAttribute("aria-label")).toBe("Seek to midpoint");
+  });
 });

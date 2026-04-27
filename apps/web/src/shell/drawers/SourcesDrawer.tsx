@@ -15,6 +15,7 @@ import type { SourceKind } from "../../state/store";
 import { colorFor } from "../../panels/palette";
 import { formatAbsolute, formatDuration } from "../../timeline/formatTime";
 import drawerStyles from "../Drawer.module.css";
+import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./SourcesDrawer.module.css";
 
 const HEADING_ID = "drawer-sources-h";
@@ -59,6 +60,7 @@ export function SourcesDrawer() {
 
   return (
     <aside
+      id={DRAWER_REGION_ID}
       className={drawerStyles.drawer}
       role="region"
       aria-labelledby={HEADING_ID}

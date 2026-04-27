@@ -13,6 +13,11 @@ import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import { PanelDrawer } from "./drawers/PanelDrawer";
 import { EventsDrawer } from "./drawers/EventsDrawer";
 
+// Shared id for the active drawer's <section role="region">. Drawers render
+// mutually exclusively so a single id is unambiguous; rail buttons reference
+// it via aria-controls so AT can announce the rail/drawer relationship.
+export const DRAWER_REGION_ID = "shell-drawer-region";
+
 export interface DrawerProps {
   /** Mints (or returns) a plot panel id when the Channels drawer's
    *  click-to-bind path needs a target and none is selected. Owned by

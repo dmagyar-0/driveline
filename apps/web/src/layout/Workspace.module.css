@@ -14,9 +14,9 @@
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg-2);
   padding: 0.25rem 0.6rem;
-  border-radius: 4px;
+  border-radius: var(--radius-4);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--fs-13);
 }
 
 .restoreBtn:hover {

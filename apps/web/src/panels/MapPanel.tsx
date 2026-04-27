@@ -23,6 +23,7 @@ import "leaflet/dist/leaflet.css";
 import type { LatLngExpression } from "leaflet";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta } from "../state/store";
+import { colorFor } from "./palette";
 import { seriesFromArrow } from "./seriesFromArrow";
 import styles from "./MapPanel.module.css";
 
@@ -181,9 +182,13 @@ export function MapPanel({ panelId }: MapPanelProps) {
             />
             {points.length > 1 && (
               <>
+                {/* Polyline colour is a data-viz series colour from the
+                    plot palette (not the cursor accent). Two MapPanels
+                    in one workspace pick distinct hues; cursor strokes
+                    stay separate via panels/cursorOverlay.ts. */}
                 <Polyline
                   positions={points}
-                  pathOptions={{ color: "#f97316", weight: 3 }}
+                  pathOptions={{ color: colorFor(panelId), weight: 3 }}
                 />
                 <FitToPolyline points={points} />
               </>

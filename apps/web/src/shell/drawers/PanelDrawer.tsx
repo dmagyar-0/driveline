@@ -33,6 +33,7 @@ import {
   type PanelKind,
 } from "../../layout/panelId";
 import drawerStyles from "../Drawer.module.css";
+import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./PanelDrawer.module.css";
 
 const HEADING_ID = "drawer-panel-h";
@@ -50,6 +51,7 @@ export function PanelDrawer() {
 
   return (
     <aside
+      id={DRAWER_REGION_ID}
       className={drawerStyles.drawer}
       role="region"
       aria-labelledby={HEADING_ID}

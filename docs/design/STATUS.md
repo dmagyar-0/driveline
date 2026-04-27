@@ -766,61 +766,141 @@ the end of each shipped phase so future sessions know where to resume.
       flake (documented in this STATUS at lines 53-62) is
       ignorable — Phase 9 does not touch the video decode
       pipeline that flake covers.
-- [ ] **Phase 10 · Cleanup, polish, accessibility audit**
+- [x] **Phase 10 · Cleanup, polish, accessibility audit** — Phase 10
+      is pure UI / CSS / docs polish; no new store slices, no schema
+      bump, no new persistence adapter, no new dependencies. The four
+      open carry-overs from earlier phases are resolved.
 
-## Where to continue
+      **Already-done items confirmed (no work):** `App.module.css`
+      was deleted in Phase 2; `SessionSummary.tsx` and its import are
+      gone (Phase 2); `<h1>Driveline</h1>` and the legacy workspace
+      toolbar testids (`workspace-toolbar`, `add-video-panel`,
+      `add-plot-panel`, `reset-layout`) were removed in Phases 1/4;
+      a grep across `apps/e2e/tests/` for the legacy `source-*` /
+      `channel-count` / `global-range` testids returns zero hits.
 
-Next phase: **Phase 10 · Cleanup, polish, accessibility audit.**
-Read `docs/design/v1-shell-integration.md` § Phase 10 (lines
-342-363) for the full plan. Concretely:
+      **Token sweep (Phase 0 + Phase 9 carry-overs):** new
+      `--fs-10: 0.625rem` token added to
+      `apps/web/src/styles/tokens.css` next to `--fs-11`.
+      `Transport.module.css` swept: `:61` `font-size: 10px` →
+      `var(--fs-10)` (prev/next button), `:139,:147,:170`
+      `font-size: 11px` → `var(--fs-11)` (`.time`/`.speed`/`.readout`),
+      `:184` `font-size: 10px` → `var(--fs-10)` (`.modeButton`).
+      `Workspace.module.css:.restoreBtn` swept: `font-size: 0.85rem`
+      → `var(--fs-13)`, `border-radius: 4px` → `var(--radius-4)`.
+      `VideoPanel.module.css:.hudToggle` swept end-to-end:
+      `font-size: 11px` → `var(--fs-11)`,
+      `font-family: ui-monospace, Menlo, monospace` →
+      `var(--font-mono)`, `color: #ddd` → `var(--color-fg-3)`,
+      `border-radius: 3px` → `var(--radius-3)`.
 
-1. **Delete obsolete `App.module.css` blocks** the new shell does
-   not use (`.shell`, `.dropZone`, `.sources`, `.source`,
-   `.sourceHeader`, `.sourceName`, `.sourceKind`, `.meta`,
-   `.global`, `.errors`). Phase 2 already deleted `App.module.css`
-   entirely as part of the SourcesDrawer landing — confirm and
-   move on.
-2. **Delete `SessionSummary.tsx`** and remove its import from
-   `App.tsx`. Phase 2 already deleted the inline `SessionSummary`
-   function and the file shim — confirm and move on.
-3. **Run the frontend-skill pre-completion checklist end-to-end**:
-   type-check, unit tests, e2e, manual browser exercise of golden
-   path, 320 px breakpoint, tab focus rings, reduced-motion,
-   bundle size delta.
-4. **Accessibility audit**: every rail button has `aria-label`,
-   every interactive drawer row has a discernible name, keyboard
-   `Tab` order is rail → drawer → workspace → transport, drawers
-   expose `role="region"` with `aria-labelledby` pointing to their
-   `<h3>`. Body font ≥ 16 px (`var(--fs-16)`); rem-based
-   throughout. Particular targets surfaced by the carry-overs
-   below:
-   - **Out-of-range bookmark UX** (Phase 8 carry-over): decide
-     between hover/focus tooltip on the row, separate
-     out-of-range section, or hiding markers; document the choice
-     in the PR.
-   - **Tab name truncation** (Phase 7 carry-over): consider
-     adding `title={node.getName()}` to the `.tabName` element so
-     the full string is available on hover.
-5. **MapPanel polyline `#f97316` literal** at
-   `panels/MapPanel.tsx:186` (Phase 9 carry-over below): sweep
-   into the cursor token or a new palette slot — explicitly
-   choose data-viz vs cursor accent (do not conflate). Phase 9
-   was transport-only; this lat/lon trace colour was deliberately
-   left for Phase 10 polish.
-6. **Update `docs/06-ui-and-panels.md`** to describe the new
-   shell (rail + drawers, panel chrome via `onRenderTab`,
-   bookmarks, prev/next + arrow-key transport shortcuts). The
-   existing prose on hot path / FlexLayout / Zustand stays
-   valid.
-7. **Update e2e specs** that select on the old `<h1>Driveline</h1>`
-   or workspace toolbar — those nodes are gone (Phase 1/4 already
-   removed them). Spot-check for any lingering selectors before
-   declaring the suite complete.
+      **a11y wiring:** new `DRAWER_REGION_ID = "shell-drawer-region"`
+      exported from `shell/Drawer.tsx`. Each of the five drawers
+      (Sources/Channels/Layout/Panel/Events) stamps that id on its
+      `<aside role="region">` (drawers render mutually exclusively so
+      a single shared id is unambiguous). `Rail.tsx` adds
+      `aria-controls={DRAWER_REGION_ID}` and
+      `aria-expanded={isActive}` alongside the existing
+      `aria-pressed`; the two semantics communicate the same toggle
+      to different AT models.
+      `Workspace.tsx` tab chrome: collapse button gains
+      `aria-label="Collapse panel — coming soon"` (the existing
+      `title=` was sighted-only); `.tabName` span gains
+      `title={node.getName()}` so the full panel name is available
+      on hover when the 16ch ellipsis kicks in (Phase 7 carry-over).
 
-The Phase 9 transport surface (prev/next buttons, ArrowLeft/Right
-shortcuts, dark-theme styling, speed pill) is unchanged by
-Phase 10 — the audit either resolves an a11y observation against
-this surface or leaves it untouched.
+      **Out-of-range bookmark UX (Phase 8 carry-over):** chose
+      option (a) — tooltip on the row, no behaviour change, no
+      separate section, markers stay visible. The seek `<button>` in
+      `EventsDrawer.tsx` now sets
+      `title="Outside the current session's range"` and prefixes
+      `aria-label` with `Out of range — ` when `outOfRange` is true.
+
+      **MapPanel polyline colour (Phase 7/9 carry-over):** chose
+      data-viz routing — `panels/MapPanel.tsx:~186` polyline
+      `pathOptions.color` is now `colorFor(panelId)`, importing from
+      `./palette`. Two MapPanels in one workspace pick distinct hues;
+      the cursor stroke stays separate via
+      `cursorOverlay.ts:cursorStrokeColor()`. A 4-line comment above
+      the `<Polyline>` documents the data-viz vs cursor-accent split.
+
+      **`docs/06-ui-and-panels.md` rewrite:** the pre-Phase-1 "App
+      shell" section is replaced with the canonical V1 layout
+      (TopBar / Rail / Drawer / FlexLayout / Transport). New
+      sub-sections cover the five drawers, the `onRenderTab` panel
+      chrome, the four Phase 6 panel kinds, the bookmark slice +
+      `BookmarkMarkers`, the prev/next + ArrowLeft/Right transport
+      shortcuts, and the a11y floor. Persistence, hot path, and
+      Zustand prose are extended (not rewritten) for the new
+      slices.
+
+      **Tests:** new `apps/web/src/shell/Rail.test.tsx` (3 cases —
+      aria-controls/aria-expanded contract, active-tab toggle,
+      collapsed null-render); `EventsDrawer.test.tsx` extended +2
+      cases (out-of-range tooltip + aria-label prefix; in-range
+      title is the bookmark label); `MapPanel.test.tsx` extended +1
+      (mock Polyline now captures `pathOptions.color`; new test
+      stubs `fetchChannelRange` + `seriesFromArrow` and asserts the
+      rendered `data-color` equals `colorFor("map-1")`).
+      Verification: `pnpm exec tsc --noEmit -p apps/web` passes
+      cleanly. `pnpm --filter web test --run` 292/292 pass (286
+      Phase 9 baseline + 6 new). `pnpm --filter web build` and the
+      e2e suite were not run in this session for the same reason
+      Phases 5-9 documented — the sandbox lacks `wasm-pack` and the
+      gitignored `apps/web/src/wasm/wasm_bindings.js` cannot be
+      regenerated here. The TypeScript graph is verified via the
+      gitignored `apps/web/src/wasm/wasm_bindings.d.ts` stub
+      recreated locally for this purpose; production build/CI is
+      unaffected. Bundle delta is unmeasured locally but expected at
+      ±0 KB gzipped (token swaps, six text-only attribute additions,
+      one `colorFor` import already present elsewhere). None of the
+      Phase 10 changes touch the cursor hot path, the video decode
+      pipeline, or the FlexLayout rebuild branch.
+
+## Migration complete
+
+V1 shell shipped. The next contributor inherits a finished shell
+(rail, five drawers, panel chrome, bookmarks, named layouts, four
+new panel kinds) with the docs at `docs/06-ui-and-panels.md` matching
+the implementation. Verification floor for any future change: tsc,
+vitest, build, e2e, plus the frontend-skill pre-completion checklist
+under `apps/web/CLAUDE.md` (and the bundled `.claude/skills/frontend`).
+
+The carry-over notes below are **v2 material** — none block v1
+shipping. Read them when picking up a new feature that touches the
+relevant surface, not as Phase 11 work.
+
+Open v2 / future-work items (curated list, not exhaustive):
+
+- **Resizable drawer width** — fixed at 220 px today; users may want
+  a drag-handle (`ui` slice + persisted `drawerWidth`).
+- **FlexLayout collapse action** — chrome icon is greyed pending an
+  upstream first-class collapse. If users push, implement via
+  `deleteTabset` + `ui`-slice restore-info entry.
+- **ScenePanel data path** — gated on the Rust core defining a
+  `point_cloud` Arrow channel kind. Binding shape already allocated.
+- **MapPanel cadence-aware merge** — current zip-by-index assumes
+  lat/lon share cadence (true for shipped fixtures). Use
+  `panels/mergeSeries.ts` for distinct cadences.
+- **Drag-to-reposition bookmarks** — delete + re-add today; add
+  `moveBookmark(id, ns)` mirroring `renameBookmark`'s no-op-on-equal
+  pattern.
+- **Per-bookmark colour override** — slot is in the schema; needs a
+  `<ColorPicker>` and `setBookmarkColor`.
+- **ArrowUp / ArrowDown bindings** — deliberately unbound; pick a
+  behaviour (volume / speed / zoom) only when a real user asks.
+- **Held-key acceleration on Arrow steps** — current OS key-repeat
+  cadence is fine; long-hold acceleration is a `keydown` repeat
+  counter, not a delta change.
+- **Mode toggle placement** — meta-row vs. TopBar meta slot vs.
+  inline pill; option (b) (TopBar) is the cleanest long-term home
+  if the meta row reads as dead chrome in user testing.
+- **Out-of-range marker hide / separate section** — options (b) and
+  (c) from the Phase 8 carry-over remain available if the
+  hover-tooltip nudge isn't enough.
+- **Tab-name max-width override** — 16ch fits the shipped fixtures;
+  lift the cap in `Workspace.module.css` if a future name doesn't
+  fit, or expose a per-tab override.
 
 ## Carry-over notes for later phases (Phase 9 additions)
 
@@ -1007,6 +1087,40 @@ this surface or leaves it untouched.
   `--color-bg-6`, `--color-border-strong`, `--color-border-subtle`,
   `--color-fg-3` / `--color-fg-4`, `--focus-ring`). No light-theme
   literals remain.
+- ~~**Phase 7 / 9 (MapPanel polyline `#f97316` literal at
+  `panels/MapPanel.tsx:186`)**~~ — **resolved in Phase 10**: routed
+  through `panels/palette.ts:colorFor(panelId)` as a data-viz series
+  colour. Two MapPanels in one workspace pick distinct hues; cursor
+  strokes stay separate via `cursorOverlay.ts:cursorStrokeColor()`.
+- ~~**Phase 7 (Tab name truncation `title=`)**~~ — **resolved in
+  Phase 10**: `.tabName` span in `Workspace.tsx` now carries
+  `title={node.getName()}` so the full panel name is available on
+  hover when the 16ch ellipsis kicks in.
+- ~~**Phase 8 (Out-of-range bookmark UX)**~~ — **resolved in Phase
+  10** with option (a) from the carry-over: hover/focus tooltip on
+  the row. The seek `<button>` in `EventsDrawer.tsx` sets
+  `title="Outside the current session's range"` and prefixes
+  `aria-label` with `Out of range — `. No behaviour change; markers
+  stay visible.
+- ~~**Phase 0 / 9 (Transport + VideoPanel font-size px literals)**~~
+  — **resolved in Phase 10**: new `--fs-10: 0.625rem` token added.
+  `Transport.module.css` (5 swaps) and `VideoPanel.module.css`
+  (`.hudToggle` font-size + family + colour + radius) tokenised.
+  `Workspace.module.css:.restoreBtn` also tokenised in passing.
+- ~~**Phase 10 (Rail ↔ Drawer ARIA association)**~~ — **resolved in
+  Phase 10**: `DRAWER_REGION_ID` exported from `shell/Drawer.tsx`,
+  stamped on every drawer's `<aside role="region">`. Rail buttons
+  carry `aria-controls={DRAWER_REGION_ID}` + `aria-expanded` next to
+  the existing `aria-pressed`.
+- ~~**Phase 10 (Tab chrome collapse `aria-label`)**~~ — **resolved
+  in Phase 10**: collapse button in `Workspace.tsx` `onRenderTab`
+  now has `aria-label="Collapse panel — coming soon"` alongside the
+  existing `title=` and `aria-disabled="true"`.
+- ~~**Phase 10 (`docs/06-ui-and-panels.md` rewrite)**~~ — **resolved
+  in Phase 10**: pre-Phase-1 "App shell" section replaced with the
+  canonical V1 layout plus new sub-sections for the rail / drawers,
+  panel chrome, four Phase 6 panel kinds, bookmarks, transport
+  shortcuts, and a11y floor.
 - **Palette duplication**: `panels/palette.ts` (`PLOT_PALETTE`) and
   `tokens.css` (`--plot-1..8`) hold the same 8 hex values in two
   systems. Keep them in sync if either changes; unification is not

@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
 import drawerStyles from "../Drawer.module.css";
+import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./LayoutDrawer.module.css";
 
 const HEADING_SAVED_ID = "drawer-layout-saved-h";
@@ -106,6 +107,7 @@ export function LayoutDrawer({
 
   return (
     <aside
+      id={DRAWER_REGION_ID}
       className={drawerStyles.drawer}
       role="region"
       aria-labelledby={HEADING_SAVED_ID}

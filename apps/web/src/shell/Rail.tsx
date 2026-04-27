@@ -8,6 +8,7 @@
 import type { ReactElement } from "react";
 import { useSession } from "../state/store";
 import type { RailTab } from "../state/persist/ui";
+import { DRAWER_REGION_ID } from "./Drawer";
 import styles from "./Rail.module.css";
 
 interface RailItem {
@@ -102,6 +103,8 @@ export function Rail() {
             className={`${styles.btn} ${isActive ? styles.active : ""}`}
             aria-label={item.label}
             aria-pressed={isActive}
+            aria-expanded={isActive}
+            aria-controls={DRAWER_REGION_ID}
             title={item.label}
             data-testid={`rail-${item.id}`}
             onClick={() => setActiveRailTab(isActive ? null : item.id)}

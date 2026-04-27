@@ -18,8 +18,18 @@ vi.mock("react-leaflet", () => ({
     <div data-testid="mock-map-container">{children}</div>
   ),
   TileLayer: () => <div data-testid="mock-tile-layer" />,
-  Polyline: ({ positions }: { positions: unknown }) => (
-    <div data-testid="mock-polyline" data-len={String((positions as unknown[]).length)} />
+  Polyline: ({
+    positions,
+    pathOptions,
+  }: {
+    positions: unknown;
+    pathOptions?: { color?: string };
+  }) => (
+    <div
+      data-testid="mock-polyline"
+      data-len={String((positions as unknown[]).length)}
+      data-color={pathOptions?.color ?? ""}
+    />
   ),
   useMap: () => ({
     fitBounds: () => undefined,
@@ -28,7 +38,15 @@ vi.mock("react-leaflet", () => ({
 
 vi.mock("leaflet/dist/leaflet.css", () => ({}));
 
+vi.mock("./seriesFromArrow", () => ({
+  seriesFromArrow: () => ({
+    xs: new Float64Array([0, 1, 2]),
+    ys: new Float64Array([10, 20, 30]),
+  }),
+}));
+
 import { MapPanel } from "./MapPanel";
+import { colorFor } from "./palette";
 import { useSession, type SourceMeta } from "../state/store";
 
 const SOURCE: SourceMeta = {
@@ -107,5 +125,19 @@ describe("MapPanel", () => {
     render(<MapPanel panelId="map-1" />);
     expect(screen.getByTestId("map-empty")).toBeTruthy();
     expect(useSession.getState().mapBindings["map-1"]).toBeNull();
+  });
+
+  it("paints the polyline with the panel's palette colour", async () => {
+    seed();
+    useSession.setState({
+      fetchChannelRange: async () => new Uint8Array(),
+    });
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/gps/lat",
+      lonChannelId: "/gps/lon",
+    });
+    render(<MapPanel panelId="map-1" />);
+    const poly = await screen.findByTestId("mock-polyline");
+    expect(poly.getAttribute("data-color")).toBe(colorFor("map-1"));
   });
 });
