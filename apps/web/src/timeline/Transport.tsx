@@ -11,6 +11,7 @@ import { BookmarkMarkers } from "./BookmarkMarkers";
 import styles from "./Transport.module.css";
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4] as const;
+const ONE_SEC_NS = 1_000_000_000n;
 
 // Ratio → ns, clamped to `[0, 1]` before mapping across the range.
 function nsFromRatio(ratio: number, range: TimeRange): bigint {
@@ -102,8 +103,8 @@ export function Transport() {
   }, []);
 
   // Global keyboard shortcuts per `docs/06-ui-and-panels.md:156-157`.
-  // `←/→` (±1 frame on focused video panel) is intentionally left for the
-  // future VideoPanel owner.
+  // ArrowLeft / ArrowRight step the cursor by ±1 s; the store's
+  // setCursor clamps to [startNs, endNs].
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -133,6 +134,12 @@ export function Transport() {
       } else if (e.code === "End") {
         e.preventDefault();
         store.setCursor(range.endNs);
+      } else if (e.code === "ArrowLeft") {
+        e.preventDefault();
+        store.setCursor(store.cursorNs - ONE_SEC_NS);
+      } else if (e.code === "ArrowRight") {
+        e.preventDefault();
+        store.setCursor(store.cursorNs + ONE_SEC_NS);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -145,6 +152,15 @@ export function Transport() {
     if (store.playing) store.pause();
     else store.play();
   };
+
+  const stepBy = (deltaNs: bigint) => {
+    if (disabled) return;
+    const store = useSession.getState();
+    if (!store.globalRange) return;
+    store.setCursor(store.cursorNs + deltaNs);
+  };
+  const onPrev1s = () => stepBy(-ONE_SEC_NS);
+  const onNext1s = () => stepBy(ONE_SEC_NS);
 
   const onSpeedChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     useSession.getState().setSpeed(Number(e.target.value));
@@ -162,6 +178,12 @@ export function Transport() {
         )}`
       : formatAbsolute(cursorNs)
     : "--:--.---";
+  const startLabel = globalRange
+    ? formatRelative(globalRange.startNs, globalRange.startNs)
+    : "--:--.---";
+  const endLabel = globalRange
+    ? formatDuration(globalRange.endNs - globalRange.startNs)
+    : "--:--.---";
 
   return (
     <div
@@ -170,17 +192,42 @@ export function Transport() {
       aria-disabled={disabled}
     >
       <div className={styles.row}>
-        <button
-          type="button"
-          className={styles.playButton}
-          data-testid="play-pause"
-          aria-label={playing ? "Pause" : "Play"}
-          aria-pressed={playing}
-          onClick={onPlayPause}
-          disabled={disabled}
-        >
-          {playing ? "❚❚" : "▶"}
-        </button>
+        <div className={styles.btnGroup}>
+          <button
+            type="button"
+            className={styles.btnT}
+            data-testid="transport-prev-1s"
+            aria-label="Step back 1 second"
+            onClick={onPrev1s}
+            disabled={disabled}
+            title="Step back 1 s"
+          >
+            ◀◀
+          </button>
+          <button
+            type="button"
+            className={`${styles.btnT} ${styles.play}`}
+            data-testid="play-pause"
+            aria-label={playing ? "Pause" : "Play"}
+            aria-pressed={playing}
+            onClick={onPlayPause}
+            disabled={disabled}
+          >
+            {playing ? "❚❚" : "▶"}
+          </button>
+          <button
+            type="button"
+            className={styles.btnT}
+            data-testid="transport-next-1s"
+            aria-label="Step forward 1 second"
+            onClick={onNext1s}
+            disabled={disabled}
+            title="Step forward 1 s"
+          >
+            ▶▶
+          </button>
+        </div>
+        <span className={styles.time}>{startLabel}</span>
         <div
           ref={trackRef}
           className={`${styles.track} ${disabled ? styles.disabled : ""}`}
@@ -212,8 +259,24 @@ export function Transport() {
             />
           </div>
         </div>
+        <span className={styles.time}>{endLabel}</span>
+        <select
+          id="transport-speed"
+          className={styles.speed}
+          data-testid="transport-speed"
+          value={speed}
+          onChange={onSpeedChange}
+          disabled={disabled}
+          aria-label="Playback speed"
+        >
+          {SPEED_OPTIONS.map((v) => (
+            <option key={v} value={v}>
+              {v}×
+            </option>
+          ))}
+        </select>
       </div>
-      <div className={styles.row}>
+      <div className={styles.metaRow}>
         <span
           className={styles.readout}
           data-testid="transport-readout"
@@ -231,24 +294,6 @@ export function Transport() {
         >
           {mode === "relative" ? "relative" : "absolute"}
         </button>
-        <span style={{ flex: 1 }} />
-        <label className={styles.speedLabel} htmlFor="transport-speed">
-          speed
-        </label>
-        <select
-          id="transport-speed"
-          className={styles.speedSelect}
-          data-testid="transport-speed"
-          value={speed}
-          onChange={onSpeedChange}
-          disabled={disabled}
-        >
-          {SPEED_OPTIONS.map((v) => (
-            <option key={v} value={v}>
-              {v}×
-            </option>
-          ))}
-        </select>
       </div>
     </div>
   );
