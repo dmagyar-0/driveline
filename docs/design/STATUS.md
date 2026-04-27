@@ -226,7 +226,87 @@ the end of each shipped phase so future sessions know where to resume.
       changes touch the cursor hot path, the video decode pipeline, or
       the FlexLayout rebuild branch in any way that would affect the
       perf budgets.
-- [ ] **Phase 5 · Panel drawer**
+- [x] **Phase 5 · Panel drawer** —
+      `apps/web/src/shell/drawers/PanelDrawer.{tsx,module.css}` added.
+      Replaces `Drawer.tsx`'s `panel` stub branch with a real component
+      that switches body on `panelKindOf(selectedPanelId)`: empty-state
+      callout when `selectedPanelId === null`; plot body lists the
+      `plotBindings[panelId]` rows with hover-revealed `×` (calls
+      `removePlotChannel`) and a `+ add channel…` row that opens the
+      existing `panels/ChannelPicker.tsx` popover anchored to its own
+      button (option (b) from the plan — independent picker instance,
+      no PlotPanel coupling); video body renders a read-only decoder
+      label sourced from `__drivelineVideoHud.codec` (polled at 250 ms;
+      cheap, doesn't churn the reconciler), an `aria-checked` HUD
+      overlay toggle, an `aria-disabled` step-hold placeholder
+      (VideoPanel doesn't carry step-hold state today), and the bound
+      channel row with × that calls `setVideoBinding(panelId, null)`.
+      The drawer header subtitle uses a new pure helper
+      `layout/panelId.ts:panelNameFor(layoutJson, panelId)` that walks
+      the FlexLayout JSON without importing FlexLayout (returns `null`
+      on miss; drawer falls back to the bare panelId string).
+      **HUD slice promotion:** `videoHudOn: Record<string, boolean>`
+      lifted into the store with `setVideoHudOn(panelId, on)` and
+      `toggleVideoHudOn(panelId)` actions; `VideoPanel.tsx` now reads
+      `useSession((s) => s.videoHudOn[panelId] ?? false)` and dispatches
+      via `toggleVideoHudOn` from both the `h` keypress handler and the
+      in-panel `<button data-testid="video-hud-toggle">`. The drawer's
+      toggle calls the same action — three surfaces share one bit, all
+      observable. `VideoPanelContainer` now passes `panelId` to
+      `VideoPanel` (added to `VideoPanelProps`). `clear()` resets
+      `videoHudOn` to `{}` (matches the bindings posture).
+      **Persistence v1 → v2:** `LAYOUT_SCHEMA_VERSION` bumped to `2`
+      and `LAYOUT_STORAGE_KEY` to `"driveline.layout.v2"`;
+      `PersistedLayout` and `LayoutSlice` extended with
+      `videoHudOn: Record<string, boolean>`; `validate()` rejects v1
+      payloads (fail-closed, drops user state on the upgrade — pre-v1
+      app, acceptable per the established posture, documented in the
+      file comment); `attachLayoutPersistence`'s reference-equality
+      short-circuit gets a fourth check.
+      **Row primitive consolidation (carry-over from Phase 4):** new
+      `apps/web/src/shell/drawers/_row.module.css` exports `.rowBase`,
+      `.rowActive`, and `.swatch`; SourcesDrawer, ChannelsDrawer, and
+      LayoutDrawer modules now `composes:` from it instead of
+      duplicating the rules. Drawer-specific overrides
+      (grid-template-columns, gap, font-size, ChannelsDrawer's
+      `[aria-disabled="true"]` overlay) stay local. Visual regression
+      bar: zero — extracted rules are byte-equal between Sources and
+      Channels; LayoutDrawer's lighter gap and font-size remain
+      explicit. PanelDrawer's `.row` composes the same primitive with
+      its own `8px 1fr` grid (no right-side cluster — × lives outside
+      the row in `.rowItem`).
+      **New dev hook:** `getVideoHudOn(panelId): boolean` added in
+      `App.tsx` next to `getSelectedPanelId` so persistence-survival
+      e2e can read the store bit directly without waiting for the rAF
+      HUD republish after a `page.reload()`. No other dev-hook surface
+      needed: `videoHudStats()` already exposes the codec.
+      **Drawer wiring:** `Drawer.tsx`'s `STUBS` map narrowed to drop
+      `panel` (mirrors how Phase 4 dropped `layout`); a single
+      `if (activeRailTab === "panel") return <PanelDrawer />;` branch
+      added before the stub fallthrough. `Shell` and `App` need no new
+      props — PanelDrawer is self-contained (single-key store
+      selectors only). Verification: `pnpm --filter web test --run`
+      197/197 pass (153 base + 7 new `PanelDrawer.test.tsx` covering
+      empty state, plot rows + remove, video HUD toggle round-trip,
+      video binding clear, step-hold placeholder, and the
+      panelNameFor fallback; + 6 new `panelId.test.ts` for the helper;
+      + 4 new persist-v2 tests; + 4 new store tests for the HUD
+      actions and the `clear()` reset). `pnpm exec tsc --noEmit`
+      passes cleanly. `pnpm --filter web build` and the e2e suite
+      were not run in this session — the sandbox lacks `wasm-pack`
+      (rustup tried to fetch the toolchain over the network and failed
+      503), so the wasm output `apps/web/src/wasm/wasm_bindings.js`
+      that the bundle and dev server need cannot be regenerated here.
+      The TypeScript graph is verified via the gitignored
+      `apps/web/src/wasm/wasm_bindings.d.ts` stub created locally for
+      this purpose; production build/CI is unaffected. None of the
+      Phase 5 changes touch the cursor hot path, the video decode
+      pipeline, or the FlexLayout rebuild branch in any way that
+      would affect the perf budgets. New e2e spec
+      `apps/e2e/tests/panelDrawer.spec.ts` covers the empty state,
+      the three-surface HUD toggle path with reload-survival, and the
+      plot × remove path — ready to run in CI alongside the existing
+      chromium project.
 - [ ] **Phase 6 · New panel kinds (Scene / Map / Table / Enum)**
 - [ ] **Phase 7 · Per-panel chrome via FlexLayout customisation**
 - [ ] **Phase 8 · Events drawer (bookmarks)**
@@ -235,62 +315,64 @@ the end of each shipped phase so future sessions know where to resume.
 
 ## Where to continue
 
-Next phase: **Phase 5 · Panel drawer.** Read
-`docs/design/v1-shell-integration.md` § Phase 5 (lines 201-222) for
-the per-panel settings drawer that switches body on the selected
-panel's kind. Concretely:
+Next phase: **Phase 6 · New panel kinds (Scene / Map / Table / Enum).**
+Read `docs/design/v1-shell-integration.md` § Phase 6 (lines 224-266)
+for the four new panel kinds, each with a folder under
+`apps/web/src/panels/`. Concretely:
 
-1. Create `apps/web/src/shell/drawers/PanelDrawer.{tsx,module.css}`.
-   Replace `Drawer.tsx`'s `STUBS.panel` arm with `<PanelDrawer />`.
-   Read `selectedPanelId` via a single-key selector and discriminate
-   on it with the existing `layout/panelId.ts:panelKindOf` (added in
-   Phase 3) — no FlexLayout JSON parsing needed for plot/video.
-2. **Empty state** — when `selectedPanelId === null`, render a
-   compact callout: "Select a panel to configure it" with a hint to
-   click any panel header. The actual click-to-select wiring lands in
-   Phase 7 (`onPointerDown` on the panel container in
-   `panelFactory.tsx`); for Phase 5 the e2e spec drives selection via
-   `setSelectedPanelId(id)` (already a dev hook).
-3. **Plot kind body** — list each `plotBindings[panelId]` channel with
-   the swatch + `removePlotChannel` × button (mirror the row primitive
-   from `ChannelsDrawer.module.css:.row` per rule-of-three). `+ add
-   channel…` reuses the existing `panels/ChannelPicker.tsx` popover so
-   we don't reimplement the picker.
-4. **Video kind body** — show `decoder` (read-only label sourced from
-   `videoHudStats().codec` if a fixture is loaded, otherwise "—"),
-   the bound channel under "Channels in panel" with a × that calls
-   `setVideoBinding(panelId, null)`, and a `step-hold` /
-   `HUD overlay` toggle pair. The HUD toggle currently lives as a
-   per-panel ref in `VideoPanel.tsx` (`hudOn` state); Phase 5
-   promotes it to the store keyed by panel id (new
-   `videoHudOn: Record<panelId, boolean>` slice, default `false`,
-   persisted via the existing layout adapter — bump
-   `LAYOUT_SCHEMA_VERSION` to 2 and migrate v1 reads with a default).
-   `step-hold` is a similar one-bit-per-panel knob if it exists in
-   `VideoPanel`; otherwise defer it to the same slice.
-5. **3D / Map / Table / Enum kind bodies** — render kind-specific
-   minimal options per integration plan §Phase 5.3 bullet 3, but
-   stub them as "Configured in Phase 6" callouts since the panel
-   implementations land then. The discrimination just needs new
-   prefixes/checks in `layout/panelId.ts:panelKindOf` once Phase 6
-   mints them.
-6. Add dev hook(s) only if a body needs an internal-state observation
-   that DOM can't cover: `videoHudStats().hudOn` already exposes the
-   HUD bit, so the Panel drawer's HUD toggle is observable; no new
-   hook needed for Phase 5.
-7. The integration plan calls out Phase 7 as the right place to
-   actually wire `onClick`/`onFocus` on each panel container to set
-   `selectedPanelId`. Phase 5 ships with selection driven only by
-   the dev hook + (eventually) a settings icon click; the manual UX
-   path lights up in Phase 7.
+1. **Store extensions** — add `sceneBindings`, `mapBindings`,
+   `tableBindings`, `enumBindings` keyed by panel id. Persist via the
+   existing layout adapter (bump `LAYOUT_SCHEMA_VERSION` to 3 and
+   migrate v2 reads with empty defaults). The Phase 5 schema bump
+   already established the v1→v2 fail-closed pattern.
+2. **`PANEL_COMPONENT_*` constants** — extend
+   `apps/web/src/layout/defaultLayout.ts` with `_SCENE | _MAP | _TABLE
+   | _ENUM`; wire into `panelFactory.tsx`. Extend
+   `apps/web/src/layout/panelId.ts:panelKindOf` with new prefixes so
+   the PanelDrawer's discriminator picks them up — currently the
+   drawer renders an "Available in Phase 6" callout for unknown
+   kinds.
+3. **`Workspace.tsx` ref API** — mirror `addPlotPanel()` for each new
+   kind. Forward through `Shell` → `Drawer` → `LayoutDrawer` to
+   un-`aria-disable` the four currently-stubbed `+ <kind>` rows in
+   `LayoutDrawer.tsx` (Phase 4 left them as `aria-disabled` with a
+   "Available in Phase 6" title).
+4. **ScenePanel / MapPanel / TablePanel / EnumPanel** — each is
+   intentionally minimal for v1. ScenePanel is a placeholder canvas
+   with an empty-state callout (no three.js until the rust core
+   defines a point-cloud format). MapPanel pulls in `leaflet` +
+   `react-leaflet` (~40 KB gzipped — justify in PR; honour the 350 KB
+   budget). TablePanel is a hand-rolled windowed list (frontend skill
+   bans new component libraries). EnumPanel uses uPlot in step-plot
+   mode — extend uPlot, do not add a new charting library.
+5. **PanelDrawer body extensions** — once `panelKindOf` recognises
+   the new kinds, replace the `UnknownKind` fallback in
+   `PanelDrawer.tsx` with kind-specific option bodies (point size for
+   scene, lat/lon channel pickers for map, column visibility for
+   table, lane channel binding for enum). Reuse the row primitive in
+   `_row.module.css` and the section / toggle styles already in
+   `PanelDrawer.module.css`.
+6. **Worker-side fetch entry points** — each new panel kind needs an
+   Arrow IPC fetch path. For v1, scene/map/table/enum can call the
+   existing `mf4FetchRange` or a new `fetchEnumStateChanges`; do not
+   add Rust-side work for formats that aren't defined yet.
 
-The Phase 4 dev hooks (`saveCurrentLayoutAs`, `restoreNamedLayout`,
-`listNamedLayouts`) and the existing
-`setSelectedPanelId`/`getSelectedPanelId` cover everything Phase 5
-needs to test programmatically. No new persistence adapter unless the
-HUD slice lands in Phase 5 — if it does, fold it into the existing
-`layout/persist.ts` schema bump rather than introducing a new adapter
-file.
+The Phase 5 dev hooks (`getVideoHudOn`) and the new `panelNameFor`
+helper transfer cleanly. No new persistence adapter — fold the four
+binding maps into the existing `layout/persist.ts` v2 → v3 bump.
+
+## Carry-over notes for later phases (Phase 5 additions)
+
+- **Empty `EMPTY: readonly string[]` constant** in `PanelDrawer.tsx`:
+  used as the default for `plotBindings[panelId] ?? EMPTY`. Frozen
+  array; do not mutate. If a future drawer wants the same pattern,
+  share the constant rather than duplicating.
+- **Decoder field via 250 ms `setInterval`** in `PanelDrawer.tsx`:
+  reads `__drivelineVideoHud.codec` because the codec is owned by the
+  videoDecode worker, not the store. Acceptable latency for a
+  read-only label that only changes once per fixture load. If this
+  proves jittery in extended use, swap to `useSyncExternalStore`
+  driven by the rAF publication.
 
 ## Carry-over notes for later phases
 

@@ -2,15 +2,15 @@
 //
 // Switches on `activeRailTab` and renders the corresponding drawer
 // component. Phases 2-5 and 8 each replace one inline stub with a real
-// `shell/drawers/<Name>Drawer.tsx`. Phases 2, 3, and 4 wired the real
-// Sources, Channels, and Layout drawers; the other two (Panel, Events)
-// are still stubs.
+// `shell/drawers/<Name>Drawer.tsx`. Phases 2-5 wired the real Sources,
+// Channels, Layout, and Panel drawers; only Events is still a stub.
 
 import type { RailTab } from "../state/persist/ui";
 import { useSession } from "../state/store";
 import { SourcesDrawer } from "./drawers/SourcesDrawer";
 import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
 import { LayoutDrawer } from "./drawers/LayoutDrawer";
+import { PanelDrawer } from "./drawers/PanelDrawer";
 import styles from "./Drawer.module.css";
 
 interface StubProps {
@@ -39,14 +39,9 @@ function DrawerStub({ title, phase, what }: StubProps) {
 }
 
 const STUBS: Record<
-  Exclude<RailTab, "sources" | "channels" | "layout">,
+  Exclude<RailTab, "sources" | "channels" | "layout" | "panel">,
   { title: string; phase: number; what: string }
 > = {
-  panel: {
-    title: "Panel",
-    phase: 5,
-    what: "Settings for the currently selected panel.",
-  },
   events: {
     title: "Events",
     phase: 8,
@@ -87,5 +82,6 @@ export function Drawer({
         resetLayout={resetLayout}
       />
     );
+  if (activeRailTab === "panel") return <PanelDrawer />;
   return <DrawerStub {...STUBS[activeRailTab]} />;
 }

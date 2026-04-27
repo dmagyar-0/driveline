@@ -71,6 +71,7 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
           sourceKind={resolved.sourceKind}
           sourceHandle={resolved.source.handle}
           channelId={resolved.channel.id}
+          panelId={panelId}
         />
         <button
           type="button"

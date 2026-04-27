@@ -25,43 +25,17 @@
 }
 
 .row {
-  display: grid;
+  composes: rowBase from "./_row.module.css";
   grid-template-columns: 8px 1fr auto;
-  align-items: center;
   gap: var(--sp-4);
-  width: 100%;
-  padding: var(--sp-4) var(--sp-5);
-  background: transparent;
-  border: 0;
-  border-left: 2px solid transparent;
-  color: var(--color-fg-2);
-  cursor: pointer;
-  text-align: left;
-  border-radius: var(--radius-4);
-  transition: background var(--motion-base);
-  font: inherit;
-}
-
-.row:hover {
-  background: var(--color-bg-5);
-}
-
-.row:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: -2px;
 }
 
 .rowActive {
-  background: var(--color-bg-4);
-  border-left-color: var(--color-accent-orange);
-  border-radius: 0 var(--radius-4) var(--radius-4) 0;
+  composes: rowActive from "./_row.module.css";
 }
 
 .swatch {
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-2);
-  display: inline-block;
+  composes: swatch from "./_row.module.css";
 }
 
 .name {
@@ -155,7 +129,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .row,
   .loadRow {
     transition: none;
   }
