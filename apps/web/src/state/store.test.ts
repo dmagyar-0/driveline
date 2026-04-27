@@ -556,3 +556,123 @@ describe("layout + bindings (T6.2)", () => {
     expect(s.layoutJson).toBe(model);
   });
 });
+
+describe("UI shell slice (Phase 1)", () => {
+  // The top-level `beforeEach` resets session + layout state but
+  // intentionally leaves UI shell fields alone (because production
+  // `clear()` does, too). Reset them explicitly here so each test
+  // sees the documented defaults regardless of prior order.
+  beforeEach(() => {
+    useSession.getState().setActiveRailTab(null);
+    useSession.getState().setRailCollapsed(false);
+    useSession.getState().setSelectedPanelId(null);
+  });
+
+  it("defaults to a closed rail with no selected panel", () => {
+    const s = useSession.getState();
+    expect(s.activeRailTab).toBeNull();
+    expect(s.railCollapsed).toBe(false);
+    expect(s.selectedPanelId).toBeNull();
+  });
+
+  it("setActiveRailTab roundtrips and clears with null", () => {
+    useSession.getState().setActiveRailTab("channels");
+    expect(useSession.getState().activeRailTab).toBe("channels");
+    useSession.getState().setActiveRailTab("layout");
+    expect(useSession.getState().activeRailTab).toBe("layout");
+    useSession.getState().setActiveRailTab(null);
+    expect(useSession.getState().activeRailTab).toBeNull();
+  });
+
+  it("setActiveRailTab is a no-op when the value already matches", () => {
+    useSession.getState().setActiveRailTab("sources");
+    let fires = 0;
+    const unsub = useSession.subscribe(() => {
+      fires++;
+    });
+    try {
+      useSession.getState().setActiveRailTab("sources");
+      expect(fires).toBe(0);
+      // sanity: a real change still fires
+      useSession.getState().setActiveRailTab("events");
+      expect(fires).toBe(1);
+    } finally {
+      unsub();
+    }
+  });
+
+  it("setRailCollapsed roundtrips and short-circuits on identical input", () => {
+    useSession.getState().setRailCollapsed(true);
+    expect(useSession.getState().railCollapsed).toBe(true);
+    let fires = 0;
+    const unsub = useSession.subscribe(() => {
+      fires++;
+    });
+    try {
+      useSession.getState().setRailCollapsed(true);
+      expect(fires).toBe(0);
+      useSession.getState().setRailCollapsed(false);
+      expect(fires).toBe(1);
+      expect(useSession.getState().railCollapsed).toBe(false);
+    } finally {
+      unsub();
+    }
+  });
+
+  it("setSelectedPanelId roundtrips and short-circuits on identical input", () => {
+    useSession.getState().setSelectedPanelId("video-1");
+    expect(useSession.getState().selectedPanelId).toBe("video-1");
+    let fires = 0;
+    const unsub = useSession.subscribe(() => {
+      fires++;
+    });
+    try {
+      useSession.getState().setSelectedPanelId("video-1");
+      expect(fires).toBe(0);
+      useSession.getState().setSelectedPanelId(null);
+      expect(fires).toBe(1);
+      expect(useSession.getState().selectedPanelId).toBeNull();
+    } finally {
+      unsub();
+    }
+  });
+
+  it("clear preserves UI shell state (it outlives a session)", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    useSession.getState().setActiveRailTab("panel");
+    useSession.getState().setRailCollapsed(true);
+    useSession.getState().setSelectedPanelId("plot-7");
+
+    await useSession.getState().clear();
+    const s = useSession.getState();
+    // Session-level state was cleared, but the rail/panel selection
+    // survives so a re-drop doesn't reset the shell out from under the
+    // user.
+    expect(s.sources).toHaveLength(0);
+    expect(s.activeRailTab).toBe("panel");
+    expect(s.railCollapsed).toBe(true);
+    expect(s.selectedPanelId).toBe("plot-7");
+
+    // Tidy up so the global store doesn't leak into other suites.
+    useSession.getState().setActiveRailTab(null);
+    useSession.getState().setRailCollapsed(false);
+    useSession.getState().setSelectedPanelId(null);
+  });
+
+  it("UI shell setters are independent of each other", () => {
+    useSession.getState().setActiveRailTab("layout");
+    useSession.getState().setRailCollapsed(true);
+    useSession.getState().setSelectedPanelId("video-3");
+    const s = useSession.getState();
+    expect(s.activeRailTab).toBe("layout");
+    expect(s.railCollapsed).toBe(true);
+    expect(s.selectedPanelId).toBe("video-3");
+
+    // Tidy up.
+    useSession.getState().setActiveRailTab(null);
+    useSession.getState().setRailCollapsed(false);
+    useSession.getState().setSelectedPanelId(null);
+  });
+});
