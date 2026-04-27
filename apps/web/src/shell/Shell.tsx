@@ -21,6 +21,10 @@ export interface ShellProps {
   onDrop: (e: React.DragEvent<HTMLElement>) => void;
   onDragOver: (e: React.DragEvent<HTMLElement>) => void;
   onDragLeave: (e: React.DragEvent<HTMLElement>) => void;
+  /** Forwarded to the Channels drawer so it can mint a plot panel
+   *  when the user clicks a channel without a panel selected. App
+   *  owns the FlexLayout `WorkspaceHandle`; Shell only forwards. */
+  ensurePlotPanel: () => string | null;
   transport: ReactNode;
   children: ReactNode;
 }
@@ -31,6 +35,7 @@ export function Shell({
   onDrop,
   onDragOver,
   onDragLeave,
+  ensurePlotPanel,
   transport,
   children,
 }: ShellProps) {
@@ -45,7 +50,7 @@ export function Shell({
       <TopBar ready={ready} />
       <div className={styles.work}>
         <Rail />
-        <Drawer />
+        <Drawer ensurePlotPanel={ensurePlotPanel} />
         <div className={styles.workMain}>{children}</div>
       </div>
       {transport}

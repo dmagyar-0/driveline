@@ -2,12 +2,13 @@
 //
 // Switches on `activeRailTab` and renders the corresponding drawer
 // component. Phases 2-5 and 8 each replace one inline stub with a real
-// `shell/drawers/<Name>Drawer.tsx`. Phase 2 wired the real Sources
-// drawer; the other four are still stubs.
+// `shell/drawers/<Name>Drawer.tsx`. Phases 2 and 3 wired the real
+// Sources and Channels drawers; the other three are still stubs.
 
 import type { RailTab } from "../state/persist/ui";
 import { useSession } from "../state/store";
 import { SourcesDrawer } from "./drawers/SourcesDrawer";
+import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
 import styles from "./Drawer.module.css";
 
 interface StubProps {
@@ -36,14 +37,9 @@ function DrawerStub({ title, phase, what }: StubProps) {
 }
 
 const STUBS: Record<
-  Exclude<RailTab, "sources">,
+  Exclude<RailTab, "sources" | "channels">,
   { title: string; phase: number; what: string }
 > = {
-  channels: {
-    title: "Channels",
-    phase: 3,
-    what: "Per-source channel list with click-to-bind to the active panel.",
-  },
   layout: {
     title: "Layout",
     phase: 4,
@@ -61,9 +57,18 @@ const STUBS: Record<
   },
 };
 
-export function Drawer() {
+export interface DrawerProps {
+  /** Mints (or returns) a plot panel id when the Channels drawer's
+   *  click-to-bind path needs a target and none is selected. Owned by
+   *  `App.tsx`, which has the `WorkspaceHandle` ref. */
+  ensurePlotPanel: () => string | null;
+}
+
+export function Drawer({ ensurePlotPanel }: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
   if (activeRailTab === null) return null;
   if (activeRailTab === "sources") return <SourcesDrawer />;
+  if (activeRailTab === "channels")
+    return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
   return <DrawerStub {...STUBS[activeRailTab]} />;
 }

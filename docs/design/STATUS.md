@@ -99,7 +99,55 @@ the end of each shipped phase so future sessions know where to resume.
       suite 23/23 pass — including `crossPanelSync.spec.ts:212`,
       whose Phase 1 sandbox-only flake did not reproduce on this run.
       perf project skipped per its dependency on chromium.
-- [ ] **Phase 3 · Channels drawer**
+- [x] **Phase 3 · Channels drawer** —
+      `apps/web/src/shell/drawers/ChannelsDrawer.{tsx,module.css}` added.
+      Reads `channels`, `sources`, `selectedPanelId`, `plotBindings`, and
+      `videoBindings` from the store via discrete single-key selectors;
+      query and per-source collapsed state are local `useState`. Channels
+      are grouped by source with collapsible `<button aria-expanded
+      aria-controls>` headers; the search input filters by substring on
+      `channel.name` (groups whose every channel filters out are hidden
+      so the user isn't scrolling past empty headers). Channel rows
+      render with `palette.ts:colorFor(channel.id)` for the 8×8 swatch
+      and the `dtype` field for the badge (`f64`/`f32`/`enum`/`u32`),
+      mirroring the SourcesDrawer row primitive (`.row`, `.swatch`,
+      `.kind`, `.pill` are duplicated locally — rule of three; revisit
+      at Phase 5). Click-to-bind: with no panel selected it calls
+      `ensurePlotPanel()` (forwarded from `App.tsx` via `Shell` →
+      `Drawer` props) which delegates to the existing
+      `WorkspaceHandle.addPlotPanel()`, marks the new id selected, then
+      binds. With a selected plot it calls `addPlotChannel`; with a
+      selected video it calls `setVideoBinding`. Already-bound rows show
+      the `.rowActive` style and a `title="Already bound to this panel"`
+      tooltip; when the active plot panel is at `MAX_PLOT_SERIES`, rows
+      render `aria-disabled` with `title="Plot full (8)"` instead of
+      silently no-opping the duplicate-protected store action.
+      Panel-kind discrimination from `selectedPanelId` is centralised in
+      a new `apps/web/src/layout/panelId.ts` module exporting
+      `PLOT_PREFIX`, `VIDEO_PREFIX`, and
+      `panelKindOf(id): "plot" | "video" | null`; `Workspace.tsx`'s
+      `addVideoPanel` / `addPlotPanel` now mint ids using those
+      constants so the convention has one canonical home (no FlexLayout
+      JSON parsing in the click hot path). Two new dev hooks added in
+      `App.tsx` next to `setActiveRailTab`/`getActiveRailTab`:
+      `setSelectedPanelId(id)` and `getSelectedPanelId()`. Drag-and-drop
+      from the drawer is deferred per integration plan §Phase 3.4. The
+      Phase 2 carry-over to lift Sources-drawer `selectedId` into the
+      `ui` slice as `selectedSourceId` is **not** done in Phase 3 — the
+      spec only filters by name substring, not by selected source; the
+      carry-over note remains live for any future drawer that needs
+      source-scoped channel filtering. Verification: `pnpm --filter web
+      build` passes (gzipped initial JS 190.11 KB, +1.14 KB vs. Phase
+      2's 188.97 KB baseline, well under the 350 KB budget); `pnpm
+      --filter web test --run` 153/153 pass; chromium e2e 22/23 pass —
+      the only failure is the Phase 1 sandbox flake on
+      `crossPanelSync.spec.ts:212` (pixel-compare at `t_7500` mismatched
+      ~16% vs. the 5% threshold), reproducing the colour-space drift
+      between the sandbox's local ffmpeg encoder and Chromium's
+      WebCodecs decode that this STATUS.md already documents at lines
+      53–62. None of the Phase 3 changes touch the video decode pipeline
+      that flake covers. Perf project skipped per its dependency on
+      chromium.
 - [ ] **Phase 4 · Layout drawer**
 - [ ] **Phase 5 · Panel drawer**
 - [ ] **Phase 6 · New panel kinds (Scene / Map / Table / Enum)**
@@ -110,44 +158,56 @@ the end of each shipped phase so future sessions know where to resume.
 
 ## Where to continue
 
-Next phase: **Phase 3 · Channels drawer.** Read
-`docs/design/v1-shell-integration.md` § Phase 3 for the row layout,
-group-by-source behaviour, click-to-bind-to-active-panel rules, and
-search input. Concretely:
+Next phase: **Phase 4 · Layout drawer.** Read
+`docs/design/v1-shell-integration.md` § Phase 4 (lines 178-199) for
+the two-section layout (Saved layouts + Add panel), the `namedLayouts`
+slice and persistence shape, and the move of the existing
+`Workspace.tsx` toolbar into the drawer. Concretely:
 
-1. Create `apps/web/src/shell/drawers/ChannelsDrawer.{tsx,module.css}`.
-   Read `channels` from the store via a single-key selector. Group
-   rendering by `sourceId`; collapsible source headers. Within each
-   group, render channel rows with swatch (`palette.ts:colorFor(channel.id)`),
-   name, and dtype badge (`f64`/`f32`/`enum`/`u32`).
-2. Replace the inline `channels` stub in `apps/web/src/shell/Drawer.tsx`
-   (`STUBS.channels`) with `<ChannelsDrawer />`.
-3. Click handler: bind to `selectedPanelId`. If the panel is a plot,
-   call `addPlotChannel`; if video, call `setVideoBinding`. If no
-   panel is selected, call `addPlotPanel()` then bind. Reuse store
-   actions — do not introduce new ones. Note: `selectedPanelId` is in
-   the `ui` slice but is not wired anywhere yet (Phase 7 owns the
-   panel-chrome click-to-select). For Phase 3 the "no selected panel
-   → auto-add a plot" branch is the only path that exists end-to-end;
-   the explicit-bind branch is reachable from Playwright via
-   `setSelectedPanelId` (add this dev hook in Phase 3).
-4. Top-of-drawer search input filtering by substring on `channel.name`
-   (local `useState`, not the store).
-5. Lift Sources-drawer selection into the `ui` slice when the channel
-   filter is implemented (see carry-over below).
+1. Create `apps/web/src/shell/drawers/LayoutDrawer.{tsx,module.css}`.
+   Replace `Drawer.tsx`'s `STUBS.layout` arm with `<LayoutDrawer />`.
+2. **Add panel section** — wire through the existing `WorkspaceHandle`
+   ref (already plumbed for Phase 3 as `ensurePlotPanel`; broaden to
+   forward the full handle, OR keep a narrow callback per row).
+   `+ video`, `+ plot` map to `addVideoPanel()` / `addPlotPanel()`. The
+   four new kinds (`+ 3D scene`, `+ map`, `+ table`, `+ enum`) block on
+   Phase 6 implementations — render disabled rows in Phase 4 with a
+   `title="Available in Phase 6"` tooltip until then. `Reset layout`
+   maps to `resetLayout()`.
+3. **Saved layouts section** — add a `namedLayouts` slice plus
+   `apps/web/src/state/persist/namedLayouts.ts` adapter (storage key
+   `driveline.layouts.named.v1`, schema-versioned, BigInt-safe via
+   serialise-as-string mirroring `state/persist/ui.ts` and
+   `layout/persist.ts`). Each row = name + meta tag (`live` if its
+   layout JSON matches the current one). Click = restore (`setLayoutJson`
+   + restore stored binding maps). `+ save current as…` opens a small
+   inline name input that calls a new store action
+   `saveCurrentLayoutAs(name)`.
+4. Remove the toolbar block at `Workspace.tsx:181-207` (`+ Video panel`,
+   `+ Plot panel`, `Reset layout`). Keep the empty-shell fallback
+   (`rootEmpty` branch).
+5. Add dev hooks: `saveCurrentLayoutAs(name)`, `restoreNamedLayout(id)`,
+   `listNamedLayouts()`. The Phase 3 hooks (`setSelectedPanelId`,
+   `getSelectedPanelId`) are already exposed.
+6. Update e2e specs that select on `data-testid="add-video-panel" /
+   "add-plot-panel" / "reset-layout"` or on `workspace-toolbar` — those
+   nodes move out of `Workspace`. Prefer the dev hooks
+   (`addVideoPanel`, `addPlotPanel`, `resetLayout`) over DOM selectors.
 
-The new dev hooks `listSources()` and `getGlobalRange()` exist; reuse
-them when adding e2e for Phase 3. `palette.ts:colorFor`,
-`formatTime.ts`, and the existing `addPlotChannel` / `setVideoBinding`
-store actions cover everything Phase 3 needs — do not introduce
-parallel utilities.
+The Phase 3 dev hooks (`setSelectedPanelId`, `getSelectedPanelId`),
+`panelId.ts:panelKindOf`, and the existing `addPlotChannel` /
+`setVideoBinding` actions cover everything Phase 3 needs — Phase 4 only
+introduces the `namedLayouts` slice and its persistence adapter on top
+of these.
 
 ## Carry-over notes for later phases
 
-- **Phase 3 (Channels drawer) — selected source lift**: Phase 2 keeps
-  `SourcesDrawer`'s `selectedId` in local `useState` per integration
-  plan §Phase 2.3. When Channels needs to filter rows by selected
-  source, lift this to the `ui` slice as
+- **Future drawer (source-scoped channel filter) — selected source lift**:
+  Phase 2 keeps `SourcesDrawer`'s `selectedId` in local `useState` per
+  integration plan §Phase 2.3. Phase 3 didn't need it because the
+  ChannelsDrawer search filters by name substring, not by source. When
+  any future drawer (or a Channels-drawer enhancement) needs source-
+  scoped channel filtering, lift this to the `ui` slice as
   `selectedSourceId: string | null` with a `setSelectedSourceId`
   action (mirror `setSelectedPanelId`). Persist via
   `state/persist/ui.ts` (bump `UI_SCHEMA_VERSION` to 2 with a

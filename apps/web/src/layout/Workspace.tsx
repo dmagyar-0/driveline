@@ -36,6 +36,7 @@ import {
   defaultLayoutModel,
 } from "./defaultLayout";
 import { panelFactory } from "./panelFactory";
+import { PLOT_PREFIX, VIDEO_PREFIX } from "./panelId";
 import styles from "./Workspace.module.css";
 
 export interface WorkspaceHandle {
@@ -140,7 +141,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
 
   const addVideoPanel = useCallback(
     (channelId?: string) => {
-      const id = newPanelId("video");
+      const id = newPanelId(VIDEO_PREFIX);
       if (channelId) setVideoBinding(id, channelId);
       return addTab({
         type: "tab",
@@ -153,7 +154,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
   );
 
   const addPlotPanel = useCallback(() => {
-    const id = newPanelId("plot");
+    const id = newPanelId(PLOT_PREFIX);
     return addTab({
       type: "tab",
       id,
