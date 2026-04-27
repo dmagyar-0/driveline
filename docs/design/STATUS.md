@@ -60,7 +60,45 @@ the end of each shipped phase so future sessions know where to resume.
       unverified for this phase but the rail/topbar/drawer code does
       not touch the cursor hot path or the video decode pipeline that
       those budgets cover.
-- [ ] **Phase 2 · Sources drawer**
+- [x] **Phase 2 · Sources drawer** —
+      `apps/web/src/shell/drawers/SourcesDrawer.{tsx,module.css}` added.
+      Reads `sources` and `globalRange` via discrete single-key
+      selectors; uses `panels/palette.ts:colorFor(source.id)` for the
+      8×8 swatch (the integration plan's `colourForId` is misnamed —
+      the real export is `colorFor`). Kind labels render as `MCAP` /
+      `MF4` / `MP4+TS` (the `mp4+sidecar` store kind maps to the
+      `MP4+TS` badge). Selected source row uses local `useState` per
+      plan §Phase 2.3 — no store coupling yet (carry-over below). The
+      "+ drop / load file…" row triggers a hidden `<input type="file"
+      multiple>` and dispatches through the existing
+      `useSession.openFiles(files)` action, so the load path is
+      identical to drag-drop. Global range section uses
+      `timeline/formatTime.ts:formatAbsolute / formatDuration` for a
+      human-readable display rather than the legacy raw `[startNs,
+      endNs)` text. `Drawer.tsx` now branches: `sources` →
+      `<SourcesDrawer />`; the other four arms are still inline stubs.
+      Two new dev hooks were added in `App.tsx` next to `listChannels`:
+      `listSources()` returns `{id, kind, name, timeRange:{startNs,endNs},
+      channelIds}[]` with BigInts serialised as decimal strings;
+      `getGlobalRange()` returns `{startNs,endNs}|null` with the same
+      serialisation, mirroring `getSessionSnapshot`. The cleanup the
+      Phase 1 STATUS pre-announced is done: deleted `App.module.css`
+      entirely, deleted the inline `SessionSummary` function (it was
+      never a separate file as the integration plan suggested),
+      deleted the `legacyShim` block, the `recentErrors` `useState`,
+      its three setter calls, and the `formatRange` helper. App.tsx
+      now returns `<Shell>{<Workspace>}</Shell>` directly. The two
+      e2e specs that depended on the shim were migrated onto the new
+      dev hooks (frontend-skill "hook over selector" rule):
+      `session-drop.spec.ts` reads `listSources()` + `getGlobalRange()`
+      instead of the six legacy testids; `videoMp4.spec.ts:158` reads
+      `listSources().map(s=>s.name)` instead of the `source-name`
+      testid. Verification: `pnpm --filter web build` passes (gzipped
+      initial JS 188.97 KB, +0.37 KB vs. Phase 1's 188.6 KB baseline);
+      `pnpm --filter web test --run` 153/153 pass; full chromium e2e
+      suite 23/23 pass — including `crossPanelSync.spec.ts:212`,
+      whose Phase 1 sandbox-only flake did not reproduce on this run.
+      perf project skipped per its dependency on chromium.
 - [ ] **Phase 3 · Channels drawer**
 - [ ] **Phase 4 · Layout drawer**
 - [ ] **Phase 5 · Panel drawer**
@@ -72,41 +110,52 @@ the end of each shipped phase so future sessions know where to resume.
 
 ## Where to continue
 
-Next phase: **Phase 2 · Sources drawer.** Read
-`docs/design/v1-shell-integration.md` § Phase 2 for the file list, the
-swatch/kind-badge layout, and the "+ drop / load file…" affordance.
-Concretely:
+Next phase: **Phase 3 · Channels drawer.** Read
+`docs/design/v1-shell-integration.md` § Phase 3 for the row layout,
+group-by-source behaviour, click-to-bind-to-active-panel rules, and
+search input. Concretely:
 
-1. Create `apps/web/src/shell/drawers/SourcesDrawer.tsx` +
-   `SourcesDrawer.module.css`. Read `sources` and `globalRange` from
-   the store via discrete selectors (frontend-skill single-key rule).
-   Use `panels/palette.ts:colourForId` for the swatch.
-2. Replace the inline `sources` stub in
-   `apps/web/src/shell/Drawer.tsx` with `<SourcesDrawer />`. Leave the
-   other four stubs untouched — they're Phase 3/4/5/8.
-3. Migrate `apps/e2e/tests/session-drop.spec.ts` and
-   `apps/e2e/tests/videoMp4.spec.ts:158` from the legacy
-   `source-count` / `source-name` / `channel-count` / `source-range` /
-   `global-range` testids onto whatever testids the new drawer
-   exposes (or, preferably, onto `__drivelineDevHooks.listChannels()`
-   and a new `listSources()` hook to match the frontend skill's
-   "hook over selector" rule).
-4. Once those two specs are green against the new drawer, delete:
-   - `apps/web/src/App.module.css` (entirely)
-   - The `SessionSummary` function and its render shim from
-     `App.tsx`
-   - The `recentErrors` `useState` and the import of
-     `App.module.css`
-   - The `SourceMeta` / `TimeRange` / `formatRange` imports/helpers
-     in `App.tsx` that only the shim used.
+1. Create `apps/web/src/shell/drawers/ChannelsDrawer.{tsx,module.css}`.
+   Read `channels` from the store via a single-key selector. Group
+   rendering by `sourceId`; collapsible source headers. Within each
+   group, render channel rows with swatch (`palette.ts:colorFor(channel.id)`),
+   name, and dtype badge (`f64`/`f32`/`enum`/`u32`).
+2. Replace the inline `channels` stub in `apps/web/src/shell/Drawer.tsx`
+   (`STUBS.channels`) with `<ChannelsDrawer />`.
+3. Click handler: bind to `selectedPanelId`. If the panel is a plot,
+   call `addPlotChannel`; if video, call `setVideoBinding`. If no
+   panel is selected, call `addPlotPanel()` then bind. Reuse store
+   actions — do not introduce new ones. Note: `selectedPanelId` is in
+   the `ui` slice but is not wired anywhere yet (Phase 7 owns the
+   panel-chrome click-to-select). For Phase 3 the "no selected panel
+   → auto-add a plot" branch is the only path that exists end-to-end;
+   the explicit-bind branch is reachable from Playwright via
+   `setSelectedPanelId` (add this dev hook in Phase 3).
+4. Top-of-drawer search input filtering by substring on `channel.name`
+   (local `useState`, not the store).
+5. Lift Sources-drawer selection into the `ui` slice when the channel
+   filter is implemented (see carry-over below).
 
-The `ui` slice exists; `selectedPanelId` is in place but unwired
-(Phase 7 owns it). The dropzone overlay testid contract is preserved
-on the Shell `<main>`. Reuse `palette.ts` and `formatTime.ts` —
-do not introduce parallel utilities (frontend-skill rule).
+The new dev hooks `listSources()` and `getGlobalRange()` exist; reuse
+them when adding e2e for Phase 3. `palette.ts:colorFor`,
+`formatTime.ts`, and the existing `addPlotChannel` / `setVideoBinding`
+store actions cover everything Phase 3 needs — do not introduce
+parallel utilities.
 
 ## Carry-over notes for later phases
 
+- **Phase 3 (Channels drawer) — selected source lift**: Phase 2 keeps
+  `SourcesDrawer`'s `selectedId` in local `useState` per integration
+  plan §Phase 2.3. When Channels needs to filter rows by selected
+  source, lift this to the `ui` slice as
+  `selectedSourceId: string | null` with a `setSelectedSourceId`
+  action (mirror `setSelectedPanelId`). Persist via
+  `state/persist/ui.ts` (bump `UI_SCHEMA_VERSION` to 2 with a
+  migration that defaults `selectedSourceId` to `null` for v1 reads).
+  Wire `clear()` in `state/store.ts` to also reset
+  `selectedSourceId` so a stale id can't survive `clearSession()`.
+  Until then, Sources-drawer selection has no functional consequence
+  and a stale id after clearSession silently shows no row as active.
 - **Phase 7 (panel chrome)**: revisit `Workspace.module.css:71`
   (`--color-tab-selected: var(--color-accent-orange)`) — Phase 7's plan
   flips this to `var(--color-fg-2)` for the new selected-panel chrome.

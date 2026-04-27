@@ -41,6 +41,7 @@ declare global {
         channelId: string | null,
       ) => void;
       resetLayout: () => void;
+      listSources: () => Array<{ id: string; name: string }>;
     };
   }
 }
@@ -155,7 +156,9 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
   });
 
   test("source list shows the mp4 source", async ({ page }) => {
-    const names = await page.getByTestId("source-name").allTextContents();
+    const names = await page.evaluate(() =>
+      window.__drivelineDevHooks!.listSources().map((s) => s.name),
+    );
     expect(names.some((n) => n.includes("short.mp4"))).toBe(true);
   });
 

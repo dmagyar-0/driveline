@@ -1,0 +1,162 @@
+/* Inner content for the Sources drawer. The 220px wrapper, scroll
+ * behaviour, padding and gap come from `Drawer.module.css:.drawer`,
+ * which this drawer's <aside> reuses. */
+
+.pill {
+  display: inline-block;
+  padding: 0 var(--sp-3);
+  min-width: 20px;
+  text-align: center;
+  background: var(--color-bg-4);
+  color: var(--color-fg-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-12);
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  padding: var(--sp-4) var(--sp-5);
+  background: transparent;
+  border: 0;
+  border-left: 2px solid transparent;
+  color: var(--color-fg-2);
+  cursor: pointer;
+  text-align: left;
+  border-radius: var(--radius-4);
+  transition: background var(--motion-base);
+  font: inherit;
+}
+
+.row:hover {
+  background: var(--color-bg-5);
+}
+
+.row:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.rowActive {
+  background: var(--color-bg-4);
+  border-left-color: var(--color-accent-orange);
+  border-radius: 0 var(--radius-4) var(--radius-4) 0;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-2);
+  display: inline-block;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+}
+
+.kind {
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-5);
+  text-transform: uppercase;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+}
+
+.loadRow {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-4) var(--sp-5);
+  background: transparent;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-4);
+  color: var(--color-fg-4);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-13);
+  transition: border-color var(--motion-base), color var(--motion-base);
+}
+
+.loadRow:hover {
+  border-color: var(--color-border-hover);
+  color: var(--color-fg-2);
+}
+
+.loadRow:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  padding: 0;
+  margin: -1px;
+  border: 0;
+}
+
+.separator {
+  border: 0;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: var(--sp-3) 0;
+  width: 100%;
+}
+
+.globalSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.rangeBlock {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: var(--sp-5);
+  row-gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--fs-12);
+}
+
+.rangeBlock dt {
+  color: var(--color-fg-5);
+}
+
+.rangeBlock dd {
+  margin: 0;
+  color: var(--color-fg-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  font-size: var(--fs-12);
+  color: var(--color-fg-6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row,
+  .loadRow {
+    transition: none;
+  }
+}
