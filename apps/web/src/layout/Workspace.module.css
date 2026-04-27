@@ -47,13 +47,18 @@
  * custom properties let us nudge the palette to match the rest of the
  * app (orange cursor accent, slightly darker backgrounds). Only the
  * vars that the installed 0.8.x `dark.css` documents are overridden.
+ *
+ * Phase 7 · the selected tab uses neutral white-on-grey, NOT orange.
+ * The wireframe author rejected orange for selection chrome (see
+ * `wireframe-bundle/chats/chat1.md`). Series colour space stays
+ * reserved for plot data; chrome stays neutral.
  */
 .flexContainer :global(.flexlayout__layout) {
   --color-background: var(--color-bg-1);
   --color-text: var(--color-fg-2);
   --color-tabset-background: var(--color-bg-3);
   --color-tabset-background-selected: var(--color-bg-4);
-  --color-tab-selected: var(--color-accent-orange);
+  --color-tab-selected: var(--color-fg-2);
   --color-tab-selected-background: var(--color-bg-3);
   --color-splitter: var(--color-border-subtle);
   /* Name collides with our token (--color-splitter-hover); inline the
@@ -61,4 +66,95 @@
    * driveline token. */
   --color-splitter-hover: #3a3a3a;
   --color-splitter-drag: var(--color-accent-orange);
+}
+
+/* Phase 7 · tabset border. FlexLayout adds `flexlayout__tabset-selected`
+ * on the active tabset; give it a hover-grey ring instead of orange. */
+.flexContainer :global(.flexlayout__tabset) {
+  border: 1px solid var(--color-border-subtle);
+}
+.flexContainer :global(.flexlayout__tabset-selected) {
+  border-color: var(--color-border-hover);
+}
+
+/* Phase 7 · per-tab chrome injected via Workspace.tsx's `onRenderTab`.
+ * Layout: grip + name + kind badge | always-visible four-icon cluster.
+ * Buttons are 24×24 hit targets with 12px glyphs (the tab strip is
+ * dense — the larger 44×44 minimum belongs to the transport bar). */
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font-size: var(--fs-13);
+  color: inherit;
+  /* FlexLayout sizes the tab strip; let the chrome breathe inside it. */
+  padding: 0 var(--sp-2);
+}
+
+.tabGrip {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-fg-5);
+  cursor: grab;
+}
+
+.tabName {
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 16ch;
+}
+
+.tabKind {
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-4);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  padding: 0 var(--sp-3);
+  line-height: 1.4;
+}
+
+.tabActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-3);
+}
+
+.tabActionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-4);
+  border-radius: var(--radius-3);
+  cursor: pointer;
+  padding: 0;
+}
+
+.tabActionBtn:hover {
+  background: var(--color-bg-5);
+  color: var(--color-fg-2);
+}
+
+.tabActionBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.tabActionDisabled,
+.tabActionDisabled:hover {
+  color: var(--color-fg-6);
+  background: transparent;
+  cursor: not-allowed;
 }

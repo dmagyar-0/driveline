@@ -2,7 +2,9 @@
 // the layout JSON maps to one React container; the container owns the
 // panel-id-keyed lookup into the store's binding maps (per
 // `docs/06-ui-and-panels.md:165-167`). Phase 6 added the four new panel
-// kinds (scene / map / table / enum).
+// kinds (scene / map / table / enum). Phase 7 added the click-to-select
+// wrapper so any pointerdown inside a panel marks it as the active
+// panel for the Panel drawer.
 
 import type { TabNode } from "flexlayout-react";
 import { PlotPanel } from "../panels/PlotPanel";
@@ -11,6 +13,7 @@ import { ScenePanel } from "../panels/ScenePanel";
 import { MapPanel } from "../panels/MapPanel";
 import { TablePanel } from "../panels/TablePanel";
 import { EnumPanel } from "../panels/EnumPanel";
+import { useSession } from "../state/store";
 import {
   PANEL_COMPONENT_ENUM,
   PANEL_COMPONENT_MAP,
@@ -19,10 +22,28 @@ import {
   PANEL_COMPONENT_TABLE,
   PANEL_COMPONENT_VIDEO,
 } from "./defaultLayout";
+import styles from "./panelFactory.module.css";
 
 export function panelFactory(node: TabNode): React.ReactNode {
   const component = node.getComponent();
   const panelId = node.getId();
+  return (
+    <div
+      className={styles.panelBody}
+      data-testid={`panel-body-${panelId}`}
+      onPointerDown={() => {
+        useSession.getState().setSelectedPanelId(panelId);
+      }}
+    >
+      {renderPanel(component, panelId)}
+    </div>
+  );
+}
+
+function renderPanel(
+  component: string | undefined,
+  panelId: string,
+): React.ReactNode {
   switch (component) {
     case PANEL_COMPONENT_VIDEO:
       return <VideoPanelContainer panelId={panelId} />;

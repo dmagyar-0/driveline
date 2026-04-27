@@ -420,50 +420,208 @@ the end of each shipped phase so future sessions know where to resume.
       well under the 350 KB budget — must be confirmed in the first CI
       run. None of the Phase 6 changes touch the cursor hot path or
       the video decode pipeline.
-- [ ] **Phase 7 · Per-panel chrome via FlexLayout customisation**
+- [x] **Phase 7 · Per-panel chrome via FlexLayout customisation** —
+      `apps/web/src/layout/Workspace.tsx` now passes `onRenderTab` and
+      `onRenderTabSet` to `<Layout>`. The custom tab content is a
+      flex row containing a 6-dot grip glyph, the panel name (16ch
+      ellipsis), a kind badge from a new shared
+      `layout/panelId.ts:kindLabel(kind)` helper (lifted out of
+      PanelDrawer.tsx, which now imports the same function — single
+      source of truth for the badge text), and a cluster of four
+      always-rendered icon buttons: settings, collapse (greyed,
+      `aria-disabled="true"`, `tabIndex={-1}`, title `"Collapse —
+      coming in a later phase"` per integration plan §Phase 7.2),
+      maximize (`Actions.maximizeToggle(node.getParent().getId())`
+      against the model), and close (`Actions.deleteTab(panelId)`).
+      `renderValues.buttons = []` suppresses FlexLayout's default
+      close icon. Settings click runs
+      `useSession.getState().setSelectedPanelId(panelId)` then
+      `useSession.getState().setActiveRailTab("panel")` — store
+      access via `getState()` keeps the render callback hook-free,
+      and the callback itself is `useCallback`'d on `model` so its
+      identity stays stable across cursor ticks. Every icon button
+      blocks `pointerdown` propagation so the chrome clicks don't
+      seed FlexLayout's tab-drag gesture. `onRenderTabSet` is an
+      empty no-op for v1 (single-tab tabsets already match the
+      wireframe). The frontend-skill "thing disappears when status
+      changes" trap is explicitly avoided: the icon cluster has no
+      hover/selection predicate — it is always rendered, with
+      neutral colour, and only the disabled-collapse button changes
+      affordance. The `BorderNode` import was added so
+      `onRenderTabSet`'s parameter signature accepts FlexLayout's
+      `TabSetNode | BorderNode` union (the public type is wider than
+      our usage).
+      **Click-to-select panel:** `apps/web/src/layout/panelFactory.tsx`
+      wraps every panel body in a `<div className={panelBody}
+      data-testid="panel-body-<id>" onPointerDown=...>` that calls
+      `useSession.getState().setSelectedPanelId(panelId)`. The
+      `panelFactory.module.css:.panelBody` rule is `display: contents`
+      so the wrapper has zero layout impact (PlotPanel / VideoPanel
+      / MapPanel still get their direct parent sizing) and pointer
+      events bubble through unchanged. The factory was refactored to
+      delegate the kind switch to a private `renderPanel(component,
+      panelId)` so the wrapper stays the single outer node — no
+      duplicated `<div>` per case, no risk that a future kind
+      forgets the wrapper.
+      **CSS overrides** in `Workspace.module.css`: the carry-over
+      from Phase 0 (`--color-tab-selected: var(--color-accent-orange)`,
+      line 56) is flipped to `var(--color-fg-2)`. New global rules
+      give every tabset a `1px solid var(--color-border-subtle)`
+      border and the active tabset
+      (`flexlayout__tabset-selected`) a `var(--color-border-hover)`
+      mid-grey ring — explicitly NOT orange per the user pushback in
+      `wireframe-bundle/chats/chat1.md`. New module-scoped classes
+      `.tab`, `.tabGrip`, `.tabName`, `.tabKind`, `.tabActions`,
+      `.tabActionBtn`, and `.tabActionDisabled` style the chrome:
+      22×22 hit targets (denser than the 44×44 transport bar floor —
+      the tab strip is intentionally tight), tabular kind pill in
+      `var(--color-bg-4)` with a subtle border, focus rings via
+      `var(--focus-ring)` on every interactive button, and the
+      disabled collapse rendered with `var(--color-fg-6)` + `cursor:
+      not-allowed`.
+      **Cursor token (carry-over rolled in):** the hardcoded
+      `ctx.strokeStyle = "#f97316"` at `panels/PlotPanel.tsx:368`
+      and the matching one at `panels/EnumPanel.tsx:193` are both
+      replaced with a new shared helper
+      `panels/cursorOverlay.ts:cursorStrokeColor()` that reads
+      `--color-accent-orange` off `:root` at draw-time via
+      `getComputedStyle(document.documentElement)`. `getComputedStyle`
+      on `document.documentElement` is fast (no layout thrash); the
+      one call per cursor tick stays comfortably inside PlotPanel's
+      < 4 ms render budget. The helper falls back to the literal
+      `#f97316` for jsdom (where the var is undefined) and for SSR
+      (no `document`). The MapPanel polyline at line 186 is
+      intentionally **not** swept here — it's a data-viz path
+      colour, not a cursor; flagged as Phase 9 polish below.
+      **Shared kind label:** the duplicate `kindLabel(kind)` switch
+      between `Workspace.tsx` and `PanelDrawer.tsx` was hoisted into
+      `layout/panelId.ts` as a new export (exhaustive switch over
+      `PanelKind`; adding a kind forces a label too). PanelDrawer's
+      local copy is removed; the rule-of-three hadn't quite fired
+      but the function genuinely belongs alongside the
+      discriminator.
+      **No new dev hooks, no schema bump, no new persistence
+      adapter** — the integration plan called this out explicitly,
+      and the existing
+      `setSelectedPanelId`/`getSelectedPanelId`/`setActiveRailTab`/
+      `getActiveRailTab` hooks (Phases 1/3/5) are the test seam.
+      `getLayoutJson()` (already exposed) carries the FlexLayout
+      `maximized` field round-trip so the e2e can assert it without
+      an `Actions`-specific peek.
+      Verification: `pnpm exec tsc --noEmit -p apps/web` passes
+      cleanly. `pnpm --filter web test --run` 238/238 pass (232
+      Phase 6 baseline + 1 new `kindLabel` case in
+      `layout/panelId.test.ts` + 2 new `cursorStrokeColor` cases in
+      `panels/cursorOverlay.test.ts` + 3 new
+      `layout/panelFactory.test.tsx` cases covering the wrapper
+      testid, the pointerdown → store mutation contract, and the
+      unknown-kind fallback path). `pnpm --filter web build` and
+      the e2e suite were not run in this session for the same
+      reason Phases 5–6 documented — the sandbox lacks `wasm-pack`
+      and the gitignored `apps/web/src/wasm/wasm_bindings.js`
+      cannot be regenerated here. The TypeScript graph is verified
+      via the gitignored `apps/web/src/wasm/wasm_bindings.d.ts`
+      stub recreated locally; production build/CI is unaffected.
+      Bundle delta is unmeasured locally but expected at +2–3 KB
+      gzipped (six tiny inline SVG icons + ~110 lines of CSS),
+      well under the 350 KB budget; must be confirmed in the first
+      CI run. None of the Phase 7 changes touch the cursor hot
+      path — the per-tab render callback fires only when the
+      FlexLayout model changes (drag, add, close, maximize), not
+      per cursor tick, and the `cursorStrokeColor()` lookup is
+      `getComputedStyle(document.documentElement)` which jsdom and
+      Chromium both resolve in microseconds without layout thrash.
+      New e2e spec `apps/e2e/tests/panelChrome.spec.ts` covers the
+      kind badge text path, the settings → drawer + selected-panel
+      round-trip, the panel-body click → selected-panel path, the
+      maximize toggle (asserted via `getLayoutJson` containing
+      `"maximized":true`), the close → tab removed path, and the
+      collapse-disabled chrome contract (`aria-disabled` +
+      `tabindex="-1"`); ready to run in CI alongside the existing
+      chromium project.
 - [ ] **Phase 8 · Events drawer (bookmarks)**
 - [ ] **Phase 9 · Transport refinement**
 - [ ] **Phase 10 · Cleanup, polish, accessibility audit**
 
 ## Where to continue
 
-Next phase: **Phase 7 · Per-panel chrome via FlexLayout
-customisation.** Read `docs/design/v1-shell-integration.md` § Phase 7
-(lines 268-300) for the `onRenderTab` / `onRenderTabSet` work plus
-click-to-select-panel wiring. Concretely:
+Next phase: **Phase 8 · Events drawer (bookmarks).** Read
+`docs/design/v1-shell-integration.md` § Phase 8 (lines 302-323) for
+the bookmark store + drawer + transport overlay plan. Concretely:
 
-1. **`onRenderTab(node, renderValues)` in `Workspace.tsx`** — replace
-   `renderValues.content` with a flex row containing: grip SVG,
-   panel name, kind tag (badge from `panelKindOf(node.getId())`),
-   then a four-icon cluster (settings, collapse, fullscreen, close).
-   Use FlexLayout's `Actions.maximizeToggle` for fullscreen and
-   `Actions.deleteTab` for close. Settings calls
-   `setSelectedPanelId(node.getId())` then
-   `setActiveRailTab('panel')`. Set `renderValues.buttons = []` to
-   suppress FlexLayout's default close icon.
-2. **Click-to-select panel** — wrap each panel body in
-   `panelFactory.tsx` with `<div onPointerDown={() =>
-   setSelectedPanelId(panelId)}>` so any click on the panel body
-   marks it selected.
-3. **CSS overrides in `Workspace.module.css`** — flip
-   `--color-tab-selected` from `var(--color-accent-orange)` (the
-   carry-over note at `Workspace.module.css:71`) to
-   `var(--color-fg-2)`; selected tabset border becomes
-   `var(--color-border-hover)`, NOT orange (explicit user pushback in
-   `wireframe-bundle/chats/chat1.md`).
-4. **`PlotPanel.tsx:368` cursor token** — the carry-over note for
-   `ctx.strokeStyle = "#f97316"` rolls into Phase 7. Read the
-   computed CSS variable at draw-time
-   (`getComputedStyle(...).getPropertyValue('--color-accent-orange')`).
-5. **Collapse icon** — there is no first-class collapse in
-   flexlayout-react. Phase 7's plan picks "grey the icon and ship
-   without collapse" for the first cut; flag in the PR.
-6. **`onRenderTabSet`** — empty for now (single-tab tabsets look like
-   the wireframe out of the box).
+1. **New slice + persistence**: `bookmarks: Bookmark[]` in the
+   store with shape
+   `{ id: string; ns: bigint; label: string; color: string;
+   createdAt: number }`. Persistence adapter at
+   `apps/web/src/state/persist/bookmarks.ts`, storage key
+   `driveline.bookmarks.v1`, BigInts serialised as decimal strings
+   (mirror `layout/persist.ts` and the Phase 4 `namedLayouts`
+   adapter). Bookmarks outlive a session — `clear()` does NOT
+   reset them (same posture as `namedLayouts`).
+2. **Drawer**: `apps/web/src/shell/drawers/EventsDrawer.tsx`. Reads
+   `bookmarks` via a single-key selector. Header
+   `<h3>Bookmarks <Pill>{count}</Pill></h3>`; one row per
+   bookmark sorted by `ns`. Row uses the
+   `_row.module.css:rowBase` primitive shared with Sources /
+   Channels / Layout / Panel drawers (Phase 5 carry-over already
+   resolved). Click row = `setCursor(bookmark.ns)`. Hover-revealed
+   `×` removes. Double-click label to edit (inline `<input>`).
+   `+ bookmark at cursor` button calls a new store action
+   `addBookmarkAtCursor(label?)` (default label `bookmark @
+   <relative time>` via `timeline/formatTime.ts:formatDuration`).
+3. **Transport overlay**: render small bookmark markers as a child
+   layer absolutely positioned on the scrubber track at
+   `(ns - startNs) / duration * 100%`. Use `transform:
+   translateX(-50%)` only — never animate `width` / `left` / colour
+   (frontend-skill perf rule). Build inside `Transport.tsx`; expose
+   `data-testid="bookmark-marker-<id>"` for e2e.
+4. **Drawer wiring**: `Drawer.tsx`'s `STUBS` map drops `events`;
+   add `if (activeRailTab === "events") return <EventsDrawer />;`.
+   `Shell` and `App` need no new props (the drawer is
+   self-contained — single-key selectors only, action via
+   `useSession.getState()`).
+5. **Dev hooks**: `addBookmarkAtCursor(label?)`,
+   `listBookmarks()` (returns `[{id, ns: string, label, color,
+   createdAt}]`, BigInts as strings), `removeBookmark(id)`,
+   `renameBookmark(id, label)`. Add to the existing `App.tsx`
+   block alongside `listNamedLayouts`.
+6. **E2E**: new `apps/e2e/tests/bookmarks.spec.ts` covering: add
+   at cursor → row appears + transport marker appears; click row
+   → cursor seeks; rename round-trip; remove → row + marker
+   disappear; reload survives.
 
-The Phase 6 dev hooks (`add*Panel`, `set*ChannelBinding`) and the
-Phase 5 `getSelectedPanelId` / `setSelectedPanelId` hooks are the
-test seam; no new persistence adapter or schema bump expected.
+The Phase 7 chrome surface (kind badges, settings click)
+is unchanged by Phase 8 — bookmarks live in their own drawer arm,
+not in the per-tab chrome.
+
+## Carry-over notes for later phases (Phase 7 additions)
+
+- **MapPanel polyline colour `#f97316`** at `panels/MapPanel.tsx:186`:
+  the path colour for the lat/lon trace is still a literal hex.
+  Phase 7 only swept *cursor* strokes (PlotPanel + EnumPanel) into
+  the new `cursorStrokeColor()` helper because the polyline is data
+  viz, not chrome — it shares the orange hue but the contract is
+  different. When Phase 9 polishes the panels, either route the
+  polyline through `palette.ts` (treat it as a series colour and
+  pick from `PLOT_PALETTE`) or call a new
+  `panels/cursorOverlay.ts:accentOrange()` helper if the lat/lon
+  trace is meant to read as the brand accent. Either way, do NOT
+  conflate the two — series colour and cursor colour belong in
+  separate token slots so the user can re-skin without losing one
+  to the other.
+- **Tabset collapse**: the in-tab `tab-collapse` button is rendered
+  greyed (`aria-disabled="true"`, `tabIndex={-1}`) per integration
+  plan §Phase 7.2. flexlayout-react has no first-class collapse
+  action, so the v1 cut leaves the icon as visual chrome only.
+  When users ask for collapse, the path is to deleteTabset +
+  remember the JSON in the `ui` slice for restore, then re-add via
+  `Actions.addNode`. Defer until there's actual user demand.
+- **Tab name truncation**: `.tabName` caps at `max-width: 16ch` with
+  `text-overflow: ellipsis`. If a future panel kind wants longer
+  names visible, lift the cap or add a `title={node.getName()}`
+  attribute to expose the full string on hover. The current
+  16ch fits "Front cam" / "Speed" / "GPS Track" comfortably and
+  matches the wireframe; revisit only if a real fixture overflows.
 
 ## Carry-over notes for later phases (Phase 6 additions)
 
@@ -524,15 +682,16 @@ test seam; no new persistence adapter or schema bump expected.
   `selectedSourceId` so a stale id can't survive `clearSession()`.
   Until then, Sources-drawer selection has no functional consequence
   and a stale id after clearSession silently shows no row as active.
-- **Phase 7 (panel chrome)**: revisit `Workspace.module.css:71`
-  (`--color-tab-selected: var(--color-accent-orange)`) — Phase 7's plan
-  flips this to `var(--color-fg-2)` for the new selected-panel chrome.
-  Phase 0 stayed value-preserving, so it still points to orange.
-- **Phase 7 (panel chrome)**: `panels/PlotPanel.tsx:368` hardcodes
-  `ctx.strokeStyle = "#f97316"` for the cursor overlay. Moving this to
-  the orange token requires reading the computed CSS variable at
-  draw-time (`getComputedStyle(...).getPropertyValue('--color-accent-orange')`);
-  defer to Phase 7 alongside the chrome rewrite.
+- ~~**Phase 7 (panel chrome)**: revisit `Workspace.module.css:71`
+  (`--color-tab-selected: var(--color-accent-orange)`)~~ — **resolved
+  in Phase 7**: now `var(--color-fg-2)`; the selected tabset border
+  uses `var(--color-border-hover)` per the user's explicit pushback.
+- ~~**Phase 7 (panel chrome)**: `panels/PlotPanel.tsx:368` hardcodes
+  `ctx.strokeStyle = "#f97316"` for the cursor overlay~~ — **resolved
+  in Phase 7**: lifted into
+  `panels/cursorOverlay.ts:cursorStrokeColor()`. PlotPanel and
+  EnumPanel both call the helper; jsdom + SSR fall back to the
+  literal hex.
 - **Phase 9 (Transport refinement)**: the Transport's light-theme block
   (lines 9–10, 24, 26, 36, 104, 109–129 in
   `Transport.module.css`) gets fully replaced with the dark wireframe

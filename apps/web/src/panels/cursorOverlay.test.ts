@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { cursorXPx } from "./cursorOverlay";
+// @vitest-environment jsdom
+
+import { afterEach, describe, expect, it } from "vitest";
+import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 
 const range = { startNs: 0n, endNs: 1_000_000_000n }; // 1 s
 
@@ -35,5 +37,25 @@ describe("cursorXPx", () => {
     const epoch = 1_704_067_200_000_000_000n;
     const wide = { startNs: epoch, endNs: epoch + 1_000_000_000n };
     expect(cursorXPx(epoch + 500_000_000n, wide, 800)).toBeCloseTo(400, 3);
+  });
+});
+
+describe("cursorStrokeColor", () => {
+  afterEach(() => {
+    document.documentElement.style.removeProperty("--color-accent-orange");
+  });
+
+  it("reads --color-accent-orange from :root at call time", () => {
+    document.documentElement.style.setProperty(
+      "--color-accent-orange",
+      "#abcdef",
+    );
+    expect(cursorStrokeColor()).toBe("#abcdef");
+  });
+
+  it("falls back to the literal hex when the var is unset", () => {
+    // No `--color-accent-orange` declared; jsdom returns "" from the
+    // computed style and the helper short-circuits to the fallback.
+    expect(cursorStrokeColor()).toBe("#f97316");
   });
 });

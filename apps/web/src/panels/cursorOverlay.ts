@@ -21,3 +21,17 @@ export function cursorXPx(
   const ratio = Number(off) / Number(span);
   return ratio * widthPx;
 }
+
+// Phase 7 · cursor stroke colour. Reads `--color-accent-orange` from
+// `:root` at draw-time so the token (`apps/web/src/styles/tokens.css`)
+// stays the single source of truth. `getComputedStyle` is fast on the
+// document element (no layout thrash) and is invoked once per cursor
+// tick — well inside the PlotPanel < 4 ms render budget. Falls back to
+// the literal hex if the var is undefined (jsdom in unit tests).
+export function cursorStrokeColor(): string {
+  if (typeof document === "undefined") return "#f97316";
+  const v = getComputedStyle(document.documentElement)
+    .getPropertyValue("--color-accent-orange")
+    .trim();
+  return v || "#f97316";
+}

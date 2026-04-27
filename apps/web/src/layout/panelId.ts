@@ -33,6 +33,27 @@ export function panelKindOf(id: string): PanelKind | null {
   return null;
 }
 
+// Phase 7 · single source of truth for the human-readable kind badge
+// used by the Panel drawer header and (now) the per-tab chrome in
+// `Workspace.tsx`. Exhaustive switch over `PanelKind` so adding a kind
+// in `panelId.ts` forces the badge label to be filled in too.
+export function kindLabel(kind: PanelKind): string {
+  switch (kind) {
+    case "plot":
+      return "PLOT";
+    case "video":
+      return "VIDEO";
+    case "scene":
+      return "SCENE";
+    case "map":
+      return "MAP";
+    case "table":
+      return "TABLE";
+    case "enum":
+      return "ENUM";
+  }
+}
+
 // Phase 5 · Walk a FlexLayout JSON model looking for a tab with a
 // matching `id`, returning the tab's `name`. The Panel drawer needs
 // to label "the panel you are configuring"; this lets it do so without
