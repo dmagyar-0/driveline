@@ -2,13 +2,15 @@
 //
 // Switches on `activeRailTab` and renders the corresponding drawer
 // component. Phases 2-5 and 8 each replace one inline stub with a real
-// `shell/drawers/<Name>Drawer.tsx`. Phases 2 and 3 wired the real
-// Sources and Channels drawers; the other three are still stubs.
+// `shell/drawers/<Name>Drawer.tsx`. Phases 2, 3, and 4 wired the real
+// Sources, Channels, and Layout drawers; the other two (Panel, Events)
+// are still stubs.
 
 import type { RailTab } from "../state/persist/ui";
 import { useSession } from "../state/store";
 import { SourcesDrawer } from "./drawers/SourcesDrawer";
 import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
+import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import styles from "./Drawer.module.css";
 
 interface StubProps {
@@ -37,14 +39,9 @@ function DrawerStub({ title, phase, what }: StubProps) {
 }
 
 const STUBS: Record<
-  Exclude<RailTab, "sources" | "channels">,
+  Exclude<RailTab, "sources" | "channels" | "layout">,
   { title: string; phase: number; what: string }
 > = {
-  layout: {
-    title: "Layout",
-    phase: 4,
-    what: "Saved layouts and the add-panel buttons.",
-  },
   panel: {
     title: "Panel",
     phase: 5,
@@ -62,13 +59,33 @@ export interface DrawerProps {
    *  click-to-bind path needs a target and none is selected. Owned by
    *  `App.tsx`, which has the `WorkspaceHandle` ref. */
   ensurePlotPanel: () => string | null;
+  /** Forwarded to the Layout drawer's `+ video` row. App owns the
+   *  FlexLayout `WorkspaceHandle`; Drawer/Shell only forward. */
+  addVideoPanel: () => void;
+  /** Forwarded to the Layout drawer's `+ plot` row. */
+  addPlotPanel: () => void;
+  /** Forwarded to the Layout drawer's `Reset layout` row. */
+  resetLayout: () => void;
 }
 
-export function Drawer({ ensurePlotPanel }: DrawerProps) {
+export function Drawer({
+  ensurePlotPanel,
+  addVideoPanel,
+  addPlotPanel,
+  resetLayout,
+}: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
   if (activeRailTab === null) return null;
   if (activeRailTab === "sources") return <SourcesDrawer />;
   if (activeRailTab === "channels")
     return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
+  if (activeRailTab === "layout")
+    return (
+      <LayoutDrawer
+        addVideoPanel={addVideoPanel}
+        addPlotPanel={addPlotPanel}
+        resetLayout={resetLayout}
+      />
+    );
   return <DrawerStub {...STUBS[activeRailTab]} />;
 }

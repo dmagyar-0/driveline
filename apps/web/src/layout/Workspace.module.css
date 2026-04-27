@@ -9,16 +9,7 @@
   overflow: hidden;
 }
 
-.toolbar {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.35rem 0.5rem;
-  background: var(--color-bg-3);
-  border-bottom: 1px solid var(--color-border-subtle);
-  font-size: 0.85rem;
-}
-
-.toolbarBtn {
+.restoreBtn {
   background: var(--color-bg-4);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg-2);
@@ -28,15 +19,9 @@
   font-size: 0.85rem;
 }
 
-.toolbarBtn:hover {
+.restoreBtn:hover {
   background: var(--color-bg-6);
   border-color: var(--color-border-hover);
-}
-
-.toolbarBtnSecondary {
-  composes: toolbarBtn;
-  margin-left: auto;
-  color: var(--color-fg-4);
 }
 
 .flexContainer {

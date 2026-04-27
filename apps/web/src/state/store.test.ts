@@ -174,6 +174,12 @@ beforeEach(async () => {
   // session); wipe it manually so layout-slice tests start from a known
   // empty state instead of whatever an earlier test last set.
   useSession.getState().setLayoutJson(null);
+  // Same for the named-layouts slice — `clear()` deliberately preserves
+  // it (saved layouts outlive a session) so the per-test reset has to
+  // be explicit.
+  for (const l of [...useSession.getState().namedLayouts]) {
+    useSession.getState().removeNamedLayout(l.id);
+  }
 });
 
 describe("session store", () => {
@@ -554,5 +560,117 @@ describe("layout + bindings (T6.2)", () => {
     expect(s.plotBindings).toEqual({});
     // layout survives
     expect(s.layoutJson).toBe(model);
+  });
+});
+
+describe("named layouts (Phase 4)", () => {
+  it("starts empty with no active id", () => {
+    const s = useSession.getState();
+    expect(s.namedLayouts).toEqual([]);
+    expect(s.activeNamedLayoutId).toBeNull();
+  });
+
+  it("saveCurrentLayoutAs snapshots layoutJson + bindings and marks active", () => {
+    const model = { layout: { type: "row", weight: 100, children: [] } };
+    useSession.getState().setLayoutJson(model);
+    useSession.getState().setVideoBinding("video-1", "/cam");
+    useSession.getState().addPlotChannel("plot-1", "/a");
+
+    const id = useSession.getState().saveCurrentLayoutAs("default");
+    const s = useSession.getState();
+    expect(s.namedLayouts).toHaveLength(1);
+    const entry = s.namedLayouts[0];
+    expect(entry.id).toBe(id);
+    expect(entry.name).toBe("default");
+    expect(entry.layoutJson).toBe(model);
+    expect(entry.videoBindings).toEqual({ "video-1": "/cam" });
+    expect(entry.plotBindings).toEqual({ "plot-1": ["/a"] });
+    expect(typeof entry.createdAt).toBe("number");
+    expect(s.activeNamedLayoutId).toBe(id);
+  });
+
+  it("saveCurrentLayoutAs deep-copies the binding maps", () => {
+    useSession.getState().setVideoBinding("video-1", "/cam");
+    useSession.getState().addPlotChannel("plot-1", "/a");
+    const id = useSession.getState().saveCurrentLayoutAs("snap");
+
+    // Mutate the live bindings; the snapshot must not see the change.
+    useSession.getState().setVideoBinding("video-1", "/changed");
+    useSession.getState().addPlotChannel("plot-1", "/b");
+
+    const entry = useSession
+      .getState()
+      .namedLayouts.find((l) => l.id === id)!;
+    expect(entry.videoBindings).toEqual({ "video-1": "/cam" });
+    expect(entry.plotBindings).toEqual({ "plot-1": ["/a"] });
+  });
+
+  it("setLayoutJson clears activeNamedLayoutId", () => {
+    useSession.getState().setLayoutJson({ a: 1 });
+    const id = useSession.getState().saveCurrentLayoutAs("x");
+    expect(useSession.getState().activeNamedLayoutId).toBe(id);
+    useSession.getState().setLayoutJson({ a: 2 });
+    expect(useSession.getState().activeNamedLayoutId).toBeNull();
+  });
+
+  it("restoreNamedLayout writes layout + bindings + active id in one set", () => {
+    // Save a layout, then drift the live state away from it.
+    useSession.getState().setLayoutJson({ ver: "saved" });
+    useSession.getState().setVideoBinding("video-1", "/cam");
+    useSession.getState().addPlotChannel("plot-1", "/saved");
+    const id = useSession.getState().saveCurrentLayoutAs("named");
+
+    useSession.getState().setLayoutJson({ ver: "drifted" });
+    useSession.getState().setVideoBinding("video-1", "/other");
+    useSession.getState().setPlotBinding("plot-1", ["/drifted"]);
+    expect(useSession.getState().activeNamedLayoutId).toBeNull();
+
+    useSession.getState().restoreNamedLayout(id);
+    const s = useSession.getState();
+    expect(s.layoutJson).toEqual({ ver: "saved" });
+    expect(s.videoBindings).toEqual({ "video-1": "/cam" });
+    expect(s.plotBindings).toEqual({ "plot-1": ["/saved"] });
+    expect(s.activeNamedLayoutId).toBe(id);
+  });
+
+  it("restoreNamedLayout is a no-op for an unknown id", () => {
+    useSession.getState().setLayoutJson({ live: true });
+    const before = useSession.getState();
+    useSession.getState().restoreNamedLayout("ghost-id");
+    const after = useSession.getState();
+    expect(after.layoutJson).toBe(before.layoutJson);
+    expect(after.activeNamedLayoutId).toBeNull();
+  });
+
+  it("removeNamedLayout drops the entry and clears active when it matched", () => {
+    const id1 = useSession.getState().saveCurrentLayoutAs("a");
+    const id2 = useSession.getState().saveCurrentLayoutAs("b");
+    expect(useSession.getState().activeNamedLayoutId).toBe(id2);
+
+    useSession.getState().removeNamedLayout(id2);
+    let s = useSession.getState();
+    expect(s.namedLayouts.map((l) => l.id)).toEqual([id1]);
+    expect(s.activeNamedLayoutId).toBeNull();
+
+    // Removing a non-active entry leaves activeNamedLayoutId untouched.
+    useSession.getState().restoreNamedLayout(id1);
+    expect(useSession.getState().activeNamedLayoutId).toBe(id1);
+    const id3 = useSession.getState().saveCurrentLayoutAs("c");
+    useSession.getState().restoreNamedLayout(id1);
+    useSession.getState().removeNamedLayout(id3);
+    s = useSession.getState();
+    expect(s.activeNamedLayoutId).toBe(id1);
+  });
+
+  it("clear() leaves namedLayouts and activeNamedLayoutId alone", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    const id = useSession.getState().saveCurrentLayoutAs("keep");
+
+    await useSession.getState().clear();
+    const s = useSession.getState();
+    expect(s.namedLayouts.map((l) => l.id)).toEqual([id]);
+    expect(s.activeNamedLayoutId).toBe(id);
   });
 });
