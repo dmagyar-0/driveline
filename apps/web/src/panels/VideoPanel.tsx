@@ -87,6 +87,7 @@ export function VideoPanel({
   const codecRef = useRef<string | null>(null);
   const hudDomRef = useRef<HTMLDivElement | null>(null);
   const hudOnRef = useRef<boolean>(false);
+  const statsDomRef = useRef<HTMLDivElement | null>(null);
 
   // `lastSeekTargetRef` starts null and is set to the initial `open()`
   // target once the worker has accepted it. The debounced cursor effect
@@ -268,6 +269,33 @@ export function VideoPanel({
           `dropped     ${snapshot.dropped}\n` +
           `codec       ${snapshot.codec ?? "—"}`;
       }
+      // Subtle always-on stats strip. Lag is `cursor - lastBlitPts`,
+      // i.e. how far behind the cursor the visible frame is — usually
+      // 0–33 ms when the pipeline is healthy, larger if the decoder is
+      // falling behind. We light the strip up in the error colour when
+      // either drops > 0 or the visible frame is more than two content
+      // frames stale, so a glance at the panel is enough to catch
+      // regressions while watching playback.
+      const stats = statsDomRef.current;
+      if (stats) {
+        let lagText = "—";
+        let lagWarn = false;
+        if (snapshot.ptsNs !== null) {
+          const lagNs = cursor - snapshot.ptsNs;
+          const lagMs = Number(lagNs / 1_000_000n);
+          lagText = `${lagMs}ms`;
+          lagWarn = lagMs > 66; // > 2 frames at 30fps
+        }
+        stats.textContent =
+          `drop ${snapshot.dropped}` +
+          `  lag ${lagText}` +
+          `  q ${snapshot.blitQueueLen}/${MAX_QUEUE}`;
+        const warn = snapshot.dropped > 0 || lagWarn;
+        const cls = warn
+          ? `${styles.stats} ${styles.statsWarn}`
+          : styles.stats;
+        if (stats.className !== cls) stats.className = cls;
+      }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -393,6 +421,12 @@ export function VideoPanel({
           className={styles.hud}
         />
       )}
+      <div
+        ref={statsDomRef}
+        data-testid="video-stats"
+        className={styles.stats}
+        aria-live="off"
+      />
     </div>
   );
 }
