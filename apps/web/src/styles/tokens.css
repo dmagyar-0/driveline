@@ -110,7 +110,11 @@
   --radius-pill: 999px;
 
   /* ---------- Shadow / elevation ---------- */
-  --shadow-1: 0 8px 24px rgba(0, 0, 0, 0.5); /* popover */
+  --shadow-1: var(--shadow-popover); /* alias of --shadow-popover (scrim/overlays) */
+
+  /* ---------- Shell layout heights ---------- */
+  --shell-topbar-h: 36px;
+  --shell-transport-h: 32px;
 
   /* ---------- Focus ring ---------- */
   --focus-ring: 2px solid var(--color-accent-blue);

@@ -20,6 +20,7 @@ import {
   codecStringFromSps,
   findSps,
   ptsToMicros,
+  shouldRefill,
   videoStreamOps,
   type DataCorePortApi,
   type VideoSourceKind,
@@ -27,16 +28,6 @@ import {
 } from "./videoDecodeOps";
 
 const PULL_BATCH = 8;
-const REFILL_LOW_WATER = 4;
-// Decoder pacing watermark. The pull loop is gated so that the most
-// recently emitted frame's PTS is no further than this beyond the
-// main-thread cursor. Without this, a HW-accelerated 4K decoder will
-// drain the entire encoded stream in a fraction of real-time, the
-// panel's bounded queue drops the surplus, and once the queue empties
-// the cursor never finds a frame ≤ itself again — the canvas freezes
-// on whatever was last blit. ~500 ms keeps a smooth lookahead while
-// letting realtime playback do the throttling.
-const LOOKAHEAD_NS: bigint = 500_000_000n;
 
 export type { VideoSourceKind };
 
@@ -131,14 +122,12 @@ async function pullAndFeed(): Promise<void> {
 async function maybeRefill(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
-  if (session.inFlight >= REFILL_LOW_WATER) return;
-  // Pacing gate: avoid running more than LOOKAHEAD_NS past the cursor.
-  // `lastEmittedPtsNs === null` means we haven't emitted any post-
-  // discard frames yet — keep priming the decoder so seek/open
-  // converges quickly.
   if (
-    session.lastEmittedPtsNs !== null &&
-    session.lastEmittedPtsNs - cursorNs > LOOKAHEAD_NS
+    !shouldRefill({
+      inFlight: session.inFlight,
+      lastEmittedPtsNs: session.lastEmittedPtsNs,
+      cursorNs,
+    })
   ) {
     return;
   }

@@ -14,7 +14,7 @@
 
 .empty {
   padding: 0.75rem;
-  color: #a0a0a0;
+  color: var(--color-fg-4);
   font-size: 0.85rem;
   margin: 0;
 }
@@ -95,7 +95,7 @@
 .footer {
   padding: 0.375rem 0.75rem;
   border-top: 1px solid var(--color-border-subtle);
-  color: #a0a0a0;
+  color: var(--color-fg-4);
   font-size: 0.75rem;
   text-align: right;
 }
