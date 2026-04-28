@@ -17,6 +17,8 @@ import * as Comlink from "comlink";
 import type { EncodedChunkWire } from "./normalise";
 import {
   CODEC_STRING_FALLBACK,
+  PRIMING_BATCH,
+  PULL_BATCH,
   codecStringFromSps,
   findSps,
   ptsToMicros,
@@ -26,8 +28,6 @@ import {
   type VideoSourceKind,
   type VideoStreamOps,
 } from "./videoDecodeOps";
-
-const PULL_BATCH = 8;
 
 export type { VideoSourceKind };
 
@@ -119,9 +119,16 @@ async function pullAndFeed(): Promise<void> {
   }
 }
 
+// `pullInFlight` serialises refills. Both `setCursor` and `onFrame` call
+// `maybeRefill`; without a mutex they can start concurrent `pullAndFeed`s
+// while the previous `await ops.next` is still pending, double-counting
+// against `inFlight` and racing the reader stream.
+let pullInFlight = false;
+
 async function maybeRefill(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
+  if (pullInFlight) return;
   if (
     !shouldRefill({
       inFlight: session.inFlight,
@@ -131,7 +138,12 @@ async function maybeRefill(): Promise<void> {
   ) {
     return;
   }
-  await pullAndFeed();
+  pullInFlight = true;
+  try {
+    await pullAndFeed();
+  } finally {
+    pullInFlight = false;
+  }
 }
 
 async function configureFromFirstKeyframe(
@@ -198,7 +210,10 @@ async function openInternal(
     lastEmittedPtsNs: null,
   };
 
-  const initial = (await ops.next(streamId, PULL_BATCH)) as EncodedChunkWire[];
+  const initial = (await ops.next(
+    streamId,
+    PRIMING_BATCH,
+  )) as EncodedChunkWire[];
   if (initial.length === 0) {
     session.ended = true;
     return { codec: "" };
