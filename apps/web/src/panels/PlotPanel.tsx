@@ -99,6 +99,22 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
   return m;
 }
 
+// uPlot's defaults paint axis labels/ticks/grid in black, which is
+// invisible on the dark panel background. Resolve the relevant tokens
+// from `tokens.css` at plot-build time so the design system stays the
+// single source of truth (mirrors `cursorStrokeColor` in cursorOverlay).
+function axisStyle(): { fg: string; grid: string } {
+  const fallback = { fg: "#e0e0e0", grid: "#2a2a2a" };
+  if (typeof document === "undefined") return fallback;
+  const cs = getComputedStyle(document.documentElement);
+  const fg = cs.getPropertyValue("--color-fg-2").trim();
+  const grid = cs.getPropertyValue("--color-border-subtle").trim();
+  return {
+    fg: fg || fallback.fg,
+    grid: grid || fallback.grid,
+  };
+}
+
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -243,6 +259,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (!mount || !container) return;
 
     const rect = container.getBoundingClientRect();
+    const { fg, grid } = axisStyle();
+    const axisOpts: uPlot.Axis = {
+      stroke: fg,
+      ticks: { stroke: grid },
+      grid: { stroke: grid },
+    };
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height)),
@@ -256,7 +278,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           spanGaps: false,
         })),
       ],
-      axes: [{}, {}],
+      axes: [axisOpts, axisOpts],
       cursor: { show: false },
       legend: { show: boundChannels.length > 0 },
     };
