@@ -26,17 +26,31 @@ import {
   type VideoStreamOps,
 } from "./videoDecodeOps";
 
-const PULL_BATCH = 8;
-const REFILL_LOW_WATER = 4;
+// Batch size for the dataCore pull. Kept small so a single batch can't
+// overshoot the lookahead window — at PULL_BATCH=8 the decoder would
+// commit ~264 ms of frames in one go, blow past the pacing gate, and
+// leave the panel queue dropping the tail. 2 frames ≈ 66 ms keeps the
+// pacing gate honest at the cost of a few extra Comlink round-trips.
+//
+// REFILL_LOW_WATER stays at 2 (not 1): with `optimizeForLatency: false`
+// the WebCodecs decoder buffers input and won't emit until more chunks
+// arrive, so a single in-flight chunk can deadlock if we wait for it
+// to emit before pulling more.
+const PULL_BATCH = 2;
+const REFILL_LOW_WATER = 2;
 // Decoder pacing watermark. The pull loop is gated so that the most
 // recently emitted frame's PTS is no further than this beyond the
 // main-thread cursor. Without this, a HW-accelerated 4K decoder will
 // drain the entire encoded stream in a fraction of real-time, the
 // panel's bounded queue drops the surplus, and once the queue empties
 // the cursor never finds a frame ≤ itself again — the canvas freezes
-// on whatever was last blit. ~500 ms keeps a smooth lookahead while
-// letting realtime playback do the throttling.
-const LOOKAHEAD_NS: bigint = 500_000_000n;
+// on whatever was last blit.
+//
+// Sized to match VideoPanel's `MAX_QUEUE` (8 frames) at 30 fps source
+// = ~264 ms — overshoot was 200+ wasted decoded frames per 10 s of
+// playback in the headless reproducer because the panel had to drop
+// every frame the decoder produced beyond what the queue could hold.
+const LOOKAHEAD_NS: bigint = 250_000_000n;
 
 export type { VideoSourceKind };
 
@@ -128,19 +142,26 @@ async function pullAndFeed(): Promise<void> {
   }
 }
 
+// Inter-frame interval used by the predictive pacing gate. Set from
+// successive emitted PTSs once we've seen at least two; falls back to
+// 30 fps until then. Per-stream: reset in `openInternal`.
+let frameIntervalNs: bigint = 33_333_333n;
+
 async function maybeRefill(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
   if (session.inFlight >= REFILL_LOW_WATER) return;
-  // Pacing gate: avoid running more than LOOKAHEAD_NS past the cursor.
+  // Predictive pacing gate. Don't issue another pull if doing so would
+  // push the *projected* most-recent PTS — once the in-flight chunks
+  // and the next batch all emit — past cursor + LOOKAHEAD_NS.
   // `lastEmittedPtsNs === null` means we haven't emitted any post-
-  // discard frames yet — keep priming the decoder so seek/open
-  // converges quickly.
-  if (
-    session.lastEmittedPtsNs !== null &&
-    session.lastEmittedPtsNs - cursorNs > LOOKAHEAD_NS
-  ) {
-    return;
+  // discard frames yet, so prime the decoder unconditionally so
+  // seek/open converges quickly.
+  if (session.lastEmittedPtsNs !== null) {
+    const projected =
+      session.lastEmittedPtsNs +
+      BigInt(session.inFlight + PULL_BATCH) * frameIntervalNs;
+    if (projected - cursorNs > LOOKAHEAD_NS) return;
   }
   await pullAndFeed();
 }
@@ -256,6 +277,10 @@ function onFrame(frame: VideoFrame): void {
   // keeps `frameIndex` a "visible frames since open" counter even when a
   // seek primes the decoder with pre-target frames.
   session.frameIndex += 1;
+  if (session.lastEmittedPtsNs !== null) {
+    const delta = ptsNs - session.lastEmittedPtsNs;
+    if (delta > 0n && delta < 1_000_000_000n) frameIntervalNs = delta;
+  }
   session.lastEmittedPtsNs = ptsNs;
   // `decodeQueueSize` is a hint per spec; some backends report 0 even with
   // chunks in flight. Surface it anyway — it's the metric `T5.2` asks for.

@@ -328,8 +328,12 @@ export function VideoPanel({
         if (client) void client.setCursor(state.cursorNs).catch(() => undefined);
       }
       // Cancel any pending pre-play scrub seek the moment playback
-      // starts — the natural decoder advance makes it redundant.
-      if (state.playing) {
+      // starts — the natural decoder advance makes it redundant. Same
+      // for the playback→pause transition (auto-pause at endNs, or a
+      // user pause): the decoder is already at cursor, so skip the
+      // round-trip that would otherwise re-decode the last GOP from a
+      // keyframe.
+      if (state.playing || prev.playing) {
         if (seekTimerRef.current !== null) {
           clearTimeout(seekTimerRef.current);
           seekTimerRef.current = null;
