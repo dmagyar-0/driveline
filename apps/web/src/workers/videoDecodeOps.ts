@@ -131,3 +131,28 @@ export function ptsToMicros(ptsNs: bigint): number {
   // the VideoFrame in its queue for exact cursor comparison.
   return Number(ptsNs / 1000n);
 }
+
+// Pull-loop tuning. Kept here (not in the worker) so the pacing predicate
+// `shouldRefill` is testable in a node env without spinning up Comlink or
+// a real `VideoDecoder`.
+export const REFILL_LOW_WATER = 4;
+// Decoder pacing watermark — the most recently emitted frame's PTS may
+// not run further than this beyond the main-thread cursor. See the
+// long-form comment in `videoDecode.worker.ts` for why this exists
+// (4K HW decoder drains the encoded stream in a fraction of real-time).
+export const LOOKAHEAD_NS: bigint = 500_000_000n;
+
+export interface RefillState {
+  inFlight: number;
+  lastEmittedPtsNs: bigint | null;
+  cursorNs: bigint;
+}
+
+// Pure pacing predicate: `true` when the worker should pull another batch.
+// `lastEmittedPtsNs === null` means we haven't emitted any post-discard
+// frames yet — keep priming the decoder so seek/open converges quickly.
+export function shouldRefill(state: RefillState): boolean {
+  if (state.inFlight >= REFILL_LOW_WATER) return false;
+  if (state.lastEmittedPtsNs === null) return true;
+  return state.lastEmittedPtsNs - state.cursorNs <= LOOKAHEAD_NS;
+}

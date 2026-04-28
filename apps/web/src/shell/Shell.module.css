@@ -1,6 +1,6 @@
 .shell {
   display: grid;
-  grid-template-rows: 36px 1fr 32px;
+  grid-template-rows: var(--shell-topbar-h) 1fr var(--shell-transport-h);
   grid-template-columns: 1fr;
   height: 100vh;
   width: 100vw;
@@ -32,7 +32,7 @@
  * handlers). The overlay is purely visual feedback. */
 .dragOverlay {
   position: absolute;
-  inset: 36px 0 32px 0;
+  inset: var(--shell-topbar-h) 0 var(--shell-transport-h) 0;
   pointer-events: none;
   background: var(--color-accent-blue-tint);
   border: 2px dashed var(--color-accent-blue);

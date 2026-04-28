@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CODEC_STRING_FALLBACK,
+  LOOKAHEAD_NS,
+  REFILL_LOW_WATER,
   codecStringFromSps,
   findSps,
   hex,
   ptsToMicros,
+  shouldRefill,
   videoStreamOps,
   type DataCorePortApi,
 } from "./videoDecodeOps";
@@ -199,5 +202,74 @@ describe("videoStreamOps", () => {
     expect(fake.openMcapVideoStream).not.toHaveBeenCalled();
     expect(fake.mcapVideoNextBatch).not.toHaveBeenCalled();
     expect(fake.closeMcapVideoStream).not.toHaveBeenCalled();
+  });
+});
+
+describe("shouldRefill", () => {
+  // Pacing gate extracted from `videoDecode.worker.ts`. The 4K-decoder fix
+  // (commit d9f2b83) lives or dies on this predicate: returning `true` too
+  // freely lets a HW decoder drain the encoded stream in a fraction of
+  // real-time and freeze the canvas; returning `false` too aggressively
+  // stalls seek/open priming.
+
+  it("returns false when in-flight frames are at or above the low-water mark", () => {
+    expect(
+      shouldRefill({
+        inFlight: REFILL_LOW_WATER,
+        lastEmittedPtsNs: 0n,
+        cursorNs: 0n,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRefill({
+        inFlight: REFILL_LOW_WATER + 10,
+        lastEmittedPtsNs: null,
+        cursorNs: 0n,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true while priming (lastEmittedPtsNs === null) so seek/open converges", () => {
+    // Even at 0 in-flight, a fresh stream needs priming pulls.
+    expect(
+      shouldRefill({
+        inFlight: 0,
+        lastEmittedPtsNs: null,
+        cursorNs: 0n,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when the most recent emitted frame is more than LOOKAHEAD_NS ahead", () => {
+    // 1 ns past the watermark is enough — the comparison is strict.
+    expect(
+      shouldRefill({
+        inFlight: 0,
+        lastEmittedPtsNs: LOOKAHEAD_NS + 1n,
+        cursorNs: 0n,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true at the boundary (lastEmittedPtsNs - cursorNs === LOOKAHEAD_NS)", () => {
+    // Pinning the boundary prevents an off-by-one mutation from passing.
+    expect(
+      shouldRefill({
+        inFlight: 0,
+        lastEmittedPtsNs: LOOKAHEAD_NS,
+        cursorNs: 0n,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true when the decoder is behind the cursor (catch-up case)", () => {
+    // Cursor scrubbed forward; the decoder needs to refill aggressively.
+    expect(
+      shouldRefill({
+        inFlight: 0,
+        lastEmittedPtsNs: 1_000_000_000n,
+        cursorNs: 5_000_000_000n,
+      }),
+    ).toBe(true);
   });
 });
