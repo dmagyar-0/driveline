@@ -136,11 +136,10 @@ export function ptsToMicros(ptsNs: bigint): number {
 // `shouldRefill` is testable in a node env without spinning up Comlink or
 // a real `VideoDecoder`.
 export const REFILL_LOW_WATER = 4;
-// Steady-state batch fed to the decoder per refill. Small so each pull
-// adds at most a couple of frames to the panel queue (`MAX_QUEUE = 8`),
-// even when the HW 4K decoder drains the encoded stream in a fraction
-// of real-time.
-export const PULL_BATCH = 2;
+// Steady-state batch fed to the decoder per refill. Sized so a pull can
+// keep the decoder pipeline busy without overrunning the panel's
+// `MAX_QUEUE = 16` buffer.
+export const PULL_BATCH = 4;
 // Open / seek priming batch. Larger than `PULL_BATCH` so the decoder
 // gets a full GOP's worth of reference frames (4K H.264 High @ L4.2 is
 // typically IBBP/IBBBP) before steady-state pacing engages — keeps
@@ -148,9 +147,11 @@ export const PULL_BATCH = 2;
 export const PRIMING_BATCH = 8;
 // Decoder pacing watermark — the most recently emitted frame's PTS may
 // not run further than this beyond the main-thread cursor. Sized to fit
-// inside `MAX_QUEUE = 8` frames at 30 fps content (≈ 4.5 frames of lead),
-// so the worker stops pulling well before a queue-full drop can occur.
-export const LOOKAHEAD_NS: bigint = 150_000_000n;
+// inside `MAX_QUEUE = 16` frames at 30 fps content (≈ 9 frames of lead),
+// so the worker stops pulling well before a queue-full drop can occur
+// while still letting the HW decoder keep up with cursor advance even
+// on slower test hardware.
+export const LOOKAHEAD_NS: bigint = 300_000_000n;
 
 export interface RefillState {
   inFlight: number;

@@ -46,7 +46,7 @@ export interface VideoHudSnapshot {
 }
 
 const SEEK_DEBOUNCE_MS = 50;
-const MAX_QUEUE = 8;
+const MAX_QUEUE = 16;
 
 declare global {
   interface Window {
