@@ -145,6 +145,7 @@ export function EventsDrawer() {
                 startNs !== null &&
                 endNs !== null &&
                 (b.ns < startNs || b.ns > endNs);
+              const isEditing = editingId === b.id;
               return (
                 <li
                   key={b.id}
@@ -152,28 +153,13 @@ export function EventsDrawer() {
                   data-testid={`bookmark-row-${b.id}`}
                   data-out-of-range={outOfRange ? "true" : undefined}
                 >
-                  <button
-                    type="button"
-                    className={s.row}
-                    onClick={() => onSeek(b.ns)}
-                    data-testid={`bookmark-seek-${b.id}`}
-                    aria-label={
-                      outOfRange
-                        ? `Out of range — Seek to ${b.label}`
-                        : `Seek to ${b.label}`
-                    }
-                    title={
-                      outOfRange
-                        ? "Outside the current session's range"
-                        : b.label
-                    }
-                  >
-                    <span
-                      className={s.swatch}
-                      style={{ background: b.color }}
-                      aria-hidden="true"
-                    />
-                    {editingId === b.id ? (
+                  {isEditing ? (
+                    <div className={s.row} data-editing="true">
+                      <span
+                        className={s.swatch}
+                        style={{ background: b.color }}
+                        aria-hidden="true"
+                      />
                       <input
                         ref={editInputRef}
                         type="text"
@@ -182,11 +168,38 @@ export function EventsDrawer() {
                         onChange={(e) => setEditingDraft(e.target.value)}
                         onKeyDown={onEditKey}
                         onBlur={commitEdit}
-                        onClick={(e) => e.stopPropagation()}
                         aria-label="Bookmark label"
                         data-testid={`bookmark-rename-input-${b.id}`}
                       />
-                    ) : (
+                      <span
+                        className={s.meta}
+                        data-testid={`bookmark-meta-${b.id}`}
+                      >
+                        {meta}
+                      </span>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      className={s.row}
+                      onClick={() => onSeek(b.ns)}
+                      data-testid={`bookmark-seek-${b.id}`}
+                      aria-label={
+                        outOfRange
+                          ? `Out of range — Seek to ${b.label}`
+                          : `Seek to ${b.label}`
+                      }
+                      title={
+                        outOfRange
+                          ? "Outside the current session's range"
+                          : b.label
+                      }
+                    >
+                      <span
+                        className={s.swatch}
+                        style={{ background: b.color }}
+                        aria-hidden="true"
+                      />
                       <span
                         className={s.label}
                         title={b.label}
@@ -197,14 +210,14 @@ export function EventsDrawer() {
                       >
                         {b.label}
                       </span>
-                    )}
-                    <span
-                      className={s.meta}
-                      data-testid={`bookmark-meta-${b.id}`}
-                    >
-                      {meta}
-                    </span>
-                  </button>
+                      <span
+                        className={s.meta}
+                        data-testid={`bookmark-meta-${b.id}`}
+                      >
+                        {meta}
+                      </span>
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={s.removeBtn}

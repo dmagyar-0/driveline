@@ -125,8 +125,18 @@ export interface SessionState {
   // happens in the drawer/marker components — storage and slice
   // preserve insertion order so renames target a stable index.
   bookmarks: Bookmark[];
+  /**
+   * Errors from the most recent `openFiles` batch. The Sources drawer
+   * renders these so a malformed MCAP/MF4 or an unknown extension is
+   * surfaced rather than silently dropped. Replaced wholesale on the
+   * next `openFiles` call; cleared on `clear()` and via
+   * `dismissOpenErrors()`.
+   */
+  lastOpenErrors: BucketError[];
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
+  /** Clear `lastOpenErrors` (used by the Sources drawer dismiss). */
+  dismissOpenErrors(): void;
   /** Close every loaded wasm handle and reset to the empty session. */
   clear(): Promise<void>;
   /**
@@ -345,6 +355,7 @@ export const useSession = create<SessionState>((set, get) => {
     namedLayouts: hydratedNamedLayouts?.layouts ?? [],
     activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
     bookmarks: hydratedBookmarks ?? [],
+    lastOpenErrors: [],
 
     setWorker(w) {
       worker = w;
@@ -636,6 +647,11 @@ export const useSession = create<SessionState>((set, get) => {
       set({ bookmarks: next });
     },
 
+    dismissOpenErrors() {
+      if (get().lastOpenErrors.length === 0) return;
+      set({ lastOpenErrors: [] });
+    },
+
     renameBookmark(id, label) {
       const trimmed = label.trim();
       if (trimmed.length === 0) return;
@@ -784,7 +800,10 @@ export const useSession = create<SessionState>((set, get) => {
             channels: allChannels,
             globalRange: newRange,
             cursorNs: nextCursor,
+            lastOpenErrors: errors,
           });
+        } else {
+          set({ lastOpenErrors: errors });
         }
 
         return { opened, errors };
@@ -837,6 +856,7 @@ export const useSession = create<SessionState>((set, get) => {
           mapBindings: {},
           tableBindings: {},
           enumBindings: {},
+          lastOpenErrors: [],
         });
       };
       const next = pending.then(run, run);

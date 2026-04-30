@@ -142,7 +142,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user
   // saved a session, reloaded, then dropped a different file).
+  //
+  // Skip the cull until at least one source has been loaded — on first
+  // hydrate the channels list is empty, which would otherwise wipe every
+  // persisted binding before the user has had a chance to drop a file.
   useEffect(() => {
+    if (sources.length === 0) return;
     const filtered = boundChannelIds.filter((id) => {
       const c = channels.get(id);
       return c && c.kind === "scalar";
@@ -150,7 +155,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (filtered.length !== boundChannelIds.length) {
       setPlotBinding(panelId, filtered);
     }
-  }, [boundChannelIds, channels, panelId, setPlotBinding]);
+  }, [boundChannelIds, channels, panelId, setPlotBinding, sources.length]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);

@@ -128,6 +128,83 @@
   color: var(--color-fg-6);
 }
 
+.errorsSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  background: var(--color-bg-5);
+}
+
+.errorsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+}
+
+.errorsHeader h3 {
+  margin: 0;
+  font-size: var(--fs-12);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-error, var(--color-fg-3));
+}
+
+.dismissBtn {
+  background: transparent;
+  border: 0;
+  color: var(--color-fg-5);
+  cursor: pointer;
+  font-size: var(--fs-14);
+  line-height: 1;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-3);
+}
+
+.dismissBtn:hover {
+  background: var(--color-bg-4);
+  color: var(--color-fg-2);
+}
+
+.dismissBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.errorsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.errorRow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  font-size: var(--fs-12);
+}
+
+.errorName {
+  color: var(--color-fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.errorReason {
+  color: var(--color-fg-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .loadRow {
     transition: none;

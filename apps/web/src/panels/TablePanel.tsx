@@ -76,7 +76,11 @@ export function TablePanel({ panelId }: TablePanelProps) {
     [boundIds, sources],
   );
 
+  // Skip the cull until at least one source is loaded so a fresh
+  // hydrate doesn't wipe every persisted binding before the user has
+  // dropped a file.
   useEffect(() => {
+    if (sources.length === 0) return;
     const filtered = boundIds.filter((id) => {
       const c = findChannel(sources, id);
       return c !== null && c.kind === "scalar";

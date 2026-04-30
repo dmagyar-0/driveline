@@ -30,6 +30,8 @@ export function SourcesDrawer() {
   const sources = useSession((st) => st.sources);
   const globalRange = useSession((st) => st.globalRange);
   const openFiles = useSession((st) => st.openFiles);
+  const errors = useSession((st) => st.lastOpenErrors);
+  const dismissOpenErrors = useSession((st) => st.dismissOpenErrors);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -118,6 +120,39 @@ export function SourcesDrawer() {
         aria-hidden="true"
         tabIndex={-1}
       />
+
+      {errors.length > 0 ? (
+        <section
+          className={s.errorsSection}
+          data-testid="sources-errors"
+          aria-live="polite"
+        >
+          <div className={s.errorsHeader}>
+            <h3>Drop errors</h3>
+            <button
+              type="button"
+              className={s.dismissBtn}
+              onClick={dismissOpenErrors}
+              aria-label="Dismiss drop errors"
+              data-testid="sources-errors-dismiss"
+            >
+              ×
+            </button>
+          </div>
+          <ul className={s.errorsList}>
+            {errors.map((err, i) => (
+              <li key={`${err.name}-${i}`} className={s.errorRow}>
+                <span className={s.errorName} title={err.name}>
+                  {err.name}
+                </span>
+                <span className={s.errorReason} title={err.reason}>
+                  {err.reason}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <hr className={s.separator} />
 

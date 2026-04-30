@@ -76,15 +76,30 @@ describe("TablePanel", () => {
   });
 
   it("drops bindings whose channel id no longer exists", () => {
+    // Seed a source so the cull effect runs — the gate on
+    // `sources.length > 0` exists so a fresh hydrate (channels list
+    // empty) doesn't wipe persisted bindings before the user has
+    // dropped a file.
+    seed();
     useSession.setState({
-      sources: [],
-      channels: [],
-      globalRange: null,
       tableBindings: { "table-1": ["/ghost"] },
     });
     render(<TablePanel panelId="table-1" />);
     // The cleanup effect filters the binding to []; empty state renders.
     expect(screen.getByTestId("table-empty")).toBeTruthy();
     expect(useSession.getState().tableBindings["table-1"]).toEqual([]);
+  });
+
+  it("does not clear a persisted binding before any source loads", () => {
+    useSession.setState({
+      sources: [],
+      channels: [],
+      globalRange: null,
+      tableBindings: { "table-1": ["/persisted"] },
+    });
+    render(<TablePanel panelId="table-1" />);
+    expect(useSession.getState().tableBindings["table-1"]).toEqual([
+      "/persisted",
+    ]);
   });
 });

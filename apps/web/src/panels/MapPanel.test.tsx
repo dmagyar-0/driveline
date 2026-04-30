@@ -111,10 +111,12 @@ describe("MapPanel", () => {
   });
 
   it("clears the binding when one of the channels disappears", () => {
+    // Seed a source so the cull effect runs — the gate on
+    // `sources.length > 0` exists so a fresh hydrate (channels list
+    // empty) doesn't wipe persisted bindings before the user has
+    // dropped a file.
+    seed();
     useSession.setState({
-      sources: [],
-      channels: [],
-      globalRange: null,
       mapBindings: {
         "map-1": {
           latChannelId: "/ghost/lat",
@@ -125,6 +127,25 @@ describe("MapPanel", () => {
     render(<MapPanel panelId="map-1" />);
     expect(screen.getByTestId("map-empty")).toBeTruthy();
     expect(useSession.getState().mapBindings["map-1"]).toBeNull();
+  });
+
+  it("does not clear a persisted binding before any source loads", () => {
+    useSession.setState({
+      sources: [],
+      channels: [],
+      globalRange: null,
+      mapBindings: {
+        "map-1": {
+          latChannelId: "/persisted/lat",
+          lonChannelId: "/persisted/lon",
+        },
+      },
+    });
+    render(<MapPanel panelId="map-1" />);
+    expect(useSession.getState().mapBindings["map-1"]).toEqual({
+      latChannelId: "/persisted/lat",
+      lonChannelId: "/persisted/lon",
+    });
   });
 
   it("paints the polyline with the panel's palette colour", async () => {
