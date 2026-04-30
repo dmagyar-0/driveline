@@ -229,8 +229,11 @@ function formatValue(v: number): string {
 }
 
 function formatSeconds(tsNs: bigint): string {
-  // Convert ns → seconds with 6-digit precision via integer division
-  // so we don't lose magnitude on the Float64 boundary.
+  // Convert ns → ms (integer divide, keeps magnitude inside Float64
+  // exact range up to ~285 years) → seconds with millisecond
+  // resolution. Sub-ms is intentionally truncated to keep the column
+  // narrow; the table is a peek-the-cursor view, not a microsecond
+  // forensic tool.
   const secs = Number(tsNs / 1_000_000n) / 1000;
   return secs.toFixed(3);
 }

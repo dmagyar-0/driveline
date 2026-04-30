@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it } from "vitest";
-import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
+import {
+  __resetCursorStrokeColorCache,
+  cursorStrokeColor,
+  cursorXPx,
+} from "./cursorOverlay";
 
 const range = { startNs: 0n, endNs: 1_000_000_000n }; // 1 s
 
@@ -43,9 +47,10 @@ describe("cursorXPx", () => {
 describe("cursorStrokeColor", () => {
   afterEach(() => {
     document.documentElement.style.removeProperty("--color-accent-orange");
+    __resetCursorStrokeColorCache();
   });
 
-  it("reads --color-accent-orange from :root at call time", () => {
+  it("reads --color-accent-orange from :root at first call", () => {
     document.documentElement.style.setProperty(
       "--color-accent-orange",
       "#abcdef",
@@ -57,5 +62,21 @@ describe("cursorStrokeColor", () => {
     // No `--color-accent-orange` declared; jsdom returns "" from the
     // computed style and the helper short-circuits to the fallback.
     expect(cursorStrokeColor()).toBe("#f97316");
+  });
+
+  it("caches the resolved colour across calls", () => {
+    document.documentElement.style.setProperty(
+      "--color-accent-orange",
+      "#111111",
+    );
+    expect(cursorStrokeColor()).toBe("#111111");
+    document.documentElement.style.setProperty(
+      "--color-accent-orange",
+      "#222222",
+    );
+    // Cached — subsequent token mutations are ignored until the cache
+    // is reset (only test code does that; production has no theme
+    // switch at v1).
+    expect(cursorStrokeColor()).toBe("#111111");
   });
 });

@@ -101,18 +101,26 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
 
 // uPlot's defaults paint axis labels/ticks/grid in black, which is
 // invisible on the dark panel background. Resolve the relevant tokens
-// from `tokens.css` at plot-build time so the design system stays the
-// single source of truth (mirrors `cursorStrokeColor` in cursorOverlay).
+// from `tokens.css` once and cache — the design system has no runtime
+// theme switch at v1, so re-reading on every plot rebuild (one per
+// binding-set change) is wasted `getComputedStyle` work. Mirrors
+// `cursorStrokeColor` in cursorOverlay.
+let axisStyleCache: { fg: string; grid: string } | null = null;
 function axisStyle(): { fg: string; grid: string } {
+  if (axisStyleCache !== null) return axisStyleCache;
   const fallback = { fg: "#e0e0e0", grid: "#2a2a2a" };
-  if (typeof document === "undefined") return fallback;
+  if (typeof document === "undefined") {
+    axisStyleCache = fallback;
+    return axisStyleCache;
+  }
   const cs = getComputedStyle(document.documentElement);
   const fg = cs.getPropertyValue("--color-fg-2").trim();
   const grid = cs.getPropertyValue("--color-border-subtle").trim();
-  return {
+  axisStyleCache = {
     fg: fg || fallback.fg,
     grid: grid || fallback.grid,
   };
+  return axisStyleCache;
 }
 
 export function PlotPanel({ panelId }: PlotPanelProps) {
