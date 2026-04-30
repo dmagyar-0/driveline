@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   CODEC_STRING_FALLBACK,
   LOOKAHEAD_NS,
+  PRIMING_BATCH,
+  PULL_BATCH,
   REFILL_LOW_WATER,
   codecStringFromSps,
   findSps,
@@ -90,6 +92,19 @@ describe("findSps", () => {
 
   it("handles an empty buffer", () => {
     expect(findSps(new Uint8Array())).toBeNull();
+  });
+
+  it("returns the first SPS when multiple SPS NALs are present", () => {
+    // Two SPS NALs back-to-back — production streams sometimes ship a
+    // duplicated SPS in successive AUs. The codec string must come from
+    // the first one we see; otherwise an inter-frame profile change
+    // would silently swap the decoder config mid-stream.
+    const buf = new Uint8Array([
+      0, 0, 0, 1, 0x67, 0x64, 0x00, 0x2a, // first SPS (High @ L4.2)
+      0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e, // second SPS (Baseline @ L3.0)
+    ]);
+    const sps = findSps(buf);
+    expect(Array.from(sps!)).toEqual([0x64, 0x00, 0x2a]);
   });
 });
 
@@ -271,5 +286,20 @@ describe("shouldRefill", () => {
         cursorNs: 5_000_000_000n,
       }),
     ).toBe(true);
+  });
+});
+
+describe("pacing constants", () => {
+  // Open primes the decoder more aggressively than steady-state pulls so
+  // a fresh stream converges before the cursor outruns it (4K H.264 GOPs
+  // are typically IBBP/IBBBP — the first emittable frame is several
+  // chunks deep). If anyone shrinks PRIMING_BATCH or grows PULL_BATCH
+  // past it without rethinking pacing, this catches the regression.
+  it("primes with at least as many chunks as a steady-state pull", () => {
+    expect(PRIMING_BATCH).toBeGreaterThan(PULL_BATCH);
+  });
+
+  it("LOOKAHEAD_NS is a positive bigint watermark", () => {
+    expect(LOOKAHEAD_NS > 0n).toBe(true);
   });
 });
