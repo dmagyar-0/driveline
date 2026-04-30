@@ -125,8 +125,18 @@ export interface SessionState {
   // happens in the drawer/marker components — storage and slice
   // preserve insertion order so renames target a stable index.
   bookmarks: Bookmark[];
+  /**
+   * Errors from the most recent `openFiles` batch. The Sources drawer
+   * renders these so a malformed MCAP/MF4 or an unknown extension is
+   * surfaced rather than silently dropped. Replaced wholesale on the
+   * next `openFiles` call; cleared on `clear()` and via
+   * `dismissOpenErrors()`.
+   */
+  lastOpenErrors: BucketError[];
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
+  /** Clear `lastOpenErrors` (used by the Sources drawer dismiss). */
+  dismissOpenErrors(): void;
   /** Close every loaded wasm handle and reset to the empty session. */
   clear(): Promise<void>;
   /**
@@ -244,10 +254,14 @@ function bigMax(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
 }
 
-function mintBookmarkId(): string {
+// `randomUUID()` is available in modern browsers and Node ≥ 19; the
+// `Math.random` fallback keeps unit tests under jsdom or older runtimes
+// from crashing while still producing a unique-per-call id with the
+// supplied prefix.
+function mintId(prefix: string): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
-    : `bm-${Math.random().toString(36).slice(2)}`;
+    : `${prefix}-${Math.random().toString(36).slice(2)}`;
 }
 
 function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
@@ -345,6 +359,7 @@ export const useSession = create<SessionState>((set, get) => {
     namedLayouts: hydratedNamedLayouts?.layouts ?? [],
     activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
     bookmarks: hydratedBookmarks ?? [],
+    lastOpenErrors: [],
 
     setWorker(w) {
       worker = w;
@@ -392,8 +407,13 @@ export const useSession = create<SessionState>((set, get) => {
       // user drag, dev hook, reset) breaks the "active named layout"
       // identity — clear it so the Layout drawer's orange border no
       // longer points at a layout the user has since diverged from.
-      // `restoreNamedLayout` writes both fields in a single `set` so it
-      // is unaffected by this clearing.
+      //
+      // SEAM: `restoreNamedLayout` deliberately bypasses this clearing
+      // by writing `{ layoutJson, activeNamedLayoutId }` in one
+      // `set({...})` call, so the ordering inside that action is
+      // load-bearing — do not refactor it to call `setLayoutJson(...)`
+      // followed by `setActiveNamedLayoutId(...)` or the active id will
+      // get clobbered by this line on every restore.
       set({ layoutJson: json, activeNamedLayoutId: null });
     },
 
@@ -530,10 +550,7 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     saveCurrentLayoutAs(name) {
-      const id =
-        typeof crypto !== "undefined" && "randomUUID" in crypto
-          ? crypto.randomUUID()
-          : `nl-${Math.random().toString(36).slice(2)}`;
+      const id = mintId("nl");
       const {
         layoutJson,
         videoBindings,
@@ -596,7 +613,7 @@ export const useSession = create<SessionState>((set, get) => {
     addBookmarkAtCursor(label) {
       const { globalRange, cursorNs } = get();
       if (!globalRange) return null;
-      const id = mintBookmarkId();
+      const id = mintId("bm");
       const finalLabel =
         label !== undefined && label.trim().length > 0
           ? label.trim()
@@ -613,7 +630,7 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     addBookmark(ns, label) {
-      const id = mintBookmarkId();
+      const id = mintId("bm");
       const finalLabel =
         label !== undefined && label.trim().length > 0
           ? label.trim()
@@ -634,6 +651,11 @@ export const useSession = create<SessionState>((set, get) => {
       const next = prev.filter((b) => b.id !== id);
       if (next.length === prev.length) return;
       set({ bookmarks: next });
+    },
+
+    dismissOpenErrors() {
+      if (get().lastOpenErrors.length === 0) return;
+      set({ lastOpenErrors: [] });
     },
 
     renameBookmark(id, label) {
@@ -784,7 +806,10 @@ export const useSession = create<SessionState>((set, get) => {
             channels: allChannels,
             globalRange: newRange,
             cursorNs: nextCursor,
+            lastOpenErrors: errors,
           });
+        } else {
+          set({ lastOpenErrors: errors });
         }
 
         return { opened, errors };
@@ -837,6 +862,7 @@ export const useSession = create<SessionState>((set, get) => {
           mapBindings: {},
           tableBindings: {},
           enumBindings: {},
+          lastOpenErrors: [],
         });
       };
       const next = pending.then(run, run);

@@ -1041,6 +1041,13 @@ Open v2 / future-work items (curated list, not exhaustive):
   When a channel's `dtype` is widened to a string-enum format the
   panel can read `colorFor(stateName)` directly without a schema
   change — `colorFor()` already accepts any string.
+- **MapPanel uses `tile.openstreetmap.org` directly**: every running
+  browser leaks the user's IP to a public endpoint, and OSM's tile
+  usage policy explicitly discourages production use without a
+  fallback CDN. Acceptable for a dev tool; before any deployment
+  outside the lab, swap to a hosted provider (Stadia/MapTiler/CartoDB)
+  with an attribution string and a per-team API key. The swap is one
+  prop on `<TileLayer />`; no schema bump.
 
 ## Carry-over notes for later phases (Phase 5 additions)
 

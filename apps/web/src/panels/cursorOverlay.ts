@@ -23,15 +23,29 @@ export function cursorXPx(
 }
 
 // Phase 7 · cursor stroke colour. Reads `--color-accent-orange` from
-// `:root` at draw-time so the token (`apps/web/src/styles/tokens.css`)
-// stays the single source of truth. `getComputedStyle` is fast on the
-// document element (no layout thrash) and is invoked once per cursor
-// tick — well inside the PlotPanel < 4 ms render budget. Falls back to
-// the literal hex if the var is undefined (jsdom in unit tests).
+// `:root` and caches the result, since the design system has no
+// runtime theme switch — re-reading per cursor tick is wasted work
+// inside the PlotPanel < 4 ms render budget. Falls back to the
+// literal hex if the var is undefined (jsdom in unit tests).
+//
+// `__resetCursorStrokeColorCache` exists for tests that need to
+// override CSS-vars between cases; production code should never call
+// it.
+let cursorStrokeColorCache: string | null = null;
+
 export function cursorStrokeColor(): string {
-  if (typeof document === "undefined") return "#f97316";
+  if (cursorStrokeColorCache !== null) return cursorStrokeColorCache;
+  if (typeof document === "undefined") {
+    cursorStrokeColorCache = "#f97316";
+    return cursorStrokeColorCache;
+  }
   const v = getComputedStyle(document.documentElement)
     .getPropertyValue("--color-accent-orange")
     .trim();
-  return v || "#f97316";
+  cursorStrokeColorCache = v || "#f97316";
+  return cursorStrokeColorCache;
+}
+
+export function __resetCursorStrokeColorCache(): void {
+  cursorStrokeColorCache = null;
 }

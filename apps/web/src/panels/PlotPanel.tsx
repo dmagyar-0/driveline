@@ -101,18 +101,26 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
 
 // uPlot's defaults paint axis labels/ticks/grid in black, which is
 // invisible on the dark panel background. Resolve the relevant tokens
-// from `tokens.css` at plot-build time so the design system stays the
-// single source of truth (mirrors `cursorStrokeColor` in cursorOverlay).
+// from `tokens.css` once and cache — the design system has no runtime
+// theme switch at v1, so re-reading on every plot rebuild (one per
+// binding-set change) is wasted `getComputedStyle` work. Mirrors
+// `cursorStrokeColor` in cursorOverlay.
+let axisStyleCache: { fg: string; grid: string } | null = null;
 function axisStyle(): { fg: string; grid: string } {
+  if (axisStyleCache !== null) return axisStyleCache;
   const fallback = { fg: "#e0e0e0", grid: "#2a2a2a" };
-  if (typeof document === "undefined") return fallback;
+  if (typeof document === "undefined") {
+    axisStyleCache = fallback;
+    return axisStyleCache;
+  }
   const cs = getComputedStyle(document.documentElement);
   const fg = cs.getPropertyValue("--color-fg-2").trim();
   const grid = cs.getPropertyValue("--color-border-subtle").trim();
-  return {
+  axisStyleCache = {
     fg: fg || fallback.fg,
     grid: grid || fallback.grid,
   };
+  return axisStyleCache;
 }
 
 export function PlotPanel({ panelId }: PlotPanelProps) {
@@ -142,7 +150,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user
   // saved a session, reloaded, then dropped a different file).
+  //
+  // Skip the cull until at least one source has been loaded — on first
+  // hydrate the channels list is empty, which would otherwise wipe every
+  // persisted binding before the user has had a chance to drop a file.
   useEffect(() => {
+    if (sources.length === 0) return;
     const filtered = boundChannelIds.filter((id) => {
       const c = channels.get(id);
       return c && c.kind === "scalar";
@@ -150,7 +163,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (filtered.length !== boundChannelIds.length) {
       setPlotBinding(panelId, filtered);
     }
-  }, [boundChannelIds, channels, panelId, setPlotBinding]);
+  }, [boundChannelIds, channels, panelId, setPlotBinding, sources.length]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);

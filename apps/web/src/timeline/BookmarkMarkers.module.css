@@ -31,11 +31,6 @@
   inset: -3px -4px;
 }
 
-.marker:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 2px;
-}
-
 .marker[data-out-of-range="true"] {
   opacity: 0.5;
 }

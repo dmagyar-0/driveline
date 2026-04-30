@@ -13,6 +13,11 @@
 // `pointerdown` on a marker calls `setCursor(b.ns)` and stops
 // propagation so the click does not also seed a scrub gesture against
 // the parent track.
+//
+// Markers are visual-only — keyboard access to bookmarks is provided
+// by the Events drawer (one tab stop per bookmark there). We don't
+// add a parallel keyboard path here because it would (a) duplicate
+// the drawer surface and (b) crowd the timeline tab order.
 
 import { useSession } from "../state/store";
 import s from "./BookmarkMarkers.module.css";
@@ -52,9 +57,7 @@ export function BookmarkMarkers() {
             data-out-of-range={outOfRange ? "true" : undefined}
             style={{ left: `${pct}%`, background: b.color }}
             onPointerDown={onPointerDown}
-            role="button"
-            tabIndex={-1}
-            aria-label={`Bookmark ${b.label}`}
+            aria-hidden="true"
             title={b.label}
           />
         );

@@ -111,12 +111,15 @@ export function MapPanel({ panelId }: MapPanelProps) {
   );
 
   // Drop the binding if either channel went away (defence against
-  // stale persisted ids).
+  // stale persisted ids). Gate on `sources.length > 0` so a fresh
+  // hydrate (channels list empty) doesn't wipe a persisted binding
+  // before the user has dropped a file.
   useEffect(() => {
+    if (sources.length === 0) return;
     if (binding !== null && (latChannel === null || lonChannel === null)) {
       setMapBinding(panelId, null);
     }
-  }, [binding, latChannel, lonChannel, panelId, setMapBinding]);
+  }, [binding, latChannel, lonChannel, panelId, setMapBinding, sources.length]);
 
   const [points, setPoints] = useState<LatLngExpression[]>([]);
 

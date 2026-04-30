@@ -17,6 +17,7 @@ import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
 import { mark } from "../perf";
+import { LOOKAHEAD_NS } from "../workers/videoDecodeOps";
 import styles from "./VideoPanel.module.css";
 
 interface VideoPanelProps {
@@ -94,6 +95,11 @@ export function VideoPanel({
   // skips a `seek()` that matches this — preventing a redundant seek on
   // mount when the cursor equals `globalRange.startNs`.
   const lastSeekTargetRef = useRef<bigint | null>(null);
+  // Watermark of the cursor most recently pushed via `client.setCursor`.
+  // Used to coalesce 60 Hz cursor ticks down to ~7 Hz — the decoder
+  // pacing gate uses `LOOKAHEAD_NS = 300 ms`, so anything finer than
+  // half that is wasted Comlink churn.
+  const lastCursorSentRef = useRef<bigint | null>(null);
 
   // Phase 5: HUD bit lives in the store (`videoHudOn[panelId]`) so the
   // Panel drawer can flip it from outside the panel. The local ref stays
@@ -308,6 +314,7 @@ export function VideoPanel({
       for (const e of queueRef.current) e.frame.close();
       queueRef.current = [];
       lastSeekTargetRef.current = null;
+      lastCursorSentRef.current = null;
       codecRef.current = null;
       lastFrameIndexRef.current = 0;
       lastDecodeQueueRef.current = 0;
@@ -344,6 +351,7 @@ export function VideoPanel({
   // every restart drops the in-flight queue.
   useEffect(() => {
     cursorRef.current = useSession.getState().cursorNs;
+    const SETCURSOR_DELTA_NS = LOOKAHEAD_NS / 2n;
     const unsubscribe = useSession.subscribe((state, prev) => {
       cursorRef.current = state.cursorNs;
       if (state.cursorNs !== prev.cursorNs) {
@@ -352,8 +360,23 @@ export function VideoPanel({
         // races to the end of the encoded stream, frames pile up past
         // the cursor, and the bounded queue empties while the cursor
         // is still mid-session.
-        const client = videoDecodeRef.current;
-        if (client) void client.setCursor(state.cursorNs).catch(() => undefined);
+        //
+        // Coalesce against `LOOKAHEAD_NS / 2` so a 60 Hz playback tick
+        // doesn't churn ~60 Comlink postMessages per second to update
+        // a watermark that only gates the 300 ms lookahead.
+        const last = lastCursorSentRef.current;
+        const delta =
+          last === null
+            ? SETCURSOR_DELTA_NS
+            : state.cursorNs > last
+              ? state.cursorNs - last
+              : last - state.cursorNs;
+        if (last === null || delta >= SETCURSOR_DELTA_NS) {
+          lastCursorSentRef.current = state.cursorNs;
+          const client = videoDecodeRef.current;
+          if (client)
+            void client.setCursor(state.cursorNs).catch(() => undefined);
+        }
       }
       // Cancel any pending pre-play scrub seek the moment playback
       // starts — the natural decoder advance makes it redundant.
@@ -373,6 +396,9 @@ export function VideoPanel({
         const target = useSession.getState().cursorNs;
         if (lastSeekTargetRef.current === target) return;
         lastSeekTargetRef.current = target;
+        // The seek itself resets the worker's notion of cursor, so the
+        // setCursor coalescer should re-baseline at the same target.
+        lastCursorSentRef.current = target;
         // Drop stale frames ahead of the seek so the blit loop converges fast.
         for (const e of queueRef.current) e.frame.close();
         queueRef.current = [];

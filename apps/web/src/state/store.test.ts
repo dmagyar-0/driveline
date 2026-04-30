@@ -228,6 +228,29 @@ describe("session store", () => {
     expect(r.opened).toEqual(["short.mf4"]);
     expect(r.errors).toHaveLength(2);
     expect(useSession.getState().sources).toHaveLength(1);
+    // Errors land on the slice so the Sources drawer can render them.
+    expect(useSession.getState().lastOpenErrors).toHaveLength(2);
+  });
+
+  it("dismissOpenErrors clears the lastOpenErrors slice", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession
+      .getState()
+      .openFiles([file("notes.txt")]);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(1);
+    useSession.getState().dismissOpenErrors();
+    expect(useSession.getState().lastOpenErrors).toHaveLength(0);
+  });
+
+  it("replaces lastOpenErrors on the next openFiles call", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("notes.txt")]);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(1);
+    // A clean follow-up drop replaces the prior batch's errors with [].
+    await useSession.getState().openFiles([file("short.mf4")]);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(0);
   });
 
   it("serialises overlapping openFiles calls", async () => {

@@ -85,12 +85,16 @@ export function EnumPanel({ panelId }: EnumPanelProps) {
     [bindingId, sources],
   );
 
-  // Drop the binding when the bound channel no longer exists.
+  // Drop the binding when the bound channel no longer exists. Gate on
+  // `sources.length > 0` so a fresh hydrate (channels list empty)
+  // doesn't wipe a persisted binding before the user has dropped a
+  // file.
   useEffect(() => {
+    if (sources.length === 0) return;
     if (bindingId !== null && channel === null) {
       setEnumBinding(panelId, null);
     }
-  }, [bindingId, channel, panelId, setEnumBinding]);
+  }, [bindingId, channel, panelId, setEnumBinding, sources.length]);
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stripRef = useRef<HTMLCanvasElement | null>(null);

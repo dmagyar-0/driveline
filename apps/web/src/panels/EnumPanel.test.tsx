@@ -71,15 +71,31 @@ describe("EnumPanel", () => {
   });
 
   it("clears the binding when the bound channel disappears", () => {
+    // Seed a source so the cull effect runs — the gate on
+    // `sources.length > 0` exists so a fresh hydrate (channels list
+    // empty) doesn't wipe persisted bindings before the user has
+    // dropped a file.
+    seed();
     useSession.setState({
-      sources: [],
-      channels: [],
-      globalRange: null,
       enumBindings: { "enum-1": "/ghost" },
     });
     render(<EnumPanel panelId="enum-1" />);
     // The cleanup effect drops the orphaned binding; empty state renders.
     expect(screen.getByTestId("enum-empty")).toBeTruthy();
     expect(useSession.getState().enumBindings["enum-1"]).toBeNull();
+  });
+
+  it("does not clear a persisted binding before any source loads", () => {
+    // Pre-fix this would wipe the binding on hydrate; with the
+    // `sources.length > 0` gate it survives until the user actually
+    // drops a file (at which point the cull above fires).
+    useSession.setState({
+      sources: [],
+      channels: [],
+      globalRange: null,
+      enumBindings: { "enum-1": "/persisted" },
+    });
+    render(<EnumPanel panelId="enum-1" />);
+    expect(useSession.getState().enumBindings["enum-1"]).toBe("/persisted");
   });
 });
