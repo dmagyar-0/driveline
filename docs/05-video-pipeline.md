@@ -134,8 +134,12 @@ encoded into the mp4's (wall-clock-agnostic) track timeline.
   the 0-based row number and `timestamp_ns` is absolute nanoseconds UTC
   at the capture instant for that frame.
 - The reader accepts `\n` or `\r\n` line endings and an optional trailing
-  newline. The frame column must equal the row's 0-based index — any
-  skipped, reordered, or duplicated row fails the file open with a
+  newline. Surrounding ASCII whitespace inside each column is trimmed
+  before parsing, so producers that pad numeric fields (e.g.
+  `"0\t100 \n"` or `" 0 \t 100 \n"`) still open cleanly. The single-tab
+  separator and exactly-two-fields invariants are still enforced. The
+  frame column must equal the row's 0-based index — any skipped,
+  reordered, or duplicated row fails the file open with a
   `sidecar line N: ...` error. A mismatch between the line count and the
   mp4's sample count also fails the open with a descriptive error.
 

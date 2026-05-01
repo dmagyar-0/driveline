@@ -178,7 +178,10 @@ impl Mp4SidecarReader {
 /// `str::lines()` accepts `\n` or `\r\n` and tolerates an optional trailing
 /// line terminator. The `frame` column must equal the line's 0-based row
 /// index — this catches reordered / skipped / duplicated rows cheaply at
-/// open time.
+/// open time. Surrounding ASCII whitespace inside each column is trimmed
+/// before parsing so producers that pad fields (e.g. `"0\t100 \n"`) still
+/// open cleanly; the structural single-tab separator and exactly-two-fields
+/// invariants are still enforced.
 fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>> {
     let text = std::str::from_utf8(bytes)?;
 
@@ -204,13 +207,12 @@ fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>>
             });
         }
 
-        let frame: usize =
-            frame_str
-                .parse()
-                .map_err(|_| crate::Error::SidecarMalformedLine {
-                    line_no: idx,
-                    reason: format!("frame column {frame_str:?} is not a non-negative integer"),
-                })?;
+        let frame: usize = frame_str.trim().parse().map_err(|_| {
+            crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: format!("frame column {frame_str:?} is not a non-negative integer"),
+            }
+        })?;
         if frame != pts_ns.len() {
             return Err(crate::Error::SidecarMalformedLine {
                 line_no: idx,
@@ -221,12 +223,14 @@ fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>>
             });
         }
 
-        let ts_ns: i64 = ts_str
-            .parse()
-            .map_err(|_| crate::Error::SidecarMalformedLine {
-                line_no: idx,
-                reason: format!("timestamp column {ts_str:?} is not an i64"),
-            })?;
+        let ts_ns: i64 =
+            ts_str
+                .trim()
+                .parse()
+                .map_err(|_| crate::Error::SidecarMalformedLine {
+                    line_no: idx,
+                    reason: format!("timestamp column {ts_str:?} is not an i64"),
+                })?;
         pts_ns.push(ts_ns);
     }
 
@@ -619,6 +623,24 @@ mod tests {
         let sidecar = b"0\t100\r\n1\t200\r\n".to_vec();
         let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
         assert_eq!(r.pts_ns(), &[100i64, 200]);
+    }
+
+    #[test]
+    fn accepts_sidecar_with_padded_columns() {
+        // Real-world producers sometimes pad the numeric columns with stray
+        // ASCII whitespace (e.g. `"0\t1777112584089512192 \n"`). The strict
+        // `i64::parse` rejected those; the parser now trims each column
+        // before parsing while still requiring a single-tab separator and
+        // exactly two fields per line.
+        let mp4 = synth_mp4(3);
+        let sidecar =
+            b"0\t1777112584089512192 \n  1 \t 1777112584122845525\n2\t1777112584156178858\n"
+                .to_vec();
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+        assert_eq!(
+            r.pts_ns(),
+            &[1777112584089512192i64, 1777112584122845525, 1777112584156178858]
+        );
     }
 
     #[test]
