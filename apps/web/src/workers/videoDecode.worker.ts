@@ -21,6 +21,7 @@ import {
   PULL_BATCH,
   codecStringFromSps,
   findSps,
+  hex,
   ptsToMicros,
   shouldRefill,
   videoStreamOps,
@@ -157,19 +158,31 @@ async function maybeRefill(): Promise<void> {
 
 async function configureFromFirstKeyframe(
   initial: EncodedChunkWire[],
+  description: Uint8Array | null,
   decoder: VideoDecoder,
 ): Promise<OpenResult> {
   const first = initial[0];
   if (!first || !first.is_keyframe) {
     throw new Error("videoDecode: first chunk is not a keyframe");
   }
-  const sps = findSps(first.data);
-  const codec = sps ? codecStringFromSps(sps) : CODEC_STRING_FALLBACK;
-  // Probe once without a HW hint; Chromium headless rejects
-  // `prefer-hardware` when no HW decoder is wired in. Fall back to
-  // `no-preference` if the probed support object reports unsupported
-  // under either hint, so the app still works in CI.
-  const baseConfig: VideoDecoderConfig = { codec, optimizeForLatency: false };
+  // AVC mode (mp4): the avcC description carries SPS/PPS, profile, and
+  // length size. Derive the codec string from its profile/compat/level
+  // bytes — the chunk data is raw AVCC NALs, not Annex-B, so `findSps`
+  // would not find anything to parse anyway.
+  // Annex-B mode (mcap): scan the first chunk for an inline SPS and
+  // derive the codec from there, as before.
+  let codec: string;
+  if (description) {
+    codec = codecFromAvccDescription(description);
+  } else {
+    const sps = findSps(first.data);
+    codec = sps ? codecStringFromSps(sps) : CODEC_STRING_FALLBACK;
+  }
+  const baseConfig: VideoDecoderConfig = {
+    codec,
+    optimizeForLatency: false,
+    ...(description ? { description } : {}),
+  };
   const supported = await VideoDecoder.isConfigSupported(baseConfig);
   if (!supported.supported) {
     throw new Error(
@@ -178,6 +191,14 @@ async function configureFromFirstKeyframe(
   }
   decoder.configure(baseConfig);
   return { codec };
+}
+
+/// avcC byte layout: [0]=configurationVersion, [1]=AVCProfileIndication,
+/// [2]=profile_compatibility, [3]=AVCLevelIndication. Mirrors what
+/// `codecStringFromSps` does for an Annex-B SPS payload.
+function codecFromAvccDescription(description: Uint8Array): string {
+  if (description.length < 4) return CODEC_STRING_FALLBACK;
+  return `avc1.${hex(description[1])}${hex(description[2])}${hex(description[3])}`;
 }
 
 async function openInternal(
@@ -193,7 +214,11 @@ async function openInternal(
   if (cursorNs < fromPtsNs) cursorNs = fromPtsNs;
   const dc = getDataCore();
   const ops = videoStreamOps(dc, sourceKind, mp4Lazy ?? undefined);
-  const streamId = await ops.open(sourceHandle, channelId, fromPtsNs);
+  const { streamId, description } = await ops.open(
+    sourceHandle,
+    channelId,
+    fromPtsNs,
+  );
   const decoder = new VideoDecoder({
     output: (frame) => onFrame(frame),
     error: (e) => {
@@ -228,7 +253,7 @@ async function openInternal(
     session.ended = true;
     return { codec: "" };
   }
-  const result = await configureFromFirstKeyframe(initial, decoder);
+  const result = await configureFromFirstKeyframe(initial, description, decoder);
   for (const c of initial) {
     const chunk = new EncodedVideoChunk({
       type: c.is_keyframe ? "key" : "delta",

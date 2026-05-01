@@ -11,10 +11,7 @@
 // `mp4AnnexB.ts`, and emitted to the decoder. The MCAP path is unchanged.
 
 import type * as Comlink from "comlink";
-import {
-  avccToAnnexB,
-  buildFirstAnnexBChunk,
-} from "./mp4AnnexB";
+import { buildAvccDescription } from "./mp4AnnexB";
 import type { EncodedChunkWire } from "./normalise";
 
 export type VideoSourceKind = "mcap" | "mp4";
@@ -67,8 +64,28 @@ export interface Mp4LazyIndex {
 // Resolves the three stream ops for a given reader kind. Keeping this as a
 // single dispatch point means `openInternal` / `pullAndFeed` / `closeInternal`
 // / `seek` never have to branch on `sourceKind` themselves.
+//
+// `open()` returns both a stream id and the optional `description` bytes the
+// videoDecode worker passes to `VideoDecoderConfig.description`. mcap streams
+// run in Annex-B mode and emit `null`; mp4 streams run in AVC (length-
+// prefixed) mode and emit a synthesised `avcC` configuration record. The
+// AVC-mode switch is the fix for ffmpeg-encoded mp4s whose samples carry a
+// leading AUD: with Annex-B prepending, SPS/PPS landed before the AUD and
+// Chrome's H.264 parser rejected the chunk with `DataError: A key frame is
+// required after configure() or flush()`. Feeding raw AVCC samples plus an
+// explicit `description` sidesteps the entire Annex-B ordering minefield.
+export interface OpenStreamResult {
+  streamId: number;
+  /** AVCDecoderConfigurationRecord bytes, or null for Annex-B sources. */
+  description: Uint8Array | null;
+}
+
 export interface VideoStreamOps {
-  open(handle: number, channelId: string, fromPtsNs: bigint): Promise<number>;
+  open(
+    handle: number,
+    channelId: string,
+    fromPtsNs: bigint,
+  ): Promise<OpenStreamResult>;
   next(streamId: number, maxN: number): Promise<EncodedChunkWire[]>;
   close(streamId: number): Promise<void>;
 }
@@ -79,8 +96,6 @@ interface Mp4LazyStreamState {
   index: Mp4LazyIndex;
   /** Index of the next sample to emit (0-based). */
   cursor: number;
-  /** True until the first chunk goes out — gates the SPS/PPS prepend. */
-  awaitingExtradata: boolean;
 }
 
 const PREFETCH_AHEAD = 12;
@@ -99,7 +114,10 @@ export function videoStreamOps(
 ): VideoStreamOps {
   if (kind === "mcap") {
     return {
-      open: (h, c, p) => dc.openMcapVideoStream(h, c, p),
+      open: async (h, c, p) => ({
+        streamId: await dc.openMcapVideoStream(h, c, p),
+        description: null,
+      }),
       next: (s, m) => dc.mcapVideoNextBatch(s, m),
       close: (s) => dc.closeMcapVideoStream(s),
     };
@@ -127,7 +145,6 @@ export function makeMp4LazyOps(
           channelId,
           index,
           cursor,
-          awaitingExtradata: true,
         },
       });
       // Surface a "fetching" indicator if the start sample isn't already
@@ -137,7 +154,10 @@ export function makeMp4LazyOps(
       if (cursor >= 0) {
         await mp4Port.mp4MarkPending(handle, index.ptsNs[cursor]);
       }
-      return streamId;
+      return {
+        streamId,
+        description: buildAvccDescription(index.sps, index.pps),
+      };
     },
     async next(streamId, maxN) {
       const slot = mp4Streams.get(streamId);
@@ -155,16 +175,15 @@ export function makeMp4LazyOps(
       await mp4Port.mp4SetActive(state.handle, activeLo, activeHi);
       for (let i = 0; i < take; i++) {
         const idx = state.cursor;
+        // Raw AVCC sample bytes (4-byte length-prefixed NAL units). The
+        // worker hands these straight to `VideoDecoder.decode` after
+        // configuring with the avcC `description` from `open()` — no
+        // Annex-B conversion, no SPS/PPS prepend.
         const body = await mp4Port.mp4Sample(state.handle, idx);
-        const annexB = avccToAnnexB(body);
-        const chunkData = state.awaitingExtradata
-          ? buildFirstAnnexBChunk(annexB, state.index.sps, state.index.pps)
-          : annexB;
-        if (state.awaitingExtradata) state.awaitingExtradata = false;
         out.push({
           pts_ns: state.index.ptsNs[idx],
           is_keyframe: state.index.isSync[idx] === 1,
-          data: chunkData,
+          data: body,
         });
         state.cursor += 1;
         if (i === 0) {
