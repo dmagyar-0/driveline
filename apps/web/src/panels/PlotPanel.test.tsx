@@ -307,6 +307,24 @@ describe("PlotPanel", () => {
     expect(snap.sampleAtCursor[0]?.value).toBe(2);
     expect(snap.sampleAtCursor[1]?.value).toBe(2);
   });
+
+  it("does not clear persisted bindings before any source loads", () => {
+    // Pre-fix this would wipe the bindings on hydrate; with the
+    // `sources.length > 0` gate persisted bindings survive until the
+    // user actually drops a file (at which point the cull above
+    // fires). Mirrors the gate test in EnumPanel/MapPanel/TablePanel.
+    useSession.setState({
+      sources: [],
+      channels: [],
+      globalRange: null,
+      plotBindings: { "test-panel": ["persisted-a", "persisted-b"] },
+    });
+    render(<PlotPanel panelId="test-panel" />);
+    expect(useSession.getState().plotBindings["test-panel"]).toEqual([
+      "persisted-a",
+      "persisted-b",
+    ]);
+  });
 });
 
 // Re-export types the test file pulls in for the shape-of-workerClient
