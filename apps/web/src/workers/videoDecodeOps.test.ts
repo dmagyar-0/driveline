@@ -160,7 +160,10 @@ describe("videoStreamOps", () => {
   it("dispatches `mcap` through the mcap_* methods", async () => {
     const dc = makeFakeDc();
     const ops = videoStreamOps(dc, "mcap");
-    await expect(ops.open(1, "/camera/front", 0n)).resolves.toBe(11);
+    const result = await ops.open(1, "/camera/front", 0n);
+    // mcap stays in Annex-B mode — no `description` is surfaced and the
+    // worker leaves `VideoDecoderConfig.description` unset.
+    expect(result).toEqual({ streamId: 11, description: null });
     await ops.next(11, 4);
     await ops.close(11);
 
@@ -189,9 +192,11 @@ describe("videoStreamOps", () => {
       sps: new Uint8Array([0x67, 0x42, 0x00, 0x1e]),
       pps: new Uint8Array([0x68, 0xeb]),
     };
+    // Raw AVCC sample: 4-byte BE length=1, then a single IDR NAL byte.
+    const sampleBody = new Uint8Array([0, 0, 0, 1, 0x65]);
     const mp4Port = {
       mp4Index: vi.fn(async () => mp4Index),
-      mp4Sample: vi.fn(async () => new Uint8Array([0, 0, 0, 1, 0x05])),
+      mp4Sample: vi.fn(async () => sampleBody),
       mp4SetActive: vi.fn(async () => undefined),
       mp4MarkPending: vi.fn(async () => undefined),
       mp4ClearPending: vi.fn(async () => undefined),
@@ -199,16 +204,26 @@ describe("videoStreamOps", () => {
       import("./videoDecodeOps").Mp4LazyPortApi
     >;
     const ops = videoStreamOps(dc, "mp4", mp4Port);
-    const streamId = await ops.open(2, "1/video", 33_000_000n);
-    expect(streamId).toBeGreaterThan(0);
+    const result = await ops.open(2, "1/video", 33_000_000n);
+    expect(result.streamId).toBeGreaterThan(0);
+    // The mp4 path runs in AVC mode: `open` synthesises an avcC
+    // description from the index's SPS+PPS, the worker passes it as
+    // `VideoDecoderConfig.description`, and chunks ride raw AVCC bytes.
+    expect(result.description).not.toBeNull();
+    // configurationVersion=1, then profile/compat/level from SPS[1..4].
+    expect(result.description!.slice(0, 4)).toEqual(
+      new Uint8Array([0x01, 0x42, 0x00, 0x1e]),
+    );
     expect(
       (mp4Port as unknown as Record<string, ReturnType<typeof vi.fn>>)
         .mp4Index,
     ).toHaveBeenCalledWith(2);
-    const batch = await ops.next(streamId, 2);
+    const batch = await ops.next(result.streamId, 2);
     expect(batch.length).toBe(2);
     expect(batch[0].is_keyframe).toBe(true);
-    await ops.close(streamId);
+    // AVC mode: chunk body is the raw mp4 sample, not Annex-B.
+    expect(batch[0].data).toBe(sampleBody);
+    await ops.close(result.streamId);
   });
 
   it("throws when the mp4 port is missing for an mp4 source", () => {
