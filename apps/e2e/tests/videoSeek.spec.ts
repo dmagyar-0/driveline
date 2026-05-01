@@ -273,4 +273,89 @@ test.describe("video seek (T5.2)", () => {
 
     expect(guard.pageErrors).toEqual([]);
   });
+
+  test("paused scrub updates the displayed frame at each target", async ({
+    page,
+  }) => {
+    // Regression for the bug where seeking while playback is stopped left
+    // the canvas frozen on the previous frame. Cause: the worker discarded
+    // every decoded frame whose PTS was strictly less than the seek target,
+    // so when the cursor landed between frame boundaries (the common case
+    // on a 33 ms grid) the panel queue contained only frames `> cursor` and
+    // the blit predicate (`newest frame whose PTS <= cursor`) could not
+    // produce a draw. During play the cursor advanced past the next frame
+    // within ~33 ms, masking the bug — only paused scrubs reproduced it.
+
+    const guard = installConsoleGuard(page);
+    const s = await snapshot(page);
+    expect(s.globalRange).not.toBeNull();
+    const startNs = BigInt(s.globalRange!.startNs);
+    const endNs = BigInt(s.globalRange!.endNs);
+    const span = endNs - startNs;
+
+    // Wait for the first frame to blit so we have a baseline.
+    await expect
+      .poll(async () => (await hud(page))?.ptsNs, {
+        timeout: 5_000,
+        intervals: [50, 100, 200],
+      })
+      .not.toBeNull();
+
+    // Offsets chosen so the resulting cursor falls between frame boundaries
+    // on the 30 fps fixture (33.333 ms per frame). The bug repros for any
+    // cursor that doesn't coincide with a frame's PTS, so even a 1 ms shift
+    // off the grid is enough.
+    const offsetsNs: bigint[] = [
+      1_001_000_000n,
+      4_007_000_000n,
+      7_013_000_000n,
+    ];
+
+    const seenPts = new Set<string>();
+    for (const off of offsetsNs) {
+      const target =
+        startNs + off >= endNs ? endNs - 1n : startNs + off;
+      const ratio = Math.min(
+        1,
+        Math.max(0, Number(target - startNs) / Number(span)),
+      );
+      await clickScrubberAtRatio(page, ratio);
+      await expect
+        .poll(async () => BigInt((await snapshot(page)).cursorNs), {
+          timeout: 2_000,
+        })
+        .toBe(target);
+
+      // Confirm the panel actually blitted a frame at/near this target
+      // while paused. Tolerate one inter-frame distance since the blit
+      // pivot is "newest frame with PTS <= cursor" — that frame can sit
+      // up to ~33 ms behind the cursor on a 30 fps stream.
+      await expect
+        .poll(
+          async () => {
+            const h = await hud(page);
+            if (!h?.ptsNs) return false;
+            const pts = BigInt(h.ptsNs);
+            const diff = pts > target ? pts - target : target - pts;
+            return diff <= 50_000_000n;
+          },
+          { timeout: 3_000, intervals: [50, 100, 200] },
+        )
+        .toBe(true);
+
+      const h = await hud(page);
+      expect(h?.ptsNs, "blit pts disappeared after seek").not.toBeNull();
+      seenPts.add(h!.ptsNs!);
+
+      // Sanity: we never started playback, so the store must still report
+      // paused. If a future change wires play-on-scrub this test will
+      // surface that as a behaviour change rather than silently passing.
+      const snap = await snapshot(page);
+      expect(snap.playing).toBe(false);
+    }
+
+    // Each distinct seek target should have produced a distinct blit PTS.
+    expect(seenPts.size).toBe(offsetsNs.length);
+    expect(guard.pageErrors).toEqual([]);
+  });
 });
