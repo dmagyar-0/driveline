@@ -4,8 +4,17 @@
 //
 // The worker itself stays thin: session management and decoder wiring live
 // there; everything below is side-effect-free and can run in node.
+//
+// Lazy-load update: the mp4+sidecar path no longer goes through the dataCore
+// worker for encoded chunks. Sample bodies are fetched from the main thread
+// `Mp4SampleCache` (backed by the original `File` blob), Annex-B framed in
+// `mp4AnnexB.ts`, and emitted to the decoder. The MCAP path is unchanged.
 
 import type * as Comlink from "comlink";
+import {
+  avccToAnnexB,
+  buildFirstAnnexBChunk,
+} from "./mp4AnnexB";
 import type { EncodedChunkWire } from "./normalise";
 
 export type VideoSourceKind = "mcap" | "mp4";
@@ -26,16 +35,33 @@ export interface DataCorePortApi {
     maxN: number,
   ): Promise<EncodedChunkWire[]>;
   closeMcapVideoStream(streamId: number): Promise<void>;
-  openMp4VideoStream(
-    handle: number,
-    channelId: string,
-    fromPtsNs: bigint,
-  ): Promise<number>;
-  mp4VideoNextBatch(
-    streamId: number,
-    maxN: number,
-  ): Promise<EncodedChunkWire[]>;
-  closeMp4VideoStream(streamId: number): Promise<void>;
+}
+
+/** RPC surface for the JS-side mp4 lazy stream. Bound to the main thread
+ * via a separate MessagePort so the decode worker can pull encoded
+ * sample bytes from `Mp4SampleCache` without ever holding the source
+ * `File` blob itself. */
+export interface Mp4LazyPortApi {
+  /** Per-sample table for the currently-bound mp4 source. */
+  mp4Index(handle: number): Promise<Mp4LazyIndex>;
+  /** Read a single sample's encoded body. Hits the LRU on the main thread. */
+  mp4Sample(handle: number, idx: number): Promise<Uint8Array>;
+  /** Notify the cache the decoder window has slid; used for prefetch + pinning. */
+  mp4SetActive(handle: number, lo: number, hi: number): Promise<void>;
+  /** Surface "fetch in flight" so the timeline can show a spinner. */
+  mp4MarkPending(handle: number, targetNs: bigint): Promise<void>;
+  /** Clear the spinner once playback can resume. */
+  mp4ClearPending(handle: number): Promise<void>;
+}
+
+export interface Mp4LazyIndex {
+  channelId: string;
+  ptsNs: BigInt64Array;
+  offsets: BigUint64Array;
+  sizes: Uint32Array;
+  isSync: Uint8Array;
+  sps: Uint8Array;
+  pps: Uint8Array;
 }
 
 // Resolves the three stream ops for a given reader kind. Keeping this as a
@@ -47,9 +73,29 @@ export interface VideoStreamOps {
   close(streamId: number): Promise<void>;
 }
 
+interface Mp4LazyStreamState {
+  handle: number;
+  channelId: string;
+  index: Mp4LazyIndex;
+  /** Index of the next sample to emit (0-based). */
+  cursor: number;
+  /** True until the first chunk goes out — gates the SPS/PPS prepend. */
+  awaitingExtradata: boolean;
+}
+
+const PREFETCH_AHEAD = 12;
+
+interface Mp4StreamSlot {
+  state: Mp4LazyStreamState;
+}
+
+let nextMp4StreamId = 1;
+const mp4Streams = new Map<number, Mp4StreamSlot>();
+
 export function videoStreamOps(
   dc: Comlink.Remote<DataCorePortApi>,
   kind: VideoSourceKind,
+  mp4Port?: Comlink.Remote<Mp4LazyPortApi>,
 ): VideoStreamOps {
   if (kind === "mcap") {
     return {
@@ -58,11 +104,128 @@ export function videoStreamOps(
       close: (s) => dc.closeMcapVideoStream(s),
     };
   }
+  if (!mp4Port) {
+    throw new Error(
+      "videoDecode: mp4 lazy port not configured — main thread must " +
+        "call setMp4LazyPort before opening an mp4 source",
+    );
+  }
+  return makeMp4LazyOps(mp4Port);
+}
+
+export function makeMp4LazyOps(
+  mp4Port: Comlink.Remote<Mp4LazyPortApi>,
+): VideoStreamOps {
   return {
-    open: (h, c, p) => dc.openMp4VideoStream(h, c, p),
-    next: (s, m) => dc.mp4VideoNextBatch(s, m),
-    close: (s) => dc.closeMp4VideoStream(s),
+    async open(handle, channelId, fromPtsNs) {
+      const index = await mp4Port.mp4Index(handle);
+      const cursor = pickStartCursor(index, fromPtsNs);
+      const streamId = nextMp4StreamId++;
+      mp4Streams.set(streamId, {
+        state: {
+          handle,
+          channelId,
+          index,
+          cursor,
+          awaitingExtradata: true,
+        },
+      });
+      // Surface a "fetching" indicator if the start sample isn't already
+      // resident; the cache reports back via the main-thread store and
+      // the timeline lights its spinner. The cleared signal comes from
+      // the first sample fetch completing inside `next()`.
+      if (cursor >= 0) {
+        await mp4Port.mp4MarkPending(handle, index.ptsNs[cursor]);
+      }
+      return streamId;
+    },
+    async next(streamId, maxN) {
+      const slot = mp4Streams.get(streamId);
+      if (!slot) return [];
+      const { state } = slot;
+      const total = state.index.ptsNs.length;
+      if (state.cursor >= total) return [];
+      const out: EncodedChunkWire[] = [];
+      const take = Math.min(maxN, total - state.cursor);
+      // Pin the active range so the cache doesn't evict samples we're
+      // about to feed to the decoder. `setActive` overwrites — caller's
+      // intent is "this is the live window".
+      const activeLo = state.cursor;
+      const activeHi = Math.min(total - 1, state.cursor + take + PREFETCH_AHEAD);
+      await mp4Port.mp4SetActive(state.handle, activeLo, activeHi);
+      for (let i = 0; i < take; i++) {
+        const idx = state.cursor;
+        const body = await mp4Port.mp4Sample(state.handle, idx);
+        const annexB = avccToAnnexB(body);
+        const chunkData = state.awaitingExtradata
+          ? buildFirstAnnexBChunk(annexB, state.index.sps, state.index.pps)
+          : annexB;
+        if (state.awaitingExtradata) state.awaitingExtradata = false;
+        out.push({
+          pts_ns: state.index.ptsNs[idx],
+          is_keyframe: state.index.isSync[idx] === 1,
+          data: chunkData,
+        });
+        state.cursor += 1;
+        if (i === 0) {
+          // The first sample of the batch landed → playback can resume;
+          // hide the spinner.
+          await mp4Port.mp4ClearPending(state.handle);
+        }
+      }
+      return out;
+    },
+    async close(streamId) {
+      const slot = mp4Streams.get(streamId);
+      if (!slot) return;
+      mp4Streams.delete(streamId);
+      try {
+        await mp4Port.mp4ClearPending(slot.state.handle);
+      } catch {
+        // best-effort
+      }
+    },
   };
+}
+
+/** Find the largest sync-sample index whose pts is `<= target`, falling
+ *  back to the first sync sample if `target` predates every keyframe.
+ *  Returns 0 for tracks without an explicit sync table (every sample
+ *  treated as a keyframe). */
+export function pickStartCursor(
+  idx: Mp4LazyIndex,
+  target: bigint,
+): number {
+  const n = idx.ptsNs.length;
+  if (n === 0) return 0;
+  // First sync index — used as fallback.
+  let firstSync = -1;
+  for (let i = 0; i < idx.isSync.length; i++) {
+    if (idx.isSync[i] === 1) {
+      firstSync = i;
+      break;
+    }
+  }
+  if (firstSync < 0) firstSync = 0;
+  // Largest sample with pts <= target via binary search.
+  let lo = 0;
+  let hi = n - 1;
+  let cand = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    if (idx.ptsNs[mid] <= target) {
+      cand = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (cand < 0) return firstSync;
+  // Walk back to the nearest preceding sync sample.
+  for (let i = cand; i >= 0; i--) {
+    if (idx.isSync[i] === 1) return i;
+  }
+  return firstSync;
 }
 
 export function hex(b: number): string {

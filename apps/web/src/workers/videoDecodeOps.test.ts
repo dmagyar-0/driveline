@@ -151,9 +151,6 @@ describe("videoStreamOps", () => {
       openMcapVideoStream: vi.fn(async () => 11),
       mcapVideoNextBatch: vi.fn(async () => []),
       closeMcapVideoStream: vi.fn(async () => undefined),
-      openMp4VideoStream: vi.fn(async () => 22),
-      mp4VideoNextBatch: vi.fn(async () => []),
-      closeMp4VideoStream: vi.fn(async () => undefined),
     };
     // The production type is Comlink.Remote<DataCorePortApi>; the fake
     // mimics the shape closely enough that the dispatch keeps type-checking.
@@ -175,33 +172,48 @@ describe("videoStreamOps", () => {
     );
     expect(fake.mcapVideoNextBatch).toHaveBeenCalledWith(11, 4);
     expect(fake.closeMcapVideoStream).toHaveBeenCalledWith(11);
-
-    // And none of the mp4_* methods fired.
-    expect(fake.openMp4VideoStream).not.toHaveBeenCalled();
-    expect(fake.mp4VideoNextBatch).not.toHaveBeenCalled();
-    expect(fake.closeMp4VideoStream).not.toHaveBeenCalled();
   });
 
-  it("dispatches `mp4` through the mp4_* methods", async () => {
+  it("dispatches `mp4` through the lazy main-thread port", async () => {
+    // mp4 sources no longer round-trip through the dataCore worker —
+    // they pull encoded bytes from `Mp4SampleCache` over a separate
+    // MessagePort. The dispatcher requires that port to be configured
+    // before opening an mp4 source.
     const dc = makeFakeDc();
-    const ops = videoStreamOps(dc, "mp4");
-    await expect(ops.open(2, "1/video", 1_700_000_000_000_000_000n)).resolves
-      .toBe(22);
-    await ops.next(22, 8);
-    await ops.close(22);
+    const mp4Index = {
+      channelId: "1/video",
+      ptsNs: BigInt64Array.from([0n, 33_000_000n, 66_000_000n]),
+      offsets: BigUint64Array.from([100n, 110n, 120n]),
+      sizes: Uint32Array.from([10, 10, 10]),
+      isSync: Uint8Array.from([1, 0, 0]),
+      sps: new Uint8Array([0x67, 0x42, 0x00, 0x1e]),
+      pps: new Uint8Array([0x68, 0xeb]),
+    };
+    const mp4Port = {
+      mp4Index: vi.fn(async () => mp4Index),
+      mp4Sample: vi.fn(async () => new Uint8Array([0, 0, 0, 1, 0x05])),
+      mp4SetActive: vi.fn(async () => undefined),
+      mp4MarkPending: vi.fn(async () => undefined),
+      mp4ClearPending: vi.fn(async () => undefined),
+    } as unknown as Comlink.Remote<
+      import("./videoDecodeOps").Mp4LazyPortApi
+    >;
+    const ops = videoStreamOps(dc, "mp4", mp4Port);
+    const streamId = await ops.open(2, "1/video", 33_000_000n);
+    expect(streamId).toBeGreaterThan(0);
+    expect(
+      (mp4Port as unknown as Record<string, ReturnType<typeof vi.fn>>)
+        .mp4Index,
+    ).toHaveBeenCalledWith(2);
+    const batch = await ops.next(streamId, 2);
+    expect(batch.length).toBe(2);
+    expect(batch[0].is_keyframe).toBe(true);
+    await ops.close(streamId);
+  });
 
-    const fake = dc as unknown as Record<string, ReturnType<typeof vi.fn>>;
-    expect(fake.openMp4VideoStream).toHaveBeenCalledWith(
-      2,
-      "1/video",
-      1_700_000_000_000_000_000n,
-    );
-    expect(fake.mp4VideoNextBatch).toHaveBeenCalledWith(22, 8);
-    expect(fake.closeMp4VideoStream).toHaveBeenCalledWith(22);
-
-    expect(fake.openMcapVideoStream).not.toHaveBeenCalled();
-    expect(fake.mcapVideoNextBatch).not.toHaveBeenCalled();
-    expect(fake.closeMcapVideoStream).not.toHaveBeenCalled();
+  it("throws when the mp4 port is missing for an mp4 source", () => {
+    const dc = makeFakeDc();
+    expect(() => videoStreamOps(dc, "mp4")).toThrow(/mp4 lazy port/);
   });
 });
 

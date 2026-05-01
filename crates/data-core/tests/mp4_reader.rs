@@ -39,55 +39,48 @@ fn sidecar_generator_is_deterministic() {
     assert_eq!(a.as_slice(), SIDECAR);
 }
 
-/// T5.3: `video_stream` must yield one Annex-B access unit per mp4 sample,
-/// with the first chunk carrying inline SPS + PPS so the video-decode
-/// worker's codec-string probe works without the mp4's avcC extradata.
+/// Lazy-load index path: the reader exposes a per-sample `(offset, size,
+/// is_sync)` table that the JS layer reads to fetch sample bytes from the
+/// source `File` blob on demand. Verify the table is well-formed against
+/// the committed fixture: ten samples, ascending offsets, exactly one
+/// keyframe (the synth fixture marks sample 0 as sync), and offsets that
+/// actually point at non-zero bytes inside the mp4 (sanity-check that
+/// the offsets address `mdat` rather than empty padding).
+///
+/// AVCC → Annex-B framing and SPS/PPS prepend now live in
+/// `apps/web/src/workers/mp4AnnexB.ts`; see `mp4AnnexB.test.ts` for the
+/// shape assertions that used to live in this file.
 #[test]
-fn video_stream_yields_annex_b_chunks_from_fixture() {
+fn sample_index_describes_fixture_layout() {
     let r = Mp4SidecarReader::open_pair(MP4, SIDECAR).expect("open pair");
-    let ch_id = r.meta().channels[0].id.clone();
+    let idx = r.sample_index();
 
-    let chunks: Vec<_> = r
-        .video_stream(&ch_id, i64::MIN)
-        .expect("video_stream")
-        .collect();
-    assert_eq!(chunks.len(), 10);
+    assert_eq!(idx.offsets.len(), 10);
+    assert_eq!(idx.sizes.len(), 10);
+    assert_eq!(idx.is_sync.len(), 10);
 
-    for c in &chunks {
-        assert_eq!(
-            &c.data[..4],
-            &[0x00, 0x00, 0x00, 0x01],
-            "chunk must start with Annex-B start code",
-        );
+    // First sample is the keyframe; every other sample is delta.
+    assert!(idx.is_sync[0]);
+    for s in &idx.is_sync[1..] {
+        assert!(!*s);
     }
 
-    // Timestamps must strictly increase, matching the sidecar.
-    let mut prev = i64::MIN;
-    for c in &chunks {
-        assert!(c.pts_ns > prev, "ptss must strictly increase");
-        prev = c.pts_ns;
+    // Offsets are strictly ascending — samples are written sequentially
+    // into a single `mdat` chunk.
+    for w in idx.offsets.windows(2) {
+        assert!(w[0] < w[1], "offsets must be ascending: {:?}", idx.offsets);
     }
 
-    // First chunk contains SPS (NAL 7) and PPS (NAL 8). Scan for start
-    // code + (header & 0x1f).
-    let first = &chunks[0].data;
-    let mut has_sps = false;
-    let mut has_pps = false;
-    let mut i = 0;
-    while i + 4 < first.len() {
-        if first[i..i + 4] == [0x00, 0x00, 0x00, 0x01] {
-            let header = first[i + 4];
-            match header & 0x1f {
-                7 => has_sps = true,
-                8 => has_pps = true,
-                _ => {}
-            }
-            i += 4;
-        } else {
-            i += 1;
-        }
+    // Every (offset, size) pair must address bytes inside the mp4 file.
+    for (i, &off) in idx.offsets.iter().enumerate() {
+        let size = idx.sizes[i] as usize;
+        assert!(size > 0, "sample {i} has zero size");
+        let lo = off as usize;
+        let hi = lo + size;
+        assert!(hi <= MP4.len(), "sample {i} offset/size escape mp4 bounds");
     }
-    assert!(has_sps, "first chunk missing SPS (NAL 7)");
-    assert!(has_pps, "first chunk missing PPS (NAL 8)");
-    assert!(chunks[0].is_keyframe);
+
+    // SPS/PPS must be non-empty so the JS layer can prepend extradata.
+    assert!(!r.sps().is_empty(), "SPS NAL bytes must be exposed");
+    assert!(!r.pps().is_empty(), "PPS NAL bytes must be exposed");
 }

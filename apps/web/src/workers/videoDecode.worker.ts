@@ -25,6 +25,7 @@ import {
   shouldRefill,
   videoStreamOps,
   type DataCorePortApi,
+  type Mp4LazyPortApi,
   type VideoSourceKind,
   type VideoStreamOps,
 } from "./videoDecodeOps";
@@ -76,6 +77,7 @@ interface SessionState {
 let cursorNs: bigint = 0n;
 
 let dataCore: Comlink.Remote<DataCorePortApi> | null = null;
+let mp4Lazy: Comlink.Remote<Mp4LazyPortApi> | null = null;
 let session: SessionState | null = null;
 
 function getDataCore(): Comlink.Remote<DataCorePortApi> {
@@ -190,7 +192,7 @@ async function openInternal(
   // would either over-pace or stall the new decode.
   if (cursorNs < fromPtsNs) cursorNs = fromPtsNs;
   const dc = getDataCore();
-  const ops = videoStreamOps(dc, sourceKind);
+  const ops = videoStreamOps(dc, sourceKind, mp4Lazy ?? undefined);
   const streamId = await ops.open(sourceHandle, channelId, fromPtsNs);
   const decoder = new VideoDecoder({
     output: (frame) => onFrame(frame),
@@ -342,6 +344,13 @@ export const videoDecodeApi = {
     // the other end to (on the main thread, that's a relay forwarding to
     // the real dataCore Remote).
     dataCore = Comlink.wrap<DataCorePortApi>(port);
+  },
+  setMp4LazyPort(port: MessagePort): void {
+    // Bound separately from `dataCore` because the lazy mp4 reads come
+    // from the main-thread `Mp4SampleCache`, not the dataCore worker.
+    // Required before opening any `mp4` source; left null for `mcap`-only
+    // sessions.
+    mp4Lazy = Comlink.wrap<Mp4LazyPortApi>(port);
   },
   setFrameSink(port: MessagePort): void {
     if (session) session.sink = port;

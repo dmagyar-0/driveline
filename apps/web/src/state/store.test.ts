@@ -151,6 +151,21 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
     async mp4SidecarSummary() {
       return summaries.mp4;
     },
+    async mp4SidecarIndex() {
+      // Empty per-sample table is enough for tests that exercise
+      // `openFiles` end-to-end without actually decoding video. The
+      // store wires up an `Mp4SampleCache` with these arrays; nothing
+      // is fetched unless a video panel mounts.
+      return {
+        channelId: "1/video",
+        ptsNs: new BigInt64Array(0),
+        offsets: new BigUint64Array(0),
+        sizes: new Uint32Array(0),
+        isSync: new Uint8Array(0),
+        sps: new Uint8Array(0),
+        pps: new Uint8Array(0),
+      };
+    },
   } as unknown as Remote<DataCoreApi>;
 
   const fake = api as FakeWorker;

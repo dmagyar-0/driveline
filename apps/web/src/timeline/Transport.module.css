@@ -117,6 +117,48 @@
   pointer-events: none;
 }
 
+/* Lazy-load buffered ranges. One absolutely-positioned segment per
+ * resident span of mp4 samples; renders behind the trackFill / thumb
+ * but on top of the empty track background so the user can see how
+ * much of the timeline is currently in the cache. */
+.bufferedSegments {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: var(--radius-3);
+  overflow: hidden;
+}
+
+.bufferedSegment {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background: var(--color-fg-4);
+  opacity: 0.18;
+}
+
+/* Spinner shown near the cursor while a seek waits on a cold sample fetch.
+ * CSS-only rotation; positioned absolutely against `.trackStrip`. */
+.fetchSpinner {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-left: 10px; /* offset clear of the thumb */
+  transform: translateY(-50%);
+  border-radius: 50%;
+  border: 2px solid var(--color-accent-orange);
+  border-top-color: transparent;
+  animation: transport-spin 800ms linear infinite;
+  pointer-events: none;
+}
+
+@keyframes transport-spin {
+  to {
+    transform: translateY(-50%) rotate(360deg);
+  }
+}
+
 .thumb {
   position: absolute;
   top: 50%;

@@ -38,8 +38,14 @@ import type {
   DataCoreApi,
   McapSummary,
   Mf4Summary,
+  Mp4SidecarIndex,
   Mp4SidecarSummary,
 } from "../workerClient";
+import {
+  Mp4SampleCache,
+  type BufferedRange,
+  type PendingFetch,
+} from "./mp4SampleCache";
 
 export type SourceKind = "mcap" | "mf4" | "mp4+sidecar";
 export type ChannelKind = ChannelKindWire;
@@ -67,6 +73,13 @@ export interface SourceMeta {
   handle: number;
   timeRange: TimeRange;
   channels: Channel[];
+  /**
+   * Lazy-load handle for `mp4+sidecar` sources. Holds the per-sample
+   * index (offsets/sizes/sync flags/pts) plus the original `File` blob
+   * the cache reads from on demand. Other source kinds leave this
+   * undefined; they keep their eager WASM-resident layout.
+   */
+  mp4Cache?: Mp4SampleCache;
 }
 
 export interface OpenResult {
@@ -141,6 +154,21 @@ export interface SessionState {
    * `dismissOpenErrors()`.
    */
   lastOpenErrors: BucketError[];
+  /**
+   * Per-source buffered ranges for the lazy-loaded mp4+sidecar caches,
+   * keyed by `SourceMeta.id`. The Transport scrubber renders one shaded
+   * segment per entry so the user can see how much of the timeline is
+   * resident in memory. Other source kinds (mcap, mf4) leave their entry
+   * undefined.
+   */
+  loadedRanges: Record<string, BufferedRange[]>;
+  /**
+   * Per-source pending-fetch indicator. Populated when a seek lands in
+   * unloaded territory and cleared once the first sample for that target
+   * arrives. The Transport renders a spinner near the cursor while any
+   * source has a pending fetch.
+   */
+  pendingFetch: Record<string, PendingFetch | null>;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Clear `lastOpenErrors` (used by the Sources drawer dismiss). */
@@ -375,6 +403,8 @@ export const useSession = create<SessionState>((set, get) => {
     activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
     bookmarks: hydratedBookmarks ?? [],
     lastOpenErrors: [],
+    loadedRanges: {},
+    pendingFetch: {},
 
     setWorker(w) {
       worker = w;
@@ -800,15 +830,33 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const pair of buckets.mp4Pairs) {
           try {
-            const mp4Bytes = await fileBytes(pair.mp4);
-            const tsBytes = await fileBytes(pair.ts);
+            // The bytes we read here exist only while WASM parses the moov
+            // and walks `stsz`/`stsc`/`stco`. Once `mp4SidecarIndex` returns
+            // we drop both `Uint8Array`s; the source `File` reference held
+            // by `Mp4SampleCache` is the only durable handle to the bytes.
+            let mp4Bytes: Uint8Array | null = await fileBytes(pair.mp4);
+            let tsBytes: Uint8Array | null = await fileBytes(pair.ts);
             const handle = await w.openMp4Sidecar(mp4Bytes, tsBytes);
             const summary = await w.mp4SidecarSummary(handle);
+            const index: Mp4SidecarIndex = await w.mp4SidecarIndex(handle);
+            // Release transient ingest buffers as soon as WASM has the
+            // index — peak memory during open drops back to steady state.
+            mp4Bytes = null;
+            tsBytes = null;
             const id = uniqueSourceId(pair.mp4.name, [
               ...existing,
               ...newSources,
             ]);
             const channels = mp4Channels(id, summary);
+            const cache = new Mp4SampleCache(pair.mp4, index);
+            cache.onLoadedRangesChange((ranges) => {
+              const prev = get().loadedRanges;
+              set({ loadedRanges: { ...prev, [id]: ranges } });
+            });
+            cache.onPendingFetchChange((p) => {
+              const prev = get().pendingFetch;
+              set({ pendingFetch: { ...prev, [id]: p } });
+            });
             newSources.push({
               id,
               kind: "mp4+sidecar",
@@ -816,6 +864,7 @@ export const useSession = create<SessionState>((set, get) => {
               handle,
               timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
               channels,
+              mp4Cache: cache,
             });
             opened.push(pair.mp4.name);
           } catch (e) {
@@ -867,6 +916,10 @@ export const useSession = create<SessionState>((set, get) => {
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
             else await w.closeMp4Sidecar(s.handle);
+            // Drop the lazy sample cache — releases its `File` ref,
+            // detaches notification subscribers, and frees any cached
+            // sample bytes.
+            s.mp4Cache?.dispose();
           } catch (err) {
             // The slab entry either stays for the lifetime of the worker
             // or was already freed, so we always continue resetting the
@@ -900,6 +953,8 @@ export const useSession = create<SessionState>((set, get) => {
           tableBindings: {},
           enumBindings: {},
           lastOpenErrors: [],
+          loadedRanges: {},
+          pendingFetch: {},
         });
       };
       const next = pending.then(run, run);
