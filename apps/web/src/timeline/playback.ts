@@ -52,7 +52,7 @@ export function startPlaybackLoop(
 
   let rafId: number | null = null;
   let anchor: Anchor | null = null;
-  // The last value the loop itself wrote via `setCursor`. The store
+  // The last value the loop itself wrote via `advanceCursor`. The store
   // clamps, so the post-write `cursorNs` may differ (end-of-session),
   // but comparing to this pre-clamp value is enough to distinguish a
   // loop-originated change from an external scrub.
@@ -81,11 +81,15 @@ export function startPlaybackLoop(
     const deltaNs = BigInt(Math.round(elapsedMs * 1e6 * a.speed));
     const nextNs = a.cursorNs + deltaNs;
     lastWritten = nextNs;
-    state.setCursor(nextNs);
+    // `advanceCursor` is the playback-only seam: same clamp + auto-pause
+    // semantics as `setCursor`, but it does not bump `seekEpoch`. That
+    // keeps the videoDecode pipeline from interpreting a 60 Hz playback
+    // tick as a user scrub and tearing down the decoder on every frame.
+    state.advanceCursor(nextNs);
     mark("tick:end");
     measure("tick", "tick:start", "tick:end");
-    // setCursor may have clamped and auto-paused at end-of-session; the
-    // subscribe listener will have already cleared `anchor` in that
+    // advanceCursor may have clamped and auto-paused at end-of-session;
+    // the subscribe listener will have already cleared `anchor` in that
     // case, so re-check before scheduling the next frame.
     if (store.getState().playing && anchor !== null) {
       rafId = raf(tick);
