@@ -8,6 +8,7 @@ import type {
   Mf4ChannelInfo,
   Mf4Summary,
   Mp4SidecarChannelInfo,
+  Mp4SidecarIndex,
   Mp4SidecarSummary,
 } from "./workers/dataCore.worker";
 import type { VideoDecodeApi } from "./workers/videoDecode.worker";
@@ -21,6 +22,7 @@ export type {
   Mf4ChannelInfo,
   Mf4Summary,
   Mp4SidecarChannelInfo,
+  Mp4SidecarIndex,
   Mp4SidecarSummary,
   VideoDecodeApi,
 };

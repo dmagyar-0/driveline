@@ -185,13 +185,48 @@ export function VideoPanel({
       mcapVideoNextBatch: (s: number, m: number) =>
         dc!.mcapVideoNextBatch(s, m),
       closeMcapVideoStream: (s: number) => dc!.closeMcapVideoStream(s),
-      openMp4VideoStream: (h: number, c: string, p: bigint) =>
-        dc!.openMp4VideoStream(h, c, p),
-      mp4VideoNextBatch: (s: number, m: number) =>
-        dc!.mp4VideoNextBatch(s, m),
-      closeMp4VideoStream: (s: number) => dc!.closeMp4VideoStream(s),
     };
     Comlink.expose(relay, bridge.port1);
+
+    // Lazy mp4 bridge: encoded sample bytes for `mp4+sidecar` sources
+    // come from `Mp4SampleCache` on the main thread, not from the
+    // dataCore worker. Resolve the cache via the source handle since
+    // the videoDecode worker only knows the wasm slab key.
+    const findMp4Cache = (handle: number) => {
+      const src = useSession
+        .getState()
+        .sources.find((s) => s.kind === "mp4+sidecar" && s.handle === handle);
+      return src?.mp4Cache ?? null;
+    };
+    const mp4Bridge = new MessageChannel();
+    const mp4Relay = {
+      mp4Index: async (handle: number) => {
+        const cache = findMp4Cache(handle);
+        if (!cache) throw new Error(`mp4 cache missing for handle ${handle}`);
+        return cache.index;
+      },
+      mp4Sample: async (handle: number, idx: number) => {
+        const cache = findMp4Cache(handle);
+        if (!cache) throw new Error(`mp4 cache missing for handle ${handle}`);
+        return cache.getSample(idx);
+      },
+      mp4SetActive: async (handle: number, lo: number, hi: number) => {
+        const cache = findMp4Cache(handle);
+        if (!cache) return;
+        const idxs: number[] = [];
+        for (let i = lo; i <= hi; i++) idxs.push(i);
+        cache.setActive(idxs);
+        cache.prefetchRange(lo, hi);
+      },
+      mp4MarkPending: async (handle: number, targetNs: bigint) => {
+        findMp4Cache(handle)?.markPendingFetch(targetNs);
+      },
+      mp4ClearPending: async (handle: number) => {
+        findMp4Cache(handle)?.clearPendingFetch();
+      },
+    };
+    Comlink.expose(mp4Relay, mp4Bridge.port1);
+
     (async () => {
       if (!dc) {
         console.error("VideoPanel: dataCore worker not initialised");
@@ -200,6 +235,9 @@ export function VideoPanel({
       // Comlink needs an explicit transfer for MessagePort.
       await videoDecode.setDataCorePort(
         Comlink.transfer(bridge.port2, [bridge.port2]),
+      );
+      await videoDecode.setMp4LazyPort(
+        Comlink.transfer(mp4Bridge.port2, [mp4Bridge.port2]),
       );
       await videoDecode.setFrameSink(
         Comlink.transfer(channel.port2, [channel.port2]),

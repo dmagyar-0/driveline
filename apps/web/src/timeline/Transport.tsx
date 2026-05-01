@@ -34,6 +34,8 @@ export function Transport() {
   const playing = useSession((s) => s.playing);
   const speed = useSession((s) => s.speed);
   const globalRange = useSession((s) => s.globalRange);
+  const loadedRanges = useSession((s) => s.loadedRanges);
+  const pendingFetch = useSession((s) => s.pendingFetch);
 
   const disabled = globalRange === null;
   const [mode, setMode] = useState<"relative" | "absolute">("relative");
@@ -171,6 +173,25 @@ export function Transport() {
   };
 
   const fillPct = globalRange ? percentOf(cursorNs, globalRange) : 0;
+  const isFetching = Object.values(pendingFetch).some((p) => p !== null);
+  const bufferedSegments: Array<{ key: string; left: number; width: number }> =
+    [];
+  if (globalRange) {
+    for (const [sid, ranges] of Object.entries(loadedRanges)) {
+      for (let i = 0; i < ranges.length; i++) {
+        const r = ranges[i];
+        const left = percentOf(r.startNs, globalRange);
+        const right = percentOf(r.endNs, globalRange);
+        const width = Math.max(0, right - left);
+        if (width <= 0) continue;
+        bufferedSegments.push({
+          key: `${sid}:${i}`,
+          left,
+          width,
+        });
+      }
+    }
+  }
   const readout = globalRange
     ? mode === "relative"
       ? `${formatRelative(cursorNs, globalRange.startNs)} / ${formatDuration(
@@ -247,6 +268,23 @@ export function Transport() {
           onPointerCancel={onPointerUp}
         >
           <div className={styles.trackStrip}>
+            {bufferedSegments.length > 0 && (
+              <div
+                className={styles.bufferedSegments}
+                data-testid="transport-buffered"
+              >
+                {bufferedSegments.map((seg) => (
+                  <div
+                    key={seg.key}
+                    className={styles.bufferedSegment}
+                    style={{
+                      left: `${seg.left}%`,
+                      width: `${seg.width}%`,
+                    }}
+                  />
+                ))}
+              </div>
+            )}
             <div
               className={styles.trackFill}
               style={{ width: `${fillPct}%` }}
@@ -257,6 +295,14 @@ export function Transport() {
               data-testid="scrubber-thumb"
               style={{ left: `${fillPct}%` }}
             />
+            {isFetching && (
+              <div
+                className={styles.fetchSpinner}
+                data-testid="transport-fetch-spinner"
+                style={{ left: `${fillPct}%` }}
+                aria-hidden
+              />
+            )}
           </div>
         </div>
         <span className={styles.time}>{endLabel}</span>

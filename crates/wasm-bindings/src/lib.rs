@@ -415,74 +415,73 @@ pub fn mcap_video_close(stream_id: u32) {
     });
 }
 
-/// Open an mp4+sidecar video stream. Symmetric with `mcap_video_open` but
-/// resolves the handle against `MP4_READERS`. The resulting
-/// `EncodedChunkIter` lives in the same `VIDEO_STREAMS` slab as MCAP
-/// streams, so the pull/close bindings below are functionally identical to
-/// the MCAP ones — we keep them separately named to mirror the `open_mcap`
-/// / `open_mp4_sidecar` split on the JS side.
+/// Return the per-sample table for an mp4+sidecar source as a plain JS
+/// object. Lazy-load path: JS holds these arrays plus a reference to the
+/// original `File` blob and fetches sample bytes on demand via `slice()`.
+/// `pts_ns` is a `BigInt64Array`; `offsets` a `BigUint64Array`; `sizes` a
+/// `Uint32Array`; `is_sync` a `Uint8Array` (0/1). `sps`/`pps` are the raw
+/// NAL bytes (no start-code prefix) the JS layer prepends to the first
+/// emitted Annex-B chunk per session.
 #[wasm_bindgen]
-pub fn mp4_video_open(
-    handle: u32,
-    channel_id: &str,
-    from_pts_ns: i64,
-) -> Result<u32, JsError> {
-    let iter = MP4_READERS.with(|cell| -> Result<EncodedChunkIter, JsError> {
+pub fn mp4_sidecar_index(handle: u32) -> Result<JsValue, JsError> {
+    MP4_READERS.with(|cell| {
         let slab = cell.borrow();
         let reader = slab
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid mp4+sidecar handle"))?;
-        reader
-            .video_stream(&channel_id.to_string(), from_pts_ns)
-            .map_err(|e| JsError::new(&format!("video_stream failed: {e}")))
-    })?;
-    let key = VIDEO_STREAMS.with(|cell| cell.borrow_mut().insert(iter));
-    u32::try_from(key).map_err(|_| JsError::new("stream handle overflowed u32"))
-}
+        let idx = reader.sample_index();
+        let pts = reader.pts_ns();
+        let n = idx.offsets.len();
+        if idx.sizes.len() != n || idx.is_sync.len() != n || pts.len() != n {
+            return Err(JsError::new("mp4 index arrays out of sync"));
+        }
 
-/// Pull up to `max_n` access units from an mp4 video stream. Body is
-/// identical to `mcap_video_next_batch`; the slab is shared.
-#[wasm_bindgen]
-pub fn mp4_video_next_batch(stream_id: u32, max_n: u32) -> Result<Array, JsError> {
-    VIDEO_STREAMS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        let iter = slab
-            .get_mut(stream_id as usize)
-            .ok_or_else(|| JsError::new("invalid video stream handle"))?;
-        let out = Array::new();
-        for _ in 0..max_n {
-            let Some(chunk) = iter.next() else { break };
-            let obj = js_sys::Object::new();
-            js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("pts_ns"),
-                &js_sys::BigInt::from(chunk.pts_ns).into(),
-            )
+        // Use raw typed-array writes so we don't allocate an intermediate
+        // `Vec` per array of length N (videos can have ~1e5 samples).
+        let pts_arr = js_sys::BigInt64Array::new_with_length(n as u32);
+        for (i, &v) in pts.iter().enumerate() {
+            pts_arr.set_index(i as u32, v);
+        }
+        let off_arr = js_sys::BigUint64Array::new_with_length(n as u32);
+        for (i, &v) in idx.offsets.iter().enumerate() {
+            off_arr.set_index(i as u32, v);
+        }
+        let size_arr = js_sys::Uint32Array::new_with_length(n as u32);
+        for (i, &v) in idx.sizes.iter().enumerate() {
+            size_arr.set_index(i as u32, v);
+        }
+        let sync_arr = Uint8Array::new_with_length(n as u32);
+        for (i, &b) in idx.is_sync.iter().enumerate() {
+            sync_arr.set_index(i as u32, b as u8);
+        }
+
+        let sps_arr = Uint8Array::new_with_length(reader.sps().len() as u32);
+        sps_arr.copy_from(reader.sps());
+        let pps_arr = Uint8Array::new_with_length(reader.pps().len() as u32);
+        pps_arr.copy_from(reader.pps());
+
+        let channel_id = reader
+            .meta()
+            .channels
+            .first()
+            .map(|c| c.id.clone())
+            .unwrap_or_default();
+
+        let obj = js_sys::Object::new();
+        js_sys::Reflect::set(&obj, &JsValue::from_str("channel_id"), &JsValue::from_str(&channel_id))
+            .map_err(|_| JsError::new("set channel_id"))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("pts_ns"), &pts_arr.into())
             .map_err(|_| JsError::new("set pts_ns"))?;
-            js_sys::Reflect::set(
-                &obj,
-                &JsValue::from_str("is_keyframe"),
-                &JsValue::from_bool(chunk.is_keyframe),
-            )
-            .map_err(|_| JsError::new("set is_keyframe"))?;
-            let data = Uint8Array::new_with_length(chunk.data.len() as u32);
-            data.copy_from(&chunk.data);
-            js_sys::Reflect::set(&obj, &JsValue::from_str("data"), &data.into())
-                .map_err(|_| JsError::new("set data"))?;
-            out.push(&obj);
-        }
-        Ok(out)
+        js_sys::Reflect::set(&obj, &JsValue::from_str("offsets"), &off_arr.into())
+            .map_err(|_| JsError::new("set offsets"))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("sizes"), &size_arr.into())
+            .map_err(|_| JsError::new("set sizes"))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("is_sync"), &sync_arr.into())
+            .map_err(|_| JsError::new("set is_sync"))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("sps"), &sps_arr.into())
+            .map_err(|_| JsError::new("set sps"))?;
+        js_sys::Reflect::set(&obj, &JsValue::from_str("pps"), &pps_arr.into())
+            .map_err(|_| JsError::new("set pps"))?;
+        Ok(JsValue::from(obj))
     })
-}
-
-/// Drop the mp4 video stream iterator at `stream_id`. Shares the slab with
-/// `mcap_video_close`.
-#[wasm_bindgen]
-pub fn mp4_video_close(stream_id: u32) {
-    VIDEO_STREAMS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(stream_id as usize) {
-            drop(slab.remove(stream_id as usize));
-        }
-    });
 }

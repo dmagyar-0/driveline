@@ -16,9 +16,7 @@ import init, {
   open_mp4_sidecar,
   close_mp4_sidecar,
   mp4_sidecar_summary,
-  mp4_video_open,
-  mp4_video_next_batch,
-  mp4_video_close,
+  mp4_sidecar_index,
 } from "../wasm/wasm_bindings.js";
 import {
   normaliseEncodedChunk,
@@ -34,6 +32,45 @@ import {
   type RawMf4Summary,
   type RawMp4Summary,
 } from "./normalise";
+
+/**
+ * Per-sample table for an mp4+sidecar source. Returned by
+ * `mp4SidecarIndex` and consumed by `Mp4SampleCache` (JS-side) to map
+ * `(sampleIdx) → (offset, size, is_sync, pts_ns)` for lazy reads from the
+ * source `File` blob. `sps`/`pps` are the raw NAL bytes (no start-code
+ * prefix) the JS-side stream prepends to the first emitted Annex-B chunk.
+ */
+export interface Mp4SidecarIndex {
+  channelId: string;
+  ptsNs: BigInt64Array;
+  offsets: BigUint64Array;
+  sizes: Uint32Array;
+  isSync: Uint8Array;
+  sps: Uint8Array;
+  pps: Uint8Array;
+}
+
+interface RawMp4SidecarIndex {
+  channel_id: string;
+  pts_ns: BigInt64Array;
+  offsets: BigUint64Array;
+  sizes: Uint32Array;
+  is_sync: Uint8Array;
+  sps: Uint8Array;
+  pps: Uint8Array;
+}
+
+function normaliseMp4Index(raw: RawMp4SidecarIndex): Mp4SidecarIndex {
+  return {
+    channelId: raw.channel_id,
+    ptsNs: raw.pts_ns,
+    offsets: raw.offsets,
+    sizes: raw.sizes,
+    isSync: raw.is_sync,
+    sps: raw.sps,
+    pps: raw.pps,
+  };
+}
 
 // Re-export the wire types so existing `workerClient` imports keep working.
 export type {
@@ -121,6 +158,17 @@ export const dataCoreApi = {
     await ready;
     return normaliseMp4(mp4_sidecar_summary(handle) as RawMp4Summary);
   },
+  /**
+   * Lazy-load index for an mp4+sidecar source. Returns the per-sample
+   * `(offset, size, is_sync, pts_ns)` table plus the SPS/PPS NAL bytes;
+   * the `mdat` bytes never cross this boundary. JS holds the index +
+   * the original `File` blob and reads sample bodies on demand via
+   * `File.slice()`. See `apps/web/src/state/mp4SampleCache.ts`.
+   */
+  async mp4SidecarIndex(handle: number): Promise<Mp4SidecarIndex> {
+    await ready;
+    return normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+  },
   async openMcapVideoStream(
     handle: number,
     channelId: string,
@@ -140,26 +188,6 @@ export const dataCoreApi = {
   async closeMcapVideoStream(streamId: number): Promise<void> {
     await ready;
     mcap_video_close(streamId);
-  },
-  async openMp4VideoStream(
-    handle: number,
-    channelId: string,
-    fromPtsNs: bigint,
-  ): Promise<number> {
-    await ready;
-    return mp4_video_open(handle, channelId, fromPtsNs);
-  },
-  async mp4VideoNextBatch(
-    streamId: number,
-    maxN: number,
-  ): Promise<EncodedChunkWire[]> {
-    await ready;
-    const raw = mp4_video_next_batch(streamId, maxN) as RawEncodedChunk[];
-    return raw.map(normaliseEncodedChunk);
-  },
-  async closeMp4VideoStream(streamId: number): Promise<void> {
-    await ready;
-    mp4_video_close(streamId);
   },
 };
 

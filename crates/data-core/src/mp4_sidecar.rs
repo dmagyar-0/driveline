@@ -6,41 +6,36 @@
 //! §"mp4 + sidecar timestamp path" for the format and rationale, and
 //! `docs/04-reader-abstraction.md` §"`Mp4SidecarReader`" for the API shape.
 //!
-//! T5.3 adds `Reader::video_stream`, producing Annex-B access units from the
-//! cached mp4 samples. `fetch_range` on the video channel still returns
-//! `Err(UnsupportedKind)` — scalar/vector APIs don't apply to video. The
-//! sidecar is a plain UTF-8 text file with no header: one line per mp4
-//! video sample in decode order, `<frame_index>\t<timestamp_ns>\n`, where
-//! `frame_index` is the 0-based row index and `timestamp_ns` is absolute
-//! ns-UTC. An mp4 with zero or multiple video tracks is rejected up front.
+//! Lazy-loading update: `open_pair` no longer reads any `mdat` bytes. It
+//! parses the `moov` box and walks `stsz`/`stsc`/`stco`/`co64`/`stss` to build
+//! a per-sample index of `(file_offset, size, is_sync)`. Sample bodies are
+//! fetched on demand by the JS layer via `File.slice()` and converted to
+//! Annex-B in JS — see `apps/web/src/workers/mp4AnnexB.ts` for the JS port
+//! of the (formerly Rust-side) `avcc_to_annexb` and SPS/PPS prepend logic.
 //!
-//! ## Annex-B vs AVCC
-//!
-//! mp4 samples live in the mdat as length-prefixed AVCC NAL units. The
-//! video-decode worker's codec probe scans the first chunk for an inline
-//! SPS using Annex-B start codes (see `videoDecode.worker.ts::findSps`),
-//! matching the MCAP reader's output. We therefore convert AVCC → Annex-B
-//! inside `video_stream` and prepend the SPS/PPS (from the track's `avcC`
-//! box) to the first emitted chunk so the consumer gets the same shape
-//! regardless of source format.
+//! `Reader::video_stream` is no longer overridden here; the trait's default
+//! returns `UnsupportedKind` and the encoded-chunk path lives entirely in
+//! JavaScript now. Scalar `fetch_range` is still rejected with
+//! `UnsupportedKind` (matching the prior contract for video-only sources).
 
 use std::io::Cursor;
 
 use mp4::{Mp4Reader as Mp4Parser, TrackType};
 
-use crate::reader::{ArrowIpc, EncodedChunkIter, Reader};
+use crate::reader::{ArrowIpc, Reader};
 use crate::types::{
-    Channel, ChannelId, ChannelKind, EncodedChunk, FetchOpts, SourceKind, SourceMeta, TimeRange,
+    Channel, ChannelId, ChannelKind, FetchOpts, SourceKind, SourceMeta, TimeRange,
 };
 
-/// One mp4 video sample, cached at open time. `bytes` is the raw sample
-/// payload from `mdat` — length-prefixed AVCC NAL units. `is_sync` mirrors
-/// the mp4's own sync-sample table (`stss`), which is authoritative for
-/// keyframes on H.264 mp4 tracks.
-#[derive(Debug, Clone)]
-struct Mp4SampleCache {
-    bytes: Vec<u8>,
-    is_sync: bool,
+/// Per-sample sample-table data extracted at open time. Parallel arrays
+/// keyed by sample index (0-based, matching `pts_ns`). `offset` is an
+/// absolute byte offset into the original mp4 file; the JS layer fetches
+/// `[offset, offset + size)` from the source `File` blob via `slice()`.
+#[derive(Debug, Clone, Default)]
+pub struct Mp4SampleIndex {
+    pub offsets: Vec<u64>,
+    pub sizes: Vec<u32>,
+    pub is_sync: Vec<bool>,
 }
 
 #[derive(Debug)]
@@ -49,13 +44,13 @@ pub struct Mp4SidecarReader {
     /// One entry per mp4 video sample in decode order, absolute ns UTC.
     /// Parallel to the mp4 track's `stsz` sample table.
     pts_ns: Vec<i64>,
-    /// Cached mp4 sample bytes + sync flags. Parallel to `pts_ns`. The
-    /// MVP reader holds the whole stream in memory (matching `McapReader`);
-    /// lazy reads against the mp4 bytes can come later.
-    samples: Vec<Mp4SampleCache>,
+    /// Per-sample byte offsets / sizes / sync flags in the original mp4
+    /// file. Replaces the old `Vec<Mp4SampleCache>` so no `mdat` bytes
+    /// live in WASM linear memory after open.
+    index: Mp4SampleIndex,
     /// SPS NAL bytes (including the NAL header byte) from the `avcC` box,
-    /// prepended to the first `video_stream` chunk so consumers see
-    /// inline extradata identical to the MCAP path.
+    /// emitted to JS so the videoDecode worker can prepend extradata onto
+    /// the first chunk it feeds to `VideoDecoder`.
     sps: Vec<u8>,
     /// PPS NAL bytes, same role as `sps`.
     pps: Vec<u8>,
@@ -67,8 +62,13 @@ impl Mp4SidecarReader {
     /// `<frame_index>\t<timestamp_ns>\n` line per mp4 sample with frame
     /// indices equal to the 0-based row number.
     ///
+    /// No `mdat` bytes are read here — only the `moov` sample tables. The
+    /// returned reader holds an in-memory index (offsets / sizes / sync
+    /// flags) but not a single byte of encoded video.
+    ///
     /// Errors:
-    /// - [`crate::Error::Mp4`] — mp4 parse failed (malformed box structure).
+    /// - [`crate::Error::Mp4`] — mp4 parse failed (malformed box structure
+    ///   or missing `stco`/`co64`).
     /// - [`crate::Error::Mp4VideoTrackCount`] — mp4 had zero or multiple
     ///   video tracks. The MVP sidecar format only addresses a single track.
     /// - [`crate::Error::SidecarNotUtf8`] — sidecar is not valid UTF-8.
@@ -80,12 +80,12 @@ impl Mp4SidecarReader {
     ///   acceptance-criterion failure from `docs/10-task-breakdown.md` T2.3.
     pub fn open_pair(mp4_bytes: &[u8], sidecar_bytes: &[u8]) -> crate::Result<Self> {
         let size = mp4_bytes.len() as u64;
-        let mut mp4 = Mp4Parser::read_header(Cursor::new(mp4_bytes), size)?;
+        let mp4 = Mp4Parser::read_header(Cursor::new(mp4_bytes), size)?;
 
-        // Drop the track borrow before calling `mp4.read_sample`, which
-        // needs `&mut mp4`. We only need the track_id, sample count, and
-        // the SPS/PPS NAL bytes from avcC past this scope.
-        let (track_id, mp4_count, sps, pps) = {
+        // Pick the single video track and pull what we need from it.
+        // Drop the borrow before building the index so we can keep the
+        // expensive `Mp4Track` fields out of the long-lived reader.
+        let (track_id, mp4_count, sps, pps, index) = {
             let mut video_tracks: Vec<_> = mp4
                 .tracks()
                 .values()
@@ -99,29 +99,12 @@ impl Mp4SidecarReader {
             let track = video_tracks[0];
             let sps = track.sequence_parameter_set()?.to_vec();
             let pps = track.picture_parameter_set()?.to_vec();
-            (
-                track.track_id(),
-                track.sample_count() as usize,
-                sps,
-                pps,
-            )
+            let count = track.sample_count() as usize;
+            let index = build_sample_index(track)?;
+            (track.track_id(), count, sps, pps, index)
         };
 
         let pts_ns = parse_sidecar_text(sidecar_bytes, mp4_count)?;
-
-        // Read every sample into memory now so `video_stream` can be a pure
-        // iterator over owned bytes — no self-referential `Cursor` lifetimes
-        // to thread through the `EncodedChunkIter` trait object.
-        let mut samples: Vec<Mp4SampleCache> = Vec::with_capacity(mp4_count);
-        for sid in 1..=mp4_count as u32 {
-            let s = mp4
-                .read_sample(track_id, sid)?
-                .ok_or_else(|| crate::Error::Mp4(mp4::Error::InvalidData("sample_not_found")))?;
-            samples.push(Mp4SampleCache {
-                bytes: s.bytes.to_vec(),
-                is_sync: s.is_sync,
-            });
-        }
 
         let time_range = match (pts_ns.first(), pts_ns.last()) {
             (Some(&first), Some(&last)) => TimeRange {
@@ -152,7 +135,7 @@ impl Mp4SidecarReader {
                 channels: vec![channel],
             },
             pts_ns,
-            samples,
+            index,
             sps,
             pps,
         })
@@ -164,11 +147,160 @@ impl Mp4SidecarReader {
     }
 
     /// Exposes the parsed per-sample absolute ns timestamps. Intended for
-    /// tests and debugging; the `video_stream` iterator uses the internal
-    /// `samples` cache directly.
+    /// tests, the wasm `mp4_sidecar_index` binding, and debugging.
     pub fn pts_ns(&self) -> &[i64] {
         &self.pts_ns
     }
+
+    /// Per-sample byte offsets / sizes / sync flags in the original mp4
+    /// file. The JS layer reads `[offset, offset + size)` from the source
+    /// `File` blob to fetch encoded sample bytes lazily.
+    pub fn sample_index(&self) -> &Mp4SampleIndex {
+        &self.index
+    }
+
+    /// SPS NAL bytes (no start code prefix). Emitted by the wasm binding so
+    /// the JS-side stream can prepend extradata onto the first emitted
+    /// Annex-B chunk per session.
+    pub fn sps(&self) -> &[u8] {
+        &self.sps
+    }
+
+    /// PPS NAL bytes (no start code prefix). See [`Self::sps`].
+    pub fn pps(&self) -> &[u8] {
+        &self.pps
+    }
+}
+
+/// Walk `stsz`/`stsc`/`stco`/`co64`/`stss` to compute, for every video
+/// sample in the track, its absolute byte offset in the source mp4 file,
+/// its size in bytes, and whether it is a sync sample.
+///
+/// Mirrors the (private) `Mp4Track::sample_offset` / `sample_size` /
+/// `is_sync_sample` helpers in the `mp4` crate but operates on the public
+/// `pub trak: TrakBox` surface so we can build the entire index once
+/// without re-walking the boxes per sample. This is critical for long
+/// recordings: the per-sample loop in the upstream crate is O(N²) on
+/// `samples_per_chunk` since `sample_offset(sid)` re-sums sizes from
+/// the start of each chunk; we sum incrementally instead.
+fn build_sample_index(track: &mp4::Mp4Track) -> crate::Result<Mp4SampleIndex> {
+    let count = track.sample_count() as usize;
+    let stbl = &track.trak.mdia.minf.stbl;
+    let stsz = &stbl.stsz;
+    let stsc = &stbl.stsc;
+    let stss = stbl.stss.as_ref();
+
+    // `stco` is u32 chunk offsets; `co64` is u64. Big mp4s (> ~4 GB) use
+    // `co64`; the rest use `stco`. Reject files with neither — that's a
+    // structurally invalid mp4 per ISO/IEC 14496-12 §8.7.4.
+    let chunk_offsets: Vec<u64> = if let Some(co64) = &stbl.co64 {
+        co64.entries.clone()
+    } else if let Some(stco) = &stbl.stco {
+        stco.entries.iter().map(|&v| v as u64).collect()
+    } else {
+        return Err(crate::Error::Mp4(mp4::Error::InvalidData(
+            "mp4 video track missing both stco and co64 chunk-offset boxes",
+        )));
+    };
+
+    let mut sizes: Vec<u32> = Vec::with_capacity(count);
+    if stsz.sample_size > 0 {
+        // Constant-size mode (rare for H.264 but legal): every sample is
+        // the same size. `stsz.sample_sizes` is empty in this branch.
+        for _ in 0..count {
+            sizes.push(stsz.sample_size);
+        }
+    } else {
+        if stsz.sample_sizes.len() < count {
+            return Err(crate::Error::Mp4(mp4::Error::InvalidData(
+                "stsz sample_sizes shorter than sample_count",
+            )));
+        }
+        for &s in stsz.sample_sizes.iter().take(count) {
+            sizes.push(s);
+        }
+    }
+
+    let mut is_sync: Vec<bool> = Vec::with_capacity(count);
+    match stss {
+        // `stss.entries` is 1-based and sorted ascending. If absent, every
+        // sample is a sync sample (per spec, e.g. for keyframe-only tracks).
+        Some(ss) => {
+            let entries = &ss.entries;
+            let mut j = 0usize;
+            for sid in 1..=count as u32 {
+                while j < entries.len() && entries[j] < sid {
+                    j += 1;
+                }
+                let hit = j < entries.len() && entries[j] == sid;
+                is_sync.push(hit);
+            }
+        }
+        None => is_sync.resize(count, true),
+    }
+
+    // Walk stsc once to drive a per-chunk traversal. For each chunk we
+    // know the starting sample id and how many samples it contains; the
+    // chunk's first sample sits at `chunk_offset[chunk_id - 1]`, and each
+    // subsequent sample's offset is the previous offset plus its size.
+    //
+    // The `mp4` crate pre-populates `StscEntry::first_sample` (see
+    // `mp4-0.14.0/src/track.rs:817`) so we don't have to derive it
+    // ourselves here.
+    let mut offsets: Vec<u64> = Vec::with_capacity(count);
+    offsets.resize(count, 0);
+
+    if stsc.entries.is_empty() {
+        // No stsc means no samples — must agree with stsz.sample_count.
+        if count != 0 {
+            return Err(crate::Error::Mp4(mp4::Error::InvalidData(
+                "stsc table empty but sample_count > 0",
+            )));
+        }
+        return Ok(Mp4SampleIndex {
+            offsets,
+            sizes,
+            is_sync,
+        });
+    }
+
+    let total_chunks = chunk_offsets.len();
+    for (entry_idx, entry) in stsc.entries.iter().enumerate() {
+        let first_chunk = entry.first_chunk;
+        let samples_per_chunk = entry.samples_per_chunk;
+        let last_chunk = if entry_idx + 1 < stsc.entries.len() {
+            stsc.entries[entry_idx + 1].first_chunk - 1
+        } else {
+            total_chunks as u32
+        };
+
+        for chunk_id in first_chunk..=last_chunk {
+            let chunk_offset = *chunk_offsets
+                .get(chunk_id as usize - 1)
+                .ok_or(crate::Error::Mp4(mp4::Error::InvalidData(
+                    "stsc references chunk beyond stco/co64 table",
+                )))?;
+
+            let first_sample_in_chunk =
+                entry.first_sample + (chunk_id - first_chunk) * samples_per_chunk;
+            let mut running_offset = chunk_offset;
+            for k in 0..samples_per_chunk {
+                let sid = first_sample_in_chunk + k;
+                if sid as usize > count {
+                    break;
+                }
+                let idx = sid as usize - 1;
+                offsets[idx] = running_offset;
+                running_offset += sizes[idx] as u64;
+            }
+        }
+    }
+
+    Ok(Mp4SampleIndex {
+        offsets,
+        sizes,
+        is_sync,
+    })
 }
 
 /// Parse the text sidecar payload into a `Vec<i64>` of absolute ns-UTC
@@ -243,66 +375,6 @@ fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>>
     Ok(pts_ns)
 }
 
-/// 4-byte big-endian length-prefixed NAL → Annex-B start-coded NAL.
-///
-/// Pushes `00 00 00 01` start codes in front of each NAL unit. Malformed
-/// or truncated inputs return whatever start codes + NAL bytes were
-/// successfully walked before the break — the decoder will either surface
-/// the bad frame as an `EncodingError` (expected) or skip it. We'd rather
-/// not panic in the reader for a locally-damaged sample.
-fn avcc_to_annexb(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len() + 4);
-    let mut i = 0;
-    while i + 4 <= bytes.len() {
-        let nal_len =
-            u32::from_be_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]) as usize;
-        i += 4;
-        if nal_len == 0 {
-            continue;
-        }
-        let end = match i.checked_add(nal_len) {
-            Some(e) if e <= bytes.len() => e,
-            _ => break,
-        };
-        out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-        out.extend_from_slice(&bytes[i..end]);
-        i = end;
-    }
-    out
-}
-
-/// Append an Annex-B framed NAL (`00 00 00 01 <nal>`).
-fn push_annexb_nal(out: &mut Vec<u8>, nal: &[u8]) {
-    out.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
-    out.extend_from_slice(nal);
-}
-
-/// True when `annex_b` contains a NAL of type 7 (SPS). Scans for
-/// start codes and inspects the first NAL byte of each.
-fn annex_b_has_sps(annex_b: &[u8]) -> bool {
-    let mut i = 0;
-    while i + 3 < annex_b.len() {
-        let is4 = annex_b[i] == 0
-            && annex_b[i + 1] == 0
-            && annex_b[i + 2] == 0
-            && annex_b[i + 3] == 1;
-        let is3 = annex_b[i] == 0 && annex_b[i + 1] == 0 && annex_b[i + 2] == 1;
-        if !is4 && !is3 {
-            i += 1;
-            continue;
-        }
-        let nal_start = i + if is4 { 4 } else { 3 };
-        if nal_start >= annex_b.len() {
-            return false;
-        }
-        if annex_b[nal_start] & 0x1f == 7 {
-            return true;
-        }
-        i = nal_start + 1;
-    }
-    false
-}
-
 impl Reader for Mp4SidecarReader {
     /// The mp4+sidecar format inherently takes two blobs; the single-slice
     /// trait constructor cannot represent that. Callers must use
@@ -316,9 +388,10 @@ impl Reader for Mp4SidecarReader {
     }
 
     /// Video channels do not have a scalar/vector Arrow representation; the
-    /// decoded frames flow through `video_stream` instead. We still look up
-    /// the channel by id so an unknown id surfaces as `ChannelNotFound` —
-    /// matching the diagnostic behaviour of the other readers.
+    /// decoded frames flow through the JS sample cache instead. We still
+    /// look up the channel by id so an unknown id surfaces as
+    /// `ChannelNotFound` — matching the diagnostic behaviour of the other
+    /// readers.
     fn fetch_range(
         &self,
         channel_id: &ChannelId,
@@ -331,77 +404,13 @@ impl Reader for Mp4SidecarReader {
         Err(crate::Error::UnsupportedKind)
     }
 
-    /// Yields Annex-B framed access units starting from the largest sync
-    /// sample whose PTS is `<= from_pts_ns`. SPS + PPS are prepended onto
-    /// the first emitted chunk so the video-decode worker can derive the
-    /// codec string the same way it does for MCAP (scan for an inline SPS).
-    ///
-    /// Because the reader owns its sample bytes, this is always a
-    /// pre-materialised `Vec<EncodedChunk>` — no streaming IO, no borrow
-    /// threading into the trait object.
-    fn video_stream(
-        &self,
-        channel_id: &ChannelId,
-        from_pts_ns: i64,
-    ) -> crate::Result<EncodedChunkIter> {
-        let channel = self
-            .meta
-            .channels
-            .iter()
-            .find(|c| &c.id == channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
-        if channel.kind != ChannelKind::Video {
-            return Err(crate::Error::UnsupportedKind);
-        }
-
-        // Snap to the largest sync sample whose PTS is <= target. If the
-        // request predates every keyframe, fall back to the first keyframe
-        // so callers still get a decodable prefix. No keyframes at all →
-        // empty stream (matches the MCAP reader's contract).
-        let sync_indices: Vec<usize> = self
-            .samples
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| s.is_sync.then_some(i))
-            .collect();
-        if sync_indices.is_empty() {
-            return Ok(Box::new(std::iter::empty()));
-        }
-        let start_idx = {
-            let mut latest: Option<usize> = None;
-            for &i in &sync_indices {
-                if self.pts_ns[i] <= from_pts_ns {
-                    latest = Some(i);
-                } else {
-                    break;
-                }
-            }
-            latest.unwrap_or(sync_indices[0])
-        };
-
-        // Prepend SPS+PPS (Annex-B framed) onto the first emitted chunk so
-        // `videoDecode.worker.ts::findSps` finds the extradata inline, just
-        // as it does for MCAP. Skip the prepend when the sample already
-        // carries an inline SPS (x264 `repeat-headers=1`): the redundant
-        // SPS/PPS BEFORE the sample's AUD violates the Annex-B ordering
-        // WebCodecs expects and causes `DataError: key frame required`.
-        let mut out: Vec<EncodedChunk> = Vec::with_capacity(self.samples.len() - start_idx);
-        for (i, sample) in self.samples[start_idx..].iter().enumerate() {
-            let mut data = Vec::with_capacity(sample.bytes.len() + 16);
-            let annex_b = avcc_to_annexb(&sample.bytes);
-            if i == 0 && !annex_b_has_sps(&annex_b) {
-                push_annexb_nal(&mut data, &self.sps);
-                push_annexb_nal(&mut data, &self.pps);
-            }
-            data.extend_from_slice(&annex_b);
-            out.push(EncodedChunk {
-                pts_ns: self.pts_ns[start_idx + i],
-                is_keyframe: sample.is_sync,
-                data,
-            });
-        }
-        Ok(Box::new(out.into_iter()))
-    }
+    // `video_stream` falls through to the trait default which returns
+    // `UnsupportedKind`. Encoded chunks for mp4+sidecar are now assembled
+    // entirely in JS: sample bytes come from the original `File` blob via
+    // `apps/web/src/state/mp4SampleCache.ts`, and AVCC → Annex-B framing
+    // (plus first-chunk SPS/PPS prepend) lives in
+    // `apps/web/src/workers/mp4AnnexB.ts`. The wasm binding
+    // `mp4_sidecar_index` exposes the per-sample table and SPS/PPS bytes.
 }
 
 #[cfg(test)]
@@ -500,6 +509,43 @@ mod tests {
     }
 
     #[test]
+    fn open_pair_does_not_read_mdat_bytes() {
+        // The whole point of the lazy-load refactor: opening the pair must
+        // produce an index but never copy a single sample byte into the
+        // reader. Walk every public byte slice on the reader and assert
+        // none of them contain the synthetic sample payload.
+        let mp4 = synth_mp4(4);
+        let sidecar = synth_sidecar(0, 1_000_000, 4);
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+
+        let idx = r.sample_index();
+        assert_eq!(idx.offsets.len(), 4);
+        assert_eq!(idx.sizes.len(), 4);
+        assert_eq!(idx.is_sync.len(), 4);
+        // synth_mp4 writes one 5-byte AVCC unit per sample.
+        for sz in &idx.sizes {
+            assert_eq!(*sz, 5);
+        }
+        // Offsets are strictly monotonic — samples are written sequentially.
+        for w in idx.offsets.windows(2) {
+            assert!(w[0] < w[1], "offsets must be ascending: {:?}", idx.offsets);
+        }
+        // Sync flags: first sample is a keyframe, rest are delta.
+        assert!(idx.is_sync[0]);
+        for s in &idx.is_sync[1..] {
+            assert!(!s);
+        }
+        // Cross-check the offsets actually point at the sample bytes in
+        // the source mp4: the synth writer emits a 5-byte unit
+        // `[0,0,0,1,9]` per sample.
+        for (i, &off) in idx.offsets.iter().enumerate() {
+            let lo = off as usize;
+            let hi = lo + idx.sizes[i] as usize;
+            assert_eq!(&mp4[lo..hi], &[0x00, 0x00, 0x00, 0x01, 0x09]);
+        }
+    }
+
+    #[test]
     fn rejects_length_mismatch() {
         // 10 mp4 samples, 9 sidecar entries → documented acceptance error.
         let mp4 = synth_mp4(10);
@@ -589,10 +635,6 @@ mod tests {
 
     #[test]
     fn rejects_sidecar_with_non_integer_frame_column() {
-        // The frame column is parsed via `frame_str.parse::<usize>()`. A
-        // non-numeric value must surface as `SidecarMalformedLine` with the
-        // documented `frame column ...` reason. Existing tests cover bad
-        // timestamp and missing tab but not bad frame.
         let mp4 = synth_mp4(1);
         let sidecar = b"abc\t100\n".to_vec();
         let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
@@ -627,11 +669,6 @@ mod tests {
 
     #[test]
     fn accepts_sidecar_with_padded_columns() {
-        // Real-world producers sometimes pad the numeric columns with stray
-        // ASCII whitespace (e.g. `"0\t1777112584089512192 \n"`). The strict
-        // `i64::parse` rejected those; the parser now trims each column
-        // before parsing while still requiring a single-tab separator and
-        // exactly two fields per line.
         let mp4 = synth_mp4(3);
         let sidecar =
             b"0\t1777112584089512192 \n  1 \t 1777112584122845525\n2\t1777112584156178858\n"
@@ -645,7 +682,6 @@ mod tests {
 
     #[test]
     fn rejects_mp4_without_video_track() {
-        // An mp4 with zero tracks is still syntactically valid.
         let config = Mp4Config {
             major_brand: "isom".parse().unwrap(),
             minor_version: 512,
@@ -698,124 +734,8 @@ mod tests {
         assert!(matches!(err, crate::Error::Mp4SidecarRequiresPair));
     }
 
-    fn first_start_code_offset(bytes: &[u8]) -> Option<usize> {
-        bytes
-            .windows(4)
-            .position(|w| w == [0x00, 0x00, 0x00, 0x01])
-    }
-
-    /// Scan Annex-B `data` for a NAL with the given `nal_type` (5 bits).
-    fn contains_nal_type(data: &[u8], nal_type: u8) -> bool {
-        let mut i = 0;
-        while i + 4 < data.len() {
-            if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 0 && data[i + 3] == 1 {
-                let header = data[i + 4];
-                if header & 0x1f == nal_type {
-                    return true;
-                }
-                i += 4;
-            } else {
-                i += 1;
-            }
-        }
-        false
-    }
-
-    #[test]
-    fn video_stream_yields_sample_count_annex_b_chunks() {
-        let mp4 = synth_mp4(10);
-        let sidecar = synth_sidecar(0, 33_333_333, 10);
-        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap();
-        let ch_id = r.meta().channels[0].id.clone();
-
-        let chunks: Vec<_> = r.video_stream(&ch_id, i64::MIN).unwrap().collect();
-        assert_eq!(chunks.len(), 10);
-        // Every chunk must begin with an Annex-B start code.
-        for c in &chunks {
-            assert_eq!(first_start_code_offset(&c.data), Some(0));
-        }
-        // PTS must be monotonic non-decreasing and match `pts_ns`.
-        let ptss: Vec<i64> = chunks.iter().map(|c| c.pts_ns).collect();
-        assert_eq!(ptss, r.pts_ns());
-        // First sample of synth_mp4 is sync; rest are delta.
-        assert!(chunks[0].is_keyframe);
-        for c in &chunks[1..] {
-            assert!(!c.is_keyframe);
-        }
-    }
-
-    #[test]
-    fn video_stream_first_chunk_contains_sps_and_pps() {
-        let mp4 = synth_mp4(5);
-        let sidecar = synth_sidecar(0, 1_000_000, 5);
-        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap();
-        let ch_id = r.meta().channels[0].id.clone();
-
-        let chunks: Vec<_> = r.video_stream(&ch_id, i64::MIN).unwrap().collect();
-        assert!(contains_nal_type(&chunks[0].data, 7), "SPS (nal=7) missing");
-        assert!(contains_nal_type(&chunks[0].data, 8), "PPS (nal=8) missing");
-        // Subsequent chunks must NOT carry the prepended extradata — only
-        // the first chunk does.
-        for c in &chunks[1..] {
-            assert!(!contains_nal_type(&c.data, 7));
-            assert!(!contains_nal_type(&c.data, 8));
-        }
-    }
-
-    #[test]
-    fn video_stream_snaps_to_preceding_sync_sample() {
-        // synth_mp4 emits `is_sync` on index 0 only. Every request past the
-        // first sample's PTS should still start the stream at index 0.
-        let mp4 = synth_mp4(10);
-        let step = 10_000_000;
-        let base = 1_700_000_000_000_000_000;
-        let sidecar = synth_sidecar(base, step, 10);
-        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap();
-        let ch_id = r.meta().channels[0].id.clone();
-
-        let chunks: Vec<_> = r
-            .video_stream(&ch_id, base + 5 * step + step / 2)
-            .unwrap()
-            .collect();
-        // Starts at the sole sync sample (index 0), so we get all 10.
-        assert_eq!(chunks.len(), 10);
-        assert_eq!(chunks[0].pts_ns, base);
-        assert!(chunks[0].is_keyframe);
-    }
-
-    #[test]
-    fn video_stream_before_any_keyframe_starts_at_first_keyframe() {
-        let mp4 = synth_mp4(3);
-        let base: i64 = 1_000_000_000;
-        let sidecar = synth_sidecar(base, 1_000_000, 3);
-        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap();
-        let ch_id = r.meta().channels[0].id.clone();
-
-        // Request predates every sample; should still start at index 0.
-        let chunks: Vec<_> = r.video_stream(&ch_id, 0).unwrap().collect();
-        assert_eq!(chunks.len(), 3);
-        assert_eq!(chunks[0].pts_ns, base);
-    }
-
-    #[test]
-    fn video_stream_unknown_channel_returns_channel_not_found() {
-        let mp4 = synth_mp4(1);
-        let sidecar = synth_sidecar(0, 0, 1);
-        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap();
-
-        let err = match r.video_stream(&"not-a-channel".to_string(), 0) {
-            Ok(_) => panic!("expected ChannelNotFound"),
-            Err(e) => e,
-        };
-        assert!(matches!(err, crate::Error::ChannelNotFound(_)));
-    }
-
     #[test]
     fn rejects_sidecar_with_extra_tab_field() {
-        // `splitn(3, '\t')` followed by `parts.next().is_some()` is the
-        // guard against `<frame>\t<ts>\t<extra>` lines. Existing tests
-        // cover missing-tab and wrong-frame-index but leave the extra-
-        // column branch unverified.
         let mp4 = synth_mp4(1);
         let sidecar = b"0\t100\textra\n".to_vec();
         let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
@@ -833,9 +753,6 @@ mod tests {
 
     #[test]
     fn rejects_sidecar_with_embedded_empty_line() {
-        // `str::lines()` will yield an empty string for the blank line
-        // between two real entries; the parser treats that as a
-        // structural error rather than silently skipping.
         let mp4 = synth_mp4(2);
         let sidecar = b"0\t100\n\n1\t200\n".to_vec();
         let err = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap_err();
@@ -846,46 +763,5 @@ mod tests {
             }
             other => panic!("expected SidecarMalformedLine, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn avcc_to_annexb_drops_zero_length_nals() {
-        // The AVCC `nal_len == 0` branch silently skips a degenerate
-        // length-prefixed NAL. Without this guard the function would
-        // emit an Annex-B start code followed by the next 0 bytes,
-        // which decoders read as a malformed unit; the explicit
-        // `continue` keeps the output well-formed.
-        let input = [
-            0x00, 0x00, 0x00, 0x00, // len=0, skipped
-            0x00, 0x00, 0x00, 0x01, 0x05, // len=1, NAL=0x05
-        ];
-        let out = avcc_to_annexb(&input);
-        assert_eq!(out, vec![0x00, 0x00, 0x00, 0x01, 0x05]);
-    }
-
-    #[test]
-    fn avcc_to_annexb_walks_multiple_nals_and_tolerates_truncation() {
-        // Two NALs: [0x05] and [0xAA, 0xBB]. Well-formed input.
-        let input = [
-            0x00, 0x00, 0x00, 0x01, 0x05, // len=1, NAL=0x05
-            0x00, 0x00, 0x00, 0x02, 0xAA, 0xBB, // len=2, NAL=AA BB
-        ];
-        let out = avcc_to_annexb(&input);
-        assert_eq!(
-            out,
-            vec![
-                0x00, 0x00, 0x00, 0x01, 0x05, //
-                0x00, 0x00, 0x00, 0x01, 0xAA, 0xBB,
-            ]
-        );
-
-        // Truncated length: second length says 99 bytes but the buffer ends
-        // after 5 bytes. First NAL still emits; second is dropped.
-        let truncated = [
-            0x00, 0x00, 0x00, 0x01, 0x05, //
-            0x00, 0x00, 0x00, 0x63, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE,
-        ];
-        let out = avcc_to_annexb(&truncated);
-        assert_eq!(out, vec![0x00, 0x00, 0x00, 0x01, 0x05]);
     }
 }
