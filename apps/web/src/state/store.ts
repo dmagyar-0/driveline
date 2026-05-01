@@ -85,6 +85,14 @@ export interface SessionState {
   cursorNs: bigint;
   playing: boolean;
   speed: number;
+  // Monotonic counter bumped on every user-initiated cursor change
+  // (`setCursor`, plus `play()` rewinds and end-of-session jumps).
+  // Playback rAF advances via `advanceCursor` and do **not** bump it.
+  // Consumers that need to react to scrubs — primarily the videoDecode
+  // pipeline, which has to tear down the decoder and reopen at the
+  // seek target — subscribe to this rather than to `cursorNs` so a
+  // 60 Hz playback tick does not look like a seek.
+  seekEpoch: number;
   // Layout + bindings slice (T6.2). `layoutJson` is the opaque FlexLayout
   // model (`Model.toJson()` output); the binding maps are keyed by the
   // FlexLayout tab id so a closed-and-reopened panel can reclaim its
@@ -158,8 +166,14 @@ export interface SessionState {
   pause(): void;
   /** Set playback speed; clamped to [MIN_SPEED, MAX_SPEED]. */
   setSpeed(n: number): void;
-  /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`. */
+  /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`.
+   *  Bumps `seekEpoch` so the video pipeline issues a real seek even
+   *  while `playing` is true. */
   setCursor(ns: bigint): void;
+  /** Playback-loop seam: advance the cursor without bumping `seekEpoch`,
+   *  so a 60 Hz rAF tick does not look like a user scrub. Same clamp
+   *  and end-of-session auto-pause as `setCursor`. */
+  advanceCursor(ns: bigint): void;
   /** Replace the FlexLayout JSON model wholesale. */
   setLayoutJson(json: unknown | null): void;
   /** Bind a video panel to a channel, or `null` to clear. */
@@ -345,6 +359,7 @@ export const useSession = create<SessionState>((set, get) => {
     cursorNs: 0n,
     playing: false,
     speed: 1,
+    seekEpoch: 0,
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
@@ -370,10 +385,16 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     play() {
-      const { globalRange, cursorNs } = get();
+      const { globalRange, cursorNs, seekEpoch } = get();
       if (!globalRange) return;
       if (cursorNs >= globalRange.endNs) {
-        set({ cursorNs: globalRange.startNs, playing: true });
+        // Rewind to the start; bump the seek epoch so the video pipeline
+        // reseeks to the new cursor instead of resuming from end-of-stream.
+        set({
+          cursorNs: globalRange.startNs,
+          playing: true,
+          seekEpoch: seekEpoch + 1,
+        });
       } else {
         set({ playing: true });
       }
@@ -389,6 +410,21 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setCursor(ns) {
+      const { globalRange, seekEpoch } = get();
+      if (!globalRange) return;
+      const clamped = bigMax(
+        globalRange.startNs,
+        bigMin(globalRange.endNs, ns),
+      );
+      const nextEpoch = seekEpoch + 1;
+      if (clamped === globalRange.endNs) {
+        set({ cursorNs: clamped, playing: false, seekEpoch: nextEpoch });
+      } else {
+        set({ cursorNs: clamped, seekEpoch: nextEpoch });
+      }
+    },
+
+    advanceCursor(ns) {
       const { globalRange } = get();
       if (!globalRange) return;
       const clamped = bigMax(
@@ -855,6 +891,7 @@ export const useSession = create<SessionState>((set, get) => {
           cursorNs: 0n,
           playing: false,
           speed: 1,
+          seekEpoch: 0,
           videoBindings: {},
           plotBindings: {},
           videoHudOn: {},

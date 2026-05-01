@@ -342,13 +342,18 @@ export function VideoPanel({
   //
   // Subscribed to the store directly (not via a reactive selector) so
   // cursor ticks at 60 Hz don't re-render this panel — the rAF blit
-  // loop reads `cursorRef.current` imperatively. Seeks are debounced
-  // for scrub / step actions, but **suppressed while `playing` is
-  // true**: during playback the decoder is already advancing the
-  // stream forward; firing a seek tears the decoder down and re-opens
-  // it from a keyframe, which is the root cause of the "4K playback
-  // lag" — a slow render frame lets the 50 ms timer fire mid-play and
-  // every restart drops the in-flight queue.
+  // loop reads `cursorRef.current` imperatively.
+  //
+  // Seek decisions are driven by `seekEpoch`, not by `cursorNs`:
+  // playback rAF advances via `advanceCursor` (which leaves `seekEpoch`
+  // alone) so a natural 60 Hz tick is invisible here, while every
+  // user-initiated `setCursor` (scrub, keyboard step, Home/End,
+  // play-from-end rewind) bumps the epoch and fires a debounced seek.
+  // That fixes the "video freezes on scrub during playback" symptom
+  // — previously the seek was suppressed whenever `playing` was true,
+  // so the canvas held the old frame until natural decoder advance
+  // caught up to the new cursor. The epoch counter lets us seek even
+  // during play without misreading playback ticks as scrubs.
   useEffect(() => {
     cursorRef.current = useSession.getState().cursorNs;
     const SETCURSOR_DELTA_NS = LOOKAHEAD_NS / 2n;
@@ -378,16 +383,7 @@ export function VideoPanel({
             void client.setCursor(state.cursorNs).catch(() => undefined);
         }
       }
-      // Cancel any pending pre-play scrub seek the moment playback
-      // starts — the natural decoder advance makes it redundant.
-      if (state.playing) {
-        if (seekTimerRef.current !== null) {
-          clearTimeout(seekTimerRef.current);
-          seekTimerRef.current = null;
-        }
-        return;
-      }
-      if (state.cursorNs === prev.cursorNs) return;
+      if (state.seekEpoch === prev.seekEpoch) return;
       if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
       seekTimerRef.current = setTimeout(() => {
         seekTimerRef.current = null;
