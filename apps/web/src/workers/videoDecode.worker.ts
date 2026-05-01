@@ -62,6 +62,13 @@ interface SessionState {
   // pacing gate in `maybeRefill` so a fast decoder does not run more
   // than `LOOKAHEAD_NS` ahead of the main-thread cursor.
   lastEmittedPtsNs: bigint | null;
+  // Latest decoded frame whose PTS is strictly before the seek target,
+  // held until the first frame at/after the target arrives. The panel
+  // blits the newest frame whose PTS <= cursor; without this hand-off,
+  // a seek that lands between frame boundaries (typical: 33 ms grid at
+  // 30 fps) leaves the panel with only frames > cursor, so the canvas
+  // stays frozen until the cursor advances — i.e. only during play.
+  pendingPreTargetFrame: VideoFrame | null;
 }
 
 // Cursor watermark from the main thread. Updated via `setCursor`;
@@ -208,6 +215,7 @@ async function openInternal(
     frameIndex: 0,
     lastOpenedFromNs: fromPtsNs,
     lastEmittedPtsNs: null,
+    pendingPreTargetFrame: null,
   };
 
   const initial = (await ops.next(
@@ -236,24 +244,9 @@ async function openInternal(
   return result;
 }
 
-function onFrame(frame: VideoFrame): void {
-  if (!session) {
+function emitFrame(frame: VideoFrame, ptsNs: bigint): void {
+  if (!session || !session.sink) {
     frame.close();
-    return;
-  }
-  session.inFlight = Math.max(0, session.inFlight - 1);
-  // Discard frames that predate the current seek target; they exist only to
-  // prime the decoder's reference buffers.
-  const ptsNs = BigInt(frame.timestamp) * 1000n;
-  if (ptsNs < session.discardBeforePtsNs) {
-    frame.close();
-    void maybeRefill();
-    return;
-  }
-  if (!session.sink) {
-    // No consumer connected yet. Drop to keep the GPU pool from starving.
-    frame.close();
-    void maybeRefill();
     return;
   }
   // HUD metrics. We only count frames that clear the discard gate — that
@@ -270,6 +263,46 @@ function onFrame(frame: VideoFrame): void {
     { ptsNs, frame, frameIndex: session.frameIndex, decodeQueue },
     [frame],
   );
+}
+
+function onFrame(frame: VideoFrame): void {
+  if (!session) {
+    frame.close();
+    return;
+  }
+  session.inFlight = Math.max(0, session.inFlight - 1);
+  const ptsNs = BigInt(frame.timestamp) * 1000n;
+  if (ptsNs < session.discardBeforePtsNs) {
+    // Pre-target frame: hold the most recent one so we can emit it just
+    // before the first post-target frame. The decoder produces frames in
+    // PTS order, so each new pre-target frame supersedes the prior one.
+    if (session.pendingPreTargetFrame) {
+      session.pendingPreTargetFrame.close();
+    }
+    session.pendingPreTargetFrame = frame;
+    void maybeRefill();
+    return;
+  }
+  if (!session.sink) {
+    // No consumer connected yet. Drop to keep the GPU pool from starving.
+    if (session.pendingPreTargetFrame) {
+      session.pendingPreTargetFrame.close();
+      session.pendingPreTargetFrame = null;
+    }
+    frame.close();
+    void maybeRefill();
+    return;
+  }
+  // First frame at/after the seek target — flush the buffered pre-target
+  // frame first so the panel has a frame whose PTS <= cursor to blit when
+  // the seek lands between frame boundaries.
+  if (session.pendingPreTargetFrame) {
+    const pre = session.pendingPreTargetFrame;
+    session.pendingPreTargetFrame = null;
+    const prePts = BigInt(pre.timestamp) * 1000n;
+    emitFrame(pre, prePts);
+  }
+  emitFrame(frame, ptsNs);
   void maybeRefill();
 }
 
@@ -277,6 +310,10 @@ async function closeInternal(): Promise<void> {
   if (!session) return;
   const s = session;
   session = null;
+  if (s.pendingPreTargetFrame) {
+    s.pendingPreTargetFrame.close();
+    s.pendingPreTargetFrame = null;
+  }
   try {
     if (s.decoder.state !== "closed") {
       try {
