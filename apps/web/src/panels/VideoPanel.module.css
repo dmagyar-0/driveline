@@ -9,6 +9,9 @@
   width: 100%;
   height: 100%;
   display: block;
+  /* Preserve the source aspect ratio when the panel is resized; the panel
+   * background (--color-bg-0 / black) shows through as letterbox bars. */
+  object-fit: contain;
 }
 
 .hudToggle {
