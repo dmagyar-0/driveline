@@ -17,7 +17,6 @@ import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
 import { mark } from "../perf";
-import { LOOKAHEAD_NS } from "../workers/videoDecodeOps";
 import styles from "./VideoPanel.module.css";
 
 interface VideoPanelProps {
@@ -96,9 +95,10 @@ export function VideoPanel({
   // mount when the cursor equals `globalRange.startNs`.
   const lastSeekTargetRef = useRef<bigint | null>(null);
   // Watermark of the cursor most recently pushed via `client.setCursor`.
-  // Used to coalesce 60 Hz cursor ticks down to ~7 Hz — the decoder
-  // pacing gate uses `LOOKAHEAD_NS = 300 ms`, so anything finer than
-  // half that is wasted Comlink churn.
+  // Used to coalesce 60 Hz cursor ticks to ~30 Hz — the worker's pacing
+  // gate compares `lastEmittedPtsNs - cursorNs` against `LOOKAHEAD_NS`,
+  // so a stale watermark tightens the gate and stalls refills mid-play
+  // (see `videoDecode.worker.ts:shouldRefill`).
   const lastCursorSentRef = useRef<bigint | null>(null);
 
   // Phase 5: HUD bit lives in the store (`videoHudOn[panelId]`) so the
@@ -394,7 +394,16 @@ export function VideoPanel({
   // during play without misreading playback ticks as scrubs.
   useEffect(() => {
     cursorRef.current = useSession.getState().cursorNs;
-    const SETCURSOR_DELTA_NS = LOOKAHEAD_NS / 2n;
+    // Coalesce setCursor against ~one frame at 30fps so a 60 Hz tick
+    // doesn't churn 60 postMessages per second, but the worker's view
+    // of the cursor never drifts more than a frame behind reality.
+    // Earlier we coalesced at LOOKAHEAD_NS/2 (150 ms); that caused the
+    // worker to sit idle for the first ~300 ms of play after open
+    // because the pacing gate (lastEmittedPtsNs - cursorNs ≤ 300 ms)
+    // didn't trip until cursorNs caught up — and with a 150 ms-stale
+    // worker cursor that took two coalesce intervals, long enough to
+    // drain the panel queue on slower decoders and freeze the canvas.
+    const SETCURSOR_DELTA_NS = 33_000_000n;
     const unsubscribe = useSession.subscribe((state, prev) => {
       cursorRef.current = state.cursorNs;
       if (state.cursorNs !== prev.cursorNs) {
@@ -403,10 +412,6 @@ export function VideoPanel({
         // races to the end of the encoded stream, frames pile up past
         // the cursor, and the bounded queue empties while the cursor
         // is still mid-session.
-        //
-        // Coalesce against `LOOKAHEAD_NS / 2` so a 60 Hz playback tick
-        // doesn't churn ~60 Comlink postMessages per second to update
-        // a watermark that only gates the 300 ms lookahead.
         const last = lastCursorSentRef.current;
         const delta =
           last === null
