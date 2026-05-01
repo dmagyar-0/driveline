@@ -46,6 +46,7 @@ import {
   type BufferedRange,
   type PendingFetch,
 } from "./mp4SampleCache";
+import { readMp4HeaderBytes } from "./mp4HeaderSlice";
 
 export type SourceKind = "mcap" | "mf4" | "mp4+sidecar";
 export type ChannelKind = ChannelKindWire;
@@ -830,18 +831,25 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const pair of buckets.mp4Pairs) {
           try {
-            // The bytes we read here exist only while WASM parses the moov
-            // and walks `stsz`/`stsc`/`stco`. Once `mp4SidecarIndex` returns
-            // we drop both `Uint8Array`s; the source `File` reference held
-            // by `Mp4SampleCache` is the only durable handle to the bytes.
-            let mp4Bytes: Uint8Array | null = await fileBytes(pair.mp4);
+            // Only the `ftyp` + `moov` boxes are needed by the WASM
+            // parser — `mdat` (the actual encoded video, often
+            // multi-GB) is never dereferenced during `open_pair`.
+            // Reading the whole mp4 here would allocate a contiguous
+            // gigabytes-sized `Uint8Array` on the main thread before
+            // the lazy sample cache could take over, OOMing tabs on
+            // long recordings. `readMp4HeaderBytes` walks the box
+            // structure via `File.slice()` and returns just the
+            // header, typically a few MB even for 2 GB sources.
+            let mp4HeaderBytes: Uint8Array | null = await readMp4HeaderBytes(
+              pair.mp4,
+            );
             let tsBytes: Uint8Array | null = await fileBytes(pair.ts);
-            const handle = await w.openMp4Sidecar(mp4Bytes, tsBytes);
+            const handle = await w.openMp4Sidecar(mp4HeaderBytes, tsBytes);
             const summary = await w.mp4SidecarSummary(handle);
             const index: Mp4SidecarIndex = await w.mp4SidecarIndex(handle);
             // Release transient ingest buffers as soon as WASM has the
             // index — peak memory during open drops back to steady state.
-            mp4Bytes = null;
+            mp4HeaderBytes = null;
             tsBytes = null;
             const id = uniqueSourceId(pair.mp4.name, [
               ...existing,

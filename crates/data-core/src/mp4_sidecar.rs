@@ -508,6 +508,62 @@ mod tests {
         assert_eq!(r.pts_ns()[9], base + 9 * step);
     }
 
+    /// Walk top-level mp4 boxes and return the concatenated `ftyp` + `moov`
+    /// bytes — i.e. exactly the buffer the JS-side header slicer
+    /// (`apps/web/src/state/mp4HeaderSlice.ts`) feeds into the wasm parser.
+    /// Used by `open_pair_accepts_header_only_buffer` to verify that
+    /// stripping `mdat` does not break `Mp4SidecarReader::open_pair`.
+    fn extract_ftyp_moov_only(mp4: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut cursor = 0usize;
+        while cursor + 8 <= mp4.len() {
+            let size32 = u32::from_be_bytes(mp4[cursor..cursor + 4].try_into().unwrap()) as u64;
+            let kind = &mp4[cursor + 4..cursor + 8];
+            let (header_len, total) = if size32 == 1 {
+                let large = u64::from_be_bytes(mp4[cursor + 8..cursor + 16].try_into().unwrap());
+                (16usize, large)
+            } else if size32 == 0 {
+                (8usize, (mp4.len() - cursor) as u64)
+            } else {
+                (8usize, size32)
+            };
+            let total = total as usize;
+            if total < header_len || cursor + total > mp4.len() {
+                panic!("malformed synth mp4 box at {cursor}");
+            }
+            if kind == b"ftyp" || kind == b"moov" {
+                out.extend_from_slice(&mp4[cursor..cursor + total]);
+            }
+            cursor += total;
+        }
+        out
+    }
+
+    #[test]
+    fn open_pair_accepts_header_only_buffer() {
+        // The JS side strips `mdat` before handing bytes to wasm to avoid
+        // OOMing on multi-GB recordings. The parser must still build the
+        // full per-sample index from `[ftyp][moov]` alone — chunk offsets
+        // are stored as integers in the moov tables, never dereferenced.
+        let full = synth_mp4(8);
+        let header = extract_ftyp_moov_only(&full);
+        assert!(header.len() < full.len(), "mdat must be stripped");
+        let sidecar = synth_sidecar(0, 1_000_000, 8);
+
+        let r = Mp4SidecarReader::open_pair(&header, &sidecar)
+            .expect("open_pair on header-only buffer");
+        let idx = r.sample_index();
+        assert_eq!(idx.offsets.len(), 8);
+        // Offsets must still address the original file positions, even
+        // though those bytes are no longer present in `header`. The JS
+        // layer reads them from the source `File` blob via `slice()`.
+        for (i, &off) in idx.offsets.iter().enumerate() {
+            let lo = off as usize;
+            let hi = lo + idx.sizes[i] as usize;
+            assert_eq!(&full[lo..hi], &[0x00, 0x00, 0x00, 0x01, 0x09]);
+        }
+    }
+
     #[test]
     fn open_pair_does_not_read_mdat_bytes() {
         // The whole point of the lazy-load refactor: opening the pair must

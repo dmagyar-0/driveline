@@ -179,8 +179,27 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
   return fake;
 }
 
-function file(name: string, bytes = new Uint8Array([1, 2, 3])): File {
-  return new File([bytes], name);
+/**
+ * Minimal `[ftyp][moov]` byte sequence accepted by `readMp4HeaderBytes`.
+ * The store now slices ftyp+moov out of the source `File` on the main
+ * thread before handing bytes to wasm (see `mp4HeaderSlice.ts`), so mp4
+ * file fixtures need a valid top-level box structure even though the
+ * fake worker never parses the bytes themselves.
+ */
+function minimalMp4Bytes(): Uint8Array {
+  const out = new Uint8Array(16);
+  const view = new DataView(out.buffer);
+  view.setUint32(0, 8, false);
+  out.set([0x66, 0x74, 0x79, 0x70], 4); // 'ftyp'
+  view.setUint32(8, 8, false);
+  out.set([0x6d, 0x6f, 0x6f, 0x76], 12); // 'moov'
+  return out;
+}
+
+function file(name: string, bytes?: Uint8Array): File {
+  const payload =
+    bytes ?? (name.endsWith(".mp4") ? minimalMp4Bytes() : new Uint8Array([1, 2, 3]));
+  return new File([payload as BlobPart], name);
 }
 
 beforeEach(async () => {
