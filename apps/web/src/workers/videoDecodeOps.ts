@@ -11,7 +11,7 @@
 // `mp4AnnexB.ts`, and emitted to the decoder. The MCAP path is unchanged.
 
 import type * as Comlink from "comlink";
-import { buildAvccDescription } from "./mp4AnnexB";
+import { buildAvccDescription, stripInlineParameterSets } from "./mp4AnnexB";
 import type { EncodedChunkWire } from "./normalise";
 
 export type VideoSourceKind = "mcap" | "mp4";
@@ -178,8 +178,13 @@ export function makeMp4LazyOps(
         // Raw AVCC sample bytes (4-byte length-prefixed NAL units). The
         // worker hands these straight to `VideoDecoder.decode` after
         // configuring with the avcC `description` from `open()` — no
-        // Annex-B conversion, no SPS/PPS prepend.
-        const body = await mp4Port.mp4Sample(state.handle, idx);
+        // Annex-B conversion, no SPS/PPS prepend. We do drop any
+        // in-band SPS/PPS NALs (x264 `repeat-headers=1` style) since
+        // they're already in the description and, when they appear
+        // before the AUD, Chrome's H.264 parser stalls the decoder.
+        const body = stripInlineParameterSets(
+          await mp4Port.mp4Sample(state.handle, idx),
+        );
         out.push({
           pts_ns: state.index.ptsNs[idx],
           is_keyframe: state.index.isSync[idx] === 1,

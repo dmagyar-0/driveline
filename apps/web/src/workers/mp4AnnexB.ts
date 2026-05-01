@@ -7,6 +7,9 @@
 //
 // Pure functions, no I/O, no shared state — covered by `mp4AnnexB.test.ts`.
 
+const NAL_TYPE_SPS = 7;
+const NAL_TYPE_PPS = 8;
+
 /**
  * Synthesise an AVCDecoderConfigurationRecord (the `avcC` payload, ISO/IEC
  * 14496-15 §5.3.3.1.2) from the SPS+PPS NAL bytes returned by the wasm
@@ -48,5 +51,81 @@ export function buildAvccDescription(
   out[pos++] = (pps.length >> 8) & 0xff;
   out[pos++] = pps.length & 0xff;
   out.set(pps, pos);
+  return out;
+}
+
+/**
+ * Drop in-band SPS (NAL type 7) and PPS (NAL type 8) NAL units from a
+ * 4-byte length-prefixed AVCC sample. Returns the same bytes when the
+ * sample carries no parameter sets (the common ffmpeg case), or a fresh
+ * buffer with the param-set NALs filtered out otherwise.
+ *
+ * Why: x264 with `repeat-headers=1` (and some broadcast-style encoders)
+ * embeds SPS/PPS at the head of every keyframe sample, BEFORE the AUD.
+ * Feeding that to `VideoDecoder` in AVC mode confuses Chrome's H.264
+ * parser — the leading SPS/PPS look like the tail of a phantom previous
+ * access unit, and when the AUD arrives the parser starts a fresh AU
+ * with no parameter sets, so the slice silently fails to decode.
+ * Symptom: priming chunks emit a few frames, then the decoder stops
+ * producing output, the panel queue drains, and lag grows unbounded
+ * until the user seeks. The avcC `description` already carries SPS/PPS,
+ * so removing the redundant in-band copies is safe and the standard
+ * fix for this pattern.
+ *
+ * Assumes the 4-byte NAL length prefix that `buildAvccDescription`
+ * writes (`lengthSizeMinusOne = 3`, the ffmpeg/x264 default — see the
+ * note in `buildAvccDescription`). Truncated samples are returned
+ * verbatim; the decoder will surface a malformed-frame error rather
+ * than silently swallowing them.
+ */
+export function stripInlineParameterSets(sample: Uint8Array): Uint8Array {
+  let needsStrip = false;
+  let i = 0;
+  while (i + 4 <= sample.length) {
+    const nalLen =
+      ((sample[i] << 24) >>> 0) |
+      (sample[i + 1] << 16) |
+      (sample[i + 2] << 8) |
+      sample[i + 3];
+    const headerPos = i + 4;
+    if (nalLen === 0 || headerPos >= sample.length) break;
+    const end = headerPos + nalLen;
+    if (end > sample.length) break;
+    const nalType = sample[headerPos] & 0x1f;
+    if (nalType === NAL_TYPE_SPS || nalType === NAL_TYPE_PPS) {
+      needsStrip = true;
+      break;
+    }
+    i = end;
+  }
+  if (!needsStrip) return sample;
+  // Second pass: copy keep-list NAL units into a fresh buffer.
+  const keep: Uint8Array[] = [];
+  let total = 0;
+  i = 0;
+  while (i + 4 <= sample.length) {
+    const nalLen =
+      ((sample[i] << 24) >>> 0) |
+      (sample[i + 1] << 16) |
+      (sample[i + 2] << 8) |
+      sample[i + 3];
+    const headerPos = i + 4;
+    if (nalLen === 0 || headerPos >= sample.length) break;
+    const end = headerPos + nalLen;
+    if (end > sample.length) break;
+    const nalType = sample[headerPos] & 0x1f;
+    if (nalType !== NAL_TYPE_SPS && nalType !== NAL_TYPE_PPS) {
+      const unit = sample.subarray(i, end);
+      keep.push(unit);
+      total += unit.length;
+    }
+    i = end;
+  }
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const u of keep) {
+    out.set(u, pos);
+    pos += u.length;
+  }
   return out;
 }
