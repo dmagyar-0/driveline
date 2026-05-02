@@ -6,10 +6,12 @@ import {
   codecStringFromSps,
   findSps,
   hex,
+  pickStartCursor,
   ptsToMicros,
   shouldRefill,
   videoStreamOps,
   type DataCorePortApi,
+  type Mp4LazyIndex,
 } from "./videoDecodeOps";
 import type * as Comlink from "comlink";
 
@@ -298,5 +300,105 @@ describe("shouldRefill", () => {
         cursorNs: 5_000_000_000n,
       }),
     ).toBe(true);
+  });
+});
+
+describe("pickStartCursor", () => {
+  // The mp4 lazy-load path opens the decoder at the largest sync sample
+  // whose PTS is `<= target`. A regression here either over-rewinds (waste
+  // of decode) or — much worse — starts mid-GOP and the decoder emits a
+  // long string of corrupt frames until the next keyframe. Both surface
+  // only via end-to-end video playback, so pin the dispatch points here.
+
+  function index(
+    pts: number[],
+    sync: number[],
+  ): Mp4LazyIndex {
+    return {
+      channelId: "1/video",
+      ptsNs: BigInt64Array.from(pts.map((p) => BigInt(p))),
+      offsets: BigUint64Array.from(pts.map((_, i) => BigInt(i * 100))),
+      sizes: Uint32Array.from(pts.map(() => 100)),
+      isSync: Uint8Array.from(sync),
+      sps: new Uint8Array(),
+      pps: new Uint8Array(),
+    };
+  }
+
+  it("returns 0 for an empty index (no samples to seek to)", () => {
+    expect(pickStartCursor(index([], []), 0n)).toBe(0);
+    // Negative target on an empty index also returns 0 — the caller
+    // guards against indexing into the empty array.
+    expect(pickStartCursor(index([], []), -1n)).toBe(0);
+  });
+
+  it("snaps to the first sync sample when target predates every sample", () => {
+    // Sync only at indices 0 and 3. Target before sample 0's PTS → must
+    // start at the first sync (index 0) so the decoder still gets a
+    // decodable prefix. Falling back to mid-GOP would emit garbage frames.
+    const idx = index([100, 200, 300, 400, 500], [1, 0, 0, 1, 0]);
+    expect(pickStartCursor(idx, 50n)).toBe(0);
+  });
+
+  it("snaps exactly onto a sync sample whose PTS equals target", () => {
+    const idx = index([0, 100, 200, 300, 400], [1, 0, 0, 1, 0]);
+    expect(pickStartCursor(idx, 300n)).toBe(3);
+  });
+
+  it("walks back from a non-sync candidate to the preceding sync sample", () => {
+    // Target lands on a delta frame (index 2). The decoder cannot start
+    // there; it must rewind to the keyframe at index 0.
+    const idx = index([0, 100, 200, 300, 400], [1, 0, 0, 1, 0]);
+    expect(pickStartCursor(idx, 250n)).toBe(0);
+  });
+
+  it("snaps to the largest sync sample <= target across multiple GOPs", () => {
+    // Two GOPs: [0..2] starting at sync index 0, [3..5] starting at sync
+    // index 3. Target inside the second GOP must rewind to its keyframe.
+    const idx = index(
+      [0, 100, 200, 300, 400, 500],
+      [1, 0, 0, 1, 0, 0],
+    );
+    expect(pickStartCursor(idx, 450n)).toBe(3);
+    expect(pickStartCursor(idx, 500n)).toBe(3);
+  });
+
+  it("handles a target past the final sample (snap to last sync)", () => {
+    // Common at end-of-session: the cursor sits at endNs. The decoder
+    // should still open at the latest keyframe, not at the empty tail.
+    const idx = index([0, 100, 200, 300, 400], [1, 0, 0, 1, 0]);
+    expect(pickStartCursor(idx, 9_999n)).toBe(3);
+  });
+
+  it("returns index 0 when no sync samples are present (treat as keyframe-only)", () => {
+    // Pathological track with `isSync` all-zero. The fallback assigns
+    // `firstSync = 0` so we still emit a decodable prefix from sample 0
+    // rather than throwing or returning -1.
+    const idx = index([0, 100, 200], [0, 0, 0]);
+    expect(pickStartCursor(idx, 150n)).toBe(0);
+    expect(pickStartCursor(idx, -100n)).toBe(0);
+  });
+
+  it("never returns an index > target's PTS sample (mutation guard)", () => {
+    // Across a 1024-sample GOP grid, the picked index's PTS must always
+    // be `<= target` and `isSync === 1`. Sweeping random targets pins the
+    // binary-search bounds against off-by-one mutations.
+    const N = 64;
+    const pts = Array.from({ length: N }, (_, i) => i * 100);
+    const sync = Array.from({ length: N }, (_, i) => (i % 8 === 0 ? 1 : 0));
+    const idx = index(pts, sync);
+    for (let t = -50; t <= 7_000; t += 37) {
+      const r = pickStartCursor(idx, BigInt(t));
+      expect(idx.isSync[r]).toBe(1);
+      // The fallback rule allows the result's PTS to exceed target only
+      // when target predates every sample — i.e. we returned the first
+      // sync. Otherwise picked PTS must be <= target.
+      const pickedPts = Number(idx.ptsNs[r]);
+      if (t < pts[0]) {
+        expect(r).toBe(0);
+      } else {
+        expect(pickedPts).toBeLessThanOrEqual(t);
+      }
+    }
   });
 });

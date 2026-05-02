@@ -441,6 +441,130 @@ describe("transport", () => {
     expect(s.speed).toBe(1);
     expect(s.globalRange).toBeNull();
   });
+
+  // Seek-vs-tick seam (commit 2ea2c39 / merge #74). The video pipeline
+  // subscribes to `seekEpoch` rather than `cursorNs` so a 60 Hz playback
+  // tick (advanceCursor) does not look like a user scrub. setCursor must
+  // bump the counter; advanceCursor must leave it alone. Get either side
+  // wrong and either: (a) every play tick tears down the decoder
+  // (advanceCursor bumps), or (b) a scrub during play stops updating the
+  // canvas (setCursor doesn't bump).
+
+  it("seekEpoch starts at 0", () => {
+    expect(useSession.getState().seekEpoch).toBe(0);
+  });
+
+  it("setCursor bumps seekEpoch on every call", async () => {
+    await loadMf4();
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().setCursor(1_000n);
+    expect(useSession.getState().seekEpoch).toBe(before + 1);
+    useSession.getState().setCursor(1_500n);
+    expect(useSession.getState().seekEpoch).toBe(before + 2);
+    // Same target counts as a fresh seek — the worker may have torn down
+    // the decoder, so the panel needs to re-issue.
+    useSession.getState().setCursor(1_500n);
+    expect(useSession.getState().seekEpoch).toBe(before + 3);
+  });
+
+  it("setCursor bumps seekEpoch even when clamping to end-of-session", async () => {
+    await loadMf4();
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().setCursor(999_999n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(3_000n);
+    expect(s.playing).toBe(false);
+    expect(s.seekEpoch).toBe(before + 1);
+  });
+
+  it("setCursor does NOT bump seekEpoch when there is no session", () => {
+    // No globalRange → setCursor returns early before touching state.
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().setCursor(123n);
+    expect(useSession.getState().seekEpoch).toBe(before);
+  });
+
+  it("advanceCursor moves the cursor without bumping seekEpoch", async () => {
+    await loadMf4();
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().advanceCursor(1_500n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(1_500n);
+    // Critical: a playback rAF tick must NOT look like a scrub. If this
+    // bumps, the videoDecode worker reseeks on every frame and the
+    // canvas freezes mid-play.
+    expect(s.seekEpoch).toBe(before);
+  });
+
+  it("advanceCursor clamps to endNs and pauses, still without bumping seekEpoch", async () => {
+    await loadMf4();
+    useSession.getState().play();
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().advanceCursor(999_999n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(3_000n);
+    expect(s.playing).toBe(false);
+    expect(s.seekEpoch).toBe(before);
+  });
+
+  it("advanceCursor clamps below the session start without bumping seekEpoch", async () => {
+    await loadMf4();
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().advanceCursor(-1n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(500n);
+    expect(s.seekEpoch).toBe(before);
+  });
+
+  it("advanceCursor is a no-op without a session", () => {
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().advanceCursor(123n);
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(0n);
+    expect(s.seekEpoch).toBe(before);
+  });
+
+  it("play() from end-of-session bumps seekEpoch (rewinds the cursor)", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(3_000n);
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().play();
+    const s = useSession.getState();
+    expect(s.cursorNs).toBe(500n);
+    expect(s.playing).toBe(true);
+    // Rewind is a real seek — the decoder was open at endNs and now has
+    // to reopen at startNs. Without the bump, the video pipeline misses
+    // the rewind and keeps emitting nothing past the prior cursor.
+    expect(s.seekEpoch).toBe(before + 1);
+  });
+
+  it("play() mid-session does NOT bump seekEpoch", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_500n);
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().play();
+    expect(useSession.getState().playing).toBe(true);
+    // Same cursor → no seek; the decoder was idle and should resume from
+    // its current position.
+    expect(useSession.getState().seekEpoch).toBe(before);
+  });
+
+  it("pause() does not bump seekEpoch", async () => {
+    await loadMf4();
+    useSession.getState().play();
+    const before = useSession.getState().seekEpoch;
+    useSession.getState().pause();
+    expect(useSession.getState().seekEpoch).toBe(before);
+  });
+
+  it("clear resets seekEpoch back to 0", async () => {
+    await loadMf4();
+    useSession.getState().setCursor(1_000n);
+    useSession.getState().setCursor(1_500n);
+    expect(useSession.getState().seekEpoch).toBeGreaterThan(0);
+    await useSession.getState().clear();
+    expect(useSession.getState().seekEpoch).toBe(0);
+  });
 });
 
 describe("fetchChannelRange", () => {
