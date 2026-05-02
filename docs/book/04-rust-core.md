@@ -214,9 +214,10 @@ but the shape is the same for each:
   bytes), and materialises parallel arrays that can be sliced.
 - **`Mp4SidecarReader`** (`mp4_sidecar.rs`, ~700 lines) is the
   video-only reader. It parses the mp4 container for the per-frame
-  sample table, cross-references a binary sidecar file of absolute
-  timestamps (one `i64` little-endian per frame), and exposes an
-  `EncodedChunkIter` over the frames.
+  sample table, cross-references a plain-text sidecar of
+  `<frame_index>\t<timestamp_ns>` lines (one per frame in decode
+  order), and exposes a sample index for lazy chunk loading by the JS
+  layer.
 
 Each of them implements `Reader`, which means the layer above can
 ignore the differences.
