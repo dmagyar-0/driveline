@@ -449,9 +449,12 @@ describe("fetchChannelRange", () => {
     useSession.getState().setWorker(worker);
     await useSession.getState().openFiles([file("short.mcap")]);
     const mcapSource = useSession.getState().sources[0];
+    // Look up the qualified channel id; the fetch routes by nativeId
+    // ("/a") to the worker.
+    const channelId = mcapSource.channels[0].id;
     const bytes = await useSession
       .getState()
-      .fetchChannelRange("/a", 100n, 200n, false);
+      .fetchChannelRange(channelId, 100n, 200n, false);
     expect(bytes).toEqual(new Uint8Array([0xaa]));
     expect(worker.openLog).toContain(
       `mcapFetchRange:${mcapSource.handle}:/a:100:200:false`,
@@ -463,9 +466,10 @@ describe("fetchChannelRange", () => {
     useSession.getState().setWorker(worker);
     await useSession.getState().openFiles([file("short.mf4")]);
     const mf4Source = useSession.getState().sources[0];
+    const channelId = mf4Source.channels[0].id;
     const bytes = await useSession
       .getState()
-      .fetchChannelRange("0/1", 500n, 3_000n, true);
+      .fetchChannelRange(channelId, 500n, 3_000n, true);
     expect(bytes).toEqual(new Uint8Array([0xbb]));
     expect(worker.openLog).toContain(
       `mf4FetchRange:${mf4Source.handle}:0/1:500:3000:true`,
@@ -487,9 +491,35 @@ describe("fetchChannelRange", () => {
     await useSession
       .getState()
       .openFiles([file("short.mp4"), file("short.mp4.timestamps")]);
+    const mp4Source = useSession.getState().sources[0];
+    const channelId = mp4Source.channels[0].id;
     await expect(
-      useSession.getState().fetchChannelRange("1/video", 0n, 1n, false),
+      useSession.getState().fetchChannelRange(channelId, 0n, 1n, false),
     ).rejects.toThrow(/channel kind not plottable/);
+  });
+
+  it("qualifies channel ids so two MF4s with the same native id do not collide", async () => {
+    // Real-world repro: drop the same MF4 twice. The wasm summary returns
+    // identical `{group}/{channel}` ids, but the session-level channel
+    // ids must differ so plot bindings, video bindings, and the
+    // `channelMap` in PlotPanel keep them apart.
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4"), file("short.mf4")]);
+    const sources = useSession.getState().sources;
+    expect(sources).toHaveLength(2);
+    expect(sources[0].id).not.toBe(sources[1].id);
+    expect(sources[0].channels[0].nativeId).toBe(sources[1].channels[0].nativeId);
+    expect(sources[0].channels[0].id).not.toBe(sources[1].channels[0].id);
+
+    // Routes still hit the right wasm handle with the correct nativeId
+    // for each source.
+    await useSession
+      .getState()
+      .fetchChannelRange(sources[1].channels[0].id, 500n, 3_000n, false);
+    expect(worker.openLog).toContain(
+      `mf4FetchRange:${sources[1].handle}:0/1:500:3000:false`,
+    );
   });
 
 });

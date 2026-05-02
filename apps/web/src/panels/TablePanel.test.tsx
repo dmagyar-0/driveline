@@ -21,6 +21,7 @@ const SOURCE: SourceMeta = {
   channels: [
     {
       id: "/speed",
+      nativeId: "/speed",
       sourceId: "src-a",
       name: "speed",
       kind: "scalar",
@@ -31,6 +32,7 @@ const SOURCE: SourceMeta = {
     },
     {
       id: "/rpm",
+      nativeId: "/rpm",
       sourceId: "src-a",
       name: "rpm",
       kind: "scalar",

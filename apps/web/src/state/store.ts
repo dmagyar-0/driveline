@@ -57,7 +57,16 @@ export interface TimeRange {
 }
 
 export interface Channel {
+  // Globally unique across the loaded session. Composed via
+  // `qualifiedChannelId(sourceId, nativeId)` so two files that expose
+  // the same wasm-internal channel id — common with MF4, where the
+  // native id is just `{group}/{channel}` — do not collide in the
+  // binding maps or the PlotPanel's `channelMap` lookup table.
   id: string;
+  // Per-source channel id as emitted by the wasm reader (`0/1` for MF4,
+  // the topic string for MCAP, `1/video` for MP4). This is the value
+  // the worker fetch APIs expect; it is *not* unique across sources.
+  nativeId: string;
   sourceId: string;
   name: string;
   kind: ChannelKind;
@@ -65,6 +74,15 @@ export interface Channel {
   unit: string | null;
   sampleCount: number;
   timeRange: TimeRange;
+}
+
+// Length-prefix encoding so distinct (sourceId, nativeId) pairs cannot
+// compose to the same string regardless of how either side embeds `|`.
+export function qualifiedChannelId(
+  sourceId: string,
+  nativeId: string,
+): string {
+  return `${nativeId.length}|${nativeId}|${sourceId}`;
 }
 
 export interface SourceMeta {
@@ -327,7 +345,8 @@ function uniqueSourceId(base: string, existing: SourceMeta[]): string {
 
 function mcapChannels(sourceId: string, s: McapSummary): Channel[] {
   return s.channels.map((c) => ({
-    id: c.id,
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
     sourceId,
     name: c.name,
     kind: c.kind,
@@ -342,7 +361,8 @@ function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
   // scalar F64 channels. Hardcode the kind/dtype here so the wasm summary
   // doesn't have to widen.
   return s.channels.map((c) => ({
-    id: c.id,
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
     sourceId,
     name: c.name,
     kind: "scalar" as const,
@@ -354,7 +374,8 @@ function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
 }
 function mp4Channels(sourceId: string, s: Mp4SidecarSummary): Channel[] {
   return s.channels.map((c) => ({
-    id: c.id,
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
     sourceId,
     name: c.name,
     kind: "video" as const,
@@ -754,7 +775,7 @@ export const useSession = create<SessionState>((set, get) => {
         if (source.kind === "mcap") {
           return await worker.mcapFetchRange(
             source.handle,
-            channel.id,
+            channel.nativeId,
             startNs,
             endNs,
             includePrev,
@@ -763,7 +784,7 @@ export const useSession = create<SessionState>((set, get) => {
         if (source.kind === "mf4") {
           return await worker.mf4FetchRange(
             source.handle,
-            channel.id,
+            channel.nativeId,
             startNs,
             endNs,
             includePrev,

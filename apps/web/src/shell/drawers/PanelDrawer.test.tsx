@@ -27,6 +27,7 @@ function seed(): void {
         channels: [
           {
             id: "chan-a",
+            nativeId: "chan-a",
             sourceId: "src-a",
             name: "alpha",
             kind: "scalar",
@@ -37,6 +38,7 @@ function seed(): void {
           },
           {
             id: "video-stream",
+            nativeId: "video-stream",
             sourceId: "src-a",
             name: "front cam",
             kind: "video",
@@ -51,6 +53,7 @@ function seed(): void {
     channels: [
       {
         id: "chan-a",
+        nativeId: "chan-a",
         sourceId: "src-a",
         name: "alpha",
         kind: "scalar",

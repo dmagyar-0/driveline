@@ -116,6 +116,7 @@ function seedSession(): void {
         channels: [
           {
             id: "chan-a",
+            nativeId: "chan-a",
             sourceId: "src-a",
             name: "alpha",
             kind: "scalar",
@@ -135,6 +136,7 @@ function seedSession(): void {
         channels: [
           {
             id: "chan-b",
+            nativeId: "chan-b",
             sourceId: "src-b",
             name: "beta",
             kind: "scalar",

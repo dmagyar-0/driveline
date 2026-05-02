@@ -30,6 +30,7 @@ const SOURCE: SourceMeta = {
   channels: [
     {
       id: "/state/gear",
+      nativeId: "/state/gear",
       sourceId: "src-a",
       name: "gear",
       kind: "scalar",
