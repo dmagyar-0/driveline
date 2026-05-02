@@ -12,9 +12,17 @@ the canvas.
 
 ## The pipeline at a glance
 
+There are two routes for encoded bytes — one per source kind. Both
+land in the same `videoDecode` worker, which is source-agnostic from
+`decode()` onward.
+
+**MCAP** — `dataCore` produces Annex-B `EncodedChunk`s and
+`videoDecode` scans the first keyframe for an SPS to derive the codec
+string:
+
 ```
 ┌──────────────┐     ┌────────────────┐     ┌──────────────┐
-│ data-core    │  →  │ videoDecode    │  →  │ VideoPanel   │
+│ dataCore     │  →  │ videoDecode    │  →  │ VideoPanel   │
 │ (Rust/WASM)  │     │ worker         │     │ (main thread)│
 │ EncodedChunk │     │ VideoDecoder   │     │ canvas blit  │
 └──────────────┘     └────────────────┘     └──────────────┘
@@ -26,9 +34,35 @@ the canvas.
                                              frame
 ```
 
-The dataCore worker owns the open file. The videoDecode worker owns
-the `VideoDecoder`. The main thread owns the canvas. `VideoFrame`
-objects travel from worker to main thread as transferred messages.
+**MP4 + sidecar** — `dataCore` is consulted **only at open time** to
+parse the moov box and hand back a sample index (offsets, sizes, sync
+flags, PTS, plus SPS+PPS). After that the `videoDecode` worker pulls
+sample bodies straight from `Mp4SampleCache` on the main thread over a
+separate `mp4Lazy` `MessagePort`, and the decoder runs in AVC
+(length-prefixed) mode against a synthesised `avcC` description:
+
+```
+┌──────────────┐                          ┌────────────────┐     ┌──────────────┐
+│ dataCore     │  ── sample index ──────▶ │ videoDecode    │  →  │ VideoPanel   │
+│ (open time)  │     (once at open)       │ worker         │     │ (main thread)│
+└──────────────┘                          │ VideoDecoder   │     │ canvas blit  │
+                                          └────────────────┘     └──────────────┘
+                                                ↑   ↓
+                                                │   │ mp4Sample(handle, idx)
+                                                │   │
+┌──────────────────┐                            │   │
+│ Mp4SampleCache   │ ◀── mp4Lazy MessagePort ───┘   │
+│ (main thread)    │ ────── sample bytes ───────────┘
+│ LRU + on-demand  │
+│ File.slice()     │ ──── reads from source File on miss
+└──────────────────┘
+```
+
+The dataCore worker owns the open file metadata. The videoDecode
+worker owns the `VideoDecoder`. The main thread owns the canvas — and
+for mp4 sources, also owns the lazy sample cache and the source `File`
+blob. `VideoFrame` objects travel from worker to main thread as
+transferred messages in both routes.
 
 ## The decoder configuration problem
 
@@ -37,13 +71,16 @@ That string encodes the H.264 profile, constraint flags, and level —
 parameters that must match the bitstream or the decoder errors out.
 
 Driveline could hard-code a codec string per format. Instead, it
-reads the parameters from the stream's first keyframe.
+discovers the parameters at open time. The route depends on the source
+kind, because MCAP and mp4 expose H.264 parameter sets differently.
 
-### Finding the SPS
+### MCAP: scan the first keyframe for an SPS
 
-An H.264 stream's **Sequence Parameter Set** (SPS) is a NAL unit
-(type 7) emitted before the first keyframe. The videoDecode worker
-scans the first keyframe's Annex-B bytes for it:
+In MCAP, the encoded stream is Annex-B (`00 00 00 01` start codes), and
+the SPS is just another NAL unit interleaved with slices. An H.264
+stream's **Sequence Parameter Set** (SPS) is a NAL unit (type 7)
+emitted before the first keyframe. The videoDecode worker scans the
+first keyframe's Annex-B bytes for it:
 
 ```ts
 function findSps(annexB: Uint8Array): Uint8Array | null {
@@ -75,7 +112,33 @@ function codecStringFromSps(sps: Uint8Array): string {
 
 The result is used to `configure` the decoder. A test fixture using
 H.264 High Profile, Level 4.2 becomes `avc1.64002A`; a different
-encoder emits a different string; the pipeline adapts.
+encoder emits a different string; the pipeline adapts. For MCAP, the
+decoder is configured **without** a `description` — Annex-B start
+codes do the framing inline.
+
+### MP4: lift SPS+PPS out of the moov
+
+mp4 doesn't need the scan. The SPS and PPS live in
+`avcC` extradata inside the moov's sample-description box, and the wasm
+`Mp4SidecarReader` extracts them at parse time. The `mp4_sidecar_index`
+binding returns them alongside the per-sample arrays, and
+`buildAvccDescription(sps, pps)` (in `mp4AnnexB.ts`) re-emits a standard
+`AVCDecoderConfigurationRecord` per ISO/IEC 14496-15 §5.3.3.1.2:
+
+```ts
+const description = buildAvccDescription(index.sps, index.pps);
+const codec = `avc1.${hex(description[1])}${hex(description[2])}${hex(description[3])}`;
+decoder.configure({ codec, description, ... });
+```
+
+The decoder is configured **with** that `description`, and the worker
+feeds raw 4-byte length-prefixed AVCC samples directly. There is no
+Annex-B conversion on the mp4 path. This is the fix for ffmpeg-encoded
+mp4s whose samples carry a leading AUD: with Annex-B prepending,
+SPS/PPS landed *before* the AUD and Chrome's H.264 parser rejected the
+chunk with `DataError: A key frame is required after configure() or
+flush()`. AVC mode + an explicit `description` sidesteps the entire
+ordering minefield.
 
 ### `isConfigSupported`
 
@@ -239,21 +302,35 @@ const tick = () => {
 ## Seeking
 
 The cursor changes thousands of times a second when the user drags
-the scrubber. Issuing a worker `seek()` on every change would thrash
-the decoder. `VideoPanel` debounces:
+the scrubber, **and** another 60 times a second once playback is
+running. Issuing a worker `seek()` on every change would thrash the
+decoder; treating *no* cursor change as a seek would mean the canvas
+freezes on a mid-playback scrub. `VideoPanel` distinguishes the two
+using a `seekEpoch` counter on the session store: only user-initiated
+cursor moves (scrub, keyboard step, Home/End, play-from-end rewind)
+bump it, while the playback rAF advances via `advanceCursor`, which
+doesn't.
+
+The panel subscribes to the store directly (not via a reactive
+selector) and gates the debounced seek on the epoch, not on
+`cursorNs`:
 
 ```tsx
-useEffect(() => {
+const unsubscribe = useSession.subscribe((state, prev) => {
+  cursorRef.current = state.cursorNs;
+  // ... push a coalesced cursor watermark to the worker (~30 Hz) ...
+  if (state.seekEpoch === prev.seekEpoch) return;
   if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
   seekTimerRef.current = setTimeout(() => {
-    if (lastSeekTargetRef.current === cursorNs) return;
-    lastSeekTargetRef.current = cursorNs;
+    seekTimerRef.current = null;
+    const target = useSession.getState().cursorNs;
+    if (lastSeekTargetRef.current === target) return;
+    lastSeekTargetRef.current = target;
     for (const e of queueRef.current) e.frame.close();
     queueRef.current = [];
-    void client.seek(cursorNs).catch(() => undefined);
+    void client.seek(target).catch(() => undefined);
   }, SEEK_DEBOUNCE_MS);   // 50ms
-  return () => { /* clear on unmount */ };
-}, [cursorNs]);
+});
 ```
 
 The worker's `seek` tears down the old stream, opens a new one at the

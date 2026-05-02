@@ -1,8 +1,8 @@
 // Pure file-bucketing helper for T2.4. Takes a flat `File[]` (from either a
 // real `DataTransfer` drop or the Playwright dev-hook) and returns the inputs
 // grouped by reader format. mp4 + `.mp4.timestamps` pairing follows the naming
-// convention in `docs/05-video-pipeline.md:127-131`: `foo.mp4` pairs with
-// `foo.mp4.timestamps` in the same drop batch.
+// convention in `docs/05-video-pipeline.md` (see the "Sidecar format" section):
+// `foo.mp4` pairs with `foo.mp4.timestamps` in the same drop batch.
 
 export interface Mp4Pair {
   mp4: File;
