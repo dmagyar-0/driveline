@@ -173,13 +173,20 @@ H.264 bitstreams have two standard envelopes:
 - **AVCC**, where NAL units are prefixed with a 4-byte length. This is
   what `.mp4` stores *inside* the container.
 
-WebCodecs' `VideoDecoder` accepts either, but they need to match the
-codec string it was configured with. Driveline converts MP4 AVCC
-frames to Annex-B when extracting them (in `data-core`'s
-`mp4_sidecar.rs`), so the videoDecode worker always sees Annex-B.
-That way the worker's H.264 parsing logic — specifically the SPS scan
-it uses to derive the `avc1.XXXXXX` codec string — works for both
-sources.
+WebCodecs' `VideoDecoder` accepts either, but the mode must match
+what the decoder was configured with. The two sources use different
+paths:
+
+- **MCAP** frames arrive as Annex-B. The videoDecode worker scans the
+  first keyframe for an SPS NAL unit, derives the `avc1.XXXXXX` codec
+  string from it, and configures the decoder in Annex-B mode (no
+  `description` field).
+- **MP4** frames stay in AVCC (length-prefixed) form. The wasm layer
+  returns SPS and PPS bytes via `mp4_sidecar_index`; `mp4AnnexB.ts`
+  synthesises an `AVCDecoderConfigurationRecord` (`avcC`) from them.
+  The decoder is configured in AVC mode with that record as the
+  `description`, so raw mp4 sample bytes feed straight to `decode()`
+  without any Annex-B conversion.
 
 ### Timestamp precision, carefully
 
@@ -249,9 +256,11 @@ of opaque chunks."
 - Signals go as Arrow IPC record batches with a `ts`/`value` schema.
   The JS side reads the raw buffers without per-element work, and a
   committed fixture asserts the two sides stay compatible.
-- Video goes as `EncodedChunk { pts_ns, is_keyframe, data }`, Annex-B
-  framed, pulled in batches to keep the decoder fed with minimal RPC
-  traffic.
+- Video goes as `EncodedChunk { pts_ns, is_keyframe, data }`. MCAP
+  chunks are Annex-B framed; MP4 chunks are AVCC-framed (raw mp4
+  samples) with the decoder configured via a synthesised `avcC`
+  description. Both paths pull in batches to keep the decoder fed
+  with minimal RPC traffic.
 - Nanoseconds everywhere the data flows — widened to microseconds
   only when WebCodecs forces it.
 

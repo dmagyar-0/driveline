@@ -246,7 +246,7 @@ oriented API. The categories are:
 | Smoke test | `ping`, `fetch_range_stub` |
 | MF4 files | `open_mf4`, `close_mf4`, `mf4_summary`, `mf4_fetch_range` |
 | MCAP files | `open_mcap`, `close_mcap`, `mcap_summary`, `mcap_fetch_range`, `mcap_video_open`, `mcap_video_next_batch`, `mcap_video_close` |
-| MP4 + sidecar | `open_mp4_sidecar`, `close_mp4_sidecar`, `mp4_sidecar_summary`, `mp4_video_open`, `mp4_video_next_batch`, `mp4_video_close` |
+| MP4 + sidecar | `open_mp4_sidecar`, `close_mp4_sidecar`, `mp4_sidecar_summary`, `mp4_sidecar_index` |
 
 Three patterns show up across all three file formats:
 
@@ -257,10 +257,14 @@ Three patterns show up across all three file formats:
 - **`*_fetch_range(handle, channel_id, t0, t1, ...) -> Uint8Array`**.
   Returns Arrow IPC bytes for one channel's values in `[t0, t1)`.
 
-The video streaming APIs add **`*_video_open / *_video_next_batch /
-*_video_close`**, which wrap the `EncodedChunkIter` in a second
-handle: `video_open` inserts the iterator into `VIDEO_STREAMS` and
-returns a stream handle that subsequent calls use.
+For MCAP sources the video streaming APIs **`mcap_video_open /
+mcap_video_next_batch / mcap_video_close`** wrap an `EncodedChunkIter`
+in a second handle stored in `VIDEO_STREAMS`. For MP4 sources the
+architecture is different: `mp4_sidecar_index` returns the full
+per-sample table (offsets, sizes, keyframe flags, SPS/PPS) in one
+call, and the JS layer lazy-fetches individual sample bytes from the
+original `File` blob via `Mp4SampleCache` without any streaming
+handle.
 
 ## Why this layering matters
 
