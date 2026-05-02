@@ -58,6 +58,7 @@ const SOURCE: SourceMeta = {
   channels: [
     {
       id: "/gps/lat",
+      nativeId: "/gps/lat",
       sourceId: "src-a",
       name: "lat",
       kind: "scalar",
@@ -68,6 +69,7 @@ const SOURCE: SourceMeta = {
     },
     {
       id: "/gps/lon",
+      nativeId: "/gps/lon",
       sourceId: "src-a",
       name: "lon",
       kind: "scalar",

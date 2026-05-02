@@ -70,7 +70,7 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
           key={`${resolved.source.id}:${resolved.channel.id}`}
           sourceKind={resolved.sourceKind}
           sourceHandle={resolved.source.handle}
-          channelId={resolved.channel.id}
+          channelId={resolved.channel.nativeId}
           panelId={panelId}
         />
         <button
