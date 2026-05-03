@@ -25,7 +25,8 @@ Outputs:
 | File | Committed? | Notes |
 |---|---|---|
 | `out.h264` | no | Regenerated. SHA256 pinned in `EXPECTED_HASHES.txt`. |
-| `short.mcap` | no | ~40 MB. Regenerated. |
+| `short.mcap` | no | ~40 MB. Regenerated, uncompressed. |
+| `short.zstd.mcap` | no | Same corpus as `short.mcap`, chunk-level zstd compression. Used by `apps/e2e/tests/zstdMcap.spec.ts`. |
 | `short.mp4` | no | Regenerated. |
 | `short.mp4.timestamps` | yes | Text, 300 lines of `<frame_index>\t<ts_ns>\n`. |
 | `short.mf4` | yes (LFS) | ~3–5 MB. |

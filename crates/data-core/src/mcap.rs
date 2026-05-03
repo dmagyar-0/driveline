@@ -15,6 +15,16 @@
 //! channels are surfaced in the channel list but `fetch_range` returns
 //! `UnsupportedKind` for them — schema-aware decoding is post-MVP.
 //!
+//! Real-world MCAPs (Foxglove's `testdata/mcap/demo.mcap`, ROS 2's
+//! default rosbag2 storage, …) almost always use chunk-level zstd
+//! compression. `predecompress_zstd_chunks` rewrites those chunks into
+//! `compression = ""` chunks before the upstream reader sees them, so
+//! such files now open and list their channels. Channels carrying
+//! `ros1msg` / `ros2idl` / `protobuf` payloads (e.g. `std_msgs/String`
+//! in the Foxglove demo) still surface as `Bytes` — adding decoders
+//! for those wire formats is a separate post-MVP task tracked in
+//! `docs/04-reader-abstraction.md`.
+//!
 //! The JSON payload shapes accepted here are the ones produced by
 //! `fixtures::short_mcap_bytes()` (which in turn mirrors the fixture
 //! spec in `docs/spike-T0.3-sample-corpus.md:65-104`):
@@ -231,9 +241,147 @@ fn find_start_code(data: &[u8], from: usize) -> Option<usize> {
     None
 }
 
+/// MCAP file magic — opens and closes every well-formed file. Defined
+/// in the MCAP spec; reproduced here so `predecompress_zstd_chunks` can
+/// verify it without going through the upstream crate.
+const MCAP_MAGIC: &[u8] = b"\x89MCAP0\r\n";
+
+/// Pre-pass that rewrites zstd-compressed chunks into uncompressed
+/// chunks so the upstream `mcap` crate's reader can consume them
+/// regardless of whether its `zstd` cargo feature is enabled — which
+/// matters on `wasm32-unknown-unknown`, where the C `zstd-sys`
+/// dependency doesn't link.
+///
+/// Each zstd chunk's records body is decompressed with `ruzstd` (pure
+/// Rust) and re-emitted with `compression = ""`. The chunk's
+/// `uncompressed_crc` is taken over uncompressed records, so it stays
+/// valid across the rewrite. The footer's `summary_start` and
+/// `summary_offset_start` are bumped by the cumulative byte delta so
+/// `Summary::read` still locates the summary section. Stale offsets
+/// inside `ChunkIndex` / `SummaryOffset` records are harmless because
+/// McapReader never dereferences them.
+fn predecompress_zstd_chunks(input: Vec<u8>) -> crate::Result<Vec<u8>> {
+    use std::io::Read;
+
+    const OP_CHUNK: u8 = 0x06;
+    const OP_FOOTER: u8 = 0x02;
+
+    if input.len() < MCAP_MAGIC.len() * 2 || !input.starts_with(MCAP_MAGIC) {
+        return Ok(input);
+    }
+
+    let body_end = input.len() - MCAP_MAGIC.len();
+    let mut out: Vec<u8> = Vec::with_capacity(input.len());
+    out.extend_from_slice(MCAP_MAGIC);
+
+    let mut total_delta: i64 = 0;
+    let mut cursor = MCAP_MAGIC.len();
+
+    while cursor + 9 <= body_end {
+        let op = input[cursor];
+        let len = u64::from_le_bytes(
+            input[cursor + 1..cursor + 9].try_into().expect("9-byte slice"),
+        ) as usize;
+        let record_start = cursor + 9;
+        let record_end = record_start + len;
+        if record_end > body_end {
+            // Malformed; let the upstream reader produce the canonical error.
+            return Ok(input);
+        }
+        let body = &input[record_start..record_end];
+
+        // Chunk record: 8 start_time + 8 end_time + 8 uncomp_size + 4
+        // uncomp_crc + u32 compression-string length + compression bytes
+        // + u64 records_size + records_size bytes of (possibly compressed)
+        // record stream.
+        if op == OP_CHUNK && body.len() >= 32 {
+            let comp_len = u32::from_le_bytes(
+                body[28..32].try_into().expect("4-byte slice"),
+            ) as usize;
+            if 32 + comp_len + 8 <= body.len() {
+                let comp = &body[32..32 + comp_len];
+                if comp == b"zstd" {
+                    let rs_off = 32 + comp_len;
+                    let records_size = u64::from_le_bytes(
+                        body[rs_off..rs_off + 8].try_into().expect("8-byte slice"),
+                    ) as usize;
+                    let data_off = rs_off + 8;
+                    if data_off + records_size <= body.len() {
+                        let compressed = &body[data_off..data_off + records_size];
+                        let mut decoder =
+                            ruzstd::StreamingDecoder::new(compressed).map_err(|e| {
+                                crate::Error::Io(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!("ruzstd init failed: {e:?}"),
+                                ))
+                            })?;
+                        let mut decompressed: Vec<u8> = Vec::with_capacity(records_size * 2);
+                        decoder.read_to_end(&mut decompressed)?;
+
+                        // Rewrite chunk body: keep the first 28 bytes
+                        // (start/end/uncomp_size/uncomp_crc — uncomp_crc is
+                        // taken over uncompressed records and is
+                        // unchanged), set compression to empty, and inline
+                        // the now-uncompressed records.
+                        let mut new_body =
+                            Vec::with_capacity(28 + 4 + 8 + decompressed.len());
+                        new_body.extend_from_slice(&body[0..28]);
+                        new_body.extend_from_slice(&0u32.to_le_bytes());
+                        new_body.extend_from_slice(&(decompressed.len() as u64).to_le_bytes());
+                        new_body.extend_from_slice(&decompressed);
+
+                        let new_len = new_body.len();
+                        out.push(op);
+                        out.extend_from_slice(&(new_len as u64).to_le_bytes());
+                        out.extend_from_slice(&new_body);
+                        total_delta += new_len as i64 - len as i64;
+                        cursor = record_end;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if op == OP_FOOTER && total_delta != 0 && body.len() >= 20 {
+            // Footer body: u64 summary_start, u64 summary_offset_start,
+            // u32 summary_crc.
+            let mut new_body = body.to_vec();
+            let summary_start = u64::from_le_bytes(
+                body[0..8].try_into().expect("8-byte slice"),
+            );
+            let summary_offset_start = u64::from_le_bytes(
+                body[8..16].try_into().expect("8-byte slice"),
+            );
+            if summary_start != 0 {
+                let shifted = summary_start as i64 + total_delta;
+                new_body[0..8].copy_from_slice(&(shifted as u64).to_le_bytes());
+            }
+            if summary_offset_start != 0 {
+                let shifted = summary_offset_start as i64 + total_delta;
+                new_body[8..16].copy_from_slice(&(shifted as u64).to_le_bytes());
+            }
+            // `summary_crc` is not validated by the SansIo SummaryReader,
+            // so we leave it as-is.
+            out.push(op);
+            out.extend_from_slice(&(new_body.len() as u64).to_le_bytes());
+            out.extend_from_slice(&new_body);
+            cursor = record_end;
+            continue;
+        }
+
+        out.push(op);
+        out.extend_from_slice(&(len as u64).to_le_bytes());
+        out.extend_from_slice(body);
+        cursor = record_end;
+    }
+
+    out.extend_from_slice(&input[body_end..]);
+    Ok(out)
+}
+
 impl Reader for McapReader {
     fn open(bytes: &[u8]) -> crate::Result<Self> {
-        let owned = bytes.to_vec();
+        let owned = predecompress_zstd_chunks(bytes.to_vec())?;
 
         // Step 1: summary section — schemas + channel list, no message body scan.
         let summary =
@@ -1029,5 +1177,41 @@ mod tests {
     fn parse_enum_json_rejects_malformed() {
         assert_eq!(parse_enum_json(b"not-json"), None);
         assert_eq!(parse_enum_json(br#"{"other": 1}"#), None);
+    }
+
+    /// `short_mcap_zstd_bytes()` writes the same four-channel corpus as
+    /// `short_mcap_bytes()` but with chunk-level zstd compression. The
+    /// reader must surface an identical `SourceMeta` regardless of how the
+    /// chunks were compressed — this exercises the native `mcap` zstd
+    /// feature (and on wasm, the `ruzstd` pre-decompression hook).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn zstd_compressed_fixture_round_trips_through_reader() {
+        let bytes = crate::fixtures::short_mcap_zstd_bytes().expect("generate zstd mcap");
+        // MCAP magic: 0x89 'M' 'C' 'A' 'P' '0' '\r' '\n'.
+        assert_eq!(&bytes[..5], b"\x89MCAP", "zstd fixture must start with MCAP magic");
+        let r = McapReader::open(&bytes).expect("open zstd mcap");
+
+        let plain = crate::fixtures::short_mcap_bytes().expect("generate plain mcap");
+        let r_plain = McapReader::open(&plain).expect("open plain mcap");
+
+        let mut zstd_names: Vec<_> = r.meta().channels.iter().map(|c| c.name.clone()).collect();
+        let mut plain_names: Vec<_> =
+            r_plain.meta().channels.iter().map(|c| c.name.clone()).collect();
+        zstd_names.sort();
+        plain_names.sort();
+        assert_eq!(
+            zstd_names, plain_names,
+            "zstd reader must surface the same channel set as the uncompressed reader"
+        );
+
+        let speed = r
+            .meta()
+            .channels
+            .iter()
+            .find(|c| c.name == "/vehicle/speed")
+            .expect("/vehicle/speed missing");
+        assert_eq!(speed.kind, ChannelKind::Scalar);
+        assert_eq!(speed.sample_count, 10);
     }
 }

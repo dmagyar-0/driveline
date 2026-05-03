@@ -92,7 +92,7 @@ fi
 # both binary outputs are already present (mf4 + sidecar timestamps are
 # committed; mcap and mp4 are gitignored).
 log "sample-data fixtures"
-if [[ -s sample-data/short.mcap && -s sample-data/short.mp4 ]]; then
+if [[ -s sample-data/short.mcap && -s sample-data/short.zstd.mcap && -s sample-data/short.mp4 ]]; then
   echo "already generated"
 else
   python3 sample-data/generate.py

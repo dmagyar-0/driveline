@@ -12,7 +12,24 @@ arrow-buffer = "54"
 arrow-ipc = "54"
 thiserror = "2"
 mf4-rs = { git = "https://github.com/dmagyar-0/mf4-rs", rev = "af795676d490c5a972796c25a327c10205d93f51" }
-mcap = { version = "0.23", default-features = false }
 serde_json = "1"
 base64 = "0.22"
 mp4 = "0.14"
+# Pure-Rust zstd decoder. Used to pre-decompress zstd-compressed MCAP
+# chunks before handing the buffer to the upstream `mcap` crate, so the
+# wasm build can read real-world MCAP files without pulling in the C
+# `zstd-sys` library (which does not link cleanly under
+# `wasm32-unknown-unknown`). Cheap on native too.
+ruzstd = { version = "0.7", default-features = false, features = ["std"] }
+
+# The upstream `mcap` crate's `zstd` feature is enabled on native because
+# the `Compression::Zstd` variant is needed to *write* the zstd test
+# fixture (`fixtures::short_mcap_zstd_bytes`). Wasm only ever reads MCAP
+# files — and our `predecompress_zstd_chunks` pass makes those reads
+# format-agnostic — so the wasm build keeps the upstream feature off and
+# avoids `zstd-sys`.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+mcap = { version = "0.23", default-features = false, features = ["zstd"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+mcap = { version = "0.23", default-features = false }

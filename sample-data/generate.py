@@ -214,13 +214,22 @@ MODE_EVENTS = [
 ]
 
 
-def write_mcap(out: Path, aus: list[bytes], sps: bytes, pps: bytes) -> None:
+def write_mcap(
+    out: Path,
+    aus: list[bytes],
+    sps: bytes,
+    pps: bytes,
+    compression: CompressionType = CompressionType.NONE,
+) -> None:
     avcc = build_avcc(sps, pps)
     with open(out, "wb") as f:
-        # Uncompressed — the Rust mcap reader in `crates/data-core`
-        # disables default features (no zstd/lz4), and this fixture is
-        # for a verification pass, not a storage benchmark.
-        w = Writer(f, compression=CompressionType.NONE)
+        # `short.mcap` is uncompressed for byte-level inspection during
+        # the verification pass. `short.zstd.mcap` is the same corpus
+        # written with chunk-level zstd to exercise the Rust reader's
+        # `predecompress_zstd_chunks` pre-pass — see
+        # `crates/data-core/src/mcap.rs` and
+        # `apps/e2e/tests/zstdMcap.spec.ts`.
+        w = Writer(f, compression=compression)
         w.start()
 
         video_schema = w.register_schema(
@@ -467,6 +476,7 @@ def main() -> None:
 
     h264 = HERE / "out.h264"
     mcap = HERE / "short.mcap"
+    mcap_zstd = HERE / "short.zstd.mcap"
     mf4 = HERE / "short.mf4"
     mp4 = HERE / "short.mp4"
     sidecar = HERE / "short.mp4.timestamps"
@@ -483,6 +493,9 @@ def main() -> None:
 
     write_mcap(mcap, aus, sps, pps)
     print(f"mcap: {mcap.stat().st_size:,} bytes")
+
+    write_mcap(mcap_zstd, aus, sps, pps, compression=CompressionType.ZSTD)
+    print(f"mcap (zstd): {mcap_zstd.stat().st_size:,} bytes")
 
     write_mf4(mf4)
     print(f"mf4:  {mf4.stat().st_size:,} bytes")

@@ -114,16 +114,49 @@ const T0_MCAP_NS: u64 = 1_704_067_200_000_000_000;
 /// is pinned, chunks are suppressed (`use_chunks = false`) so no indexes or
 /// CRCs of chunk bytes bleed into the stream.
 pub fn short_mcap_bytes() -> crate::Result<Vec<u8>> {
-    use ::mcap::{records::MessageHeader, WriteOptions};
+    use ::mcap::WriteOptions;
 
-    let buf: Vec<u8> = Vec::new();
-    let cursor = Cursor::new(buf);
-
+    let cursor = Cursor::new(Vec::<u8>::new());
     let mut writer = WriteOptions::new()
         .compression(None)
         .library("driveline-test-fixtures")
         .use_chunks(false)
         .create(cursor)?;
+    write_short_corpus(&mut writer)?;
+    writer.finish()?;
+    Ok(writer.into_inner().into_inner())
+}
+
+/// Same four-channel corpus as `short_mcap_bytes`, but written with
+/// zstd-compressed chunks. Used by the wasm pre-decompression test path
+/// and by the e2e visual-proof spec to verify the reader handles
+/// real-world (compressed) MCAP files.
+///
+/// Native-only: the `mcap` crate's `Compression::Zstd` variant is only
+/// available when its `zstd` cargo feature is on, which the wasm target
+/// deliberately keeps off (see `Cargo.toml`). Wasm builds consume zstd
+/// files via `ruzstd` but do not write them.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn short_mcap_zstd_bytes() -> crate::Result<Vec<u8>> {
+    use ::mcap::{Compression, WriteOptions};
+
+    let cursor = Cursor::new(Vec::<u8>::new());
+    let mut writer = WriteOptions::new()
+        .compression(Some(Compression::Zstd))
+        .library("driveline-test-fixtures")
+        // `Compression` is only honoured when the writer chunks; without
+        // this the option is silently ignored.
+        .use_chunks(true)
+        .create(cursor)?;
+    write_short_corpus(&mut writer)?;
+    writer.finish()?;
+    Ok(writer.into_inner().into_inner())
+}
+
+fn write_short_corpus<W: std::io::Write + std::io::Seek>(
+    writer: &mut ::mcap::Writer<W>,
+) -> crate::Result<()> {
+    use ::mcap::records::MessageHeader;
 
     let float_schema = writer.add_schema("foxglove.Float64", "jsonschema", b"")?;
     let speed_ch =
@@ -202,8 +235,7 @@ pub fn short_mcap_bytes() -> crate::Result<Vec<u8>> {
         )?;
     }
 
-    writer.finish()?;
-    Ok(writer.into_inner().into_inner())
+    Ok(())
 }
 
 /// 2023-11-14T22:13:20Z — chosen to land beyond `Number.MAX_SAFE_INTEGER`
