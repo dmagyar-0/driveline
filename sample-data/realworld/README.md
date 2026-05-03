@@ -46,12 +46,23 @@ The spec asserts that:
 - the file opens through the existing MCAP adapter,
 - 9 channels are inferred (`/vehicle/speed` etc. as scalar,
   `/imu/accel` etc. as vector),
-- a PlotPanel bound to `/vehicle/speed` and
-  `/vehicle/steering_angle` produces real per-series stats with
-  plausible bounds (speed 25–35 m/s, steering ±2 rad) — i.e.,
-  Highway 280 driving from 2018-07-27.
+- a single PlotPanel bound to `/vehicle/speed` and
+  `/vehicle/steering_angle` simultaneously produces real per-series
+  stats with plausible bounds (speed 25–35 m/s, steering ±90°) —
+  i.e., Highway 280 driving from 2018-07-27.
 
-Screenshots land in `apps/e2e/tests/screenshots/comma2k19-*.png`.
+Screenshot: `apps/e2e/tests/screenshots/comma2k19-multi-channel.png`
+shows both signals plotted on the same panel with the time axis at
+the actual recording wall-clock (`7/27/18, 6:04 am`).
+
+> Bug history: this dataset originally hit a PlotPanel bug where
+> binding two CAN channels with non-coincident timestamps produced
+> two invisible traces. `mergeSeries` correctly emits `null` at every
+> union timestamp where the other channel has a sample, but the
+> uPlot series were configured with `spanGaps:false`, so each trace
+> collapsed to isolated 1-pixel dots. Fixed in PlotPanel by
+> spanning gaps per-series, which also matches the step-hold
+> rendering documented in `docs/03-data-model.md`.
 
 ## Why these seven
 

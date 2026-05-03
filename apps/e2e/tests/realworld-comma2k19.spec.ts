@@ -89,53 +89,47 @@ test.describe("real-world ADAS dataset (comma2k19)", () => {
     expect(speed.sampleCount).toBeGreaterThan(4_000);
     expect(accel.sampleCount).toBeGreaterThan(6_000);
 
-    // One scalar per panel keeps the union x-axis dense (no nulls
-    // from interleaved CAN timestamps), so uPlot draws solid lines
-    // instead of 1-pixel dots. We mint a second plot panel for the
-    // steering trace.
-    const steerPanelId = await page.evaluate(() => {
-      return window.__drivelineDevHooks!.addPlotPanel()!;
-    });
-    expect(steerPanelId).toBeTruthy();
-
+    // Bind both scalars to the SAME plot panel. The two CAN signals
+    // come from different mailboxes, so their timestamps interleave
+    // rather than coincide. `mergeSeries` therefore emits `null` for
+    // every union row where the other channel has a sample. With the
+    // pre-fix `spanGaps:false` this collapsed each trace to invisible
+    // 1-pixel dots; with `spanGaps:true` (PlotPanel.tsx series opts)
+    // each trace is connected through its own samples and both lines
+    // render normally.
     await page.evaluate(
-      ([speedPanel, steerPanel, speedId, steerId]) => {
+      ([panelId, speedId, steerId]) => {
         const hooks = window.__drivelineDevHooks!;
-        hooks.addPlotChannelBinding(speedPanel, speedId);
-        hooks.addPlotChannelBinding(steerPanel, steerId);
+        hooks.addPlotChannelBinding(panelId, speedId);
+        hooks.addPlotChannelBinding(panelId, steerId);
       },
-      ["plot-1", steerPanelId, speed.id, steer.id],
+      ["plot-1", speed.id, steer.id],
     );
 
     await expect
       .poll(
         async () => {
-          const a = await page.evaluate((p) =>
-            window.__drivelineDevHooks!.getPlotPanelSeriesStats(p), "plot-1");
-          const b = await page.evaluate(
+          const stats = await page.evaluate(
             (p) => window.__drivelineDevHooks!.getPlotPanelSeriesStats(p),
-            steerPanelId,
+            "plot-1",
           );
           return (
-            a && a.length === 1 && a[0].count > 0 &&
-            b && b.length === 1 && b[0].count > 0
+            stats &&
+            stats.length === 2 &&
+            stats.every((s) => s.count > 0)
           );
         },
         { timeout: 10_000, intervals: [100, 200, 500] },
       )
       .toBe(true);
 
-    const speedStatsArr = (await page.evaluate(
+    const stats = (await page.evaluate(
       (p) => window.__drivelineDevHooks!.getPlotPanelSeriesStats(p)!,
       "plot-1",
     )) as Array<{ channelId: string; min: number; max: number; count: number }>;
-    const steerStatsArr = (await page.evaluate(
-      (p) => window.__drivelineDevHooks!.getPlotPanelSeriesStats(p)!,
-      steerPanelId,
-    )) as Array<{ channelId: string; min: number; max: number; count: number }>;
 
     // Highway driving on the 280: speed range ~25–35 m/s (90–125 km/h).
-    const speedStats = speedStatsArr[0];
+    const speedStats = stats.find((s) => s.channelId === speed.id)!;
     expect(speedStats.count).toBeGreaterThan(4_000);
     expect(speedStats.min).toBeGreaterThan(0);
     expect(speedStats.max).toBeGreaterThan(20);
@@ -143,7 +137,7 @@ test.describe("real-world ADAS dataset (comma2k19)", () => {
 
     // Steering wheel angle in degrees on this CAN bus. Highway driving
     // means small lane corrections — well within ±90°.
-    const steerStats = steerStatsArr[0];
+    const steerStats = stats.find((s) => s.channelId === steer.id)!;
     expect(steerStats.count).toBeGreaterThan(4_000);
     expect(Math.abs(steerStats.min)).toBeLessThan(90);
     expect(Math.abs(steerStats.max)).toBeLessThan(90);
@@ -159,13 +153,10 @@ test.describe("real-world ADAS dataset (comma2k19)", () => {
     );
     await page.waitForTimeout(800);
 
-    const panels = page.getByTestId("plot-panel");
-    await expect(panels).toHaveCount(2);
-    await panels.nth(0).screenshot({
-      path: path.join(SCREENSHOT_DIR, "comma2k19-speed.png"),
-    });
-    await panels.nth(1).screenshot({
-      path: path.join(SCREENSHOT_DIR, "comma2k19-steering.png"),
+    const panel = page.getByTestId("plot-panel");
+    await expect(panel).toHaveCount(1);
+    await panel.screenshot({
+      path: path.join(SCREENSHOT_DIR, "comma2k19-multi-channel.png"),
     });
 
     // Whole-app screenshot for the report.
