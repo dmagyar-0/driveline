@@ -288,7 +288,16 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           label: labelFor(c),
           stroke: colorFor(c.id),
           width: 1,
-          spanGaps: false,
+          // `mergeSeries` emits `null` at every union timestamp where
+          // *this* series has no sample. With two same-rate signals on
+          // different CAN mailboxes (e.g. /vehicle/speed and
+          // /vehicle/steering_angle in comma2k19) every other slot is
+          // null per series, so `spanGaps:false` collapsed each trace
+          // to invisible 1-pixel dots. Spanning gives each series the
+          // step-hold rendering 03-data-model.md promises — and a real
+          // gap (channel stops broadcasting) just becomes a longer
+          // horizontal hold, which is also the documented behavior.
+          spanGaps: true,
         })),
       ],
       axes: [axisOpts, axisOpts],

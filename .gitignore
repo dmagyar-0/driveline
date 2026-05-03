@@ -31,6 +31,12 @@ sample-data/*
 !sample-data/short.mf4
 !sample-data/schemas/
 !sample-data/refs/
+# Real-world dataset converters write fixtures into sample-data/realworld/.
+# Track the docs only; the generated .mcap regenerates from the public
+# source via scripts/convert_comma2k19_to_mcap.py.
+!sample-data/realworld/
+sample-data/realworld/*
+!sample-data/realworld/README.md
 
 # Editor / OS
 .DS_Store
