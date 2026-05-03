@@ -11,6 +11,10 @@ node_modules
 apps/web/dist
 apps/web/.vite
 
+# TypeScript incremental build cache (`tsc -b` writes this next to the
+# project's tsconfig.json).
+*.tsbuildinfo
+
 # wasm-pack output (generated; regenerate with `pnpm wasm:build`)
 apps/web/src/wasm/*
 !apps/web/src/wasm/.gitkeep
