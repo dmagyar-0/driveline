@@ -13,7 +13,7 @@
 // (future) bookmarks adapter no string-encoding round-trip is needed.
 
 import type { useSession } from "../store";
-import type { MapBinding } from "../../layout/persist";
+import type { MapBinding, PlotPanelSettingsLite } from "../../layout/persist";
 
 export const NAMED_LAYOUTS_STORAGE_KEY = "driveline.layouts.named.v2";
 export const NAMED_LAYOUTS_SCHEMA_VERSION = 2 as const;
@@ -28,6 +28,10 @@ export interface NamedLayout {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
+  // Phase 8 · added as an OPTIONAL v2 field rather than bumping the
+  // schema, so saved-layout entries created before per-panel settings
+  // existed don't get dropped on read. New writes always include it.
+  plotPanelSettings: Record<string, PlotPanelSettingsLite>;
   createdAt: number;
 }
 
@@ -84,6 +88,21 @@ function validateMapBindingMap(
   return v as Record<string, MapBinding | null>;
 }
 
+function validatePlotPanelSettingsMap(
+  v: unknown,
+): Record<string, PlotPanelSettingsLite> | null {
+  if (!isPlainObject(v)) return null;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (!isPlainObject(x)) return null;
+    const t = x.gapThresholdSec;
+    if (t !== null && (typeof t !== "number" || !Number.isFinite(t))) {
+      return null;
+    }
+  }
+  return v as Record<string, PlotPanelSettingsLite>;
+}
+
 function validateLayout(raw: unknown): NamedLayout | null {
   if (!isPlainObject(raw)) return null;
   if (typeof raw.id !== "string" || raw.id.length === 0) return null;
@@ -103,6 +122,12 @@ function validateLayout(raw: unknown): NamedLayout | null {
   if (!tableBindings) return null;
   const enumBindings = validateNullableStringMap(raw.enumBindings);
   if (!enumBindings) return null;
+  // Optional Phase 8 field — entries saved before per-panel settings
+  // existed default to an empty map.
+  const plotPanelSettings = validatePlotPanelSettingsMap(
+    raw.plotPanelSettings ?? {},
+  );
+  if (!plotPanelSettings) return null;
   return {
     id: raw.id,
     name: raw.name,
@@ -113,6 +138,7 @@ function validateLayout(raw: unknown): NamedLayout | null {
     mapBindings,
     tableBindings,
     enumBindings,
+    plotPanelSettings,
     createdAt: raw.createdAt,
   };
 }

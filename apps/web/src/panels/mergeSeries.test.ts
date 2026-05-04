@@ -81,3 +81,104 @@ describe("mergeSeries", () => {
     expect(out.ys[2]).toEqual([null, null, null, null, 5000]);
   });
 });
+
+describe("mergeSeries · gap-threshold mode (Phase 8)", () => {
+  it("treats null / NaN / non-positive thresholds as 'off'", () => {
+    // Sanity: the gap-threshold path is opt-in. A null / NaN / 0 / -5
+    // threshold must produce identical output to the default-mode call.
+    const a = mk([1, 3], [10, 30]);
+    const b = mk([2, 3], [200, 300]);
+    const baseline = mergeSeries([a, b]);
+    for (const t of [null, Number.NaN, 0, -5, Number.POSITIVE_INFINITY]) {
+      const out = mergeSeries([a, b], t as number | null);
+      expect(Array.from(out.xs)).toEqual(Array.from(baseline.xs));
+      expect(out.ys.map((y) => Array.from(y))).toEqual(
+        baseline.ys.map((y) => Array.from(y)),
+      );
+    }
+  });
+
+  it("step-holds within the threshold for a single series", () => {
+    // Single input, no other series to provide intermediate union xs.
+    // The gap-marker injection must produce a held-end + null pair so
+    // uPlot draws a line up to lastX+threshold, then a gap.
+    const a = mk([0, 1, 2, 100], [10, 11, 12, 13]);
+    const out = mergeSeries([a], 5);
+    // Real samples are preserved verbatim at their xs.
+    const xs = Array.from(out.xs);
+    expect(xs).toContain(0);
+    expect(xs).toContain(1);
+    expect(xs).toContain(2);
+    expect(xs).toContain(100);
+    // Gap markers: held-end at 2+5 = 7, gap-start just after.
+    expect(xs).toContain(7);
+    // Held-end carries the last real value (12).
+    const heldIdx = xs.indexOf(7);
+    expect(out.ys[0][heldIdx]).toBe(12);
+    // The very next position is a null (gap-start marker, lastX+threshold+ε).
+    expect(out.ys[0][heldIdx + 1]).toBeNull();
+    // The post-gap real sample at 100 is the actual value, not a step-hold.
+    const postIdx = xs.indexOf(100);
+    expect(out.ys[0][postIdx]).toBe(13);
+  });
+
+  it("step-holds across non-coincident timestamps (multi-mailbox case)", () => {
+    // Same-rate signals on different CAN mailboxes — the bug PR #83
+    // fixed. With a threshold above the inter-sample dx, the per-series
+    // step-hold must fill the alignment artifacts so the rendered line
+    // doesn't collapse to dots, AND no nulls appear in the output for
+    // small gaps.
+    const a = mk([0, 0.1, 0.2, 0.3], [10, 11, 12, 13]);
+    const b = mk([0.05, 0.15, 0.25], [200, 201, 202]);
+    const out = mergeSeries([a, b], 1);
+    const xs = Array.from(out.xs);
+    // Union of all real samples — no gap markers because no dx > 1.
+    expect(xs).toEqual([0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3]);
+    // Series A: step-held everywhere it lacks a sample, no nulls.
+    expect(out.ys[0]).toEqual([10, 10, 11, 11, 12, 12, 13]);
+    // Series B: leading null until first sample, then step-held.
+    expect(out.ys[1]).toEqual([null, 200, 200, 201, 201, 202, 202]);
+  });
+
+  it("emits null at union timestamps that fall beyond the threshold", () => {
+    // Series A has a real gap; series B has samples inside that gap.
+    // At B's sample positions, A must read as null (genuinely no
+    // signal), not step-held — that's the whole point of the threshold.
+    const a = mk([0, 1, 2, 100], [10, 11, 12, 13]);
+    const b = mk([50, 51], [500, 501]);
+    const out = mergeSeries([a, b], 5);
+    const xs = Array.from(out.xs);
+    const idxA = xs.indexOf(50);
+    const idxB = xs.indexOf(51);
+    expect(out.ys[0][idxA]).toBeNull();
+    expect(out.ys[0][idxB]).toBeNull();
+    // Series B is real at its own positions.
+    expect(out.ys[1][idxA]).toBe(500);
+    expect(out.ys[1][idxB]).toBe(501);
+  });
+
+  it("returns leading null for samples that arrive after the union start", () => {
+    // Series B's first sample is at t=10, but series A starts at t=0.
+    // Union slots before t=10 must read as null for B (no value yet),
+    // not step-held to a future value.
+    const a = mk([0, 1, 2, 10], [10, 11, 12, 100]);
+    const b = mk([10, 11], [200, 201]);
+    const out = mergeSeries([a, b], 5);
+    const xs = Array.from(out.xs);
+    for (let i = 0; i < xs.length && xs[i] < 10; i++) {
+      expect(out.ys[1][i]).toBeNull();
+    }
+  });
+
+  it("preserves real-sample positions exactly across the held-end marker", () => {
+    // Edge case: when a real sample lands at exactly lastX+threshold,
+    // the held-end marker should not duplicate the position. Verify
+    // dedupe by checking xs is strictly ascending.
+    const a = mk([0, 5, 10, 30], [10, 15, 20, 30]);
+    const out = mergeSeries([a], 10);
+    const xs = Array.from(out.xs);
+    for (let i = 1; i < xs.length; i++) {
+      expect(xs[i]).toBeGreaterThan(xs[i - 1]);
+    }
+  });
+});

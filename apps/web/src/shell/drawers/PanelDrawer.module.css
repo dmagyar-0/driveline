@@ -226,6 +226,48 @@
   margin: 0;
 }
 
+.gapInputRow {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.gapInputLabel {
+  font-size: var(--fs-12);
+  color: var(--color-fg-4);
+}
+
+.gapInput {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-bg-3);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  font: inherit;
+  font-size: var(--fs-13);
+  font-variant-numeric: tabular-nums;
+}
+
+.gapInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-accent-orange);
+}
+
+.gapInputUnit {
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+}
+
+.gapHelp {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+  line-height: 1.4;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .removeBtn,
   .addRow,

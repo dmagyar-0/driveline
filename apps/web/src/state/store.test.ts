@@ -777,6 +777,7 @@ describe("layout + bindings (T6.2)", () => {
     });
     useSession.getState().addTableChannel("table-1", "/a");
     useSession.getState().setEnumBinding("enum-1", "/state");
+    useSession.getState().setPlotGapThreshold("plot-1", 1.5);
 
     await useSession.getState().clear();
     const s = useSession.getState();
@@ -787,8 +788,68 @@ describe("layout + bindings (T6.2)", () => {
     expect(s.mapBindings).toEqual({});
     expect(s.tableBindings).toEqual({});
     expect(s.enumBindings).toEqual({});
+    expect(s.plotPanelSettings).toEqual({});
     // layout survives
     expect(s.layoutJson).toBe(model);
+  });
+
+  it("setPlotGapThreshold writes a per-panel finite positive value", () => {
+    useSession.getState().setPlotGapThreshold("plot-1", 1.5);
+    expect(useSession.getState().plotPanelSettings).toEqual({
+      "plot-1": { gapThresholdSec: 1.5 },
+    });
+    useSession.getState().setPlotGapThreshold("plot-2", 0.25);
+    expect(useSession.getState().plotPanelSettings).toEqual({
+      "plot-1": { gapThresholdSec: 1.5 },
+      "plot-2": { gapThresholdSec: 0.25 },
+    });
+  });
+
+  it("setPlotGapThreshold normalises null / NaN / non-positive to null", () => {
+    const store = useSession.getState();
+    // Seed something to clear back to null.
+    store.setPlotGapThreshold("plot-1", 1);
+    expect(useSession.getState().plotPanelSettings["plot-1"]).toEqual({
+      gapThresholdSec: 1,
+    });
+
+    store.setPlotGapThreshold("plot-1", null);
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].gapThresholdSec,
+    ).toBeNull();
+
+    store.setPlotGapThreshold("plot-1", 2);
+    store.setPlotGapThreshold("plot-1", Number.NaN);
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].gapThresholdSec,
+    ).toBeNull();
+
+    store.setPlotGapThreshold("plot-1", 2);
+    store.setPlotGapThreshold("plot-1", 0);
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].gapThresholdSec,
+    ).toBeNull();
+
+    store.setPlotGapThreshold("plot-1", 2);
+    store.setPlotGapThreshold("plot-1", -1);
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].gapThresholdSec,
+    ).toBeNull();
+
+    store.setPlotGapThreshold("plot-1", 2);
+    store.setPlotGapThreshold("plot-1", Number.POSITIVE_INFINITY);
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].gapThresholdSec,
+    ).toBeNull();
+  });
+
+  it("setPlotGapThreshold no-ops when the value is unchanged", () => {
+    useSession.getState().setPlotGapThreshold("plot-1", 1);
+    const before = useSession.getState().plotPanelSettings;
+    useSession.getState().setPlotGapThreshold("plot-1", 1);
+    // Object identity preserved on no-op so the persist subscriber
+    // doesn't re-stringify and write.
+    expect(useSession.getState().plotPanelSettings).toBe(before);
   });
 
   it("setVideoHudOn sets per-panel without touching siblings", () => {

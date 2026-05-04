@@ -40,6 +40,7 @@ const SAMPLE_LAYOUT: NamedLayout = {
   },
   tableBindings: { "table-1": ["/vehicle/speed"] },
   enumBindings: { "enum-1": "/state/gear" },
+  plotPanelSettings: { "plot-1": { gapThresholdSec: 1.5 } },
   createdAt: 1_700_000_000_000,
 };
 
@@ -207,6 +208,36 @@ describe("namedLayouts persist", () => {
     };
     saveNamedLayoutsToStorage(empty, s);
     expect(loadNamedLayoutsFromStorage(s)).toEqual(empty);
+  });
+
+  it("treats a missing plotPanelSettings as empty (Phase 8 backwards compat)", () => {
+    // Layouts saved before the per-panel settings field existed must
+    // still load without dropping the user's saved layout.
+    const s = makeStorage();
+    s.setItem(
+      NAMED_LAYOUTS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layouts: [
+          {
+            id: "x",
+            name: "x",
+            layoutJson: null,
+            videoBindings: {},
+            plotBindings: {},
+            sceneBindings: {},
+            mapBindings: {},
+            tableBindings: {},
+            enumBindings: {},
+            // plotPanelSettings intentionally absent
+            createdAt: 0,
+          },
+        ],
+        activeNamedLayoutId: null,
+      }),
+    );
+    const loaded = loadNamedLayoutsFromStorage(s);
+    expect(loaded?.layouts[0].plotPanelSettings).toEqual({});
   });
 });
 
