@@ -1179,6 +1179,49 @@ mod tests {
         assert_eq!(parse_enum_json(br#"{"other": 1}"#), None);
     }
 
+    #[test]
+    fn predecompress_zstd_chunks_passes_through_non_mcap_bytes() {
+        // Buffer that doesn't start with MCAP magic must be returned
+        // verbatim — the pre-pass is a fast-path no-op for non-MCAP
+        // input and must not surface a parse error or mangle the
+        // bytes. A regression that dropped the magic-check guard would
+        // try to parse arbitrary bytes as record headers.
+        let input = b"this is plainly not an mcap file at all".to_vec();
+        let out = predecompress_zstd_chunks(input.clone()).expect("non-mcap pass-through");
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn predecompress_zstd_chunks_short_input_is_returned_verbatim() {
+        // Inputs too short to hold even the leading + trailing magic
+        // pair must short-circuit; otherwise the cursor loop's
+        // `body_end = input.len() - MCAP_MAGIC.len()` underflows the
+        // `cursor + 9 <= body_end` bound check on the very first
+        // iteration. The MCAP magic alone is exactly 8 bytes — half
+        // of the required minimum — so this is the most common
+        // non-empty truncated input we'd see in the wild.
+        let input = MCAP_MAGIC.to_vec();
+        let out = predecompress_zstd_chunks(input.clone()).expect("short pass-through");
+        assert_eq!(out, input);
+    }
+
+    #[test]
+    fn predecompress_zstd_chunks_is_noop_for_uncompressed_mcap() {
+        // The plain fixture has `use_chunks(false)` so it contains no
+        // chunk records at all — the pre-pass must therefore round-trip
+        // it byte-for-byte. A regression that mangled the verbatim
+        // pass-through path (e.g. dropping each record's body) would
+        // produce bytes that look superficially MCAP-shaped but the
+        // downstream reader would fail to open. We assert both: the
+        // bytes are identical AND the reader still surfaces the four
+        // expected channels after the pre-pass.
+        let bytes = crate::fixtures::short_mcap_bytes().expect("generate plain mcap");
+        let pre = predecompress_zstd_chunks(bytes.clone()).expect("predecompress");
+        assert_eq!(pre, bytes, "uncompressed MCAP must not change");
+        let r = McapReader::open(&pre).expect("open after no-op predecompress");
+        assert_eq!(r.meta().channels.len(), 4);
+    }
+
     /// `short_mcap_zstd_bytes()` writes the same four-channel corpus as
     /// `short_mcap_bytes()` but with chunk-level zstd compression. The
     /// reader must surface an identical `SourceMeta` regardless of how the
