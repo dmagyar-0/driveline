@@ -14,7 +14,14 @@ Channels emitted:
   /vehicle/wheel_speed_fl     foxglove.Float64   ~80 Hz
   /vehicle/wheel_speed_fr     foxglove.Float64   ~80 Hz
   /vehicle/wheel_speed_rl     foxglove.Float64   ~80 Hz
-  /vehicle/wheel_speed_rr     foxglove.Float64   ~80 Hz
+  /vehicle/wheel_speed_rr     foxglove.Float64   ~80 Hz   (registered lazily
+                                                          only when upstream
+                                                          ships a 4th wheel;
+                                                          comma2k19's demo
+                                                          parquet does, so it
+                                                          is emitted with real
+                                                          RR samples — never
+                                                          a duplicated RL)
   /imu/accel                  foxglove.Vector3  ~110 Hz
   /imu/gyro                   foxglove.Vector3   ~20 Hz
   /gnss/ublox                 foxglove.Vector3   ~10 Hz   (lat, lon, alt)
@@ -23,7 +30,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,11 +42,48 @@ import pyarrow.parquet as pq
 from mcap.writer import Writer, CompressionType
 
 HERE = Path(__file__).resolve().parent
-SCHEMAS = HERE.parent / "sample-data" / "schemas"
+SAMPLE_DATA = HERE.parent / "sample-data"
+SCHEMAS = SAMPLE_DATA / "schemas"
+EXPECTED_HASHES = SAMPLE_DATA / "EXPECTED_HASHES.txt"
+PARQUET_HASH_KEY = "comma2k19_demo.parquet"
 
 
 def load_schema(name: str) -> bytes:
     return (SCHEMAS / f"{name}.jsonschema").read_bytes()
+
+
+def expected_parquet_sha256() -> str | None:
+    """Return the pinned SHA256 for the comma2k19 demo parquet, or None.
+
+    `sample-data/EXPECTED_HASHES.txt` follows the standard `sha256sum`
+    format (`<hex>  <name>`); this lookup is keyed on the basename so
+    the file works whether the user downloaded the parquet to /tmp/
+    or anywhere else.
+    """
+    if not EXPECTED_HASHES.exists():
+        return None
+    pattern = re.compile(r"^([0-9a-fA-F]{64})\s+(\S+)\s*$")
+    for line in EXPECTED_HASHES.read_text().splitlines():
+        m = pattern.match(line)
+        if m and m.group(2) == PARQUET_HASH_KEY:
+            return m.group(1).lower()
+    return None
+
+
+def verify_sha256(path: Path, expected_hex: str) -> None:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    actual = h.hexdigest()
+    if actual != expected_hex.lower():
+        sys.exit(
+            f"SHA256 mismatch for {path}:\n"
+            f"  expected {expected_hex}\n"
+            f"  got      {actual}\n"
+            f"upstream may have resharded the parquet — update "
+            f"sample-data/EXPECTED_HASHES.txt after auditing."
+        )
 
 
 def parse_segment_start_ns(segment_id: str) -> int:
@@ -73,11 +119,27 @@ def main() -> None:
     ap.add_argument("--out", default="sample-data/realworld/comma2k19.mcap")
     ap.add_argument("--compression", default="zstd",
                     choices=["zstd", "none"])
+    ap.add_argument(
+        "--skip-hash-check",
+        action="store_true",
+        help="Bypass the SHA256 verification against EXPECTED_HASHES.txt. "
+             "Useful when working against a locally-resharded copy.",
+    )
     args = ap.parse_args()
 
     parquet = Path(args.parquet)
     if not parquet.exists():
         sys.exit(f"missing parquet: {parquet}")
+
+    expected = expected_parquet_sha256()
+    if expected and not args.skip_hash_check:
+        verify_sha256(parquet, expected)
+    elif not expected:
+        print(
+            f"warning: no SHA256 entry for {PARQUET_HASH_KEY} in "
+            f"{EXPECTED_HASHES} — skipping hash verification.",
+            file=sys.stderr,
+        )
 
     pf = pq.ParquetFile(parquet)
     rg = pf.read_row_group(0)
@@ -95,9 +157,21 @@ def main() -> None:
 
     # comma2k19 'processed_log' times are seconds since system boot, not
     # since segment start. Anchor everything to the smallest observed `t`
-    # so the output MCAP starts at `recording start`.
+    # so the output MCAP starts at `recording start`. Each list can hold
+    # NaN samples in arbitrary positions (GNSS dropouts, etc.), and
+    # `min(...)` over a list containing NaN is undefined in CPython
+    # (depends on element order), so filter NaNs per-list before taking
+    # the minimum.
     t_lists = [v for k, v in log.items() if k.endswith("__t") and v]
-    t_min = min(min(v) for v in t_lists if v and not np.isnan(v[0]))
+    finite_mins: list[float] = []
+    for v in t_lists:
+        arr = np.asarray(v, dtype=np.float64)
+        arr = arr[~np.isnan(arr)]
+        if arr.size:
+            finite_mins.append(float(arr.min()))
+    if not finite_mins:
+        sys.exit("segment has no finite timestamps in any processed_log __t array")
+    t_min = min(finite_mins)
 
     def to_abs_ns(t_rel_s: float) -> int:
         return start_ns + int((t_rel_s - t_min) * 1_000_000_000)
@@ -140,7 +214,13 @@ def main() -> None:
         ch_wheel_fl = reg_f64("/vehicle/wheel_speed_fl", "m/s")
         ch_wheel_fr = reg_f64("/vehicle/wheel_speed_fr", "m/s")
         ch_wheel_rl = reg_f64("/vehicle/wheel_speed_rl", "m/s")
-        ch_wheel_rr = reg_f64("/vehicle/wheel_speed_rr", "m/s")
+        # `wheel_speed_rr` is registered lazily on the first 4-wheel
+        # sample we see. comma2k19's demo parquet does ship four
+        # wheels, but if a future variant trims to three the converter
+        # must drop RR rather than silently re-broadcasting RL — that
+        # would produce `wheel_speed_rl - wheel_speed_rr == 0` and a
+        # wrong conclusion in any downstream analysis.
+        ch_wheel_rr: int | None = None
         ch_accel = reg_vec3("/imu/accel", "m/s^2")
         ch_gyro = reg_vec3("/imu/gyro", "rad/s")
         ch_gnss = reg_vec3("/gnss/ublox", "deg,deg,m")
@@ -159,20 +239,23 @@ def main() -> None:
             ts = to_abs_ns(t)
             entries.append((ts, ch_steer, f64_payload(ts, v)))
 
-        # Wheel speeds: 3-element vector per sample (FL, FR, RL).
-        # comma2k19 stores three of the four wheels — we re-broadcast the
-        # rear-left as rear-right so the panel still has four traces.
+        # Wheel speeds: most comma2k19 variants (including the demo
+        # parquet) ship four wheels (FL, FR, RL, RR). Some downstream
+        # rlogs trim to three. Emit RR only when the source actually
+        # has it — never synthesise from RL.
         for t, vec in zip(log["processed_log__CAN__wheel_speed__t"],
                           log["processed_log__CAN__wheel_speed__value"]):
             if len(vec) < 3:
                 continue
             ts = to_abs_ns(t)
             fl, fr, rl = vec[0], vec[1], vec[2]
-            rr = vec[3] if len(vec) >= 4 else rl
             entries.append((ts, ch_wheel_fl, f64_payload(ts, fl)))
             entries.append((ts, ch_wheel_fr, f64_payload(ts, fr)))
             entries.append((ts, ch_wheel_rl, f64_payload(ts, rl)))
-            entries.append((ts, ch_wheel_rr, f64_payload(ts, rr)))
+            if len(vec) >= 4:
+                if ch_wheel_rr is None:
+                    ch_wheel_rr = reg_f64("/vehicle/wheel_speed_rr", "m/s")
+                entries.append((ts, ch_wheel_rr, f64_payload(ts, vec[3])))
 
         # IMU accel.
         for t, vec in zip(log["processed_log__IMU__accelerometer__t"],

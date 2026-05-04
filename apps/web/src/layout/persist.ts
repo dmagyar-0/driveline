@@ -18,6 +18,11 @@
 // `validate()`, which intentionally drops the user's old layout/bindings
 // — acceptable per the existing fail-closed posture; pre-v1 app stage.
 //
+// Phase 8 added `plotPanelSettings` as an OPTIONAL v3 field rather than
+// bumping to v4, so users who already had saved layouts don't lose them
+// on first load with the new field. New writes always include the
+// field; old reads default it to `{}`.
+//
 // `attachLayoutPersistence` wires the Zustand subscribe → Storage write
 // loop; the first post-hydration fire is skipped so we don't rewrite the
 // exact payload we just loaded.
@@ -32,6 +37,10 @@ export interface MapBinding {
   lonChannelId: string;
 }
 
+export interface PlotPanelSettingsLite {
+  gapThresholdSec: number | null;
+}
+
 export interface PersistedLayout {
   version: typeof LAYOUT_SCHEMA_VERSION;
   layoutJson: unknown | null;
@@ -42,6 +51,7 @@ export interface PersistedLayout {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
+  plotPanelSettings: Record<string, PlotPanelSettingsLite>;
 }
 
 function defaultStorage(): Storage | undefined {
@@ -89,6 +99,24 @@ function isMapBindingMap(
   return true;
 }
 
+function isPlotPanelSettingsMap(
+  v: unknown,
+): v is Record<string, PlotPanelSettingsLite> {
+  if (!isPlainObject(v)) return false;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (!isPlainObject(x)) return false;
+    const t = x.gapThresholdSec;
+    // Reject NaN / Infinity so we don't restore a junk value that the
+    // store would just normalise away anyway. The store's setter
+    // already guards on write; this guards on read.
+    if (t !== null && (typeof t !== "number" || !Number.isFinite(t))) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function validate(raw: unknown): PersistedLayout | null {
   if (!isPlainObject(raw)) return null;
   if (raw.version !== LAYOUT_SCHEMA_VERSION) return null;
@@ -102,6 +130,10 @@ function validate(raw: unknown): PersistedLayout | null {
   if (!isMapBindingMap(raw.mapBindings)) return null;
   if (!isStringArrayMap(raw.tableBindings)) return null;
   if (!isNullableStringMap(raw.enumBindings)) return null;
+  // Optional v3 field — pre-Phase-8 payloads don't have it. Default to
+  // an empty map so older saved layouts round-trip cleanly.
+  const settings = raw.plotPanelSettings ?? {};
+  if (!isPlotPanelSettingsMap(settings)) return null;
   return {
     version: LAYOUT_SCHEMA_VERSION,
     layoutJson: raw.layoutJson ?? null,
@@ -112,6 +144,7 @@ function validate(raw: unknown): PersistedLayout | null {
     mapBindings: raw.mapBindings,
     tableBindings: raw.tableBindings,
     enumBindings: raw.enumBindings,
+    plotPanelSettings: settings,
   };
 }
 
@@ -159,6 +192,7 @@ export interface LayoutSlice {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
+  plotPanelSettings: Record<string, PlotPanelSettingsLite>;
 }
 
 function snapshot(s: LayoutSlice): PersistedLayout {
@@ -172,6 +206,7 @@ function snapshot(s: LayoutSlice): PersistedLayout {
     mapBindings: s.mapBindings,
     tableBindings: s.tableBindings,
     enumBindings: s.enumBindings,
+    plotPanelSettings: s.plotPanelSettings,
   };
 }
 
@@ -194,7 +229,8 @@ export function attachLayoutPersistence(
       s.sceneBindings === last.sceneBindings &&
       s.mapBindings === last.mapBindings &&
       s.tableBindings === last.tableBindings &&
-      s.enumBindings === last.enumBindings
+      s.enumBindings === last.enumBindings &&
+      s.plotPanelSettings === last.plotPanelSettings
     ) {
       return;
     }

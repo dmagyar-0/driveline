@@ -62,6 +62,10 @@ export interface Channel {
   // the same wasm-internal channel id — common with MF4, where the
   // native id is just `{group}/{channel}` — do not collide in the
   // binding maps or the PlotPanel's `channelMap` lookup table.
+  // The session-level uniqueness invariant relies on `uniqueSourceId`
+  // (see line 339) keeping every loaded source's id distinct, which
+  // pairs with the length-prefix encoding in `qualifiedChannelId` to
+  // make `(sourceId, nativeId)` an injective key.
   id: string;
   // Per-source channel id as emitted by the wasm reader (`0/1` for MF4,
   // the topic string for MCAP, `1/video` for MP4). This is the value
@@ -106,6 +110,26 @@ export interface OpenResult {
   errors: BucketError[];
 }
 
+/**
+ * Per-plot-panel display settings. Currently a single field; the shape
+ * is an object so future settings (axis pinning, log/linear, smoothing)
+ * can land without bumping the persistence schema.
+ *
+ * `gapThresholdSec === null` preserves the spanGaps:true behavior PR
+ * #83 shipped — alignment artifacts span and any real channel-loss
+ * gap renders as a horizontal hold. Setting a positive number switches
+ * the panel to step-hold mode with explicit gaps for any inter-sample
+ * dx exceeding the threshold; see `mergeSeries` for the rendering
+ * contract.
+ */
+export interface PlotPanelSettings {
+  gapThresholdSec: number | null;
+}
+
+export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
+  gapThresholdSec: null,
+};
+
 export interface SessionState {
   sources: SourceMeta[];
   channels: Channel[];
@@ -132,6 +156,12 @@ export interface SessionState {
   layoutJson: unknown | null;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
+  // Per-plot-panel display settings (Phase 8). Decoupled from
+  // `plotBindings` because settings outlive the binding set —
+  // a user who changes their bound channels shouldn't lose their
+  // gap-threshold choice. Round-trips through the layout adapter and
+  // named-layout snapshots so reload restores it.
+  plotPanelSettings: Record<string, PlotPanelSettings>;
   // Per-video-panel HUD overlay bit (Phase 5). Lifted out of
   // `VideoPanel` local state so the Panel drawer can flip it from outside
   // the panel. Persisted via the layout adapter (schema v2). Default
@@ -235,6 +265,13 @@ export interface SessionState {
   addPlotChannel(panelId: string, channelId: string): void;
   /** Remove one channel from a plot panel (no-op if absent). */
   removePlotChannel(panelId: string, channelId: string): void;
+  /**
+   * Set the per-panel gap threshold in seconds. `null` (or a
+   * non-positive / non-finite number) restores the default
+   * `spanGaps:true` rendering. Persists through layout adapter so a
+   * reload preserves the choice.
+   */
+  setPlotGapThreshold(panelId: string, sec: number | null): void;
   /** Bind a 3D scene panel to a single channel; `null` clears. */
   setSceneBinding(panelId: string, channelId: string | null): void;
   /** Bind a map panel to lat/lon channels; pass `null` to clear. */
@@ -413,6 +450,7 @@ export const useSession = create<SessionState>((set, get) => {
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
+    plotPanelSettings: hydrated?.plotPanelSettings ?? {},
     videoHudOn: hydrated?.videoHudOn ?? {},
     sceneBindings: hydrated?.sceneBindings ?? {},
     mapBindings: hydrated?.mapBindings ?? {},
@@ -558,6 +596,23 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
+    setPlotGapThreshold(panelId, sec) {
+      const prev = get().plotPanelSettings;
+      const existing = prev[panelId] ?? DEFAULT_PLOT_PANEL_SETTINGS;
+      // Normalise: any non-finite or non-positive value collapses to
+      // null (the "off" state), so the persistence layer doesn't have
+      // to defend against -Infinity / NaN coming from a numeric input.
+      const normalised: number | null =
+        sec !== null && Number.isFinite(sec) && sec > 0 ? sec : null;
+      if (existing.gapThresholdSec === normalised) return;
+      set({
+        plotPanelSettings: {
+          ...prev,
+          [panelId]: { ...existing, gapThresholdSec: normalised },
+        },
+      });
+    },
+
     setSceneBinding(panelId, channelId) {
       const prev = get().sceneBindings;
       if ((prev[panelId] ?? null) === channelId) return;
@@ -643,6 +698,7 @@ export const useSession = create<SessionState>((set, get) => {
         layoutJson,
         videoBindings,
         plotBindings,
+        plotPanelSettings,
         sceneBindings,
         mapBindings,
         tableBindings,
@@ -659,6 +715,7 @@ export const useSession = create<SessionState>((set, get) => {
         mapBindings: { ...mapBindings },
         tableBindings: { ...tableBindings },
         enumBindings: { ...enumBindings },
+        plotPanelSettings: { ...plotPanelSettings },
         createdAt: Date.now(),
       };
       set({
@@ -683,6 +740,7 @@ export const useSession = create<SessionState>((set, get) => {
         mapBindings: { ...entry.mapBindings },
         tableBindings: { ...entry.tableBindings },
         enumBindings: { ...entry.enumBindings },
+        plotPanelSettings: { ...(entry.plotPanelSettings ?? {}) },
         activeNamedLayoutId: id,
       });
     },
@@ -976,6 +1034,7 @@ export const useSession = create<SessionState>((set, get) => {
           seekEpoch: 0,
           videoBindings: {},
           plotBindings: {},
+          plotPanelSettings: {},
           videoHudOn: {},
           sceneBindings: {},
           mapBindings: {},

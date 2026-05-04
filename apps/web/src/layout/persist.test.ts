@@ -44,6 +44,10 @@ const SAMPLE: PersistedLayout = {
     "table-1": ["/vehicle/speed", "/vehicle/rpm"],
   },
   enumBindings: { "enum-1": "/state/gear", "enum-2": null },
+  plotPanelSettings: {
+    "plot-1": { gapThresholdSec: 1.5 },
+    "plot-2": { gapThresholdSec: null },
+  },
 };
 
 describe("layout persist", () => {
@@ -187,9 +191,48 @@ describe("layout persist", () => {
       mapBindings: {},
       tableBindings: {},
       enumBindings: {},
+      plotPanelSettings: {},
     };
     saveLayoutToStorage(payload, s);
     expect(loadLayoutFromStorage(s)).toEqual(payload);
+  });
+
+  it("treats a missing plotPanelSettings as an empty map (Phase 8 backwards compat)", () => {
+    // A v3 payload written before the Phase 8 field existed must still
+    // load — otherwise users lose every saved layout on first run with
+    // the new build.
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        version: 3,
+        layoutJson: null,
+        videoBindings: {},
+        plotBindings: {},
+        videoHudOn: {},
+        sceneBindings: {},
+        mapBindings: {},
+        tableBindings: {},
+        enumBindings: {},
+        // plotPanelSettings intentionally absent
+      }),
+    );
+    const loaded = loadLayoutFromStorage(s);
+    expect(loaded?.plotPanelSettings).toEqual({});
+  });
+
+  it("returns null when plotPanelSettings has a non-finite threshold", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        ...SAMPLE,
+        plotPanelSettings: {
+          "plot-1": { gapThresholdSec: "not a number" },
+        },
+      }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
   });
 });
 
@@ -226,6 +269,7 @@ const EMPTY_SLICE: LayoutSlice = {
   mapBindings: {},
   tableBindings: {},
   enumBindings: {},
+  plotPanelSettings: {},
 };
 
 describe("attachLayoutPersistence", () => {
@@ -327,6 +371,24 @@ describe("attachLayoutPersistence", () => {
     expect(loaded?.mapBindings["map-1"]).toEqual({
       latChannelId: "/gps/lat",
       lonChannelId: "/gps/lon",
+    });
+    stop();
+  });
+
+  it("writes when plotPanelSettings changes ref (Phase 8)", () => {
+    const s = makeStorage();
+    const store = makeFakeStore(EMPTY_SLICE);
+    const stop = attachLayoutPersistence(
+      store as unknown as typeof useSession,
+      s,
+    );
+    store.push({
+      ...EMPTY_SLICE,
+      plotPanelSettings: { "plot-1": { gapThresholdSec: 2 } },
+    });
+    const loaded = loadLayoutFromStorage(s);
+    expect(loaded?.plotPanelSettings).toEqual({
+      "plot-1": { gapThresholdSec: 2 },
     });
     stop();
   });

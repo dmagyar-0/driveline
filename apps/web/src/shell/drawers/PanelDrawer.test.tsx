@@ -222,4 +222,72 @@ describe("PanelDrawer", () => {
     render(<PanelDrawer />);
     expect(screen.getByTestId("panel-drawer-unknown")).toBeTruthy();
   });
+
+  describe("plot gap-threshold (Phase 8)", () => {
+    it("plot body renders the gap-threshold section with default off state", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      render(<PanelDrawer />);
+      expect(screen.getByTestId("panel-plot-gap-section")).toBeTruthy();
+      const toggle = screen.getByTestId("panel-plot-gap-toggle");
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+      // Input row is hidden until the toggle is on.
+      expect(screen.queryByTestId("panel-plot-gap-input-row")).toBeNull();
+    });
+
+    it("toggling on writes a positive default and exposes the input", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      render(<PanelDrawer />);
+      const toggle = screen.getByTestId("panel-plot-gap-toggle");
+      fireEvent.click(toggle);
+      // Default seed when toggled on without a prior draft is 1 sec.
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.gapThresholdSec,
+      ).toBe(1);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      expect(screen.getByTestId("panel-plot-gap-input-row")).toBeTruthy();
+    });
+
+    it("toggling off clears the per-panel threshold to null", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      useSession.getState().setPlotGapThreshold("plot-1", 2.5);
+      render(<PanelDrawer />);
+      const toggle = screen.getByTestId("panel-plot-gap-toggle");
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      fireEvent.click(toggle);
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.gapThresholdSec,
+      ).toBeNull();
+    });
+
+    it("blurring a valid number commits to the store", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      useSession.getState().setPlotGapThreshold("plot-1", 1);
+      render(<PanelDrawer />);
+      const input = screen.getByTestId(
+        "panel-plot-gap-input",
+      ) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "0.75" } });
+      fireEvent.blur(input);
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.gapThresholdSec,
+      ).toBe(0.75);
+    });
+
+    it("blurring an invalid number reverts the draft without flipping the mode", () => {
+      // The user might transiently type a non-positive or empty value
+      // mid-edit; that shouldn't cascade into "off" state.
+      useSession.getState().setSelectedPanelId("plot-1");
+      useSession.getState().setPlotGapThreshold("plot-1", 2);
+      render(<PanelDrawer />);
+      const input = screen.getByTestId(
+        "panel-plot-gap-input",
+      ) as HTMLInputElement;
+      fireEvent.change(input, { target: { value: "-3" } });
+      fireEvent.blur(input);
+      // Store stays at 2; draft reverts back.
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.gapThresholdSec,
+      ).toBe(2);
+    });
+  });
 });

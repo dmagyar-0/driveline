@@ -1,5 +1,11 @@
 //! Probe driveline's MCAP / MF4 readers against an arbitrary user-supplied file.
 //!
+//! This is a smoke-test, not a benchmark — it does one `open`, prints
+//! the resulting `SourceMeta`, and (for MF4) runs a single
+//! `fetch_range` with `FetchOpts::default()` against the first channel.
+//! Use it to confirm a file parses end-to-end; do not draw timing
+//! conclusions from its output.
+//!
 //! Usage:
 //!   cargo run -p data-core --example probe_external -- <kind> <path>
 //!   kind = mf4 | mcap

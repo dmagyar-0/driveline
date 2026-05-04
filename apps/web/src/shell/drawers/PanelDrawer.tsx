@@ -158,66 +158,175 @@ function PlotBody({ panelId }: BodyProps) {
   };
 
   return (
-    <section className={s.section}>
-      <div className={s.sectionHeader}>
-        <h4 className={s.sectionTitle}>Channels in panel</h4>
-        <span className={s.countPill} data-testid="panel-plot-count">
-          {ids.length} / {MAX_PLOT_SERIES}
-        </span>
-      </div>
-      {bound.length === 0 ? (
-        <p className={s.empty}>No channels bound. Add one below.</p>
-      ) : (
-        <ul className={s.list} data-testid="panel-plot-list">
-          {bound.map((c) => (
-            <li key={c.id} className={s.rowItem}>
-              <span className={s.row}>
-                <span
-                  className={s.swatch}
-                  style={{ background: colorFor(c.id) }}
-                  aria-hidden="true"
-                />
-                <span className={s.name} title={c.name}>
-                  {labelFor(c)}
+    <>
+      <section className={s.section}>
+        <div className={s.sectionHeader}>
+          <h4 className={s.sectionTitle}>Channels in panel</h4>
+          <span className={s.countPill} data-testid="panel-plot-count">
+            {ids.length} / {MAX_PLOT_SERIES}
+          </span>
+        </div>
+        {bound.length === 0 ? (
+          <p className={s.empty}>No channels bound. Add one below.</p>
+        ) : (
+          <ul className={s.list} data-testid="panel-plot-list">
+            {bound.map((c) => (
+              <li key={c.id} className={s.rowItem}>
+                <span className={s.row}>
+                  <span
+                    className={s.swatch}
+                    style={{ background: colorFor(c.id) }}
+                    aria-hidden="true"
+                  />
+                  <span className={s.name} title={c.name}>
+                    {labelFor(c)}
+                  </span>
                 </span>
-              </span>
-              <button
-                type="button"
-                className={s.removeBtn}
-                onClick={() => onRemove(c.id)}
-                aria-label={`Remove ${c.name}`}
-                data-testid={`panel-plot-remove-${c.id}`}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
+                <button
+                  type="button"
+                  className={s.removeBtn}
+                  onClick={() => onRemove(c.id)}
+                  aria-label={`Remove ${c.name}`}
+                  data-testid={`panel-plot-remove-${c.id}`}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button
+          ref={addBtnRef}
+          type="button"
+          className={s.addRow}
+          aria-disabled={atCap || undefined}
+          title={atCap ? `Plot full (${MAX_PLOT_SERIES})` : undefined}
+          onClick={() => {
+            if (atCap) return;
+            openPicker();
+          }}
+          data-testid="panel-plot-add-channel"
+        >
+          + add channel…
+        </button>
+        {pickerAnchor !== null && (
+          <ChannelPicker
+            sources={sources}
+            selectedIds={ids}
+            maxSelected={MAX_PLOT_SERIES}
+            anchorRect={pickerAnchor}
+            onToggle={onToggle}
+            onClose={() => setPickerAnchor(null)}
+          />
+        )}
+      </section>
+      <PlotGapThresholdControl panelId={panelId} />
+    </>
+  );
+}
+
+/**
+ * "Gap threshold" control surface — a toggle plus a number input that
+ * round-trips through `setPlotGapThreshold`. Lives in its own component
+ * so the `useState` for the in-flight numeric input doesn't churn the
+ * rest of `PlotBody` on every keystroke. Off (default) preserves the
+ * spanGaps:true rendering shipped in PR #83; on flips the panel into
+ * step-hold + explicit-gap mode.
+ */
+function PlotGapThresholdControl({ panelId }: BodyProps) {
+  const gapThresholdSec = useSession(
+    (st) => st.plotPanelSettings[panelId]?.gapThresholdSec ?? null,
+  );
+  const isOn = gapThresholdSec !== null;
+  // Local draft so a partially-typed value (e.g. "0.") doesn't get
+  // immediately normalised to null by the store. Synced from the store
+  // value on every change, but only the blur/Enter commit calls the
+  // store action.
+  const [draft, setDraft] = useState<string>(
+    gapThresholdSec === null ? "1" : String(gapThresholdSec),
+  );
+  // Track the value we last saw from the store so external changes
+  // (e.g. restoring a named layout) re-seed the draft. We compare to
+  // the numeric value, not the string, so a user typing "1.0" while
+  // the store says 1 doesn't get clobbered.
+  const lastSeenRef = useRef<number | null>(gapThresholdSec);
+  useEffect(() => {
+    if (lastSeenRef.current !== gapThresholdSec) {
+      lastSeenRef.current = gapThresholdSec;
+      setDraft(gapThresholdSec === null ? "1" : String(gapThresholdSec));
+    }
+  }, [gapThresholdSec]);
+
+  const setStore = (sec: number | null) => {
+    useSession.getState().setPlotGapThreshold(panelId, sec);
+  };
+
+  const commitDraft = () => {
+    const parsed = Number.parseFloat(draft);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      // Invalid input → revert the draft to the previous on-value
+      // rather than turning the threshold off. The user's intent here
+      // is "I typed something" not "turn this off."
+      setDraft(gapThresholdSec === null ? "1" : String(gapThresholdSec));
+      return;
+    }
+    setStore(parsed);
+  };
+
+  return (
+    <section className={s.section} data-testid="panel-plot-gap-section">
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Gap threshold</h4>
+      </div>
       <button
-        ref={addBtnRef}
         type="button"
-        className={s.addRow}
-        aria-disabled={atCap || undefined}
-        title={atCap ? `Plot full (${MAX_PLOT_SERIES})` : undefined}
+        role="switch"
+        aria-checked={isOn}
+        className={`${s.toggle} ${isOn ? s.toggleOn : ""}`}
         onClick={() => {
-          if (atCap) return;
-          openPicker();
+          if (isOn) {
+            setStore(null);
+          } else {
+            const parsed = Number.parseFloat(draft);
+            setStore(
+              Number.isFinite(parsed) && parsed > 0 ? parsed : 1,
+            );
+          }
         }}
-        data-testid="panel-plot-add-channel"
+        data-testid="panel-plot-gap-toggle"
       >
-        + add channel…
+        <span>Show gaps for dropouts</span>
+        <span className={s.toggleState}>{isOn ? "on" : "off"}</span>
       </button>
-      {pickerAnchor !== null && (
-        <ChannelPicker
-          sources={sources}
-          selectedIds={ids}
-          maxSelected={MAX_PLOT_SERIES}
-          anchorRect={pickerAnchor}
-          onToggle={onToggle}
-          onClose={() => setPickerAnchor(null)}
-        />
+      {isOn && (
+        <label className={s.gapInputRow} data-testid="panel-plot-gap-input-row">
+          <span className={s.gapInputLabel}>Threshold</span>
+          <input
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="0.1"
+            value={draft}
+            className={s.gapInput}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={commitDraft}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitDraft();
+                (e.currentTarget as HTMLInputElement).blur();
+              }
+            }}
+            data-testid="panel-plot-gap-input"
+          />
+          <span className={s.gapInputUnit}>sec</span>
+        </label>
       )}
+      <p className={s.gapHelp}>
+        {isOn
+          ? "Inter-sample gaps longer than this render as breaks; shorter intervals stay step-held."
+          : "Off: gaps render as horizontal step-holds (matches default behavior)."}
+      </p>
     </section>
   );
 }

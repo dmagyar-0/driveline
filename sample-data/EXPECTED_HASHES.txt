@@ -1,3 +1,10 @@
 # SHA256 of sample-data/out.h264 — the bit-identical
 # cornerstone. All other outputs derive from it.
 0a79d8f99b2ef2a3bfd62d6d2da69cc7496421b29ba01bf98badcaf840cba484  out.h264
+
+# SHA256 of huggingface.co/datasets/commaai/comma2k19/resolve/main/
+# data/demo-00000-of-00003.parquet (81 159 824 bytes).
+# scripts/convert_comma2k19_to_mcap.py verifies this hash on read so
+# upstream resharding cannot silently invalidate the e2e expectations
+# in apps/e2e/tests/realworld-comma2k19.spec.ts.
+5f40cd21c6376543365514ef1e36d44cb1198444e597d481bef6aa0916a0957e  comma2k19_demo.parquet

@@ -131,6 +131,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const setPlotBinding = useSession((s) => s.setPlotBinding);
   const addPlotChannel = useSession((s) => s.addPlotChannel);
   const removePlotChannel = useSession((s) => s.removePlotChannel);
+  // Gap threshold mode comes from per-panel settings (Phase 8). `null`
+  // is the default and pairs with `spanGaps:true`; a positive number
+  // pairs with `spanGaps:false` and explicit gap markers in mergeSeries.
+  const gapThresholdSec = useSession(
+    (s) => s.plotPanelSettings[panelId]?.gapThresholdSec ?? null,
+  );
 
   const boundChannelIds = useMemo(
     () => storedBindings ?? [],
@@ -262,10 +268,13 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return () => ro.disconnect();
   }, [resizePlotToContainer, sizeOverlayToContainer]);
 
-  // (Re)build uPlot whenever the set of bound channels changes. We key
-  // off the joined id string so the effect reruns only on meaningful
-  // changes, not on every `boundChannels` reference churn.
-  const seriesKey = boundChannelIds.join("|");
+  // (Re)build uPlot whenever the set of bound channels OR the
+  // gap-threshold mode changes. The threshold flips `spanGaps` (which
+  // is a per-series option that uPlot bakes into its draw plan), so
+  // mode changes need a fresh plot instance.
+  const seriesKey = `${boundChannelIds.join("|")}::g=${
+    gapThresholdSec ?? "off"
+  }`;
   useEffect(() => {
     const mount = plotMountRef.current;
     const container = containerRef.current;
@@ -278,6 +287,20 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       ticks: { stroke: grid },
       grid: { stroke: grid },
     };
+    // Default mode: `mergeSeries` emits `null` at every union timestamp
+    // where *this* series has no sample. With two same-rate signals on
+    // different CAN mailboxes (e.g. /vehicle/speed and
+    // /vehicle/steering_angle in comma2k19) every other slot is null
+    // per series, so `spanGaps:false` collapsed each trace to invisible
+    // 1-pixel dots. Spanning gives each series the step-hold rendering
+    // 03-data-model.md promises — at the cost of hiding real
+    // channel-loss gaps as longer horizontal holds.
+    //
+    // Gap-threshold mode: `mergeSeries` already step-holds within the
+    // threshold and emits explicit `null`s at gap markers, so the
+    // renderer must NOT span — `spanGaps:false` lets those nulls draw
+    // as actual gaps without losing the multi-mailbox interleave fix.
+    const spanGaps = gapThresholdSec === null;
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height)),
@@ -288,16 +311,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           label: labelFor(c),
           stroke: colorFor(c.id),
           width: 1,
-          // `mergeSeries` emits `null` at every union timestamp where
-          // *this* series has no sample. With two same-rate signals on
-          // different CAN mailboxes (e.g. /vehicle/speed and
-          // /vehicle/steering_angle in comma2k19) every other slot is
-          // null per series, so `spanGaps:false` collapsed each trace
-          // to invisible 1-pixel dots. Spanning gives each series the
-          // step-hold rendering 03-data-model.md promises — and a real
-          // gap (channel stops broadcasting) just becomes a longer
-          // horizontal hold, which is also the documented behavior.
-          spanGaps: true,
+          spanGaps,
         })),
       ],
       axes: [axisOpts, axisOpts],
@@ -356,7 +370,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         );
         if (aborted) return;
         const decoded: PlotSeries[] = batches.map((b) => seriesFromArrow(b));
-        const merged = mergeSeries(decoded);
+        const merged = mergeSeries(decoded, gapThresholdSec);
         const renderStart = `plot:render:${panelId}:start`;
         const renderEnd = `plot:render:${panelId}:end`;
         mark(renderStart);
@@ -377,7 +391,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return () => {
       aborted = true;
     };
-  }, [boundChannels, globalRange, publishSync]);
+  }, [boundChannels, globalRange, gapThresholdSec, publishSync]);
 
   // Cursor overlay redraw on every cursor tick.
   useEffect(() => {
