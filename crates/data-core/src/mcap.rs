@@ -257,9 +257,22 @@ const MCAP_MAGIC: &[u8] = b"\x89MCAP0\r\n";
 /// `uncompressed_crc` is taken over uncompressed records, so it stays
 /// valid across the rewrite. The footer's `summary_start` and
 /// `summary_offset_start` are bumped by the cumulative byte delta so
-/// `Summary::read` still locates the summary section. Stale offsets
-/// inside `ChunkIndex` / `SummaryOffset` records are harmless because
-/// McapReader never dereferences them.
+/// `Summary::read` still locates the summary section.
+///
+/// # Precondition
+///
+/// **The output is only safe to feed to a linear reader (e.g.
+/// `mcap::MessageStream`) — never an indexed reader.** Stale byte
+/// offsets inside `ChunkIndex`, `SummaryOffset`, and `MessageIndex`
+/// records are *not* rewritten: chunks shift by the compression delta,
+/// but the records that reference them still hold the original
+/// pre-rewrite offsets. `McapReader::open` consumes the buffer via
+/// `MessageStream` (see `mcap.rs` `open()` impl) which ignores all of
+/// these, so the staleness is invisible *today*. Swapping in any
+/// indexed reader (`mcap::IndexedReader`, etc.) requires either
+/// rewriting these offsets or stripping op-0x07 / 0x08 / 0x0E records
+/// here first. The `debug_assert!` next to `MessageStream::new` exists
+/// to make a future swap surface this constraint at test time.
 fn predecompress_zstd_chunks(input: Vec<u8>) -> crate::Result<Vec<u8>> {
     use std::io::Read;
 
@@ -271,7 +284,12 @@ fn predecompress_zstd_chunks(input: Vec<u8>) -> crate::Result<Vec<u8>> {
     }
 
     let body_end = input.len() - MCAP_MAGIC.len();
-    let mut out: Vec<u8> = Vec::with_capacity(input.len());
+    // Compressed → uncompressed rewrite always grows; pre-allocating
+    // double the input avoids the guaranteed realloc inside the chunk
+    // rewrite loop. Worst case (no chunks) we waste `input.len()` bytes
+    // briefly until the function returns; both fixtures and real-world
+    // MCAPs see this offset by the larger output anyway.
+    let mut out: Vec<u8> = Vec::with_capacity(input.len().saturating_mul(2));
     out.extend_from_slice(MCAP_MAGIC);
 
     let mut total_delta: i64 = 0;
@@ -402,7 +420,19 @@ impl Reader for McapReader {
         let mut channel_data: HashMap<ChannelId, ChannelData> = HashMap::new();
         let mut keyframe_index: HashMap<ChannelId, Vec<KeyframeEntry>> = HashMap::new();
 
-        for msg_result in ::mcap::MessageStream::new(&owned)? {
+        // SAFETY: `predecompress_zstd_chunks` does not rewrite stale byte
+        // offsets inside `MessageIndex` / `ChunkIndex` / `SummaryOffset`
+        // records — a linear `MessageStream` is required. If this is ever
+        // swapped for an indexed reader, the predecompress pre-pass must
+        // also strip or rewrite those offsets first.
+        let stream = ::mcap::MessageStream::new(&owned)?;
+        debug_assert_eq!(
+            std::any::type_name_of_val(&stream),
+            std::any::type_name::<::mcap::MessageStream>(),
+            "predecompress_zstd_chunks output is only safe with mcap::MessageStream — a future \
+             swap to an indexed reader must rewrite/strip stale offsets in the pre-pass first",
+        );
+        for msg_result in stream {
             let msg = msg_result?;
             let Some((kind, _dtype, topic)) = channel_meta.get(&msg.channel.id) else {
                 continue;

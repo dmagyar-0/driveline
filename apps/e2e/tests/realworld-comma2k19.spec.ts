@@ -56,6 +56,10 @@ test.describe("real-world ADAS dataset (comma2k19)", () => {
     });
 
     // Topics emitted by the converter — see scripts/convert_comma2k19_to_mcap.py.
+    // wheel_speed_rr is registered lazily by the converter only when
+    // the upstream parquet actually ships a 4-element wheel-speed
+    // vector; comma2k19's demo parquet does, so the channel is
+    // expected here and carries real (non-synthesised) RR samples.
     const byTopic = new Map(channels.map((c) => [c.name, c]));
     for (const topic of [
       "/vehicle/speed",

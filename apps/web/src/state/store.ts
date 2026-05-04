@@ -62,6 +62,10 @@ export interface Channel {
   // the same wasm-internal channel id — common with MF4, where the
   // native id is just `{group}/{channel}` — do not collide in the
   // binding maps or the PlotPanel's `channelMap` lookup table.
+  // The session-level uniqueness invariant relies on `uniqueSourceId`
+  // (see line 339) keeping every loaded source's id distinct, which
+  // pairs with the length-prefix encoding in `qualifiedChannelId` to
+  // make `(sourceId, nativeId)` an injective key.
   id: string;
   // Per-source channel id as emitted by the wasm reader (`0/1` for MF4,
   // the topic string for MCAP, `1/video` for MP4). This is the value

@@ -31,9 +31,17 @@ mkdir -p /tmp/datasets
 curl -L -o /tmp/datasets/comma2k19_demo.parquet \
   https://huggingface.co/datasets/commaai/comma2k19/resolve/main/data/demo-00000-of-00003.parquet
 
+# 1b. (optional) verify the parquet against the SHA256 pinned in
+#     sample-data/EXPECTED_HASHES.txt. The converter does the same
+#     check on read.
+grep comma2k19_demo.parquet sample-data/EXPECTED_HASHES.txt \
+  | (cd /tmp/datasets && sha256sum -c -)
+
 # 2. Convert one segment to MCAP using the foxglove.* schemas Driveline
 #    already understands. Output is sample-data/realworld/comma2k19.mcap.
-pip install mcap pyarrow numpy
+#    Versions are constrained for reproducibility — newer majors may
+#    move the parquet/MCAP APIs the converter relies on.
+pip install 'mcap>=1.2,<2' 'pyarrow>=14,<20' 'numpy>=1.24,<3'
 python3 scripts/convert_comma2k19_to_mcap.py
 
 # 3. Open it in the dev server. Drop the file into the browser at
