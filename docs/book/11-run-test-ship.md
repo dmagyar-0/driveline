@@ -184,11 +184,11 @@ Python script:
 python3 sample-data/generate.py
 ```
 
-That produces a matching MCAP / MF4 / MP4+sidecar triple covering a
-10-second 4K clip plus synthetic telemetry channels. The outputs are
-gitignored (they're large), but the script writes alongside them a
-`manifest.json` of expected SHA-256 hashes that the test setup
-verifies to catch accidental regeneration drift.
+That produces MCAP (plain and zstd-compressed) / MF4 / MP4+sidecar
+fixtures covering a 10-second 4K clip plus synthetic telemetry
+channels. The outputs are gitignored (they're large), but the script
+writes alongside them `EXPECTED_HASHES.txt` of expected SHA-256 hashes
+that the test setup verifies to catch accidental regeneration drift.
 
 ## Format check
 
