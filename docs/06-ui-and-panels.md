@@ -66,7 +66,7 @@ grid):
 | **SourcesDrawer** | List loaded sources, swatch + kind badge, `+ drop / load file…` row, global-range readout. |
 | **ChannelsDrawer** | Search + collapsible per-source groups. Click-to-bind: with no panel selected, mints a plot panel; with a plot panel selected, calls `addPlotChannel`; with a video panel selected, calls `setVideoBinding`. |
 | **LayoutDrawer** | Saved layouts (`saveCurrentLayoutAs` / `restoreNamedLayout`) with `live` / `active` markers. `Add panel` section adds video / plot / 3D scene / map / table / enum. `Reset layout` row at the bottom. |
-| **PanelDrawer** | Configures the selected panel (settings rail flip from the tab chrome). Body switches on `panelKindOf(selectedPanelId)`. Plot bodies list bound channels with × remove + `+ add channel…`. Video body shows decoder label, HUD toggle, and the bound channel. |
+| **PanelDrawer** | Configures the selected panel (settings rail flip from the tab chrome). Body switches on `panelKindOf(selectedPanelId)`. Plot bodies list bound channels with × remove + `+ add channel…`, plus a **Gap threshold** toggle+input (on: inter-sample gaps longer than N s render as breaks; off: all gaps render as step-holds). Video body shows decoder label, HUD toggle, and the bound channel. |
 | **EventsDrawer** | Bookmarks list with double-click rename, ×, and `+ bookmark at cursor` (one-click + "…" custom-label variant). Out-of-range rows render at 50 % opacity with a `title="Outside the current session's range"` tooltip and `aria-label` prefixed `Out of range — `. |
 
 Drawer state (active tab + collapsed flag) persists via
@@ -129,13 +129,14 @@ interface SessionState {
   cursorMode: 'absolute' | 'relative';
 
   // panel bindings (one map per panel kind)
-  videoBindings: Record<PanelId, ChannelId | null>;
-  plotBindings:  Record<PanelId, ChannelId[]>;
-  sceneBindings: Record<PanelId, ChannelId | null>;
-  mapBindings:   Record<PanelId, MapBinding | null>;
-  tableBindings: Record<PanelId, ChannelId[]>;
-  enumBindings:  Record<PanelId, ChannelId | null>;
-  videoHudOn:    Record<PanelId, boolean>;
+  videoBindings:     Record<PanelId, ChannelId | null>;
+  plotBindings:      Record<PanelId, ChannelId[]>;
+  sceneBindings:     Record<PanelId, ChannelId | null>;
+  mapBindings:       Record<PanelId, MapBinding | null>;
+  tableBindings:     Record<PanelId, ChannelId[]>;
+  enumBindings:      Record<PanelId, ChannelId | null>;
+  videoHudOn:        Record<PanelId, boolean>;
+  plotPanelSettings: Record<PanelId, PlotPanelSettings>; // gap threshold per panel
 
   // layout
   layoutJson: unknown;
@@ -166,8 +167,9 @@ Why Zustand:
 
 Persistence is sliced into adapters under `state/persist/`:
 
-- `layout.ts` — FlexLayout JSON + the six binding maps + `videoHudOn`
-  (`driveline.layout.v3`).
+- `layout.ts` — FlexLayout JSON + the six binding maps + `videoHudOn` +
+  `plotPanelSettings` (`driveline.layout.v3`; `plotPanelSettings` is an
+  optional field, defaulting to `{}` for pre-Phase-8 saved layouts).
 - `namedLayouts.ts` — saved layouts (`driveline.layouts.named.v2`).
 - `bookmarks.ts` — bookmark list with BigInts encoded as decimal strings
   (`driveline.bookmarks.v1`).
@@ -235,7 +237,9 @@ FlexLayout component string to a React component:
   assignment is deterministic via `panels/palette.ts:colorFor(channelId)`
   (FNV-1a over 8 palette slots).
 - Panel controls live in the PanelDrawer: channel × remove, `+ add
-  channel…` opens `panels/ChannelPicker.tsx`.
+  channel…` opens `panels/ChannelPicker.tsx`; a **Gap threshold**
+  toggle switches between span-gaps (default) and step-hold-with-breaks
+  mode, stored per-panel in `plotPanelSettings` via `persist.ts`.
 
 ### ScenePanel
 
