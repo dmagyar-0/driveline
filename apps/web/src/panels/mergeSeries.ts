@@ -120,32 +120,89 @@ function mergeStepHold(
   // pathologically tiny thresholds where `threshold * 1e-6` would
   // underflow to zero.
   const epsilon = Math.max(threshold * 1e-6, 1e-9);
+  const k = inputs.length;
 
-  // Collect candidate xs: every real sample plus, for each detected
-  // intra-series gap, a "held-end" marker at `lastX + threshold` and a
-  // "gap-start" marker at `lastX + threshold + epsilon`.
-  const candidate: number[] = [];
-  for (const inp of inputs) {
-    const xs = inp.xs;
-    for (let i = 0; i < xs.length; i++) {
-      candidate.push(xs[i]);
-      if (i > 0 && xs[i] - xs[i - 1] > threshold) {
-        const heldEnd = xs[i - 1] + threshold;
-        candidate.push(heldEnd);
-        candidate.push(heldEnd + epsilon);
-      }
+  // Output xs is the union of (real samples ∪ per-series gap markers).
+  // Pre-count both so we can allocate the output Float64Array once.
+  // Worst case (every interval > threshold) adds 2 × samples.
+  let upper = 0;
+  for (let i = 0; i < k; i++) {
+    const xs = inputs[i].xs;
+    upper += xs.length;
+    for (let j = 1; j < xs.length; j++) {
+      if (xs[j] - xs[j - 1] > threshold) upper += 2;
     }
   }
-  candidate.sort((a, b) => a - b);
 
-  // Dedupe ascending. Float comparison is exact here because all values
-  // came from input.xs (Float64) or arithmetic on those values, never
-  // from user-typed thresholds.
-  const xsBuf = new Float64Array(candidate.length);
+  // Per-input cursor over the augmented sequence (real samples + gap
+  // markers). `markerPhase` encodes which of the two pending markers
+  // we'll emit next, ahead of advancing past the gap:
+  //   0 = none queued — `nextX` reads `xs[cursorIdx]`
+  //   1 = held-end marker (`lastX + threshold`) is next
+  //   2 = gap-start marker (`lastX + threshold + ε`) is next
+  // Markers are queued lazily on cursor advance: once we consume real
+  // sample `xs[c]`, peek `xs[c+1]` and queue a pair iff the dx exceeds
+  // threshold, so the next `nextX` returns the held-end marker before
+  // the post-gap real sample.
+  const cursorIdx = new Int32Array(k);
+  const markerPhase = new Uint8Array(k);
+  const marker1 = new Float64Array(k);
+  const marker2 = new Float64Array(k);
+
+  // Returns NaN when input i is exhausted; callers guard with NaN check.
+  const nextX = (i: number): number => {
+    const ph = markerPhase[i];
+    if (ph === 1) return marker1[i];
+    if (ph === 2) return marker2[i];
+    const idx = cursorIdx[i];
+    const ixs = inputs[i].xs;
+    return idx < ixs.length ? ixs[idx] : Number.NaN;
+  };
+
+  const consume = (i: number): void => {
+    const ph = markerPhase[i];
+    if (ph === 1) { markerPhase[i] = 2; return; }
+    if (ph === 2) { markerPhase[i] = 0; return; }
+    const ixs = inputs[i].xs;
+    const idx = cursorIdx[i];
+    const next = idx + 1;
+    cursorIdx[i] = next;
+    if (next < ixs.length && ixs[next] - ixs[idx] > threshold) {
+      const m1 = ixs[idx] + threshold;
+      marker1[i] = m1;
+      marker2[i] = m1 + epsilon;
+      markerPhase[i] = 1;
+    }
+  };
+
+  // k-way merge with inline dedupe. Total cost O((N+G)·k), one
+  // allocation for xsBuf — same shape as `mergeUnion` but with the
+  // augmented per-input streams.
+  //
+  // Dedupe via `===` is bit-exact on Float64 (NaN is excluded by the
+  // guard above): two values that *should* compare equal always do,
+  // because IEEE-754 arithmetic on identical operands is deterministic.
+  // The only loss is values "morally" equal but reached via different
+  // arithmetic paths — those just leave a sub-ε extra entry in xs,
+  // visually indistinguishable from the held-end marker.
+  const xsBuf = new Float64Array(upper);
   let n = 0;
-  for (let i = 0; i < candidate.length; i++) {
-    if (n === 0 || candidate[i] !== xsBuf[n - 1]) {
-      xsBuf[n++] = candidate[i];
+  while (true) {
+    let minX = Number.POSITIVE_INFINITY;
+    let any = false;
+    for (let i = 0; i < k; i++) {
+      const x = nextX(i);
+      if (!Number.isNaN(x)) {
+        any = true;
+        if (x < minX) minX = x;
+      }
+    }
+    if (!any) break;
+    if (n === 0 || xsBuf[n - 1] !== minX) {
+      xsBuf[n++] = minX;
+    }
+    for (let i = 0; i < k; i++) {
+      if (nextX(i) === minX) consume(i);
     }
   }
   const xs = xsBuf.subarray(0, n);

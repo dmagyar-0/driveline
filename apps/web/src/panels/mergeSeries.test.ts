@@ -195,4 +195,31 @@ describe("mergeSeries · gap-threshold mode (Phase 8)", () => {
     expect(out.ys[0]).toEqual([null, null, null]);
     expect(out.ys[1]).toEqual([10, 11, 12]);
   });
+
+  it("interleaves gap markers from multiple series in ascending order", () => {
+    // Each series has its own intra-series gap. The k-way merger has to
+    // emit each gap's (held-end, gap-start) pair in correct global order,
+    // even when one series' gap markers fall between another series'
+    // real samples. Output xs must be strictly ascending.
+    const a = mk([0, 100], [10, 20]);   // gap: held-end 1, gap-start 1+ε
+    const b = mk([2, 50], [200, 250]);  // gap: held-end 3, gap-start 3+ε
+    const out = mergeSeries([a, b], 1);
+    const xs = Array.from(out.xs);
+    for (let i = 1; i < xs.length; i++) {
+      expect(xs[i]).toBeGreaterThan(xs[i - 1]);
+    }
+    // Both held-end markers are present.
+    expect(xs).toContain(1);
+    expect(xs).toContain(3);
+    // a's held-end at x=1 carries a's last value (10); b is null there
+    // (b hasn't started yet, since b's first sample is at 2).
+    const idx1 = xs.indexOf(1);
+    expect(out.ys[0][idx1]).toBe(10);
+    expect(out.ys[1][idx1]).toBeNull();
+    // b's held-end at x=3 carries b's last value (200); a is null there
+    // (a's gap of 100 from x=0 already exceeds threshold 1).
+    const idx3 = xs.indexOf(3);
+    expect(out.ys[0][idx3]).toBeNull();
+    expect(out.ys[1][idx3]).toBe(200);
+  });
 });

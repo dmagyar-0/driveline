@@ -254,6 +254,17 @@ def main() -> None:
             entries.append((ts, ch_wheel_rl, f64_payload(ts, rl)))
             if len(vec) >= 4:
                 if ch_wheel_rr is None:
+                    # Mid-stream registration: any earlier 3-wheel samples
+                    # produced no RR value, so the resulting channel will
+                    # start later than its FL/FR/RL siblings. Surface this
+                    # so a downstream consumer expecting four parallel
+                    # series isn't surprised by the ragged start.
+                    print(
+                        f"warning: /vehicle/wheel_speed_rr registered at "
+                        f"ts={ts}; earlier samples in this segment had only "
+                        f"3 wheels — RR series will start later than FL/FR/RL.",
+                        file=sys.stderr,
+                    )
                     ch_wheel_rr = reg_f64("/vehicle/wheel_speed_rr", "m/s")
                 entries.append((ts, ch_wheel_rr, f64_payload(ts, vec[3])))
 

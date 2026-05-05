@@ -63,7 +63,7 @@ export interface Channel {
   // native id is just `{group}/{channel}` — do not collide in the
   // binding maps or the PlotPanel's `channelMap` lookup table.
   // The session-level uniqueness invariant relies on `uniqueSourceId`
-  // (see line 339) keeping every loaded source's id distinct, which
+  // (defined below in this file) keeping every loaded source's id distinct, which
   // pairs with the length-prefix encoding in `qualifiedChannelId` to
   // make `(sourceId, nativeId)` an injective key.
   id: string;
