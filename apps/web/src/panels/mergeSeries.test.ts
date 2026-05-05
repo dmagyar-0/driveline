@@ -181,4 +181,18 @@ describe("mergeSeries · gap-threshold mode (Phase 8)", () => {
       expect(xs[i]).toBeGreaterThan(xs[i - 1]);
     }
   });
+
+  it("yields all-null for an empty series alongside a populated one", () => {
+    // The step-hold walk seeds `hasSample = false` and only flips it
+    // once the input cursor advances past a real sample. An empty
+    // series must therefore read as null at every union slot — not
+    // leak the populated series' values via a shared array reference
+    // and not crash on the unread `lastY`.
+    const a = mk([], []);
+    const b = mk([0, 1, 2], [10, 11, 12]);
+    const out = mergeSeries([a, b], 5);
+    expect(Array.from(out.xs)).toEqual([0, 1, 2]);
+    expect(out.ys[0]).toEqual([null, null, null]);
+    expect(out.ys[1]).toEqual([10, 11, 12]);
+  });
 });

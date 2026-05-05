@@ -273,6 +273,27 @@ describe("PanelDrawer", () => {
       ).toBe(0.75);
     });
 
+    it("pressing Enter commits the draft and blurs the input", () => {
+      // Power users edit by typing then hitting Enter rather than
+      // tabbing out. The Enter handler must commit-and-blur (not just
+      // commit), otherwise the still-focused input swallows shortcuts
+      // like space-to-play.
+      useSession.getState().setSelectedPanelId("plot-1");
+      useSession.getState().setPlotGapThreshold("plot-1", 1);
+      render(<PanelDrawer />);
+      const input = screen.getByTestId(
+        "panel-plot-gap-input",
+      ) as HTMLInputElement;
+      input.focus();
+      expect(document.activeElement).toBe(input);
+      fireEvent.change(input, { target: { value: "0.4" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.gapThresholdSec,
+      ).toBe(0.4);
+      expect(document.activeElement).not.toBe(input);
+    });
+
     it("blurring an invalid number reverts the draft without flipping the mode", () => {
       // The user might transiently type a non-positive or empty value
       // mid-edit; that shouldn't cascade into "off" state.
