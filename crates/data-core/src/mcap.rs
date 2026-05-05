@@ -271,8 +271,8 @@ const MCAP_MAGIC: &[u8] = b"\x89MCAP0\r\n";
 /// these, so the staleness is invisible *today*. Swapping in any
 /// indexed reader (`mcap::IndexedReader`, etc.) requires either
 /// rewriting these offsets or stripping op-0x07 / 0x08 / 0x0E records
-/// here first. The `debug_assert!` next to `MessageStream::new` exists
-/// to make a future swap surface this constraint at test time.
+/// here first. The `SAFETY` comment at the call site echoes this
+/// precondition so a future refactor can't miss it.
 fn predecompress_zstd_chunks(input: Vec<u8>) -> crate::Result<Vec<u8>> {
     use std::io::Read;
 
@@ -426,12 +426,6 @@ impl Reader for McapReader {
         // swapped for an indexed reader, the predecompress pre-pass must
         // also strip or rewrite those offsets first.
         let stream = ::mcap::MessageStream::new(&owned)?;
-        debug_assert_eq!(
-            std::any::type_name_of_val(&stream),
-            std::any::type_name::<::mcap::MessageStream>(),
-            "predecompress_zstd_chunks output is only safe with mcap::MessageStream — a future \
-             swap to an indexed reader must rewrite/strip stale offsets in the pre-pass first",
-        );
         for msg_result in stream {
             let msg = msg_result?;
             let Some((kind, _dtype, topic)) = channel_meta.get(&msg.channel.id) else {
