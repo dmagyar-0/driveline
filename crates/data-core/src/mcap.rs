@@ -1252,6 +1252,33 @@ mod tests {
         assert_eq!(r.meta().channels.len(), 4);
     }
 
+    /// Idempotence: running the pre-pass on its own output is a no-op.
+    /// Once chunks have been inlined as uncompressed records, a second
+    /// pass walks the same records verbatim. This matters because a
+    /// future re-open path (network refetch, panel remount, retry on
+    /// transient I/O error) may legitimately call the pre-pass on
+    /// already-rewritten bytes; corruption there would surface as a
+    /// "works once, fails twice" bug that's painful to track down.
+    /// The test also confirms the first pass actually rewrites the
+    /// buffer, so a regression that silently no-op'd the zstd branch
+    /// would surface as both `assert_ne!` (fast-fail) and `assert_eq!`
+    /// (slow-fail) checks rather than passing trivially.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn predecompress_zstd_chunks_is_idempotent_on_zstd_input() {
+        let zstd = crate::fixtures::short_mcap_zstd_bytes().expect("generate zstd mcap");
+        let once = predecompress_zstd_chunks(zstd.clone()).expect("first decompress");
+        assert_ne!(
+            once, zstd,
+            "first pass should rewrite zstd chunks (output must differ from compressed input)"
+        );
+        let twice = predecompress_zstd_chunks(once.clone()).expect("second decompress");
+        assert_eq!(once, twice, "second predecompress must be a byte-for-byte no-op");
+        // Double-rewritten bytes must still open cleanly.
+        let r = McapReader::open(&twice).expect("open after double predecompress");
+        assert_eq!(r.meta().channels.len(), 4);
+    }
+
     /// `short_mcap_zstd_bytes()` writes the same four-channel corpus as
     /// `short_mcap_bytes()` but with chunk-level zstd compression. The
     /// reader must surface an identical `SourceMeta` regardless of how the

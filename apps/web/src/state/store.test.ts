@@ -1020,6 +1020,47 @@ describe("named layouts (Phase 4)", () => {
     expect(s.enumBindings).toEqual({ "enum-1": "/state" });
   });
 
+  it("saveCurrentLayoutAs snapshots plotPanelSettings (Phase 8)", () => {
+    // Phase-8 added the per-panel settings map to the named-layout
+    // schema. The snapshot must include the live values at save time
+    // and must not be perturbed by post-save mutations to live state
+    // — otherwise restoring later would replay the user's drift, not
+    // their saved state.
+    useSession.getState().setPlotGapThreshold("plot-1", 1.5);
+    const id = useSession.getState().saveCurrentLayoutAs("snap");
+
+    // Mutate live; the snapshot must not see the change.
+    useSession.getState().setPlotGapThreshold("plot-1", 9);
+    useSession.getState().setPlotGapThreshold("plot-2", 0.5);
+
+    const entry = useSession
+      .getState()
+      .namedLayouts.find((l) => l.id === id)!;
+    expect(entry.plotPanelSettings).toEqual({
+      "plot-1": { gapThresholdSec: 1.5 },
+    });
+  });
+
+  it("restoreNamedLayout restores plotPanelSettings (Phase 8)", () => {
+    useSession.getState().setPlotGapThreshold("plot-1", 2.5);
+    useSession.getState().setPlotGapThreshold("plot-2", 0.25);
+    const id = useSession.getState().saveCurrentLayoutAs("phase8");
+
+    // Drift live state away.
+    useSession.getState().setPlotGapThreshold("plot-1", null);
+    useSession.getState().setPlotGapThreshold("plot-2", null);
+    expect(useSession.getState().plotPanelSettings).toEqual({
+      "plot-1": { gapThresholdSec: null },
+      "plot-2": { gapThresholdSec: null },
+    });
+
+    useSession.getState().restoreNamedLayout(id);
+    expect(useSession.getState().plotPanelSettings).toEqual({
+      "plot-1": { gapThresholdSec: 2.5 },
+      "plot-2": { gapThresholdSec: 0.25 },
+    });
+  });
+
   it("saveCurrentLayoutAs deep-copies Phase 6 binding maps", () => {
     useSession.getState().setMapBinding("map-1", {
       latChannelId: "/lat",
