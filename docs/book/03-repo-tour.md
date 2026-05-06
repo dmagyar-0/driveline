@@ -216,7 +216,7 @@ The codebase as of this book's writing is roughly:
 - Tests: ~1 line of tests per 6 lines of production code.
 
 Most files are small. The biggest individual ones are `crates/data-
-core/src/mcap.rs` (~1 200 lines — MCAP is a complex format) and
+core/src/mcap.rs` (~1 300 lines — MCAP is a complex format) and
 `apps/web/src/panels/PlotPanel.tsx` (~500 lines — lots of plot/UI
 state to juggle). Everything else is under 500 lines.
 

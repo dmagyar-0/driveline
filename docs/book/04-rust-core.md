@@ -199,7 +199,7 @@ store, the panels) doesn't care whether it's talking to a noop, an
 
 ## The three real readers at a glance
 
-The full implementations are long — MCAP alone is about 1200 lines —
+The full implementations are long — MCAP alone is about 1300 lines —
 but the shape is the same for each:
 
 - **`Mf4Reader`** (`mf4.rs`, ~700 lines) wraps the `mf4-rs` crate.
@@ -208,7 +208,7 @@ but the shape is the same for each:
   cg_offset` per group, and records the channel list with absolute
   nanosecond ranges. `fetch_range` does a sample-index binary search
   and copies out the `[t0, t1)` slice to an Arrow batch.
-- **`McapReader`** (`mcap.rs`, ~1200 lines) wraps the `mcap` crate.
+- **`McapReader`** (`mcap.rs`, ~1300 lines) wraps the `mcap` crate.
   MCAP is message-oriented, so the reader reads every message at open
   time, classifies it by schema (video, scalar, vector, enum, opaque
   bytes), and materialises parallel arrays that can be sliced.
