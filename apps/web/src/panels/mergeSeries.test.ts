@@ -196,6 +196,37 @@ describe("mergeSeries · gap-threshold mode (Phase 8)", () => {
     expect(out.ys[1]).toEqual([10, 11, 12]);
   });
 
+  it("pre-allocates enough buffer for a series with many consecutive gaps", () => {
+    // Every interval exceeds the threshold, so each of the N-1 gaps
+    // injects two synthetic xs (held-end + gap-start). The augmented
+    // stream is 3·N - 2 long; the upper-bound pre-allocation in
+    // mergeStepHold has to count both terms. A regression that under-
+    // allocates would silently truncate the output, because Float64
+    // typed arrays no-op past-length writes and subarray() clamps the
+    // end to the underlying buffer length — so the bug surfaces only
+    // as a missing tail.
+    const a = mk([0, 10, 20, 30], [10, 20, 30, 40]);
+    const out = mergeSeries([a], 1);
+    // 4 real + 3 gaps × 2 markers = 10. The strict equality is the
+    // point of this test — looser assertions would let an undersized
+    // buffer slip through.
+    expect(out.xs.length).toBe(10);
+    const xs = Array.from(out.xs);
+    // Real samples preserved.
+    for (const t of [0, 10, 20, 30]) expect(xs).toContain(t);
+    // Held-end markers at lastX + threshold for each gap.
+    for (const t of [1, 11, 21]) expect(xs).toContain(t);
+    // Output is strictly ascending (no zero-fill from over-allocation,
+    // no duplicate from miscounted dedupe).
+    for (let i = 1; i < xs.length; i++) {
+      expect(xs[i]).toBeGreaterThan(xs[i - 1]);
+    }
+    // Tail sample lands at its real x; ys ends at its real value
+    // (would zero-fill if the buffer were too small).
+    expect(xs[xs.length - 1]).toBe(30);
+    expect(out.ys[0][xs.length - 1]).toBe(40);
+  });
+
   it("interleaves gap markers from multiple series in ascending order", () => {
     // Each series has its own intra-series gap. The k-way merger has to
     // emit each gap's (held-end, gap-start) pair in correct global order,
