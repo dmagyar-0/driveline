@@ -10,7 +10,8 @@ import type { RailTab } from "./state/persist/ui";
 import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
-import { startPlaybackLoop } from "./timeline/playback";
+import { getReadinessSnapshot } from "./panels/videoReadiness";
+import { isCursorGated, startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
 import type { WorkspaceHandle } from "./layout/Workspace";
@@ -209,6 +210,19 @@ declare global {
       }>;
       removeBookmark: (id: string) => void;
       renameBookmark: (id: string, label: string) => void;
+      // Issue #2 — decode-aware cursor gating.
+      // `getVideoReadiness` returns the per-panel state of every
+      // entry currently in the readiness registry; `getCursorGated`
+      // returns the most recent gate decision from `playback.ts`'s
+      // tick. Both are read-only Playwright seams.
+      getVideoReadiness: () => Array<{
+        panelId: string;
+        state: "ready" | "waiting" | "stalled" | "absent";
+        lastReadyMs: number;
+        waitingSinceMs: number | null;
+        lastBlitPtsNs: string | null;
+      }>;
+      getCursorGated: () => boolean;
     };
   }
 }
@@ -457,6 +471,27 @@ export function App() {
       removeBookmark: (id) => useSession.getState().removeBookmark(id),
       renameBookmark: (id, label) =>
         useSession.getState().renameBookmark(id, label),
+      getVideoReadiness: () => {
+        const out: Array<{
+          panelId: string;
+          state: "ready" | "waiting" | "stalled" | "absent";
+          lastReadyMs: number;
+          waitingSinceMs: number | null;
+          lastBlitPtsNs: string | null;
+        }> = [];
+        for (const [panelId, r] of getReadinessSnapshot()) {
+          out.push({
+            panelId,
+            state: r.state,
+            lastReadyMs: r.lastReadyMs,
+            waitingSinceMs: r.waitingSinceMs,
+            lastBlitPtsNs:
+              r.lastBlitPtsNs === null ? null : r.lastBlitPtsNs.toString(),
+          });
+        }
+        return out;
+      },
+      getCursorGated: () => isCursorGated(),
     };
     setReady(true);
     return () => {

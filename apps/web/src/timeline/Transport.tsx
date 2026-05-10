@@ -8,7 +8,106 @@ import { useSession } from "../state/store";
 import type { TimeRange } from "../state/store";
 import { formatAbsolute, formatDuration, formatRelative } from "./formatTime";
 import { BookmarkMarkers } from "./BookmarkMarkers";
+import {
+  getReadinessSnapshot,
+  subscribeReadiness,
+  type ReadyState,
+} from "../panels/videoReadiness";
 import styles from "./Transport.module.css";
+
+// Issue #2 — hysteresis for the decode-waiting dot. Plan §3 numbers:
+// don't show the dot for short waits (which happen on every tiny
+// scrub), and once shown keep it visible for a brief minimum so a
+// fast-flickering ready/waiting flap doesn't strobe.
+const WAITING_VISIBLE_DELAY_MS = 250;
+const WAITING_MIN_VISIBLE_MS = 400;
+const STATES_THAT_SHOW_DOT: readonly ReadyState[] = ["waiting"];
+
+/** Returns true when at least one panel in the registry is in a
+ *  state that should drive the loading affordance. "stalled" panels
+ *  intentionally do NOT trigger the dot — they have their own
+ *  inline error UI inside the VideoPanel. */
+function anyPanelWaiting(): boolean {
+  for (const r of getReadinessSnapshot().values()) {
+    if (STATES_THAT_SHOW_DOT.includes(r.state)) return true;
+  }
+  return false;
+}
+
+/** Issue #2 — drives the "decode-waiting" dot. Subscribes to the
+ *  readiness registry (coalesced to rAF) and applies plan §3
+ *  hysteresis so the dot ignores sub-250 ms blips and stays visible
+ *  for at least 400 ms once shown. The hook re-renders the Transport
+ *  only on hysteresis transitions, never per rAF frame. */
+function useDecodeWaiting(): boolean {
+  const [visible, setVisible] = useState(false);
+  // Refs hold the timers so unrelated parent re-renders don't tear
+  // them down — the dot must persist across rerenders triggered by
+  // unrelated store slices (cursorNs, loadedRanges, …).
+  const showTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const visibleRef = useRef(false);
+  const shownAtMsRef = useRef<number>(0);
+  visibleRef.current = visible;
+
+  useEffect(() => {
+    const clearShow = () => {
+      if (showTimerRef.current !== null) {
+        clearTimeout(showTimerRef.current);
+        showTimerRef.current = null;
+      }
+    };
+    const clearHide = () => {
+      if (hideTimerRef.current !== null) {
+        clearTimeout(hideTimerRef.current);
+        hideTimerRef.current = null;
+      }
+    };
+
+    const evaluate = () => {
+      const wantsDot = anyPanelWaiting();
+      if (wantsDot) {
+        // Cancel any pending hide; we still want to be visible.
+        clearHide();
+        if (visibleRef.current || showTimerRef.current !== null) return;
+        showTimerRef.current = setTimeout(() => {
+          showTimerRef.current = null;
+          shownAtMsRef.current = performance.now();
+          setVisible(true);
+        }, WAITING_VISIBLE_DELAY_MS);
+      } else {
+        clearShow();
+        if (!visibleRef.current || hideTimerRef.current !== null) return;
+        const elapsed = performance.now() - shownAtMsRef.current;
+        const remaining = Math.max(0, WAITING_MIN_VISIBLE_MS - elapsed);
+        hideTimerRef.current = setTimeout(() => {
+          hideTimerRef.current = null;
+          // Re-check: if a new wait started while the hide timer was
+          // pending, keep the dot visible.
+          if (anyPanelWaiting()) {
+            shownAtMsRef.current = performance.now();
+            setVisible(true);
+          } else {
+            setVisible(false);
+          }
+        }, remaining);
+      }
+    };
+
+    // Initial evaluation, then subscribe to coalesced state-change
+    // notifications. The registry's notify is rAF-batched, so this
+    // does not fire 60 times per second.
+    evaluate();
+    const unsub = subscribeReadiness(evaluate);
+    return () => {
+      unsub();
+      clearShow();
+      clearHide();
+    };
+  }, []);
+
+  return visible;
+}
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4] as const;
 const ONE_SEC_NS = 1_000_000_000n;
@@ -36,6 +135,7 @@ export function Transport() {
   const globalRange = useSession((s) => s.globalRange);
   const loadedRanges = useSession((s) => s.loadedRanges);
   const pendingFetch = useSession((s) => s.pendingFetch);
+  const decodeWaiting = useDecodeWaiting();
 
   const disabled = globalRange === null;
   const [mode, setMode] = useState<"relative" | "absolute">("relative");
@@ -247,6 +347,20 @@ export function Transport() {
           >
             ▶▶
           </button>
+          {/* Issue #2 — decode-waiting dot. Pulses when at least one
+           *  bound video panel has been "waiting" continuously for
+           *  ≥ 250 ms (hysteresis-managed in `useDecodeWaiting`).
+           *  Stalled panels surface their own per-panel error badge
+           *  instead, so they don't trigger this. */}
+          {decodeWaiting && (
+            <span
+              className={styles.decodeWaitingDot}
+              data-testid="transport-decode-waiting"
+              role="status"
+              aria-label="Waiting for video decode"
+              title="Waiting for video decode"
+            />
+          )}
         </div>
         <span className={styles.time}>{startLabel}</span>
         <div
@@ -291,7 +405,11 @@ export function Transport() {
             />
             <BookmarkMarkers />
             <div
-              className={styles.thumb}
+              className={
+                decodeWaiting
+                  ? `${styles.thumb} ${styles.thumbWaiting}`
+                  : styles.thumb
+              }
               data-testid="scrubber-thumb"
               style={{ left: `${fillPct}%` }}
             />

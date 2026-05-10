@@ -6,7 +6,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Remote } from "comlink";
 import { useSession } from "../state/store";
-import { startPlaybackLoop } from "./playback";
+import { isCursorGated, startPlaybackLoop } from "./playback";
+import type { PanelReadiness } from "../panels/videoReadiness";
 import type {
   DataCoreApi,
   McapSummary,
@@ -338,6 +339,207 @@ describe("playback loop (T3.3)", () => {
     clock.advance(50);
     clock.flush();
     expect(useSession.getState().cursorNs).toBe(50_000_000n);
+    stop();
+  });
+});
+
+// Issue #2 — decode-aware cursor gating tests. Drives the loop with a
+// hand-rolled readiness map + bound panel list so the gate predicate
+// can be exercised without spinning up a `<VideoPanel>`.
+describe("playback loop gating (Issue #2)", () => {
+  function readinessMap(
+    entries: Array<[string, PanelReadiness["state"]]>,
+  ): Map<string, PanelReadiness> {
+    const m = new Map<string, PanelReadiness>();
+    for (const [id, state] of entries) {
+      m.set(id, {
+        state,
+        lastReadyMs: 0,
+        waitingSinceMs: state === "waiting" ? 0 : null,
+        lastBlitPtsNs: state === "ready" ? 0n : null,
+      });
+    }
+    return m;
+  }
+
+  it("does not advance the cursor while the only bound panel is waiting", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([["video-1", "waiting"]]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["video-1"],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    // 100 ms of fake wall-clock with the panel "waiting" must NOT
+    // advance the cursor.
+    expect(useSession.getState().cursorNs).toBe(0n);
+    expect(isCursorGated()).toBe(true);
+    // The loop must keep scheduling so it can re-check on the next
+    // rAF — otherwise a "waiting" panel would freeze playback even
+    // after it caught up.
+    expect(clock.pendingCount()).toBe(1);
+    stop();
+  });
+
+  it("flips ready: next tick advances by exactly one frame, not by the entire wait", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([["video-1", "waiting"]]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["video-1"],
+    });
+
+    useSession.getState().play();
+    // Sit through a long wait while the panel reports "waiting".
+    clock.advance(1000);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(0n);
+
+    // Decoder catches up. Next 16 ms tick must advance by ~16 ms only,
+    // NOT by 1016 ms (the anchor must have been re-based on every
+    // gated tick).
+    ready.set("video-1", {
+      state: "ready",
+      lastReadyMs: 0,
+      waitingSinceMs: null,
+      lastBlitPtsNs: 0n,
+    });
+    clock.advance(16);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(16_000_000n);
+    expect(isCursorGated()).toBe(false);
+    stop();
+  });
+
+  it("skips the gate when no video panel is bound", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => new Map(),
+      boundVideoPanelIds: () => [],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    // No bound panels → predicate skipped → cursor advances normally.
+    expect(useSession.getState().cursorNs).toBe(100_000_000n);
+    expect(isCursorGated()).toBe(false);
+    stop();
+  });
+
+  it("ignores stalled panels for gating (cursor proceeds)", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([["video-broken", "stalled"]]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["video-broken"],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    // The single bound panel is stalled → gate ignores it → cursor
+    // advances at wall clock rate.
+    expect(useSession.getState().cursorNs).toBe(100_000_000n);
+    expect(isCursorGated()).toBe(false);
+    stop();
+  });
+
+  it("multi-panel: one waiting holds the cursor; the rest don't matter", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([
+      ["healthy", "ready"],
+      ["slow", "waiting"],
+    ]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["healthy", "slow"],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(0n);
+    expect(isCursorGated()).toBe(true);
+    stop();
+  });
+
+  it("multi-panel: one stalled + one ready advances at the ready panel's pace", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([
+      ["healthy", "ready"],
+      ["broken", "stalled"],
+    ]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["healthy", "broken"],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(100_000_000n);
+    expect(isCursorGated()).toBe(false);
+    stop();
+  });
+
+  it("orphan binding without a registry entry does not gate the cursor", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    // Empty registry but the binding exists — typically a stale
+    // videoBindings entry left over from a previous layout where the
+    // panel has been removed. Gating on these would freeze playback
+    // forever for users whose binding map drifted from their layout.
+    // Once a real panel mounts, its first rAF tick puts it in the
+    // registry and gating engages naturally.
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => new Map(),
+      boundVideoPanelIds: () => ["video-1"],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(100_000_000n);
+    expect(isCursorGated()).toBe(false);
+    stop();
+  });
+
+  it("explicit absent state in the registry gates the cursor", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    // Distinct from the orphan case: the panel HAS published a
+    // snapshot, but it's still in the initial "absent" state (no
+    // frame has landed). This must gate; the panel's own
+    // STALLED_TIMEOUT_MS escalation bounds the grace.
+    const ready = readinessMap([["video-1", "absent"]]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["video-1"],
+    });
+
+    useSession.getState().play();
+    clock.advance(50);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(0n);
+    expect(isCursorGated()).toBe(true);
     stop();
   });
 });
