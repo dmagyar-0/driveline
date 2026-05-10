@@ -15,6 +15,30 @@
 import type { StoreApi } from "zustand";
 import type { SessionState } from "../state/store";
 import { mark, measure } from "../perf";
+import {
+  getReadinessSnapshot as defaultGetReadinessSnapshot,
+  type PanelReadiness,
+} from "../panels/videoReadiness";
+
+// Issue #2 — cursor gating signal. Mirrors the constant in
+// `panels/VideoPanel.tsx`; both modules independently consult their
+// own copy so neither has to import across the panels/timeline seam
+// just to compare two bigints.
+//
+// Rationale: at 30 fps the inter-frame interval is ~33 ms; ε = 100 ms
+// (≈3 frames) keeps the gate from flapping when a single rAF tick
+// happens to land between decode + blit. At 60 fps the same ε
+// trivially covers one frame.
+export const READY_EPSILON_NS = 100_000_000n;
+
+/** Issue #2 — flag readable by Playwright via the `getCursorGated`
+ *  dev hook. Module-scope so the rAF loop can write it without
+ *  routing through React state. Mirrors the most recent `tick()`
+ *  decision; consult after a tick to know if the cursor was held. */
+let cursorGated = false;
+export function isCursorGated(): boolean {
+  return cursorGated;
+}
 
 export interface PlaybackDeps {
   /** Wall-clock source in milliseconds. */
@@ -23,6 +47,14 @@ export interface PlaybackDeps {
   raf: (cb: FrameRequestCallback) => number;
   /** Cancels a previously-returned rAF handle. */
   caf: (id: number) => void;
+  /** Issue #2 — readiness map source. Defaults to the live registry;
+   *  unit tests inject a hand-rolled Map so the gate can be exercised
+   *  without spinning up a VideoPanel. */
+  readiness: () => Map<string, PanelReadiness>;
+  /** Issue #2 — list of bound video panel ids. Defaults to reading
+   *  `videoBindings` off the store; unit tests pass a closure to
+   *  drive the gate directly. */
+  boundVideoPanelIds: (state: SessionState) => string[];
 }
 
 type SessionStore = Pick<
@@ -30,11 +62,25 @@ type SessionStore = Pick<
   "getState" | "subscribe"
 >;
 
+function defaultBoundVideoPanelIds(state: SessionState): string[] {
+  // Walk `videoBindings` once per tick; a panel is "bound" iff its
+  // entry exists and is non-null. Allocation-light: the array is at
+  // most one entry per video panel (typically ≤ 4).
+  const out: string[] = [];
+  const b = state.videoBindings;
+  for (const k in b) {
+    if (b[k]) out.push(k);
+  }
+  return out;
+}
+
 function defaultDeps(): PlaybackDeps {
   return {
     now: () => performance.now(),
     raf: (cb) => requestAnimationFrame(cb),
     caf: (id) => cancelAnimationFrame(id),
+    readiness: defaultGetReadinessSnapshot,
+    boundVideoPanelIds: defaultBoundVideoPanelIds,
   };
 }
 
@@ -48,7 +94,10 @@ export function startPlaybackLoop(
   store: SessionStore,
   deps?: Partial<PlaybackDeps>,
 ): () => void {
-  const { now, raf, caf } = { ...defaultDeps(), ...deps };
+  const { now, raf, caf, readiness, boundVideoPanelIds } = {
+    ...defaultDeps(),
+    ...deps,
+  };
 
   let rafId: number | null = null;
   let anchor: Anchor | null = null;
@@ -77,6 +126,41 @@ export function startPlaybackLoop(
     const state = store.getState();
     if (!state.playing) return;
     mark("tick:start");
+
+    // Issue #2 — decode-aware gate. Hold the cursor whenever any bound
+    // video panel reports "waiting" or "absent"; ignore stalled panels
+    // (they have their own inline error UI and we must not deadlock on
+    // them); and ignore bindings whose panel hasn't mounted yet — an
+    // orphan binding from a previous layout, with no rAF loop running,
+    // shouldn't gate the cursor forever. Once a panel mounts its rAF
+    // tick will land an entry in the registry within one frame and the
+    // gate engages naturally.
+    const bound = boundVideoPanelIds(state);
+    if (bound.length > 0) {
+      const snaps = readiness();
+      let allReady = true;
+      for (let i = 0; i < bound.length; i++) {
+        const r = snaps.get(bound[i]);
+        // No registry entry = panel not mounted (orphan binding) →
+        // ignore. Mount lifecycle: panel's first rAF tick adds the
+        // entry, panel's cleanup `clearPanelReadiness` removes it.
+        if (!r) continue;
+        if (r.state === "waiting" || r.state === "absent") {
+          allReady = false;
+          break;
+        }
+        // "ready" → continue. "stalled" → ignore for cursor gating.
+      }
+      if (!allReady) {
+        cursorGated = true;
+        anchor = { ...a, nowMs: now() };
+        mark("tick:gated");
+        rafId = raf(tick);
+        return;
+      }
+    }
+    cursorGated = false;
+
     const elapsedMs = now() - a.nowMs;
     const deltaNs = BigInt(Math.round(elapsedMs * 1e6 * a.speed));
     const nextNs = a.cursorNs + deltaNs;

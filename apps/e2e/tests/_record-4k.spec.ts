@@ -58,10 +58,14 @@ test(`record 4K playback (${LABEL})`, async ({ page }) => {
     await window.__drivelineDevHooks!.openFiles([
       { name: "short.mcap", bytes },
     ]);
-    window.__drivelineDevHooks!.setVideoChannelBinding(
-      "video-1",
-      "/camera/front",
-    );
+    // Resolve the qualified channel id at runtime — PR #84b08ee
+    // changed `Channel.id` to `qualifiedChannelId(sourceId, nativeId)`.
+    const id = window.__drivelineDevHooks!.findChannelId({
+      sourceName: "short.mcap",
+      nativeId: "/camera/front",
+    });
+    if (!id) throw new Error("video channel must resolve");
+    window.__drivelineDevHooks!.setVideoChannelBinding("video-1", id);
   });
 
   await page.getByTestId("video-panel-canvas").waitFor({ timeout: 30_000 });

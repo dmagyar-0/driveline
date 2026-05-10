@@ -32,9 +32,13 @@ const VIDEO_PANEL_ID = "video-1";
 const PLOT_PANEL_ID = "plot-1";
 
 // Matches the channels written by
-// `crates/data-core/src/fixtures.rs:129-203`.
-const VIDEO_CHANNEL_ID = "/camera/front";
-const SPEED_CHANNEL_ID = "/vehicle/speed";
+// `crates/data-core/src/fixtures.rs:129-203`. PR #84b08ee changed
+// `Channel.id` from the native form to
+// `qualifiedChannelId(sourceId, nativeId)`, so the test resolves these
+// at runtime via the `findChannelId` dev hook.
+const VIDEO_NATIVE_ID = "/camera/front";
+const SPEED_NATIVE_ID = "/vehicle/speed";
+const SOURCE_NAME = "short.mcap";
 
 interface SessionSnapshot {
   cursorNs: string;
@@ -81,6 +85,8 @@ declare global {
       addPlotChannelBinding: (panelId: string, channelId: string) => void;
       getPlotPanelSync: (panelId: string) => PlotSync | null;
       resetLayout: () => void;
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
     };
   }
 }
@@ -129,6 +135,12 @@ async function clickScrubberAtRatio(page: Page, ratio: number): Promise<void> {
 test.describe("cross-panel sync (T6.1)", () => {
   test.slow();
 
+  // Populated in `beforeEach` once the qualified ids are resolved via
+  // the `findChannelId` dev hook. Test bodies read these instead of the
+  // native ids — the binding maps and the `sampleAtCursor.channelId`
+  // both carry the qualified form.
+  let resolvedSpeedChannelId: string;
+
   // Filter out the expected VideoDecoder errors fired by the synthetic
   // fixture. Same allow-list as videoSeek.spec.ts so a real regression
   // in error handling still surfaces.
@@ -172,14 +184,33 @@ test.describe("cross-panel sync (T6.1)", () => {
 
     // Bind the default panels programmatically. The picker UIs have
     // their own dedicated specs; here we care about the sync invariant,
-    // not the binding UX.
+    // not the binding UX. Resolve the qualified channel ids at runtime
+    // — PR #84b08ee changed `Channel.id` to
+    // `qualifiedChannelId(sourceId, nativeId)`.
+    const resolved = await page.evaluate(
+      ({ sourceName, videoNative, speedNative }) => {
+        const hooks = window.__drivelineDevHooks!;
+        return {
+          video: hooks.findChannelId({ sourceName, nativeId: videoNative }),
+          speed: hooks.findChannelId({ sourceName, nativeId: speedNative }),
+        };
+      },
+      {
+        sourceName: SOURCE_NAME,
+        videoNative: VIDEO_NATIVE_ID,
+        speedNative: SPEED_NATIVE_ID,
+      },
+    );
+    expect(resolved.video, "video channel must resolve").not.toBeNull();
+    expect(resolved.speed, "speed channel must resolve").not.toBeNull();
+    resolvedSpeedChannelId = resolved.speed!;
     await page.evaluate(
       ([videoPanelId, videoChannelId, plotPanelId, speedChannelId]) => {
         const hooks = window.__drivelineDevHooks!;
         hooks.setVideoChannelBinding(videoPanelId, videoChannelId);
         hooks.addPlotChannelBinding(plotPanelId, speedChannelId);
       },
-      [VIDEO_PANEL_ID, VIDEO_CHANNEL_ID, PLOT_PANEL_ID, SPEED_CHANNEL_ID],
+      [VIDEO_PANEL_ID, resolved.video!, PLOT_PANEL_ID, resolved.speed!],
     );
 
     await page.getByTestId("video-panel-canvas").waitFor();
@@ -288,7 +319,7 @@ test.describe("cross-panel sync (T6.1)", () => {
       // the five targets would be a regression.
       expect(ps.sampleAtCursor).toHaveLength(1);
       const sample = ps.sampleAtCursor[0]!;
-      expect(sample.channelId).toBe(SPEED_CHANNEL_ID);
+      expect(sample.channelId).toBe(resolvedSpeedChannelId);
       expect(BigInt(sample.tsNs)).toBeLessThanOrEqual(target);
 
       // Wait for the blit loop to settle on a frame whose PTS is at or

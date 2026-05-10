@@ -41,6 +41,8 @@ declare global {
         channelId: string | null,
       ) => void;
       resetLayout: () => void;
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
     };
   }
 }
@@ -50,7 +52,8 @@ declare global {
 // default (T6.2) so the spec has to wire a channel before the canvas
 // will mount.
 const VIDEO_PANEL_ID = "video-1";
-const VIDEO_CHANNEL_ID = "/camera/front";
+const VIDEO_NATIVE_ID = "/camera/front";
+const VIDEO_SOURCE_NAME = "short.mcap";
 
 async function snapshot(page: Page): Promise<SessionSnapshot> {
   return await page.evaluate(() =>
@@ -126,11 +129,20 @@ test.describe("video seek (T5.2)", () => {
 
     // Bind the default video panel to the fixture's video channel.
     // T6.2 made panels unbound-by-default; without this, the canvas
-    // never mounts and `video-panel-canvas` below hangs.
+    // never mounts and `video-panel-canvas` below hangs. Resolve the
+    // qualified channel id at runtime — PR #84b08ee changed
+    // `Channel.id` from the native form to
+    // `qualifiedChannelId(sourceId, nativeId)`.
+    const channelId = await page.evaluate(
+      ({ sourceName, nativeId }) =>
+        window.__drivelineDevHooks!.findChannelId({ sourceName, nativeId }),
+      { sourceName: VIDEO_SOURCE_NAME, nativeId: VIDEO_NATIVE_ID },
+    );
+    expect(channelId, "video channel must resolve").not.toBeNull();
     await page.evaluate(
-      ([panelId, channelId]) =>
-        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, channelId),
-      [VIDEO_PANEL_ID, VIDEO_CHANNEL_ID],
+      ([panelId, id]) =>
+        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, id),
+      [VIDEO_PANEL_ID, channelId!],
     );
 
     // Wait for the VideoPanel to mount and the HUD snapshot to populate.

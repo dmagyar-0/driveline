@@ -1,0 +1,155 @@
+// Unit tests for the per-panel readiness registry (Issue #2).
+
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __resetReadinessForTests,
+  clearPanelReadiness,
+  getReadinessSnapshot,
+  setPanelReadiness,
+  subscribeReadiness,
+  type PanelReadiness,
+} from "./videoReadiness";
+
+function snap(
+  state: PanelReadiness["state"],
+  overrides: Partial<PanelReadiness> = {},
+): PanelReadiness {
+  return {
+    state,
+    lastReadyMs: 0,
+    waitingSinceMs: null,
+    lastBlitPtsNs: null,
+    ...overrides,
+  };
+}
+
+describe("videoReadiness registry", () => {
+  beforeEach(() => {
+    __resetReadinessForTests();
+    // Run the rAF coalescer synchronously so tests don't sprout
+    // arbitrary `await new Promise(r => requestAnimationFrame(r))`
+    // dance for every assertion.
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      cb(0);
+      return 0;
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    __resetReadinessForTests();
+  });
+
+  it("starts empty", () => {
+    expect(getReadinessSnapshot().size).toBe(0);
+  });
+
+  it("setPanelReadiness inserts new panels and overwrites existing ones", () => {
+    setPanelReadiness("p1", snap("waiting", { waitingSinceMs: 100 }));
+    expect(getReadinessSnapshot().get("p1")?.state).toBe("waiting");
+
+    setPanelReadiness(
+      "p1",
+      snap("ready", { lastReadyMs: 200, waitingSinceMs: null }),
+    );
+    expect(getReadinessSnapshot().get("p1")?.state).toBe("ready");
+    expect(getReadinessSnapshot().get("p1")?.lastReadyMs).toBe(200);
+    expect(getReadinessSnapshot().get("p1")?.waitingSinceMs).toBeNull();
+  });
+
+  it("clearPanelReadiness removes the entry and notifies subscribers", () => {
+    const fn = vi.fn();
+    const unsub = subscribeReadiness(fn);
+
+    setPanelReadiness("p1", snap("ready"));
+    expect(getReadinessSnapshot().has("p1")).toBe(true);
+    fn.mockClear();
+
+    clearPanelReadiness("p1");
+    expect(getReadinessSnapshot().has("p1")).toBe(false);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // Clearing a panel that's already gone should not notify again.
+    fn.mockClear();
+    clearPanelReadiness("p1");
+    expect(fn).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("notifies subscribers on first insert and on state transitions only", () => {
+    const fn = vi.fn();
+    const unsub = subscribeReadiness(fn);
+
+    setPanelReadiness("p1", snap("waiting", { waitingSinceMs: 100 }));
+    expect(fn).toHaveBeenCalledTimes(1);
+    fn.mockClear();
+
+    // Same state, just a clock tick — must not notify.
+    setPanelReadiness("p1", snap("waiting", { waitingSinceMs: 100 }));
+    setPanelReadiness("p1", snap("waiting", { waitingSinceMs: 100 }));
+    expect(fn).not.toHaveBeenCalled();
+
+    // Transition → notify.
+    setPanelReadiness("p1", snap("ready", { lastReadyMs: 250 }));
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // Another transition → notify.
+    fn.mockClear();
+    setPanelReadiness("p1", snap("stalled"));
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    unsub();
+  });
+
+  it("subscriber unsubscribe stops further notifications", () => {
+    const fn = vi.fn();
+    const unsub = subscribeReadiness(fn);
+    setPanelReadiness("p1", snap("waiting"));
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    fn.mockClear();
+    unsub();
+    setPanelReadiness("p1", snap("ready"));
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it("supports multiple panels independently", () => {
+    setPanelReadiness("a", snap("ready", { lastBlitPtsNs: 100n }));
+    setPanelReadiness("b", snap("waiting", { waitingSinceMs: 50 }));
+    setPanelReadiness("c", snap("stalled"));
+
+    const r = getReadinessSnapshot();
+    expect(r.size).toBe(3);
+    expect(r.get("a")?.state).toBe("ready");
+    expect(r.get("a")?.lastBlitPtsNs).toBe(100n);
+    expect(r.get("b")?.state).toBe("waiting");
+    expect(r.get("c")?.state).toBe("stalled");
+  });
+
+  it("a panel transitioning waiting → stalled → waiting fires two state-change notifies", () => {
+    const fn = vi.fn();
+    const unsub = subscribeReadiness(fn);
+
+    setPanelReadiness("p1", snap("waiting"));
+    fn.mockClear();
+    setPanelReadiness("p1", snap("stalled"));
+    expect(fn).toHaveBeenCalledTimes(1);
+    setPanelReadiness("p1", snap("waiting"));
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    unsub();
+  });
+
+  it("subscriber callbacks that throw do not break the notify loop", () => {
+    const bad = vi.fn().mockImplementation(() => {
+      throw new Error("boom");
+    });
+    const good = vi.fn();
+    subscribeReadiness(bad);
+    subscribeReadiness(good);
+
+    setPanelReadiness("p1", snap("waiting"));
+    expect(bad).toHaveBeenCalledTimes(1);
+    expect(good).toHaveBeenCalledTimes(1);
+  });
+});

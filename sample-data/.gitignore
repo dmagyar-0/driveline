@@ -2,3 +2,7 @@ out.h264
 short.mcap
 short.zstd.mcap
 short.mp4
+short.annexb.mp4
+short.annexb.mp4.timestamps
+short.broken.mp4
+short.broken.mp4.timestamps

@@ -4,6 +4,7 @@ import {
   LOOKAHEAD_NS,
   REFILL_LOW_WATER,
   codecStringFromSps,
+  detectMp4Framing,
   findSps,
   hex,
   pickStartCursor,
@@ -164,8 +165,15 @@ describe("videoStreamOps", () => {
     const ops = videoStreamOps(dc, "mcap");
     const result = await ops.open(1, "/camera/front", 0n);
     // mcap stays in Annex-B mode — no `description` is surfaced and the
-    // worker leaves `VideoDecoderConfig.description` unset.
-    expect(result).toEqual({ streamId: 11, description: null });
+    // worker leaves `VideoDecoderConfig.description` unset. The `framing`
+    // field is part of the union type; mcap reports `"avcc"` since the
+    // decoder code only consults it in conjunction with a non-null
+    // description (and mcap's description is null).
+    expect(result).toEqual({
+      streamId: 11,
+      description: null,
+      framing: "avcc",
+    });
     await ops.next(11, 4);
     await ops.close(11);
 
@@ -194,8 +202,11 @@ describe("videoStreamOps", () => {
       sps: new Uint8Array([0x67, 0x42, 0x00, 0x1e]),
       pps: new Uint8Array([0x68, 0xeb]),
     };
-    // Raw AVCC sample: 4-byte BE length=1, then a single IDR NAL byte.
-    const sampleBody = new Uint8Array([0, 0, 0, 1, 0x65]);
+    // Raw AVCC sample: 4-byte BE length=2, then a 2-byte IDR NAL.
+    // (Length=1 would collide with the Annex-B start-code sniff.) The body
+    // is opaque to the dispatch logic; only the framing detector ever
+    // looks at the leading bytes.
+    const sampleBody = new Uint8Array([0, 0, 0, 2, 0x65, 0x88]);
     const mp4Port = {
       mp4Index: vi.fn(async () => mp4Index),
       mp4Sample: vi.fn(async () => sampleBody),
@@ -231,6 +242,137 @@ describe("videoStreamOps", () => {
   it("throws when the mp4 port is missing for an mp4 source", () => {
     const dc = makeFakeDc();
     expect(() => videoStreamOps(dc, "mp4")).toThrow(/mp4 lazy port/);
+  });
+
+  it("detects Annex-B framing in mp4 sources and emits raw bytes without a description", async () => {
+    // The non-standard Annex-B mp4 fixture (`scripts/video/make_annexb_mp4.py`)
+    // overwrites the 4-byte length prefix in mdat with a `00 00 00 01` start
+    // code, leaving the rest of the sample bytes intact. The detector picks
+    // that up at `open()` time, the worker switches to Annex-B mode (no
+    // description, no `stripInlineParameterSets`), and chunks ride straight
+    // through to the decoder — same shape the mcap path uses.
+    const dc = makeFakeDc();
+    const mp4Index = {
+      channelId: "1/video",
+      ptsNs: BigInt64Array.from([0n, 33_000_000n, 66_000_000n]),
+      offsets: BigUint64Array.from([100n, 110n, 120n]),
+      sizes: Uint32Array.from([10, 10, 10]),
+      isSync: Uint8Array.from([1, 0, 0]),
+      sps: new Uint8Array([0x67, 0x42, 0x00, 0x1e]),
+      pps: new Uint8Array([0x68, 0xeb]),
+    };
+    // 00 00 00 01 (start code) | 0x67 (SPS NAL header) | trailing payload.
+    const annexBSample = new Uint8Array([
+      0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0x99,
+    ]);
+    const mp4Port = {
+      mp4Index: vi.fn(async () => mp4Index),
+      mp4Sample: vi.fn(async () => annexBSample),
+      mp4SetActive: vi.fn(async () => undefined),
+      mp4MarkPending: vi.fn(async () => undefined),
+      mp4ClearPending: vi.fn(async () => undefined),
+    } as unknown as Comlink.Remote<
+      import("./videoDecodeOps").Mp4LazyPortApi
+    >;
+    const ops = videoStreamOps(dc, "mp4", mp4Port);
+    const result = await ops.open(7, "1/video", 0n);
+    // Annex-B mode: no avcC description, framing surfaced as `"annexb"`.
+    expect(result.description).toBeNull();
+    expect(result.framing).toBe("annexb");
+    // First `next()` reuses the bytes captured during framing detection
+    // instead of refetching: `mp4Sample` was called exactly once (at open),
+    // and the emitted body is the same reference.
+    const fakePort = mp4Port as unknown as Record<
+      string,
+      ReturnType<typeof vi.fn>
+    >;
+    expect(fakePort.mp4Sample).toHaveBeenCalledTimes(1);
+    const batch = await ops.next(result.streamId, 1);
+    expect(batch.length).toBe(1);
+    expect(batch[0].is_keyframe).toBe(true);
+    // Verbatim pass-through — no `stripInlineParameterSets` reformatting.
+    expect(batch[0].data).toBe(annexBSample);
+    // Still only one fetch: the open() bytes were reused for the first
+    // emitted chunk.
+    expect(fakePort.mp4Sample).toHaveBeenCalledTimes(1);
+    // The next pull goes back to the cache as usual.
+    await ops.next(result.streamId, 1);
+    expect(fakePort.mp4Sample).toHaveBeenCalledTimes(2);
+    await ops.close(result.streamId);
+  });
+});
+
+describe("detectMp4Framing", () => {
+  // The detector runs once per mp4 `open()` against the first sample. It
+  // must distinguish standard AVCC layout (4-byte BE length prefix) from
+  // the Annex-B start-code layout produced by
+  // `scripts/video/make_annexb_mp4.py`. False positives in either
+  // direction wedge `VideoDecoder.configure()` with an opaque error, so
+  // pin every realistic boundary case here.
+
+  it("returns `avcc` for length-prefixed samples (typical x264 mp4)", () => {
+    // 4-byte BE length = 0x12 (18 bytes), then SPS NAL header byte.
+    expect(
+      detectMp4Framing(
+        new Uint8Array([0, 0, 0, 0x12, 0x67, 0x42, 0x00, 0x1e]),
+      ),
+    ).toBe("avcc");
+    // A larger length still well below the 16M boundary.
+    expect(
+      detectMp4Framing(
+        new Uint8Array([0, 0, 0x40, 0x00, 0x67, 0x42, 0x00, 0x1e]),
+      ),
+    ).toBe("avcc");
+  });
+
+  it("returns `annexb` for samples that begin with `00 00 00 01` plus a valid NAL header", () => {
+    // SPS (type 7) — the synthesized Annex-B fixture's first NAL.
+    expect(
+      detectMp4Framing(
+        new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e]),
+      ),
+    ).toBe("annexb");
+    // IDR slice (type 5) — also a valid first-NAL kind in the wild.
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x65, 0x88, 0x99])),
+    ).toBe("annexb");
+    // AUD (type 9) — some encoders emit an AUD before the SPS.
+    expect(detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x09, 0x10]))).toBe(
+      "annexb",
+    );
+  });
+
+  it("returns `avcc` for the pathological 16M-NAL whose byte[4] has forbidden_zero_bit set", () => {
+    // Length prefix `00 00 00 01` (= 16,777,217-byte NAL) but byte[4]'s
+    // top bit is the H.264 forbidden_zero_bit. A real Annex-B NAL header
+    // never sets it; treat as AVCC.
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x80, 0x00, 0x00])),
+    ).toBe("avcc");
+  });
+
+  it("returns `avcc` when byte[4] decodes to nal_type 0 (unspecified)", () => {
+    // forbidden_zero_bit clear, nal_unit_type = 0. No conformant H.264
+    // stream starts a sample with type 0.
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x00, 0xff, 0xff])),
+    ).toBe("avcc");
+  });
+
+  it("returns `avcc` when byte[4] decodes to nal_type > 23 (reserved/extension)", () => {
+    // nal_unit_type = 24 (forbidden_zero_bit clear, low 5 bits = 24).
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x18, 0x55, 0x66])),
+    ).toBe("avcc");
+    // nal_unit_type = 31 (max 5-bit value).
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x1f, 0x55])),
+    ).toBe("avcc");
+  });
+
+  it("returns `avcc` for samples shorter than 5 bytes (defensive)", () => {
+    expect(detectMp4Framing(new Uint8Array())).toBe("avcc");
+    expect(detectMp4Framing(new Uint8Array([0, 0, 0, 1]))).toBe("avcc");
   });
 });
 

@@ -42,6 +42,8 @@ declare global {
       ) => void;
       resetLayout: () => void;
       listSources: () => Array<{ id: string; name: string }>;
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
     };
   }
 }
@@ -53,7 +55,8 @@ declare global {
 // written with a single video track at `track_id = 1` (see
 // `crates/data-core/src/fixtures.rs::short_mp4_bytes`).
 const VIDEO_PANEL_ID = "video-1";
-const VIDEO_CHANNEL_ID = "1/video";
+const VIDEO_NATIVE_ID = "1/video";
+const VIDEO_SOURCE_NAME = "short.mp4";
 
 async function snapshot(page: Page): Promise<SessionSnapshot> {
   return await page.evaluate(() =>
@@ -133,11 +136,20 @@ test.describe("video mp4 + sidecar (T5.3)", () => {
 
     // Bind the default video panel to the mp4's video channel. T6.2
     // made panels unbound by default; without this the canvas never
-    // mounts.
+    // mounts. Resolve the qualified channel id at runtime — PR #84b08ee
+    // changed `Channel.id` from the native form to
+    // `qualifiedChannelId(sourceId, nativeId)`, so hardcoding the native
+    // id no longer binds.
+    const channelId = await page.evaluate(
+      ({ sourceName, nativeId }) =>
+        window.__drivelineDevHooks!.findChannelId({ sourceName, nativeId }),
+      { sourceName: VIDEO_SOURCE_NAME, nativeId: VIDEO_NATIVE_ID },
+    );
+    expect(channelId, "video channel must resolve").not.toBeNull();
     await page.evaluate(
-      ([panelId, channelId]) =>
-        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, channelId),
-      [VIDEO_PANEL_ID, VIDEO_CHANNEL_ID],
+      ([panelId, id]) =>
+        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, id),
+      [VIDEO_PANEL_ID, channelId!],
     );
 
     await page.getByTestId("video-panel-canvas").waitFor();

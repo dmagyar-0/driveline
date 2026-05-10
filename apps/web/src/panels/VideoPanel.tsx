@@ -11,13 +11,48 @@
 // blit queue, dropped frames, codec) and guards that skip seeks that
 // duplicate the open target or the last-issued target.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
 import { mark } from "../perf";
+import {
+  clearPanelReadiness,
+  getReadinessSnapshot,
+  setPanelReadiness,
+  subscribeReadiness,
+  type PanelReadiness,
+  type ReadyState,
+} from "./videoReadiness";
 import styles from "./VideoPanel.module.css";
+
+// Issue #2 — readiness predicate constants. The panel reports "ready"
+// in two regimes:
+//   1. A frame has been blitted *and* it is within READY_EPSILON_NS of
+//      the cursor (steady-state play, decoder is keeping up frame for
+//      frame).
+//   2. The decoder is alive — `frameIndex` advanced within the last
+//      FRAME_LIVE_WINDOW_MS — even if `lastBlitPts` is briefly more
+//      than ε behind. Without this, a 4K decode on a slow CPU (where
+//      individual frames take 30–80 ms each) constantly trips the ε
+//      threshold for healthy streams, the gate engages, and the worker
+//      stops emitting because its lookahead pacing follows the gated
+//      cursor — a feedback loop that throttles playback to ~25 % real
+//      time. Treating "decoder is producing frames" as a ready signal
+//      is honest: if frames are arriving the user IS seeing playback,
+//      whether or not the most-recent blit happens to be within the
+//      tight ε at the moment we polled.
+//
+// Mirrors `READY_EPSILON_NS` in `timeline/playback.ts`; both modules
+// independently consult their own copy so neither has to import across
+// the panels/timeline seam.
+const READY_EPSILON_NS = 100_000_000n;
+const FRAME_LIVE_WINDOW_MS = 250;
+// Issue #2 — once a panel has been "waiting" continuously for this long
+// AND `frameIndex` has not advanced since the wait began, the panel
+// transitions to "stalled" and the cursor is allowed to proceed past it.
+const STALLED_TIMEOUT_MS = 5000;
 
 interface VideoPanelProps {
   sourceKind: "mcap" | "mp4";
@@ -89,6 +124,34 @@ export function VideoPanel({
   const hudOnRef = useRef<boolean>(false);
   const statsDomRef = useRef<HTMLDivElement | null>(null);
 
+  // Issue #2 — readiness bookkeeping. Reused across rAF ticks so the
+  // hot path doesn't allocate per frame. `lastFrameIndexAtWaitStartRef`
+  // records the `frameIndex` at the moment the panel flipped from
+  // "ready" to "waiting"; if it changes before STALLED_TIMEOUT_MS
+  // elapses we restart the wait clock (decoder is alive, just slow).
+  // `waitingSinceMsRef` is the wall clock at which the panel last
+  // transitioned out of "ready"; the rAF loop derives the "have we
+  // been waiting long enough to escalate to stalled" check from this.
+  // `lastFrameArrivedMsRef` is bumped on every decoder frame arrival
+  // (in `port.onmessage`) — drives the "decoder alive" arm of the
+  // readiness predicate.
+  const readinessScratchRef = useRef<PanelReadiness>({
+    state: "absent",
+    lastReadyMs: 0,
+    waitingSinceMs: null,
+    lastBlitPtsNs: null,
+  });
+  const waitingSinceMsRef = useRef<number | null>(null);
+  const lastFrameIndexAtWaitStartRef = useRef<number>(0);
+  const lastReadyMsRef = useRef<number>(0);
+  const lastFrameArrivedMsRef = useRef<number>(0);
+
+  // Issue #2 — inline stalled badge inside the panel. The rAF loop
+  // doesn't write to React state directly (no per-frame renders); the
+  // dedicated readiness subscriber below mirrors the registry into
+  // local state once per state transition, which is rare.
+  const [readyState, setReadyState] = useState<ReadyState>("absent");
+
   // `lastSeekTargetRef` starts null and is set to the initial `open()`
   // target once the worker has accepted it. The debounced cursor effect
   // skips a `seek()` that matches this — preventing a redundant seek on
@@ -142,6 +205,11 @@ export function VideoPanel({
       const { ptsNs, frame, frameIndex, decodeQueue } = data;
       lastFrameIndexRef.current = frameIndex;
       lastDecodeQueueRef.current = decodeQueue;
+      // Issue #2 — wall clock of the most recent frame arrival.
+      // Drives the "decoder is alive" arm of the readiness predicate
+      // so a healthy 4K stream that briefly outpaces ε is still
+      // reported as ready instead of constantly tripping the gate.
+      lastFrameArrivedMsRef.current = performance.now();
       if (!sizedRef.current) {
         canvas.width = frame.displayWidth;
         canvas.height = frame.displayHeight;
@@ -340,6 +408,98 @@ export function VideoPanel({
           : styles.stats;
         if (stats.className !== cls) stats.className = cls;
       }
+
+      // Issue #2 — publish per-panel readiness. The rAF blit loop is
+      // the single source of truth for "has a frame within ε of the
+      // cursor actually been blitted." Routing this through the same
+      // tick keeps the readiness signal honest with the on-canvas HUD.
+      //
+      // Predicate: ready iff a frame has been blitted AND that frame's
+      // PTS is within READY_EPSILON_NS behind (or anywhere ahead of)
+      // the cursor. Cursor-ahead-of-frame within ε is the steady-state
+      // shape during playback; cursor-behind-frame happens after a
+      // backwards scrub and is also "ready" (frame is on canvas).
+      const nowMsRead = performance.now();
+      const lastBlitPts = lastBlitPtsRef.current;
+      let isReady = false;
+      if (lastBlitPts !== null) {
+        const behindNs = cursor - lastBlitPts;
+        // Tight arm: visible frame is within ε of cursor. behindNs<0
+        // means cursor is *behind* the visible frame (just-scrubbed-
+        // back), which is also ready.
+        if (behindNs <= READY_EPSILON_NS) {
+          isReady = true;
+        } else {
+          // Loose arm A: decoder is producing frames recently.
+          // Without this, a 4K stream whose decoder is real-time but
+          // per-frame arrival jitters a couple of frames behind cursor
+          // would trip the tight arm constantly, gate would engage,
+          // worker pacing would follow the gated cursor, and playback
+          // would throttle into a feedback loop.
+          if (
+            nowMsRead - lastFrameArrivedMsRef.current <=
+            FRAME_LIVE_WINDOW_MS
+          ) {
+            isReady = true;
+          } else {
+            // Loose arm B: queue still holds undelivered frames
+            // straddling the cursor — decoder finished its lookahead
+            // burst and went idle by design (worker pacing). The
+            // panel will catch up as cursor advances; this is not a
+            // stall. Walking the queue once is O(MAX_QUEUE=16),
+            // which is fine for a 60 Hz tick.
+            for (let i = 0; i < q.length; i++) {
+              if (q[i].ptsNs >= cursor) {
+                isReady = true;
+                break;
+              }
+            }
+          }
+        }
+      }
+
+      // Compute readiness state with stalled escalation.
+      let nextState: ReadyState;
+      if (isReady) {
+        nextState = "ready";
+        waitingSinceMsRef.current = null;
+        lastReadyMsRef.current = nowMsRead;
+      } else {
+        // Not-ready. Either we just transitioned out of ready or we've
+        // been waiting since some earlier tick. Track when the wait
+        // started so the Transport can apply hysteresis.
+        if (waitingSinceMsRef.current === null) {
+          waitingSinceMsRef.current = nowMsRead;
+          lastFrameIndexAtWaitStartRef.current =
+            lastFrameIndexRef.current;
+        }
+        const waitedMs = nowMsRead - waitingSinceMsRef.current;
+        // If `frameIndex` advanced since the wait started, the decoder
+        // is alive — reset the stalled clock by re-anchoring the wait
+        // start to "now" with the current frameIndex. Keeps a slow but
+        // healthy pipeline from being declared stalled.
+        if (
+          lastFrameIndexRef.current !==
+          lastFrameIndexAtWaitStartRef.current
+        ) {
+          waitingSinceMsRef.current = nowMsRead;
+          lastFrameIndexAtWaitStartRef.current =
+            lastFrameIndexRef.current;
+          nextState = "waiting";
+        } else if (waitedMs >= STALLED_TIMEOUT_MS) {
+          nextState = "stalled";
+        } else {
+          nextState = "waiting";
+        }
+      }
+
+      const scratch = readinessScratchRef.current;
+      scratch.state = nextState;
+      scratch.lastReadyMs = lastReadyMsRef.current;
+      scratch.waitingSinceMs = waitingSinceMsRef.current;
+      scratch.lastBlitPtsNs = lastBlitPts;
+      setPanelReadiness(panelId, scratch);
+
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -358,6 +518,13 @@ export function VideoPanel({
       lastDecodeQueueRef.current = 0;
       droppedFramesRef.current = 0;
       lastBlitPtsRef.current = null;
+      // Issue #2 — drop our entry from the readiness registry so the
+      // playback rAF doesn't keep gating on an unmounted panel.
+      waitingSinceMsRef.current = null;
+      lastFrameIndexAtWaitStartRef.current = 0;
+      lastReadyMsRef.current = 0;
+      lastFrameArrivedMsRef.current = 0;
+      clearPanelReadiness(panelId);
       window.__drivelineVideoHud = undefined;
       const dc = videoDecodeRef.current;
       const w = videoDecodeWorkerRef.current;
@@ -374,7 +541,33 @@ export function VideoPanel({
         w?.terminate();
       }
     };
-  }, [sourceKind, sourceHandle, channelId, globalRange?.startNs]);
+  }, [sourceKind, sourceHandle, channelId, globalRange?.startNs, panelId]);
+
+  // Issue #2 — mirror our own readiness state into local React state so
+  // we can render the inline "stream stalled" badge. The subscriber is
+  // coalesced (rAF-batched) and only fires on state transitions, so this
+  // does NOT trigger a 60 Hz render.
+  useEffect(() => {
+    const sync = () => {
+      const r = getReadinessSnapshot().get(panelId);
+      setReadyState(r?.state ?? "absent");
+    };
+    sync();
+    const unsub = subscribeReadiness(sync);
+    return () => unsub();
+  }, [panelId]);
+
+  const onRetry = () => {
+    // Re-issue a seek against the current cursor. The seek pipeline
+    // tears down + reconfigures the decoder, which is exactly what a
+    // user pressing "retry" on a broken stream wants.
+    const target = useSession.getState().cursorNs;
+    const client = videoDecodeRef.current;
+    if (!client) return;
+    waitingSinceMsRef.current = null;
+    lastReadyMsRef.current = performance.now();
+    void client.seek(target).catch(() => undefined);
+  };
 
   // Cursor + seek side effect.
   //
@@ -492,6 +685,26 @@ export function VideoPanel({
         className={styles.stats}
         aria-live="off"
       />
+      {/* Issue #2 — inline stalled badge. Inclusion-list rendering: only
+       *  the "stalled" state surfaces this UI; "waiting" is the
+       *  Transport's responsibility (the orange dot next to play). */}
+      {readyState === "stalled" && (
+        <div
+          className={styles.stalledBadge}
+          data-testid="video-panel-stalled-badge"
+          role="status"
+        >
+          <span>stream stalled</span>
+          <button
+            type="button"
+            className={styles.stalledRetry}
+            data-testid="video-panel-stalled-retry"
+            onClick={onRetry}
+          >
+            retry
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -77,3 +77,40 @@
   color: var(--color-error-dark);
   opacity: 1;
 }
+
+/* Issue #2 — per-panel "stream stalled" badge. Surfaced when the
+ * readiness registry escalates a panel from "waiting" to "stalled"
+ * (decoder alive but producing no new frames for >5 s). Centered so it
+ * doesn't fight the bottom-right stats strip; uses the error tint so
+ * it reads as a problem at a glance. */
+.stalledBadge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3, 6px);
+  padding: 6px 10px;
+  background: var(--scrim-hud);
+  color: var(--color-error-dark);
+  border: 1px solid var(--color-error-dark);
+  border-radius: var(--radius-3, 3px);
+  font: var(--fs-11) / 1.35 var(--font-mono, ui-monospace, Menlo, monospace);
+  pointer-events: auto;
+}
+
+.stalledRetry {
+  background: transparent;
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-fg-4);
+  border-radius: var(--radius-3, 3px);
+  font: inherit;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.stalledRetry:hover {
+  background: var(--color-bg-6);
+}

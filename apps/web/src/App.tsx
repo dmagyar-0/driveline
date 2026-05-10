@@ -10,7 +10,8 @@ import type { RailTab } from "./state/persist/ui";
 import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
-import { startPlaybackLoop } from "./timeline/playback";
+import { getReadinessSnapshot } from "./panels/videoReadiness";
+import { isCursorGated, startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
 import type { WorkspaceHandle } from "./layout/Workspace";
@@ -148,6 +149,16 @@ declare global {
         unit: string | null;
         sampleCount: number;
       }>;
+      // Resolve the qualified channel id used by the binding maps from the
+      // per-source native id surfaced by the wasm reader (e.g. "1/video",
+      // "/camera/front"). Tests that bind by content rather than by envelope
+      // id call this so a future change to `qualifiedChannelId` doesn't
+      // break specs. `sourceName` is matched against `SourceMeta.name` —
+      // equality first, substring fallback so `"short.mp4 (2)"` still
+      // resolves when a re-run collides on the base name. Returns null if
+      // no source/channel matches.
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
       // Phase 2 (Sources drawer) — enumerate loaded sources and the
       // session's global range. BigInts are serialised as decimal
       // strings so `page.evaluate` can return them.
@@ -199,6 +210,19 @@ declare global {
       }>;
       removeBookmark: (id: string) => void;
       renameBookmark: (id: string, label: string) => void;
+      // Issue #2 — decode-aware cursor gating.
+      // `getVideoReadiness` returns the per-panel state of every
+      // entry currently in the readiness registry; `getCursorGated`
+      // returns the most recent gate decision from `playback.ts`'s
+      // tick. Both are read-only Playwright seams.
+      getVideoReadiness: () => Array<{
+        panelId: string;
+        state: "ready" | "waiting" | "stalled" | "absent";
+        lastReadyMs: number;
+        waitingSinceMs: number | null;
+        lastBlitPtsNs: string | null;
+      }>;
+      getCursorGated: () => boolean;
     };
   }
 }
@@ -383,6 +407,15 @@ export function App() {
           unit: c.unit,
           sampleCount: c.sampleCount,
         })),
+      findChannelId: ({ sourceName, nativeId }) => {
+        const sources = useSession.getState().sources;
+        const exact = sources.find((s) => s.name === sourceName);
+        const src =
+          exact ?? sources.find((s) => s.name.includes(sourceName)) ?? null;
+        if (!src) return null;
+        const ch = src.channels.find((c) => c.nativeId === nativeId);
+        return ch?.id ?? null;
+      },
       listSources: () =>
         useSession.getState().sources.map((s) => ({
           id: s.id,
@@ -438,6 +471,27 @@ export function App() {
       removeBookmark: (id) => useSession.getState().removeBookmark(id),
       renameBookmark: (id, label) =>
         useSession.getState().renameBookmark(id, label),
+      getVideoReadiness: () => {
+        const out: Array<{
+          panelId: string;
+          state: "ready" | "waiting" | "stalled" | "absent";
+          lastReadyMs: number;
+          waitingSinceMs: number | null;
+          lastBlitPtsNs: string | null;
+        }> = [];
+        for (const [panelId, r] of getReadinessSnapshot()) {
+          out.push({
+            panelId,
+            state: r.state,
+            lastReadyMs: r.lastReadyMs,
+            waitingSinceMs: r.waitingSinceMs,
+            lastBlitPtsNs:
+              r.lastBlitPtsNs === null ? null : r.lastBlitPtsNs.toString(),
+          });
+        }
+        return out;
+      },
+      getCursorGated: () => isCursorGated(),
     };
     setReady(true);
     return () => {

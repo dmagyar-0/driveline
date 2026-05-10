@@ -170,6 +170,41 @@
   pointer-events: none;
 }
 
+/* Issue #2 — subtle ring while we wait on a video decode. Plain
+ * outline (not box-shadow) so we don't have to animate width / top
+ * — the ring sits against the existing thumb. */
+.thumbWaiting {
+  outline: 2px solid var(--color-accent-orange);
+  outline-offset: 2px;
+}
+
+/* Issue #2 — decode-waiting dot in the play-button group. Visibility
+ * is gated by hysteresis in `useDecodeWaiting`; CSS here only handles
+ * the visual pulse. Animating opacity (not size / position) keeps the
+ * compositor on the fast path and avoids thrash on the surrounding
+ * btnGroup layout. */
+.decodeWaitingDot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-accent-orange);
+  margin-left: var(--sp-2, 4px);
+  align-self: center;
+  animation: decode-pulse 800ms ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes decode-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .disabled {
   opacity: 0.5;
   pointer-events: none;
