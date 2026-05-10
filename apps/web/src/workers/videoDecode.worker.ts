@@ -26,6 +26,7 @@ import {
   shouldRefill,
   videoStreamOps,
   type DataCorePortApi,
+  type Mp4Framing,
   type Mp4LazyPortApi,
   type VideoSourceKind,
   type VideoStreamOps,
@@ -159,20 +160,21 @@ async function maybeRefill(): Promise<void> {
 async function configureFromFirstKeyframe(
   initial: EncodedChunkWire[],
   description: Uint8Array | null,
+  framing: Mp4Framing,
   decoder: VideoDecoder,
 ): Promise<OpenResult> {
   const first = initial[0];
   if (!first || !first.is_keyframe) {
     throw new Error("videoDecode: first chunk is not a keyframe");
   }
-  // AVC mode (mp4): the avcC description carries SPS/PPS, profile, and
-  // length size. Derive the codec string from its profile/compat/level
+  // AVC mode (standard mp4): the avcC description carries SPS/PPS, profile,
+  // and length size. Derive the codec string from its profile/compat/level
   // bytes — the chunk data is raw AVCC NALs, not Annex-B, so `findSps`
   // would not find anything to parse anyway.
-  // Annex-B mode (mcap): scan the first chunk for an inline SPS and
-  // derive the codec from there, as before.
+  // Annex-B mode (mcap, or non-standard mp4 detected at open()): scan the
+  // first chunk for an inline SPS and derive the codec from there.
   let codec: string;
-  if (description) {
+  if (framing === "avcc" && description) {
     codec = codecFromAvccDescription(description);
   } else {
     const sps = findSps(first.data);
@@ -181,7 +183,7 @@ async function configureFromFirstKeyframe(
   const baseConfig: VideoDecoderConfig = {
     codec,
     optimizeForLatency: false,
-    ...(description ? { description } : {}),
+    ...(framing === "avcc" && description ? { description } : {}),
   };
   const supported = await VideoDecoder.isConfigSupported(baseConfig);
   if (!supported.supported) {
@@ -214,7 +216,7 @@ async function openInternal(
   if (cursorNs < fromPtsNs) cursorNs = fromPtsNs;
   const dc = getDataCore();
   const ops = videoStreamOps(dc, sourceKind, mp4Lazy ?? undefined);
-  const { streamId, description } = await ops.open(
+  const { streamId, description, framing } = await ops.open(
     sourceHandle,
     channelId,
     fromPtsNs,
@@ -253,7 +255,12 @@ async function openInternal(
     session.ended = true;
     return { codec: "" };
   }
-  const result = await configureFromFirstKeyframe(initial, description, decoder);
+  const result = await configureFromFirstKeyframe(
+    initial,
+    description,
+    framing,
+    decoder,
+  );
   for (const c of initial) {
     const chunk = new EncodedVideoChunk({
       type: c.is_keyframe ? "key" : "delta",

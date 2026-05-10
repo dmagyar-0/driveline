@@ -16,6 +16,18 @@ import type { EncodedChunkWire } from "./normalise";
 
 export type VideoSourceKind = "mcap" | "mp4";
 
+/** mp4 mdat sample framing.
+ *
+ * - "avcc" (the standard ISO/IEC 14496-15 layout): each NAL unit is preceded
+ *   by a 4-byte big-endian length prefix. We synthesise an avcC description
+ *   from the SPS+PPS in `stsd` and feed raw sample bytes to the decoder.
+ * - "annexb" (non-standard, but real in the wild — produced by the
+ *   `scripts/video/make_annexb_mp4.py` fixture, or by some broadcast tools):
+ *   NAL units are separated by `00 00 00 01` start codes, the same way they
+ *   appear in MCAP. The decoder runs in Annex-B mode (no `description`,
+ *   raw sample bytes pass-through). */
+export type Mp4Framing = "avcc" | "annexb";
+
 // The subset of `DataCoreApi` that videoDecode actually needs. Bound to a
 // MessagePort handed in from the main thread so we share the main-thread
 // dataCore worker's wasm slab (where the source was opened) — spawning our
@@ -78,6 +90,10 @@ export interface OpenStreamResult {
   streamId: number;
   /** AVCDecoderConfigurationRecord bytes, or null for Annex-B sources. */
   description: Uint8Array | null;
+  /** mp4 framing mode, derived once at `open()` time by sniffing the first
+   *  sample's first 5 bytes. Always `"avcc"` for the mcap path (which never
+   *  uses a length-prefix layout, but the field is part of the union type). */
+  framing: Mp4Framing;
 }
 
 export interface VideoStreamOps {
@@ -96,6 +112,13 @@ interface Mp4LazyStreamState {
   index: Mp4LazyIndex;
   /** Index of the next sample to emit (0-based). */
   cursor: number;
+  /** Detected at `open()` time; per-sample loop branches on it without
+   *  re-sniffing. */
+  framing: Mp4Framing;
+  /** First sample bytes captured during `open()` for framing detection.
+   *  Consumed (set back to null) on the first `next()` call so we don't
+   *  refetch the sample we already have in memory. */
+  firstSampleBytes: Uint8Array | null;
 }
 
 const PREFETCH_AHEAD = 12;
@@ -117,6 +140,10 @@ export function videoStreamOps(
       open: async (h, c, p) => ({
         streamId: await dc.openMcapVideoStream(h, c, p),
         description: null,
+        // mcap doesn't use mp4 framing at all, but the field is part of the
+        // union type. Decoder code only uses framing in conjunction with a
+        // non-null description, so this value is inert here.
+        framing: "avcc",
       }),
       next: (s, m) => dc.mcapVideoNextBatch(s, m),
       close: (s) => dc.closeMcapVideoStream(s),
@@ -139,25 +166,41 @@ export function makeMp4LazyOps(
       const index = await mp4Port.mp4Index(handle);
       const cursor = pickStartCursor(index, fromPtsNs);
       const streamId = nextMp4StreamId++;
+      // Surface a "fetching" indicator if the start sample isn't already
+      // resident; the cache reports back via the main-thread store and
+      // the timeline lights its spinner. Fire this BEFORE the sample fetch
+      // below so the spinner is up while the slice is in flight; the
+      // cleared signal comes from the first sample fetch completing
+      // inside `next()`.
+      let framing: Mp4Framing = "avcc";
+      let firstSampleBytes: Uint8Array | null = null;
+      if (cursor < index.ptsNs.length) {
+        await mp4Port.mp4MarkPending(handle, index.ptsNs[cursor]);
+        // One-shot framing detection: pull the first sample we'd emit
+        // anyway, sniff its first 5 bytes, and stash it on the slot so
+        // `next()` doesn't refetch. This shifts one `File.slice()` from
+        // the first `next()` call into `open()`; net latency-to-first-
+        // frame is unchanged.
+        firstSampleBytes = await mp4Port.mp4Sample(handle, cursor);
+        framing = detectMp4Framing(firstSampleBytes);
+      }
       mp4Streams.set(streamId, {
         state: {
           handle,
           channelId,
           index,
           cursor,
+          framing,
+          firstSampleBytes,
         },
       });
-      // Surface a "fetching" indicator if the start sample isn't already
-      // resident; the cache reports back via the main-thread store and
-      // the timeline lights its spinner. The cleared signal comes from
-      // the first sample fetch completing inside `next()`.
-      if (cursor >= 0) {
-        await mp4Port.mp4MarkPending(handle, index.ptsNs[cursor]);
-      }
-      return {
-        streamId,
-        description: buildAvccDescription(index.sps, index.pps),
-      };
+      // AVCC mode (the standard mp4 layout) needs the synthesised avcC
+      // description. Annex-B framed mp4s carry start codes and inline
+      // SPS/PPS, just like the mcap path — the decoder derives the codec
+      // string from inline SPS and runs without a `description`.
+      const description =
+        framing === "avcc" ? buildAvccDescription(index.sps, index.pps) : null;
+      return { streamId, description, framing };
     },
     async next(streamId, maxN) {
       const slot = mp4Streams.get(streamId);
@@ -175,16 +218,28 @@ export function makeMp4LazyOps(
       await mp4Port.mp4SetActive(state.handle, activeLo, activeHi);
       for (let i = 0; i < take; i++) {
         const idx = state.cursor;
-        // Raw AVCC sample bytes (4-byte length-prefixed NAL units). The
-        // worker hands these straight to `VideoDecoder.decode` after
-        // configuring with the avcC `description` from `open()` — no
-        // Annex-B conversion, no SPS/PPS prepend. We do drop any
-        // in-band SPS/PPS NALs (x264 `repeat-headers=1` style) since
-        // they're already in the description and, when they appear
-        // before the AUD, Chrome's H.264 parser stalls the decoder.
-        const body = stripInlineParameterSets(
-          await mp4Port.mp4Sample(state.handle, idx),
-        );
+        // The very first call to `next()` after `open()` reuses the bytes
+        // already fetched for framing detection; subsequent calls slice
+        // from the main-thread cache as usual.
+        const cached = i === 0 ? state.firstSampleBytes : null;
+        const raw = cached ?? (await mp4Port.mp4Sample(state.handle, idx));
+        if (i === 0) state.firstSampleBytes = null; // release reference
+        let body: Uint8Array;
+        if (state.framing === "avcc") {
+          // Raw AVCC sample bytes (4-byte length-prefixed NAL units). The
+          // worker hands these straight to `VideoDecoder.decode` after
+          // configuring with the avcC `description` from `open()` — no
+          // Annex-B conversion, no SPS/PPS prepend. We do drop any
+          // in-band SPS/PPS NALs (x264 `repeat-headers=1` style) since
+          // they're already in the description and, when they appear
+          // before the AUD, Chrome's H.264 parser stalls the decoder.
+          body = stripInlineParameterSets(raw);
+        } else {
+          // Annex-B mode: pass the sample bytes through untouched. NAL
+          // units are already separated by start codes, the same shape
+          // the mcap path uses, and parameter sets are in-band.
+          body = raw;
+        }
         out.push({
           pts_ns: state.index.ptsNs[idx],
           is_keyframe: state.index.isSync[idx] === 1,
@@ -254,6 +309,48 @@ export function pickStartCursor(
 
 export function hex(b: number): string {
   return b.toString(16).padStart(2, "0").toUpperCase();
+}
+
+/**
+ * Sniff a single mp4 sample to decide whether the mdat carries the standard
+ * 4-byte length-prefixed NAL units (`"avcc"`) or, non-standardly, NAL units
+ * separated by `00 00 00 01` Annex-B start codes (`"annexb"`).
+ *
+ * Run once per `open()` against the first sample we'd emit anyway. The
+ * heuristic is: bytes [0..4] must be the Annex-B start code AND byte [4]
+ * must look like a valid NAL header (forbidden_zero_bit clear, nal_unit_type
+ * in 1..23). Otherwise we treat the sample as AVCC.
+ *
+ * The first sample for the streams Driveline ingests is always a keyframe
+ * whose first NAL is SPS (type 7) — both for x264 with `repeat-headers=1`
+ * (the canonical mp4) and for the synthesised Annex-B fixture
+ * (`scripts/video/make_annexb_mp4.py`). The detector is unambiguous on
+ * every realistic input. The only false-positive a real AVCC sample could
+ * trigger requires a NAL whose 4-byte BE length is exactly 0x00000001
+ * (= 1 byte) AND whose single payload byte happens to be a valid
+ * non-unspecified NAL header. The spec-mandated minimum NAL is 2 bytes
+ * (header + at least one rbsp byte for SODB), so 1-byte NAL lengths don't
+ * occur in conformant streams. The 16,777,217-byte case (length prefix
+ * `00 00 00 01` interpreted as a 1-byte NAL plus run-on data) is similarly
+ * not realistic for H.264.
+ */
+export function detectMp4Framing(firstSample: Uint8Array): Mp4Framing {
+  if (firstSample.length < 5) return "avcc";
+  if (
+    firstSample[0] !== 0x00 ||
+    firstSample[1] !== 0x00 ||
+    firstSample[2] !== 0x00 ||
+    firstSample[3] !== 0x01
+  ) {
+    return "avcc";
+  }
+  const nalHeader = firstSample[4];
+  const forbiddenBit = (nalHeader >> 7) & 1;
+  const nalType = nalHeader & 0x1f;
+  if (forbiddenBit !== 0) return "avcc";
+  if (nalType === 0) return "avcc";
+  if (nalType > 23) return "avcc";
+  return "annexb";
 }
 
 /// Scan an Annex-B buffer for the first SPS (NAL type 7). Returns the SPS
