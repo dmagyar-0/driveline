@@ -68,6 +68,8 @@ declare global {
       ) => void;
       resetLayout: () => void;
       listSources: () => Array<{ id: string; name: string }>;
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
     };
     __drivelineVideoHud?: VideoHud;
   }
@@ -118,12 +120,23 @@ async function runScenario(
   );
 
   // The channel id is `qualifiedChannelId(sourceId, "1/video")` — a
-  // synthetic envelope. The simplest way to bind without re-deriving
-  // it here is to click the in-panel picker button rendered by
-  // `VideoPanelContainer` for any candidate video channel.
-  const pick = page.locator('[data-testid^="video-pick-"]').first();
-  await pick.waitFor({ timeout: 30_000 });
-  await pick.click();
+  // synthetic envelope. Resolve it via the `findChannelId` dev hook
+  // rather than clicking the picker; this works even when multiple
+  // video channels are loaded back-to-back (avcc + annexb).
+  const channelId = await page.evaluate(
+    (sourceName) =>
+      window.__drivelineDevHooks!.findChannelId({
+        sourceName,
+        nativeId: "1/video",
+      }),
+    fixtureName,
+  );
+  if (!channelId) throw new Error(`video channel must resolve for ${fixtureName}`);
+  await page.evaluate(
+    ([panelId, id]) =>
+      window.__drivelineDevHooks!.setVideoChannelBinding(panelId, id),
+    ["video-1", channelId],
+  );
 
   await page.getByTestId("video-panel-canvas").waitFor({ timeout: 30_000 });
 

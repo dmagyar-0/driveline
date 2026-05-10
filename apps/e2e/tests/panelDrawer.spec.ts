@@ -35,6 +35,8 @@ declare global {
       addPlotChannelBinding: (panelId: string, channelId: string) => void;
       resetLayout: () => void;
       listChannels: () => Array<{ id: string; name: string; sourceId: string }>;
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
       setActiveRailTab: (tab: string | null) => void;
       setSelectedPanelId: (id: string | null) => void;
       getSelectedPanelId: () => string | null;
@@ -45,7 +47,11 @@ declare global {
 }
 
 const VIDEO_PANEL_ID = "video-1";
-const VIDEO_CHANNEL_ID = "1/video";
+// PR #84b08ee changed `Channel.id` from the native form to
+// `qualifiedChannelId(sourceId, nativeId)`, so the test resolves the id
+// at runtime via the `findChannelId` dev hook.
+const VIDEO_NATIVE_ID = "1/video";
+const VIDEO_SOURCE_NAME = "short.mp4";
 
 async function hud(page: Page): Promise<HudStats | null> {
   return await page.evaluate(() => window.__drivelineDevHooks!.videoHudStats());
@@ -100,13 +106,18 @@ test.describe("Panel drawer (Phase 5)", () => {
       return await window.__drivelineDevHooks!.openFiles(descs);
     });
     expect(result.errors).toEqual([]);
+    // Resolve the qualified channel id at runtime — PR #84b08ee changed
+    // `Channel.id` to `qualifiedChannelId(sourceId, nativeId)`.
+    const channelId = await page.evaluate(
+      ({ sourceName, nativeId }) =>
+        window.__drivelineDevHooks!.findChannelId({ sourceName, nativeId }),
+      { sourceName: VIDEO_SOURCE_NAME, nativeId: VIDEO_NATIVE_ID },
+    );
+    expect(channelId, "video channel must resolve").not.toBeNull();
     await page.evaluate(
-      ([panelId, channelId]) =>
-        window.__drivelineDevHooks!.setVideoChannelBinding(
-          panelId,
-          channelId,
-        ),
-      [VIDEO_PANEL_ID, VIDEO_CHANNEL_ID],
+      ([panelId, id]) =>
+        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, id),
+      [VIDEO_PANEL_ID, channelId!],
     );
     await page.getByTestId("video-panel-canvas").waitFor();
     await expect

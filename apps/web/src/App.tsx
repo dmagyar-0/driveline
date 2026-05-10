@@ -148,6 +148,16 @@ declare global {
         unit: string | null;
         sampleCount: number;
       }>;
+      // Resolve the qualified channel id used by the binding maps from the
+      // per-source native id surfaced by the wasm reader (e.g. "1/video",
+      // "/camera/front"). Tests that bind by content rather than by envelope
+      // id call this so a future change to `qualifiedChannelId` doesn't
+      // break specs. `sourceName` is matched against `SourceMeta.name` —
+      // equality first, substring fallback so `"short.mp4 (2)"` still
+      // resolves when a re-run collides on the base name. Returns null if
+      // no source/channel matches.
+      findChannelId: (q: { sourceName: string; nativeId: string }) =>
+        string | null;
       // Phase 2 (Sources drawer) — enumerate loaded sources and the
       // session's global range. BigInts are serialised as decimal
       // strings so `page.evaluate` can return them.
@@ -383,6 +393,15 @@ export function App() {
           unit: c.unit,
           sampleCount: c.sampleCount,
         })),
+      findChannelId: ({ sourceName, nativeId }) => {
+        const sources = useSession.getState().sources;
+        const exact = sources.find((s) => s.name === sourceName);
+        const src =
+          exact ?? sources.find((s) => s.name.includes(sourceName)) ?? null;
+        if (!src) return null;
+        const ch = src.channels.find((c) => c.nativeId === nativeId);
+        return ch?.id ?? null;
+      },
       listSources: () =>
         useSession.getState().sources.map((s) => ({
           id: s.id,
