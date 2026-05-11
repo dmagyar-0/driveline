@@ -1,9 +1,11 @@
 // Manual diagnostic: load both the canonical AVCC short.mp4 and the
 // hand-rolled Annex-B variant (`scripts/video/make_annexb_mp4.py`),
 // hit Play for ~11 s on each, and save a .webm recording + a JSON
-// stats sidecar. The Annex-B variant exercises the path that was
-// removed in commit e2f63a0 (mp4 samples carrying start codes
-// instead of length prefixes are now expected to fail).
+// stats sidecar. The Annex-B variant exercises the autodetect path
+// in `videoDecodeOps.detectMp4Framing` — mp4 samples carrying start
+// codes instead of length prefixes are now decoded just like the
+// MCAP Annex-B path (no avcC description, codec string derived from
+// inline SPS).
 //
 // Skipped unless explicitly invoked with RECORD_LABEL=<name>.
 //
@@ -231,7 +233,7 @@ test(`AVCC mp4 baseline (${LABEL})`, async ({ page }) => {
   await saveRecording(page, `${LABEL}-avcc-mp4.webm`);
 });
 
-test(`Annex-B mp4 (non-standard, expected to fail) (${LABEL})`, async ({
+test(`Annex-B mp4 (autodetected) (${LABEL})`, async ({
   page,
 }) => {
   test.setTimeout(120_000);

@@ -44,8 +44,11 @@ function scheduleNotify(): void {
     for (const l of listeners) {
       try {
         l();
-      } catch {
-        // Subscriber bugs shouldn't break the registry.
+      } catch (err) {
+        // Subscriber bugs shouldn't break the registry — but log so
+        // a regression that swallows readiness updates is visible in
+        // field telemetry instead of producing a silent "stuck dot".
+        console.warn("videoReadiness: subscriber threw", err);
       }
     }
   };

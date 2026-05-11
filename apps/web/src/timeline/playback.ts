@@ -34,7 +34,13 @@ export const READY_EPSILON_NS = 100_000_000n;
 /** Issue #2 — flag readable by Playwright via the `getCursorGated`
  *  dev hook. Module-scope so the rAF loop can write it without
  *  routing through React state. Mirrors the most recent `tick()`
- *  decision; consult after a tick to know if the cursor was held. */
+ *  decision; consult after a tick to know if the cursor was held.
+ *
+ *  Caveat: only one playback loop may run against this module at a
+ *  time — concurrent `startPlaybackLoop()` callers would race on this
+ *  flag. Production has exactly one loop (mounted by `<App />`); unit
+ *  tests in `playback.test.ts` rely on that singleton assumption to
+ *  observe gate state via `isCursorGated()`. */
 let cursorGated = false;
 export function isCursorGated(): boolean {
   return cursorGated;
