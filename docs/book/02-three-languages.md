@@ -264,7 +264,7 @@ function Counter() {
   any value in `deps` has changed since the last render. If `deps` is
   `[]` (empty), it runs exactly once on mount.
 
-Driveline uses `useEffect` in [`App.tsx:175`](../../apps/web/src/App.tsx#L175)
+Driveline uses `useEffect` in [`App.tsx:237`](../../apps/web/src/App.tsx#L237)
 to spawn the workers on first mount, and in many panels to set up
 subscriptions when the component appears.
 
@@ -306,7 +306,7 @@ source of truth for the entire Driveline UI.
 ## A sanity check
 
 That's the vocabulary. If you now look at this real line from
-[`apps/web/src/App.tsx:166`](../../apps/web/src/App.tsx#L166):
+[`apps/web/src/App.tsx:231`](../../apps/web/src/App.tsx#L231):
 
 ```tsx
 const dataCore = useRef<Remote<DataCoreApi> | null>(null);

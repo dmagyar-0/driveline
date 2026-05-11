@@ -41,13 +41,12 @@ data-core ───────────────────────�
 ```
 
 mp4+sidecar — `data-core` is consulted **only at open time** to parse
-the moov; thereafter `video-decode` pulls AVCC sample bodies straight
-from `Mp4SampleCache` over a separate `mp4Lazy` MessagePort, and the
-decoder runs in AVC (length-prefixed) mode against a synthesised `avcC`
-description:
+the moov; thereafter `video-decode` pulls sample bodies from
+`Mp4SampleCache` over a separate `mp4Lazy` MessagePort. The framing
+(AVCC or Annex-B) is autodetected at `open()` time:
 
 ```
-                 sample bytes (AVCC)         VideoFrame
+                 sample bytes (AVCC or Annex-B)    VideoFrame
 Mp4SampleCache ─────────────────────▶ video-decode ─────────▶ VideoPanel
 (main thread)   mp4Sample(handle, i)                            │
       ▲                                                         │
@@ -80,23 +79,24 @@ source `File` blob itself.
      derived from `profile_idc` / constraint flags / `level_idc` (e.g.
      `avc1.64002A`). The decoder is configured **without** a
      `description` — Annex-B start codes do the framing inline.
-   - **mp4 (AVC mode).** The worker calls `mp4Index(handle)` over the
-     `mp4Lazy` MessagePort and gets back the parallel-arrays index plus
-     the SPS+PPS bytes the wasm reader extracted from the moov.
-     `buildAvccDescription(sps, pps)` (in `mp4AnnexB.ts`) lays out a
+   - **mp4 (AVCC or Annex-B; autodetected).** The worker calls
+     `mp4Index(handle)` over the `mp4Lazy` MessagePort. `detectMp4Framing`
+     sniffs the first sample at `open()` time. For standard AVCC mp4s,
+     `buildAvccDescription(sps, pps)` (in `mp4AnnexB.ts`) synthesises a
      standard `AVCDecoderConfigurationRecord` per ISO/IEC 14496-15
-     §5.3.3.1.2, and the codec string is read from the description's
-     profile/level bytes. The decoder is configured **with**
-     `description = avcC` and fed raw 4-byte length-prefixed AVCC
-     samples directly. This sidesteps the Annex-B ordering pitfall
-     where ffmpeg-encoded mp4s carry a leading AUD that, once
-     prepended with SPS/PPS, made Chrome's H.264 parser reject the
-     first chunk.
+     §5.3.3.1.2; the codec string comes from its profile/level bytes, and
+     raw AVCC NALs feed straight to `decode()`. This sidesteps the AUD
+     ordering pitfall where ffmpeg-encoded mp4s carry a leading AUD that,
+     once prepended with SPS/PPS, made Chrome's H.264 parser reject the
+     first chunk. For non-standard Annex-B mp4s (some broadcast tools;
+     `scripts/video/make_annexb_mp4.py` fixture), `description` is `null`
+     and the codec string is derived from an inline SPS scan — same as
+     the MCAP path.
 4. Either path then calls:
    ```js
    decoder.configure({
      codec: "avc1.64002A",         // derived per source kind (see above)
-     description,                  // null for MCAP, avcC bytes for mp4
+     description,                  // null for MCAP and Annex-B mp4; avcC bytes for AVCC mp4
      hardwareAcceleration: "prefer-hardware",
      optimizeForLatency: false,    // replay, not live
    });
@@ -242,7 +242,7 @@ encoded into the mp4's (wall-clock-agnostic) track timeline.
 
 ### Decode flow
 
-The decoder is driven in **AVC (length-prefixed) mode** for mp4 sources:
+The decoder is driven in **AVC (length-prefixed) mode** for AVCC-framed mp4 sources, or **Annex-B mode** for non-standard mp4s detected by `detectMp4Framing` at `open()` time. For the standard AVCC path:
 
 1. `videoDecode` calls `mp4Index(handle)` over the `mp4Lazy` port at
    open time and uses `pickStartCursor(index, fromPtsNs)` to snap the
@@ -255,10 +255,11 @@ The decoder is driven in **AVC (length-prefixed) mode** for mp4 sources:
    for that one sample, populates an LRU entry, and returns the bytes.
    Concurrent callers requesting the same sample share one in-flight
    promise.
-3. Before the bytes are handed to the decoder, `stripInlineParameterSets`
-   drops any in-band SPS/PPS NAL units (the x264 `repeat-headers=1`
-   case). They're already in the `avcC` description, and when they
-   appeared before the AUD they stalled the decoder.
+3. For AVCC sources, before the bytes are handed to the decoder,
+   `stripInlineParameterSets` drops any in-band SPS/PPS NAL units (the
+   x264 `repeat-headers=1` case). They're already in the `avcC`
+   description, and when they appeared before the AUD they stalled the
+   decoder. Annex-B mp4 samples pass through untouched.
 4. The cache's budget defaults to half of `performance.memory.jsHeapSizeLimit`
    (clamped to a 64 MB floor; falls back to 512 MB on Firefox/Safari/node),
    computed in `apps/web/src/state/memoryBudget.ts`. Samples outside the
