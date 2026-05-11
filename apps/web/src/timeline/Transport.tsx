@@ -21,6 +21,8 @@ import styles from "./Transport.module.css";
 // fast-flickering ready/waiting flap doesn't strobe.
 const WAITING_VISIBLE_DELAY_MS = 250;
 const WAITING_MIN_VISIBLE_MS = 400;
+// Array (not equality) so adding states later is a one-line change.
+// "stalled" is deliberately excluded — see `anyPanelWaiting` JSDoc.
 const STATES_THAT_SHOW_DOT: readonly ReadyState[] = ["waiting"];
 
 /** Returns true when at least one panel in the registry is in a
