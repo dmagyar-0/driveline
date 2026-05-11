@@ -181,12 +181,14 @@ paths:
   first keyframe for an SPS NAL unit, derives the `avc1.XXXXXX` codec
   string from it, and configures the decoder in Annex-B mode (no
   `description` field).
-- **MP4** frames stay in AVCC (length-prefixed) form. The wasm layer
-  returns SPS and PPS bytes via `mp4_sidecar_index`; `mp4AnnexB.ts`
-  synthesises an `AVCDecoderConfigurationRecord` (`avcC`) from them.
-  The decoder is configured in AVC mode with that record as the
-  `description`, so raw mp4 sample bytes feed straight to `decode()`
-  without any Annex-B conversion.
+- **MP4** frames are usually in AVCC (length-prefixed) form, but
+  `detectMp4Framing` sniffs the first sample at `open()` time. For
+  standard AVCC mp4s, `mp4AnnexB.ts` synthesises an
+  `AVCDecoderConfigurationRecord` from the moov's SPS+PPS bytes and the
+  decoder runs in AVC mode with that record as `description`. For
+  non-standard Annex-B mp4s (some broadcast tools), `description` is
+  `null` and the codec string is derived from an inline SPS scan —
+  the same path as MCAP.
 
 ### Timestamp precision, carefully
 
@@ -257,10 +259,10 @@ of opaque chunks."
   The JS side reads the raw buffers without per-element work, and a
   committed fixture asserts the two sides stay compatible.
 - Video goes as `EncodedChunk { pts_ns, is_keyframe, data }`. MCAP
-  chunks are Annex-B framed; MP4 chunks are AVCC-framed (raw mp4
-  samples) with the decoder configured via a synthesised `avcC`
-  description. Both paths pull in batches to keep the decoder fed
-  with minimal RPC traffic.
+  chunks are Annex-B framed. MP4 chunks are AVCC-framed (standard) or
+  Annex-B framed (non-standard); `detectMp4Framing` picks the mode at
+  `open()` time, which determines whether the decoder gets a synthesised
+  `avcC` description or an inline SPS scan. Both paths pull in batches.
 - Nanoseconds everywhere the data flows — widened to microseconds
   only when WebCodecs forces it.
 

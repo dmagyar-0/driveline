@@ -38,8 +38,9 @@ string:
 parse the moov box and hand back a sample index (offsets, sizes, sync
 flags, PTS, plus SPS+PPS). After that the `videoDecode` worker pulls
 sample bodies straight from `Mp4SampleCache` on the main thread over a
-separate `mp4Lazy` `MessagePort`, and the decoder runs in AVC
-(length-prefixed) mode against a synthesised `avcC` description:
+separate `mp4Lazy` `MessagePort`. `detectMp4Framing` sniffs the first
+sample at `open()` time; the decoder runs in AVC (length-prefixed) mode
+for standard AVCC mp4s, or Annex-B mode for non-standard ones:
 
 ```
 ┌──────────────┐                          ┌────────────────┐     ┌──────────────┐
@@ -116,12 +117,14 @@ encoder emits a different string; the pipeline adapts. For MCAP, the
 decoder is configured **without** a `description` — Annex-B start
 codes do the framing inline.
 
-### MP4: lift SPS+PPS out of the moov
+### MP4: framing autodetect + codec derivation
 
-mp4 doesn't need the scan. The SPS and PPS live in
-`avcC` extradata inside the moov's sample-description box, and the wasm
-`Mp4SidecarReader` extracts them at parse time. The `mp4_sidecar_index`
-binding returns them alongside the per-sample arrays, and
+`detectMp4Framing` sniffs the first sample at `open()` time to detect
+whether the mdat carries standard AVCC NALs (length-prefixed) or
+non-standard Annex-B NALs. Two modes result.
+
+**AVCC (standard mp4)** — SPS and PPS live in `avcC` extradata inside
+the moov's sample-description box, extracted by `Mp4SidecarReader`.
 `buildAvccDescription(sps, pps)` (in `mp4AnnexB.ts`) re-emits a standard
 `AVCDecoderConfigurationRecord` per ISO/IEC 14496-15 §5.3.3.1.2:
 
@@ -131,14 +134,17 @@ const codec = `avc1.${hex(description[1])}${hex(description[2])}${hex(descriptio
 decoder.configure({ codec, description, ... });
 ```
 
-The decoder is configured **with** that `description`, and the worker
-feeds raw 4-byte length-prefixed AVCC samples directly. There is no
-Annex-B conversion on the mp4 path. This is the fix for ffmpeg-encoded
-mp4s whose samples carry a leading AUD: with Annex-B prepending,
-SPS/PPS landed *before* the AUD and Chrome's H.264 parser rejected the
-chunk with `DataError: A key frame is required after configure() or
-flush()`. AVC mode + an explicit `description` sidesteps the entire
-ordering minefield.
+The decoder receives raw 4-byte length-prefixed NAL units with an
+explicit `description`. This sidesteps the AUD ordering problem in some
+ffmpeg-encoded mp4s: with Annex-B prepending, SPS/PPS landed *before*
+the AUD and Chrome's H.264 parser rejected the chunk with `DataError: A
+key frame is required after configure() or flush()`.
+
+**Annex-B mp4 (non-standard)** — some broadcast tools and the
+`scripts/video/make_annexb_mp4.py` fixture write mdat samples with
+`00 00 00 01` start codes. `detectMp4Framing` recognises this and runs
+the decoder without a `description`; the codec string is derived from
+an inline SPS scan — the same path as MCAP.
 
 ### `isConfigSupported`
 
