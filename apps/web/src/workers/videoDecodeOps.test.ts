@@ -370,6 +370,27 @@ describe("detectMp4Framing", () => {
     ).toBe("avcc");
   });
 
+  it("returns `annexb` at the inclusive nal_type == 1 lower boundary (non-IDR slice)", () => {
+    // nal_unit_type = 1 (coded slice of a non-IDR picture). Sits one
+    // above the type-0 reject case; pinning it guards against an
+    // off-by-one regression that would change `=== 0` to `<= 0` and
+    // misclassify legitimate Annex-B samples whose first NAL is a
+    // P-slice (e.g. mid-GOP samples after a forced re-open).
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x01, 0x55, 0x66])),
+    ).toBe("annexb");
+  });
+
+  it("returns `annexb` at the inclusive nal_type == 23 upper boundary", () => {
+    // nal_unit_type = 23 (highest valid H.264 type). Sits one below
+    // the > 23 reject case; pinning it guards against an off-by-one
+    // regression that would change `> 23` to `>= 23` and misclassify
+    // a real Annex-B sample whose first NAL is type 23.
+    expect(
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x17, 0x55, 0x66])),
+    ).toBe("annexb");
+  });
+
   it("returns `avcc` for samples shorter than 5 bytes (defensive)", () => {
     expect(detectMp4Framing(new Uint8Array())).toBe("avcc");
     expect(detectMp4Framing(new Uint8Array([0, 0, 0, 1]))).toBe("avcc");
