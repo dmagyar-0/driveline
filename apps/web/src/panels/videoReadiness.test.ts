@@ -152,4 +152,28 @@ describe("videoReadiness registry", () => {
     expect(bad).toHaveBeenCalledTimes(1);
     expect(good).toHaveBeenCalledTimes(1);
   });
+
+  it("logs subscriber errors via console.warn so a swallowed-update regression is visible", () => {
+    // The catch in `scheduleNotify` deliberately surfaces subscriber
+    // throws through `console.warn` (rather than swallowing silently)
+    // so a buggy subscriber that breaks readiness propagation shows up
+    // in field telemetry instead of producing a silent "stuck dot" in
+    // the Transport. Pin both the message and the thrown error so a
+    // refactor can't quietly drop the second argument.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const err = new Error("boom");
+    const bad = vi.fn().mockImplementation(() => {
+      throw err;
+    });
+    subscribeReadiness(bad);
+
+    setPanelReadiness("p1", snap("waiting"));
+    expect(bad).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "videoReadiness: subscriber threw",
+      err,
+    );
+    warn.mockRestore();
+  });
 });
