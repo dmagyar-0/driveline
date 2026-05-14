@@ -191,7 +191,7 @@ function tick(): void {
   const deltaNs = BigInt(Math.round(elapsedMs * 1e6 * a.speed));
   const nextNs = a.cursorNs + deltaNs;
   lastWritten = nextNs;
-  state.setCursor(nextNs);
+  state.advanceCursor(nextNs);
   if (store.getState().playing && anchor !== null) {
     rafId = raf(tick);
   }
@@ -204,8 +204,8 @@ anchor.nowMs) × speed`. Drift is bounded by the precision of
 
 ### Re-anchoring on external changes
 
-Every `setCursor` call — from the playback loop itself, from the
-scrubber, from a test harness — fires the same store subscription.
+Every cursor write — `advanceCursor` from the playback loop, `setCursor`
+from the scrubber or a test harness — fires the same store subscription.
 The loop has to tell "my own writes" from "someone scrubbed":
 
 ```ts
@@ -222,7 +222,7 @@ const unsubscribe = store.subscribe((state, prev) => {
 ```
 
 `lastWritten` is the `nextNs` the loop's own `tick` passed to
-`setCursor`. If the observed new cursor matches that, it was our
+`advanceCursor`. If the observed new cursor matches that, it was our
 write; no re-anchor needed. If it differs, a scrubber or a test wrote
 the store, so the anchor is invalidated and replaced.
 
@@ -234,7 +234,7 @@ continues from the new value.
 
 When the loop writes past `endNs`:
 
-1. `setCursor(nextNs)` is called.
+1. `advanceCursor(nextNs)` is called.
 2. The store's reducer clamps, and — because `atEnd && playing` — sets
    `playing = false`.
 3. The loop's subscribe listener sees `state.playing && !prev.playing`
