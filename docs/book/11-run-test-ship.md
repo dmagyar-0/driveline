@@ -255,8 +255,8 @@ You now know the shape of every piece:
 - **Arrow IPC** for signal columns; **`EncodedChunk` Annex-B** for
   video.
 - **`cursorNs`** as the universal synchronisation primitive, written
-  only through `setCursor`, moved by the scrubber or the rAF playback
-  loop.
+  through `setCursor` (user scrubs) or `advanceCursor` (rAF playback
+  loop; does not bump `seekEpoch`).
 - **Vite + wasm-pack + pnpm + cargo** for build; **vitest + Playwright
   + cargo test** for test; a static `dist/` for ship.
 
