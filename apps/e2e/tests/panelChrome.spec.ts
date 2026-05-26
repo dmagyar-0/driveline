@@ -59,8 +59,12 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     // replaced with a per-kind SVG glyph so the chrome doesn't bloat.
     // `data-panel-kind` is the durable, scriptable identifier and
     // remains the same surface tests/CSS pivot on.
+    //
+    // FlexLayout renders a duplicate "stamp" copy of each tab for
+    // drag-preview reasons (`flexlayout__tab_button_stamp`). Scope to
+    // the live tab button so we don't double-count.
     const headers = page.locator(
-      '[data-panel-id="video-1"], [data-panel-id="plot-1"]',
+      ".flexlayout__tab_button [data-panel-id]:not(.flexlayout__tab_button_stamp [data-panel-id])",
     );
     await expect(headers).toHaveCount(2);
     const kinds = await headers.evaluateAll((nodes) =>
@@ -157,13 +161,20 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     // `title` (sighted hover tooltip) AND an `aria-label` (assistive
     // tech accessible name) — see PanelHeader.test.tsx for the unit
     // contract; this is the cross-tab integration check.
+    //
+    // FlexLayout's drag-preview "stamp" duplicates the tab DOM, so
+    // each test-id appears 4× across both tabs. Pick the live ones
+    // by scoping to the visible tab button.
     for (const testId of [
       "tab-rename",
       "tab-settings",
       "tab-maximize",
       "tab-close",
     ]) {
-      const buttons = page.getByTestId(testId);
+      const buttons = page.locator(
+        `.flexlayout__tab_button [data-testid="${testId}"]`,
+      );
+      // 2 visible tab buttons × 1 action button each.
       await expect(buttons).toHaveCount(2);
       const labels = await buttons.evaluateAll((nodes) =>
         nodes.map((n) => ({
