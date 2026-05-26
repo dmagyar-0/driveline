@@ -103,11 +103,13 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     await page.evaluate(() =>
       window.__drivelineDevHooks!.setSelectedPanelId(null),
     );
-    await page.getByTestId(`panel-body-${PLOT_PANEL_ID}`).click({
-      // Click the body itself, not the tab strip; FlexLayout puts the
-      // tab strip outside the body wrapper.
-      position: { x: 10, y: 40 },
-    });
+    // The `panel-body-*` wrapper sets `display: contents` (so it
+    // doesn't break FlexLayout's grid), which means it has no box
+    // and isn't directly clickable. Click the plot panel's own
+    // <section> root instead — pointerdown bubbles through the
+    // `display: contents` wrapper and reaches the click-to-select
+    // handler in `panelFactory.tsx`.
+    await page.getByTestId("plot-panel").click({ position: { x: 10, y: 40 } });
     await expect
       .poll(() =>
         page.evaluate(() => window.__drivelineDevHooks!.getSelectedPanelId()),
@@ -116,41 +118,60 @@ test.describe("Per-panel chrome (Phase 7)", () => {
   });
 
   test("maximize toggles the layout's maximized field", async ({ page }) => {
-    const before = await getLayout(page);
-    expect(before).not.toContain('"maximized"');
+    // After `resetLayout()` (in `beforeEach`) the store's `layoutJson`
+    // is set back to `null` — the in-memory model is rebuilt from
+    // `defaultLayoutModel`, but the persisted JSON only repopulates
+    // when the user makes a model-changing action (`onModelChange`).
+    // The maximize click is exactly such an action, so we observe
+    // the result by polling `getLayoutJson` AFTER each click.
+    //
+    // Scope to the live tab button (FlexLayout's stamp DOM also
+    // emits a `tab-maximize` button which is hidden but reachable
+    // by `.first()`).
+    const maximizes = page.locator(
+      '.flexlayout__tab_button [data-testid="tab-maximize"]',
+    );
 
     // Two tabs → two maximize buttons. Click the first (video tabset).
-    await page.getByTestId("tab-maximize").first().click();
+    await maximizes.first().click();
     await expect
       .poll(async () => (await getLayout(page)).includes('"maximized":true'))
       .toBe(true);
 
-    // Click again to restore.
-    await page.getByTestId("tab-maximize").first().click();
+    // Maximizing hides the other tabset's strip; click the visible
+    // maximize on the now-maximised tabset to restore.
+    await page
+      .locator('.flexlayout__tab_button [data-testid="tab-maximize"]:visible')
+      .first()
+      .click();
     await expect
       .poll(async () => !(await getLayout(page)).includes('"maximized":true'))
       .toBe(true);
   });
 
   test("close removes the tab from the layout", async ({ page }) => {
-    expect(await getLayout(page)).toContain(`"id":"${PLOT_PANEL_ID}"`);
+    // Plot panel is rendered before any close click, so the DOM is
+    // the source of truth here (`getLayoutJson` is null after reset
+    // until a model-changing action runs — see `maximize` test).
+    await expect(
+      page.getByTestId(`panel-body-${PLOT_PANEL_ID}`),
+    ).toBeAttached();
 
-    // The plot tab is the second of the two; locate by panel-body
-    // anchor and walk to its tab close button.
-    const closes = page.getByTestId("tab-close");
+    const closes = page.locator(
+      '.flexlayout__tab_button [data-testid="tab-close"]',
+    );
     await expect(closes).toHaveCount(2);
-    // Click the close on whichever tab is the plot one — we identify it
-    // by clicking each settings icon in turn and checking which selects
-    // the plot id, but simpler: close the second (right-hand) tab,
-    // which the default layout puts as plot.
+    // The default layout puts plot as the second (right-hand) tab.
     await closes.nth(1).click();
 
-    await expect
-      .poll(async () => await getLayout(page))
-      .not.toContain(`"id":"${PLOT_PANEL_ID}"`);
     await expect(page.getByTestId(`panel-body-${PLOT_PANEL_ID}`)).toHaveCount(
       0,
     );
+    // After the close, the model has mutated and `layoutJson` is
+    // populated — confirm the JSON no longer references the plot id.
+    await expect
+      .poll(async () => await getLayout(page))
+      .not.toContain(`"id":"${PLOT_PANEL_ID}"`);
   });
 
   test("every tab action button advertises an accessible name", async ({
