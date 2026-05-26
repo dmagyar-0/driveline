@@ -163,6 +163,47 @@ Status line reads "6 sources" and the time axis spans 06:07–06:14
 with one 60 s data block per segment. Screenshot at
 `apps/e2e/tests/screenshots/comma2k19-multi-segment-multi-panel.png`.
 
+### Splitting one segment across multiple files
+
+Each comma2k19 segment carries ~15 distinct signal groups (CAN
+speed/steering/wheels, IMU accel/gyro, GNSS u-blox/qcom, …). Both
+converters take `--only NAME[,NAME]` to emit a subset, so a single
+segment can be fanned out into several topic-specific files without
+touching the parquet more than once. The known groups are:
+
+- MCAP: `speed`, `steering_angle`, `wheel_speed`, `accel`, `gyro`, `gnss`
+- MF4: `wheels`, `accel`, `gyro`, `gnss`
+
+Generate the four-file split used by the fourth demo test:
+
+```sh
+python3 scripts/convert_comma2k19_to_mcap.py --only speed,steering_angle \
+  --out sample-data/realworld/comma2k19_chassis.mcap
+python3 scripts/convert_comma2k19_to_mcap.py --only wheel_speed \
+  --out sample-data/realworld/comma2k19_wheels.mcap
+python3 scripts/convert_comma2k19_to_mf4.py --only accel,gyro \
+  --out sample-data/realworld/comma2k19_imu.mf4
+python3 scripts/convert_comma2k19_to_mf4.py --only gnss \
+  --out sample-data/realworld/comma2k19_gnss.mf4
+```
+
+The fourth test (`splits one segment across 4 files and plots them on
+2 panels`) drops the four files, installs the same two-plot layout,
+and binds:
+
+- `plot-1` — `/vehicle/speed` (chassis.mcap), four wheel speeds
+  (wheels.mcap), three IMU accel axes (imu.mf4) — 8 chips, the
+  panel's max, pulling from three files.
+- `plot-2` — `/vehicle/steering_angle` (chassis.mcap), three IMU
+  gyro axes (imu.mf4), `GNSS_Alt` (gnss.mf4) — 5 chips, also from
+  three files. `GNSS_Lat` / `GNSS_Lon` are deliberately omitted —
+  on the CA-280 segment those values sit at ~40 and ~-120 and
+  would squash every other series on the shared y-axis.
+
+Status line reads "4 sources" and both panels render a full 60 s of
+data with no gaps. Screenshot at
+`apps/e2e/tests/screenshots/comma2k19-split-by-topic.png`.
+
 > Bug history: this dataset originally hit a PlotPanel bug where
 > binding two CAN channels with non-coincident timestamps produced
 > two invisible traces. `mergeSeries` correctly emits `null` at every

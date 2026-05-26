@@ -70,7 +70,25 @@ def main() -> None:
             "Defaults to 0."
         ),
     )
+    ap.add_argument(
+        "--only",
+        default="",
+        help=(
+            "Comma-separated subset of channel groups to emit: "
+            "wheels,accel,gyro,gnss. Empty (the default) emits all "
+            "four. Useful for splitting one segment into several "
+            "topic-specific MF4s."
+        ),
+    )
     args = ap.parse_args()
+    only = {t.strip() for t in args.only.split(",") if t.strip()}
+    known = {"wheels", "accel", "gyro", "gnss"}
+    if only:
+        unknown = only - known
+        if unknown:
+            sys.exit(f"unknown --only group(s): {sorted(unknown)}; "
+                     f"known: {sorted(known)}")
+    enabled = only or known
 
     parquet = Path(args.parquet)
     if not parquet.exists():
@@ -183,32 +201,41 @@ def main() -> None:
     # MF4 reader pulls it out via `idx.start_time_ns` and adds it to
     # each sample's relative seconds.
     mdf.start_time = start_dt
-    mdf.append(signals(wheels, wheel_t, "m/s"),
-               comment="Wheel speeds")
-    mdf.append(signals(accel, accel_t, "m/s^2"),
-               comment="IMU accelerometer")
-    mdf.append(signals(gyro, gyro_t, "rad/s"),
-               comment="IMU gyroscope")
-    # Lat/lon are in degrees but altitude is in metres — keep them in
-    # one CG anyway since they share the GNSS cadence; the MF4 schema
-    # carries unit per channel, not per group.
-    gnss_signals = signals(
-        {"GNSS_Lat": gnss["GNSS_Lat"]}, gnss_t, "deg"
-    ) + signals(
-        {"GNSS_Lon": gnss["GNSS_Lon"]}, gnss_t, "deg"
-    ) + signals(
-        {"GNSS_Alt": gnss["GNSS_Alt"]}, gnss_t, "m"
-    )
-    mdf.append(gnss_signals, comment="GNSS u-blox")
+    n = 0
+    if "wheels" in enabled:
+        mdf.append(signals(wheels, wheel_t, "m/s"),
+                   comment="Wheel speeds")
+        n += len(wheel_t) * 4
+    if "accel" in enabled:
+        mdf.append(signals(accel, accel_t, "m/s^2"),
+                   comment="IMU accelerometer")
+        n += len(accel_t) * 3
+    if "gyro" in enabled:
+        mdf.append(signals(gyro, gyro_t, "rad/s"),
+                   comment="IMU gyroscope")
+        n += len(gyro_t) * 3
+    if "gnss" in enabled:
+        # Lat/lon are in degrees but altitude is in metres — keep them
+        # in one CG anyway since they share the GNSS cadence; the MF4
+        # schema carries unit per channel, not per group.
+        gnss_signals = signals(
+            {"GNSS_Lat": gnss["GNSS_Lat"]}, gnss_t, "deg"
+        ) + signals(
+            {"GNSS_Lon": gnss["GNSS_Lon"]}, gnss_t, "deg"
+        ) + signals(
+            {"GNSS_Alt": gnss["GNSS_Alt"]}, gnss_t, "m"
+        )
+        mdf.append(gnss_signals, comment="GNSS u-blox")
+        n += len(gnss_t) * 3
+    if n == 0:
+        sys.exit("--only filtered out every group; nothing to write")
 
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     mdf.save(out, overwrite=True)
     size_mb = out.stat().st_size / (1024 * 1024)
-    n = (len(wheel_t) * 4 + len(accel_t) * 3
-         + len(gyro_t) * 3 + len(gnss_t) * 3)
     print(f"wrote {out} ({size_mb:.2f} MB, {n:,} samples across "
-          f"4 channel groups)")
+          f"{len(enabled)} channel group(s): {sorted(enabled)})")
 
 
 if __name__ == "__main__":

@@ -484,4 +484,177 @@ test.describe("comma2k19 dashcam + CAN", () => {
       ),
     });
   });
+
+  test("splits one segment across 4 files and plots them on 2 panels", async ({
+    page,
+  }) => {
+    // Same 60 s window as the original test, but the segment's signals
+    // are emitted into four topic-specific files by passing `--only`
+    // to each converter. Proves Driveline can unify a fanned-out
+    // recording (chassis CAN in one MCAP, wheel CAN in another, IMU
+    // and GNSS each in their own MF4) on a single clock.
+    const RELS = [
+      "realworld/comma2k19_chassis.mcap",
+      "realworld/comma2k19_wheels.mcap",
+      "realworld/comma2k19_imu.mf4",
+      "realworld/comma2k19_gnss.mf4",
+    ];
+    test.skip(
+      !RELS.every((r) =>
+        existsSync(path.resolve(__dirname, "../../../sample-data", r)),
+      ),
+      "split-by-topic fixtures missing — see sample-data/realworld/README.md",
+    );
+
+    const LAYOUT = {
+      global: {
+        tabEnableClose: true,
+        tabEnableRename: false,
+        splitterSize: 4,
+        borderEnableAutoHide: true,
+      },
+      borders: [],
+      layout: {
+        type: "row",
+        weight: 100,
+        children: [
+          {
+            type: "tabset",
+            weight: 50,
+            children: [
+              {
+                type: "tab",
+                id: "plot-1",
+                name: "Speed & wheels (2 MCAP + 1 MF4)",
+                component: "plot",
+              },
+            ],
+          },
+          {
+            type: "tabset",
+            weight: 50,
+            children: [
+              {
+                type: "tab",
+                id: "plot-2",
+                name: "Steering / Gyro / GNSS (1 MCAP + 2 MF4)",
+                component: "plot",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    await page.evaluate(
+      (json) => window.__drivelineDevHooks!.setLayoutJson(json),
+      LAYOUT,
+    );
+
+    const open = await page.evaluate(async (rels) => {
+      const descs = await Promise.all(
+        rels.map(async (rel) => {
+          const r = await fetch(`/sample-data/${rel}`);
+          if (!r.ok) throw new Error(`fetch ${rel}: ${r.status}`);
+          return {
+            name: rel.split("/").pop()!,
+            bytes: new Uint8Array(await r.arrayBuffer()),
+          };
+        }),
+      );
+      return await window.__drivelineDevHooks!.openFiles(descs);
+    }, RELS);
+    expect(open.errors).toEqual([]);
+    expect(open.opened).toHaveLength(4);
+
+    const all = await page.evaluate(() =>
+      window
+        .__drivelineDevHooks!.listChannels()
+        .map((c) => ({ id: c.id, name: c.name, sourceId: c.sourceId })),
+    );
+    const sourceById = await page.evaluate(() =>
+      Object.fromEntries(
+        window
+          .__drivelineDevHooks!.listSources()
+          .map((s) => [s.id, s.name]),
+      ),
+    );
+    const pick = (sourcePattern: RegExp, channelName: string) => {
+      const ch = all.find(
+        (c) =>
+          c.name === channelName &&
+          sourcePattern.test(sourceById[c.sourceId] ?? ""),
+      );
+      if (!ch) {
+        throw new Error(
+          `channel ${channelName} not in source matching ${sourcePattern}; ` +
+            `have ${all.length} channels across ${
+              Object.values(sourceById).length
+            } sources`,
+        );
+      }
+      return ch.id;
+    };
+
+    // Panel 1 — speed + IMU accel. Three files contribute: the chassis
+    // MCAP (vehicle speed), the wheels MCAP (four corner speeds), the
+    // IMU MF4 (three accel axes). Eight chips, the panel's max.
+    const plot1Ids = [
+      pick(/chassis\.mcap/, "/vehicle/speed"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_fl"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_fr"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_rl"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_rr"),
+      pick(/imu\.mf4/, "IMU_Accel_X"),
+      pick(/imu\.mf4/, "IMU_Accel_Y"),
+      pick(/imu\.mf4/, "IMU_Accel_Z"),
+    ];
+
+    // Panel 2 — rotation + altitude. Three files contribute: the
+    // chassis MCAP (steering angle in deg), the IMU MF4 (3-axis gyro
+    // in rad/s), the GNSS MF4 (altitude in m). GNSS_Lat / GNSS_Lon
+    // are deliberately omitted because their absolute deg values
+    // (~40 and ~-120 for the CA-280 segment) squash every other
+    // series on a shared y-axis.
+    const plot2Ids = [
+      pick(/chassis\.mcap/, "/vehicle/steering_angle"),
+      pick(/imu\.mf4/, "IMU_Gyro_X"),
+      pick(/imu\.mf4/, "IMU_Gyro_Y"),
+      pick(/imu\.mf4/, "IMU_Gyro_Z"),
+      pick(/gnss\.mf4/, "GNSS_Alt"),
+    ];
+
+    await page.evaluate(
+      ({ a, b }: { a: string[]; b: string[] }) => {
+        const h = window.__drivelineDevHooks!;
+        for (const id of a) h.addPlotChannelBinding("plot-1", id);
+        for (const id of b) h.addPlotChannelBinding("plot-2", id);
+      },
+      { a: plot1Ids, b: plot2Ids },
+    );
+
+    await waitForPlotSeries(page, "plot-1", 8);
+    await waitForPlotSeries(page, "plot-2", 5);
+    await paintAndSettle(page);
+
+    // Each panel must carry series from at least 3 distinct source
+    // files — the test's whole point is the cross-file fan-in.
+    for (const panelId of ["plot-1", "plot-2"]) {
+      const stats = await page.evaluate(
+        (p) => window.__drivelineDevHooks!.getPlotPanelSeriesStats(p),
+        panelId,
+      );
+      expect(stats, panelId).not.toBeNull();
+      const files = new Set(
+        stats!.map((s) => {
+          const ch = all.find((c) => c.id === s.channelId);
+          return sourceById[ch?.sourceId ?? ""] ?? "";
+        }),
+      );
+      expect(files.size, `${panelId} files`).toBeGreaterThanOrEqual(3);
+    }
+
+    await page.screenshot({
+      path: path.join(SCREENSHOT_DIR, "comma2k19-split-by-topic.png"),
+    });
+  });
 });
