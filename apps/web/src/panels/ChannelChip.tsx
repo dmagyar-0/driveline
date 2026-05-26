@@ -53,7 +53,8 @@ export function ChannelChip({ channel, sourceBadge, onRemove }: Props) {
       <button
         type="button"
         className={styles.chipRemove}
-        aria-label={`remove ${channel.name}`}
+        aria-label={`Remove channel ${channel.name}`}
+        title={`Remove ${short}`}
         onClick={() => onRemove(channel.id)}
         data-testid={`remove-${channel.id}`}
       >
