@@ -161,3 +161,29 @@
   background: rgba(178, 58, 0, 0.18);
   color: var(--color-error-dark);
 }
+
+/* a11y · screen-reader-only sibling that surfaces the panel kind
+ * (Video / Plot / Map / …) for AT. The visible glyph is decorative
+ * (`aria-hidden`), and the tab name alone doesn't distinguish a
+ * "Speeds" video panel from a "Speeds" plot. Standard clip pattern. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* The focused-ring underline and the per-button hover swap are both
+   * intentional motion; drop transitions for users who opt out. */
+  .header::after,
+  .actionBtn,
+  .nameInput {
+    transition: none;
+  }
+}

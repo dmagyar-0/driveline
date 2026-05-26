@@ -172,6 +172,14 @@ export function PanelHeader({
           <PanelTypeIcon kind={kind} />
         </span>
       )}
+      {/* a11y: the kind glyph is decorative (aria-hidden), so we
+       *  surface the same identity to screen readers via a visually
+       *  hidden span. Without this, a tab announces only the tab
+       *  name — a screen-reader user can't tell a "Speeds" tab from
+       *  a "Speeds" Video panel. */}
+      {kind !== null && (
+        <span className={styles.srOnly}>{kindLabel} panel:</span>
+      )}
       {renaming ? (
         <input
           ref={inputRef}

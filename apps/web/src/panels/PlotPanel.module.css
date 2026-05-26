@@ -107,7 +107,15 @@
   cursor: pointer;
   font-size: var(--fs-15);
   line-height: 1;
-  padding: 0 2px;
+  /* a11y · ≥24×24 hit target floor. The chip itself reads as a
+   * compact pill; the × is the only interactive surface inside it so
+   * we widen the click box without inflating the visible glyph. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 var(--sp-2);
   border-radius: var(--radius-2);
   flex-shrink: 0;
 }

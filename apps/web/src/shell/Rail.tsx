@@ -126,6 +126,20 @@ export function Rail() {
 
   if (railCollapsed) return null;
 
+  // a11y decision (Agent E carryover): the rail expands 48 → 168 px
+  // on hover / focus-within to reveal text labels. We deliberately do
+  // NOT put `aria-expanded` on the <nav> itself because:
+  //   1. The hover expansion is purely visual progressive disclosure
+  //      of *labels that are already in the accessible name*. Every
+  //      button carries `aria-label="<Label>"`, so AT announces the
+  //      label whether the rail is collapsed or not.
+  //   2. The expansion does not change what is focusable, what is
+  //      announced, nor what region content the rail discloses — the
+  //      drawer disclosure (`aria-expanded` on the active button) is
+  //      a separate concept.
+  // Putting `aria-expanded` on the rail itself would falsely imply
+  // that focus into the rail toggles a disclosure widget, which is
+  // not what happens.
   return (
     <nav className={styles.rail} aria-label="Sections" data-testid="rail">
       {RAIL_GROUPS.map((group, groupIdx) => (

@@ -58,7 +58,9 @@
   line-height: 1;
   padding: 0;
   cursor: pointer;
-  transition: background var(--motion-fast), border-color var(--motion-fast);
+  transition:
+    background var(--motion-fast),
+    border-color var(--motion-fast);
 }
 
 .btnT:hover:not(:disabled) {
@@ -179,7 +181,9 @@
   padding: 4px var(--sp-5);
   cursor: pointer;
   min-height: 22px;
-  transition: background var(--motion-fast), color var(--motion-fast);
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast);
 }
 
 .segBtn:hover:not(:disabled) {
@@ -416,7 +420,9 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
   transform: translate(-50%, -50%);
   pointer-events: none;
-  transition: width var(--motion-fast), height var(--motion-fast);
+  transition:
+    width var(--motion-fast),
+    height var(--motion-fast);
 }
 
 .track:hover .thumb,
@@ -464,4 +470,25 @@
   opacity: 0.5;
   pointer-events: none;
   cursor: not-allowed;
+}
+
+/* a11y · honour `prefers-reduced-motion`. Pulsing/spinning indicators
+ * are status affordances — when motion is disabled, drop the animation
+ * but keep the colour so the dot is still discoverable. Track / thumb
+ * size transitions are pure UX delight; cut them too. */
+@media (prefers-reduced-motion: reduce) {
+  .btnT,
+  .segBtn,
+  .trackStrip,
+  .thumb,
+  .chip {
+    transition: none;
+  }
+  .decodeWaitingDot {
+    animation: none;
+  }
+  .fetchSpinner {
+    animation: none;
+    border-top-color: var(--color-accent-orange);
+  }
 }
