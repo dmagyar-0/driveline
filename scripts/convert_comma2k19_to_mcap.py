@@ -120,6 +120,19 @@ def main() -> None:
     ap.add_argument("--compression", default="zstd",
                     choices=["zstd", "none"])
     ap.add_argument(
+        "--segment-offset-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "Add this many seconds to the drive-start anchor before "
+            "emitting messages, so multiple segments of the same drive "
+            "land at distinct wall-clock positions on Driveline's unified "
+            "timeline. Each comma2k19 segment is nominally 60 s, so "
+            "segment N belongs at offset N*60. Defaults to 0 to preserve "
+            "the original single-segment behaviour."
+        ),
+    )
+    ap.add_argument(
         "--skip-hash-check",
         action="store_true",
         help="Bypass the SHA256 verification against EXPECTED_HASHES.txt. "
@@ -150,7 +163,9 @@ def main() -> None:
 
     seg_id = seg_ids[args.segment_index]
     log = rg["log"][args.segment_index].as_py()
-    start_ns = parse_segment_start_ns(seg_id)
+    start_ns = parse_segment_start_ns(seg_id) + int(
+        args.segment_offset_seconds * 1_000_000_000
+    )
     print(f"segment {args.segment_index}: {seg_id}")
     print(f"  recording start ns: {start_ns}  "
           f"({datetime.fromtimestamp(start_ns/1e9, tz=timezone.utc).isoformat()})")

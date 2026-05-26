@@ -130,6 +130,39 @@ and asserts the per-series stats land for both channel ids. The
 status line reads "3 sources" — the mp4 + sidecar pair counts as
 one, the mcap as a second, the mf4 as a third.
 
+### Multiple MCAPs + multiple MF4s on two panels
+
+Both converters take `--segment-offset-seconds N` so several segments
+of the same drive can land at distinct wall-clock positions on
+Driveline's timeline (each comma2k19 segment is 60 s, so segment N
+belongs at `N*60`). Generate per-segment MCAP + MF4 pairs for
+segments 4, 7, 10 of the 2018-07-27--06-03-57 drive:
+
+```sh
+for entry in 0:10:600 1:4:240 2:7:420; do
+  IFS=: read -r idx seg off <<<"$entry"
+  python3 scripts/convert_comma2k19_to_mcap.py \
+    --segment-index "$idx" --segment-offset-seconds "$off" \
+    --out "sample-data/realworld/comma2k19_seg${seg}.mcap"
+  python3 scripts/convert_comma2k19_to_mf4.py \
+    --segment-index "$idx" --segment-offset-seconds "$off" \
+    --out "sample-data/realworld/comma2k19_seg${seg}.mf4"
+done
+```
+
+The third test (`plots 3 MCAPs and 3 MF4s across two side-by-side
+panels`) drops the six files, installs a custom layout with two
+plot tabs, and binds:
+
+- `plot-1` to `/vehicle/speed` (MCAP) and `WheelSpeedFL` (MF4) for
+  each of the three segments — six series, all m/s.
+- `plot-2` to `/vehicle/steering_angle` (MCAP, deg) and `IMU_Gyro_Z`
+  (MF4, rad/s) for each segment — six series, two y-axes.
+
+Status line reads "6 sources" and the time axis spans 06:07–06:14
+with one 60 s data block per segment. Screenshot at
+`apps/e2e/tests/screenshots/comma2k19-multi-segment-multi-panel.png`.
+
 > Bug history: this dataset originally hit a PlotPanel bug where
 > binding two CAN channels with non-coincident timestamps produced
 > two invisible traces. `mergeSeries` correctly emits `null` at every

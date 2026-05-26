@@ -307,4 +307,181 @@ test.describe("comma2k19 dashcam + CAN", () => {
       path: path.join(SCREENSHOT_DIR, "comma2k19-mcap-plus-mf4.png"),
     });
   });
+
+  test("plots 3 MCAPs and 3 MF4s across two side-by-side panels", async ({
+    page,
+  }) => {
+    // Drops six per-segment files (segments 4, 7, 10 of the
+    // 2018-07-27--06-03-57 drive, each emitted as MCAP + MF4 with the
+    // correct segment-start wall-clock so they line up on the unified
+    // timeline rather than stacking at the drive root).
+    const RELS = [
+      "realworld/comma2k19_seg4.mcap",
+      "realworld/comma2k19_seg4.mf4",
+      "realworld/comma2k19_seg7.mcap",
+      "realworld/comma2k19_seg7.mf4",
+      "realworld/comma2k19_seg10.mcap",
+      "realworld/comma2k19_seg10.mf4",
+    ];
+    test.skip(
+      !RELS.every((r) =>
+        existsSync(path.resolve(__dirname, "../../../sample-data", r)),
+      ),
+      "multi-segment comma2k19 fixtures missing — regenerate with " +
+        "scripts/convert_comma2k19_to_{mcap,mf4}.py at offsets 240/420/600",
+    );
+
+    // Custom layout: two PlotPanel tabs side by side, stable ids so
+    // bindings can target them by name. Defaults to a 50/50 split.
+    const LAYOUT = {
+      global: {
+        tabEnableClose: true,
+        tabEnableRename: false,
+        splitterSize: 4,
+        borderEnableAutoHide: true,
+      },
+      borders: [],
+      layout: {
+        type: "row",
+        weight: 100,
+        children: [
+          {
+            type: "tabset",
+            weight: 50,
+            children: [
+              {
+                type: "tab",
+                id: "plot-1",
+                name: "Speeds (MCAP + MF4)",
+                component: "plot",
+              },
+            ],
+          },
+          {
+            type: "tabset",
+            weight: 50,
+            children: [
+              {
+                type: "tab",
+                id: "plot-2",
+                name: "Steering + Gyro (MCAP + MF4)",
+                component: "plot",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    await page.evaluate(
+      (json) => window.__drivelineDevHooks!.setLayoutJson(json),
+      LAYOUT,
+    );
+
+    const open = await page.evaluate(async (rels) => {
+      const descs = await Promise.all(
+        rels.map(async (rel) => {
+          const r = await fetch(`/sample-data/${rel}`);
+          if (!r.ok) throw new Error(`fetch ${rel}: ${r.status}`);
+          return {
+            name: rel.split("/").pop()!,
+            bytes: new Uint8Array(await r.arrayBuffer()),
+          };
+        }),
+      );
+      return await window.__drivelineDevHooks!.openFiles(descs);
+    }, RELS);
+    expect(open.errors).toEqual([]);
+    expect(open.opened).toHaveLength(6);
+
+    // Resolve each (sourceName, channelName) pair to a channel id.
+    const all = await page.evaluate(() =>
+      window
+        .__drivelineDevHooks!.listChannels()
+        .map((c) => ({ id: c.id, name: c.name, sourceId: c.sourceId })),
+    );
+    const sourceById = await page.evaluate(() =>
+      Object.fromEntries(
+        window
+          .__drivelineDevHooks!.listSources()
+          .map((s) => [s.id, s.name]),
+      ),
+    );
+    const pick = (sourcePattern: RegExp, channelName: string) => {
+      const ch = all.find(
+        (c) =>
+          c.name === channelName &&
+          sourcePattern.test(sourceById[c.sourceId] ?? ""),
+      );
+      if (!ch) {
+        throw new Error(
+          `channel ${channelName} not found in source matching ${sourcePattern}`,
+        );
+      }
+      return ch.id;
+    };
+
+    // Plot 1 — chassis CAN speed (MCAP) and front-left wheel speed
+    // (MF4), one each per segment. Six series, all m/s.
+    const plot1Ids = [
+      pick(/seg4\.mcap/, "/vehicle/speed"),
+      pick(/seg7\.mcap/, "/vehicle/speed"),
+      pick(/seg10\.mcap/, "/vehicle/speed"),
+      pick(/seg4\.mf4/, "WheelSpeedFL"),
+      pick(/seg7\.mf4/, "WheelSpeedFL"),
+      pick(/seg10\.mf4/, "WheelSpeedFL"),
+    ];
+
+    // Plot 2 — steering wheel angle (MCAP, deg) and yaw-rate gyro
+    // (MF4, rad/s), one each per segment. uPlot drops a second y-axis
+    // for the differing units.
+    const plot2Ids = [
+      pick(/seg4\.mcap/, "/vehicle/steering_angle"),
+      pick(/seg7\.mcap/, "/vehicle/steering_angle"),
+      pick(/seg10\.mcap/, "/vehicle/steering_angle"),
+      pick(/seg4\.mf4/, "IMU_Gyro_Z"),
+      pick(/seg7\.mf4/, "IMU_Gyro_Z"),
+      pick(/seg10\.mf4/, "IMU_Gyro_Z"),
+    ];
+
+    await page.evaluate(
+      ({ a, b }: { a: string[]; b: string[] }) => {
+        const h = window.__drivelineDevHooks!;
+        for (const id of a) h.addPlotChannelBinding("plot-1", id);
+        for (const id of b) h.addPlotChannelBinding("plot-2", id);
+      },
+      { a: plot1Ids, b: plot2Ids },
+    );
+
+    await waitForPlotSeries(page, "plot-1", 6);
+    await waitForPlotSeries(page, "plot-2", 6);
+    await paintAndSettle(page);
+
+    // Each plot must contain at least one series from an MCAP source
+    // and one from an MF4 source — that's the multi-format claim.
+    for (const panelId of ["plot-1", "plot-2"]) {
+      const stats = await page.evaluate(
+        (p) => window.__drivelineDevHooks!.getPlotPanelSeriesStats(p),
+        panelId,
+      );
+      expect(stats, panelId).not.toBeNull();
+      expect(stats!).toHaveLength(6);
+      const formats = new Set(
+        stats!.map((s) => {
+          const id = s.channelId;
+          const ch = all.find((c) => c.id === id);
+          const src = sourceById[ch?.sourceId ?? ""];
+          return src.endsWith(".mcap") ? "mcap" : "mf4";
+        }),
+      );
+      expect(formats.has("mcap"), `${panelId} needs MCAP series`).toBe(true);
+      expect(formats.has("mf4"), `${panelId} needs MF4 series`).toBe(true);
+    }
+
+    await page.screenshot({
+      path: path.join(
+        SCREENSHOT_DIR,
+        "comma2k19-multi-segment-multi-panel.png",
+      ),
+    });
+  });
 });

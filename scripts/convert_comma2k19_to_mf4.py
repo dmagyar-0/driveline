@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
@@ -59,6 +59,17 @@ def main() -> None:
     )
     ap.add_argument("--segment-index", type=int, default=0)
     ap.add_argument("--out", default="sample-data/realworld/comma2k19.mf4")
+    ap.add_argument(
+        "--segment-offset-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "Shift the HD-block `start_time` by this many seconds so "
+            "multiple segments from one drive land at distinct wall-clock "
+            "positions on Driveline's timeline (segment N -> N*60). "
+            "Defaults to 0."
+        ),
+    )
     args = ap.parse_args()
 
     parquet = Path(args.parquet)
@@ -76,7 +87,9 @@ def main() -> None:
 
     seg_id = seg_ids[args.segment_index]
     log = rg["log"][args.segment_index].as_py()
-    start_dt = parse_segment_start_dt(seg_id)
+    start_dt = parse_segment_start_dt(seg_id) + timedelta(
+        seconds=args.segment_offset_seconds
+    )
     print(f"segment {args.segment_index}: {seg_id}")
     print(f"  start: {start_dt.isoformat()}")
 
