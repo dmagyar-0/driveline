@@ -12,17 +12,23 @@
 
 .clearBtn {
   position: absolute;
-  top: 0.5rem;
-  left: 0.5rem;
-  background: var(--scrim-hud);
+  top: var(--sp-5);
+  left: var(--sp-5);
+  z-index: 3;
+  background: rgba(0, 0, 0, 0.6);
   color: var(--color-fg-2);
-  border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
-  padding: 0.2rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-pill);
+  padding: var(--sp-2) var(--sp-5);
   cursor: pointer;
-  font-size: 0.75rem;
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity var(--motion-base), background var(--motion-base);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .wrap:hover .clearBtn,
@@ -30,56 +36,64 @@
   opacity: 1;
 }
 
-.empty {
+.clearBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Wrapper for either the rich empty state (no candidates) or the
+ * compact-explainer-plus-picker (candidates exist). Empty-state
+ * styling itself lives in VideoPanelEmptyState.module.css; this
+ * module only owns the layout shell. */
+.emptyWrap {
   width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   justify-content: center;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 1rem;
-  color: var(--color-fg-3);
-  background: var(--color-bg-2);
+  gap: var(--sp-5);
+  padding: var(--sp-6);
   box-sizing: border-box;
-}
-
-.hint {
-  margin: 0;
-  font-size: 0.9rem;
-  text-align: center;
+  background: var(--color-bg-2);
+  overflow-y: auto;
 }
 
 .list {
   list-style: none;
   padding: 0;
-  margin: 0;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  max-height: 60%;
-  overflow-y: auto;
-  width: min(100%, 24rem);
+  gap: var(--sp-3);
+  width: min(100%, 28rem);
 }
 
 .choice {
   width: 100%;
-  background: var(--color-bg-4);
+  background: var(--color-bg-3);
   border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
+  border-radius: var(--radius-4);
   color: var(--color-fg-2);
-  padding: 0.4rem 0.6rem;
+  padding: var(--sp-5) var(--sp-6);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--fs-13);
+  font-family: var(--font-sans);
   text-align: left;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: var(--sp-2);
+  transition: background var(--motion-base), border-color var(--motion-base);
 }
 
 .choice:hover:not(:disabled) {
-  background: var(--color-bg-6);
+  background: var(--color-bg-4);
   border-color: var(--color-border-hover);
+}
+
+.choice:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .choice:disabled {
@@ -88,10 +102,13 @@
 }
 
 .choiceSource {
-  font-size: 0.7rem;
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
   color: var(--color-fg-5);
+  letter-spacing: var(--tracking-wide);
 }
 
 .choiceName {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-2);
 }

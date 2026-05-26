@@ -12,6 +12,10 @@
 // We mock `VideoPanel` at the module boundary so the test runs under
 // jsdom without web workers, OffscreenCanvas, or VideoDecoder; the
 // stub records its props so we can assert the routing.
+//
+// We also mock `VideoPanelEmptyState` so its CSS Module + fetch logic
+// don't have to run in this test — the empty-state component has its
+// own dedicated assertions (and a smoke run via Playwright).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -19,6 +23,9 @@ import { cleanup, render, screen } from "@testing-library/react";
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const lastVideoPanelProps: { current: Record<string, unknown> | null } = {
+  current: null,
+};
+const lastEmptyStateProps: { current: Record<string, unknown> | null } = {
   current: null,
 };
 
@@ -29,12 +36,23 @@ vi.mock("./VideoPanel", () => ({
   },
 }));
 
+vi.mock("./VideoPanelEmptyState", () => ({
+  VideoPanelEmptyState: (props: Record<string, unknown>) => {
+    lastEmptyStateProps.current = props;
+    return (
+      <div
+        data-testid="mock-video-empty-state"
+        data-variant={(props.variant as string | undefined) ?? "primary"}
+      />
+    );
+  },
+}));
+
 vi.mock("./VideoPanelContainer.module.css", () => ({
   default: {
     wrap: "wrap",
-    empty: "empty",
+    emptyWrap: "emptyWrap",
     clearBtn: "clearBtn",
-    hint: "hint",
     list: "list",
     choice: "choice",
     choiceSource: "choiceSource",
@@ -71,6 +89,7 @@ const SOURCE: SourceMeta = {
 
 beforeEach(() => {
   lastVideoPanelProps.current = null;
+  lastEmptyStateProps.current = null;
   useSession.setState({
     sources: [SOURCE],
     channels: SOURCE.channels,
@@ -115,15 +134,42 @@ describe("VideoPanelContainer", () => {
     expect(props.panelId).toBe("video-1");
   });
 
-  it("renders the picker when the binding does not resolve to a video channel", () => {
-    // Sanity guard: when there's no binding, the container shouldn't
-    // render the mocked VideoPanel at all. Without this, the
-    // `expect(props.channelId).toBe(NATIVE_ID)` assertion above would
-    // also pass for a stale `lastVideoPanelProps` from a prior test —
-    // catching that ordering bug here keeps the regression test honest.
+  it("renders the picker plus a compact empty state when candidates exist but none is bound", () => {
+    // Sanity guard: when there's no binding (but channels are
+    // loaded), the container shouldn't render the mocked VideoPanel
+    // at all. The compact empty-state variant explains the next step
+    // while the picker provides the actual affordance.
     useSession.setState({ videoBindings: { "video-1": null } });
     render(<VideoPanelContainer panelId="video-1" />);
     expect(screen.queryByTestId("mock-video-panel")).toBeNull();
     expect(screen.getByTestId("video-panel-video-1-empty")).toBeTruthy();
+    // Picker channel button is rendered.
+    expect(screen.getByTestId(`video-pick-${QUALIFIED_ID}`)).toBeTruthy();
+    // Empty state is in the "compact" variant when a picker is also
+    // shown — issue #22 redesign: the rich variant is reserved for the
+    // first-impression "no candidates yet" case so the CTA doesn't
+    // compete with the picker.
+    const empty = screen.getByTestId("mock-video-empty-state");
+    expect(empty.getAttribute("data-variant")).toBe("compact");
+  });
+
+  it("renders the rich (primary) empty state when no video candidates are loaded", () => {
+    // Issue #22 — the "no sources at all" case is most users' first
+    // impression. Container must surface the rich empty state with
+    // the Try-sample-data CTA, not a wall of plain text.
+    useSession.setState({
+      sources: [],
+      channels: [],
+      globalRange: null,
+      videoBindings: { "video-1": null },
+    });
+    render(<VideoPanelContainer panelId="video-1" />);
+    expect(screen.queryByTestId("mock-video-panel")).toBeNull();
+    const empty = screen.getByTestId("mock-video-empty-state");
+    expect(empty).toBeTruthy();
+    // Primary variant gets the icon, headline, formats, CTA — see
+    // VideoPanelEmptyState.module.css `.compact` override list for the
+    // delta.
+    expect(empty.getAttribute("data-variant")).toBe("primary");
   });
 });

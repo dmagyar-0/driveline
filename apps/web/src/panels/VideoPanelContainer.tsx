@@ -3,13 +3,17 @@
 // Resolves `videoBindings[panelId]` from the store, finds the owning
 // source (MCAP or mp4+sidecar), and renders the existing `VideoPanel`
 // with props. When unbound, or when the bound channel no longer exists
-// (session cleared, different file loaded), show a picker that lists
-// every `kind === "video"` channel.
+// (session cleared, different file loaded), we surface either:
+//   - the rich `VideoPanelEmptyState` (no candidate channels — first
+//     impression, with the "Try sample data" CTA wired through), or
+//   - a compact picker on top of a stripped-down empty state when
+//     candidate channels exist but the user hasn't bound one.
 
 import { useMemo } from "react";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta } from "../state/store";
 import { VideoPanel } from "./VideoPanel";
+import { VideoPanelEmptyState } from "./VideoPanelEmptyState";
 import styles from "./VideoPanelContainer.module.css";
 
 interface VideoPanelContainerProps {
@@ -39,7 +43,9 @@ function resolveBinding(
   return null;
 }
 
-function videoChannels(sources: SourceMeta[]): { source: SourceMeta; channel: Channel }[] {
+function videoChannels(
+  sources: SourceMeta[],
+): { source: SourceMeta; channel: Channel }[] {
   const out: { source: SourceMeta; channel: Channel }[] = [];
   for (const source of sources) {
     if (source.kind !== "mcap" && source.kind !== "mp4+sidecar") continue;
@@ -86,39 +92,56 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
     );
   }
 
-  // Empty / unresolved state: show a small picker so the user can bind a
-  // video channel without leaving the panel.
+  // No bound channel and no candidates yet — render the rich empty
+  // state with the "Try sample data" CTA. This is most users' first
+  // impression of the panel, so it gets the full treatment.
+  if (candidates.length === 0) {
+    return (
+      <div
+        className={styles.emptyWrap}
+        data-testid={`video-panel-${panelId}-empty`}
+      >
+        <VideoPanelEmptyState />
+      </div>
+    );
+  }
+
+  // Candidates exist; the user just needs to pick one. Render a
+  // compact empty-state explainer above the picker so we keep the
+  // visual identity but lean on the picker as the primary affordance.
   return (
-    <div className={styles.empty} data-testid={`video-panel-${panelId}-empty`}>
-      {candidates.length === 0 ? (
-        <p className={styles.hint}>
-          Drop an MCAP file or mp4 + sidecar with a video channel to bind
-          this panel.
-        </p>
-      ) : (
-        <>
-          <p className={styles.hint}>
-            {bindingId
-              ? "The previously bound channel is no longer available."
-              : "Pick a video channel for this panel:"}
-          </p>
-          <ul className={styles.list}>
-            {candidates.map(({ source, channel }) => (
-              <li key={channel.id}>
-                <button
-                  type="button"
-                  className={styles.choice}
-                  onClick={() => setVideoBinding(panelId, channel.id)}
-                  data-testid={`video-pick-${channel.id}`}
-                >
-                  <span className={styles.choiceSource}>{source.name}</span>
-                  <span className={styles.choiceName}>{channel.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+    <div
+      className={styles.emptyWrap}
+      data-testid={`video-panel-${panelId}-empty`}
+    >
+      <VideoPanelEmptyState
+        variant="compact"
+        headline={
+          bindingId
+            ? "Channel no longer available"
+            : "Pick a video channel"
+        }
+        description={
+          bindingId
+            ? "The previously bound channel isn't in the current session. Choose another one below."
+            : "Select one of the loaded video tracks to start decoding."
+        }
+      />
+      <ul className={styles.list}>
+        {candidates.map(({ source, channel }) => (
+          <li key={channel.id}>
+            <button
+              type="button"
+              className={styles.choice}
+              onClick={() => setVideoBinding(panelId, channel.id)}
+              data-testid={`video-pick-${channel.id}`}
+            >
+              <span className={styles.choiceSource}>{source.name}</span>
+              <span className={styles.choiceName}>{channel.name}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

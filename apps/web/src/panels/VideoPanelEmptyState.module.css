@@ -1,0 +1,173 @@
+/* Empty-state layout. Generous whitespace — the user hasn't loaded
+ * data yet, and a tight engineer UI would feel cold here. Still
+ * restrained: no gradients, no soft drop shadows on cards, no centred
+ * three-card hero. Just a clear visual hierarchy and one CTA. */
+
+.empty {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-6);
+  padding: var(--sp-8);
+  box-sizing: border-box;
+  color: var(--color-fg-3);
+  background: var(--color-bg-2);
+  text-align: center;
+}
+
+/* `compact` variant — used by the picker fallback. Trim spacing and
+ * shrink the icon so the channel list below still has room. */
+.compact {
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-7);
+}
+.compact .icon svg {
+  width: 44px;
+  height: 33px;
+}
+.compact .headline {
+  font-size: var(--fs-15);
+}
+.compact .formats {
+  display: none;
+}
+.compact .description {
+  max-width: 28rem;
+}
+
+.icon {
+  color: var(--color-fg-5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.headline {
+  margin: 0;
+  font-size: var(--fs-18);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-2);
+  letter-spacing: var(--tracking-tight);
+}
+
+.description {
+  margin: 0;
+  max-width: 32rem;
+  font-size: var(--fs-14);
+  line-height: var(--lh-body);
+  color: var(--color-fg-4);
+}
+
+.formats {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-4);
+  justify-content: center;
+}
+
+.format {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--sp-2) var(--sp-5);
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-4);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+}
+
+.cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  margin-top: var(--sp-3);
+}
+
+.tryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-5) var(--sp-7);
+  font-family: var(--font-sans);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-1);
+  background: var(--color-accent-orange);
+  border: 1px solid var(--color-accent-orange);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  transition: filter var(--motion-base), background var(--motion-base);
+  min-height: 36px;
+}
+
+.tryButton:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.tryButton:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.tryButton:disabled {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-strong);
+  color: var(--color-fg-4);
+  cursor: progress;
+}
+
+.ctaHint {
+  margin: 0;
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+}
+
+.ctaHint code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--color-fg-4);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-2);
+  padding: 0 var(--sp-2);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  border-top-color: var(--color-fg-1);
+  border-radius: 50%;
+  animation: video-empty-spin 0.7s linear infinite;
+  display: inline-block;
+}
+
+@keyframes video-empty-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+  }
+}
+
+.error {
+  margin: 0;
+  color: var(--color-error-dark);
+  font-size: var(--fs-12);
+  max-width: 32rem;
+}
