@@ -1,5 +1,4 @@
-// T4.2 · PlotPanel — multi-series and channel picker. T6.2 wired
-// bindings into the store.
+// T4.2 · PlotPanel — multi-series plot with channel picker.
 //
 // Up to 8 scalar channels bound via a popover tree (`ChannelPicker`).
 // Colour per channel is deterministic (`palette.colorFor`). Data for
@@ -13,6 +12,23 @@
 // Several plot panels can coexist, each with its own independent set of
 // channels (per the manual checklist in docs/09-verification-plan.md:131).
 //
+// UX overhaul (issues #1–#8):
+//   1. Chips compact: short label + unit + optional source badge; full
+//      path lives in the tooltip; chip row never grows past 2 rows.
+//   2. Source badge appears when the bound short-labels collide so users
+//      can disambiguate four `speed` chips coming from four files.
+//   3. Y-axes group by unit. With ≥2 unit-groups we render left + right
+//      axes (uPlot scales `y` and `y2`); with ≥3, extra groups still get
+//      their own scale and we surface a `Mixed units` warning chip.
+//   4. Cursor-value legend strip under the plot, updated in the same
+//      effect that publishes the sync snapshot (no extra hot-path work).
+//   5. The add-channel button reads `Add channel · n / N max`.
+//   6. Calmer palette (`palette.ts`).
+//   7. Chip swatch is `colorFor(channel.id)` — same string used for the
+//      uPlot stroke; the two cannot drift.
+//   8. Axis grid + label colours read from `--color-fg-3` / a dedicated
+//      `--color-plot-grid` for legibility on the dark surface.
+//
 // Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,6 +41,18 @@ import { mergeSeries } from "./mergeSeries";
 import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
+import { ChannelChip } from "./ChannelChip";
+import {
+  CursorReadout,
+  formatReadoutValue,
+  type CursorReadoutEntry,
+} from "./CursorReadout";
+import {
+  shortChannelLabel,
+  shouldShowSourceBadges,
+  sourceBadge as sourceBadgeFor,
+} from "./channelLabels";
+import { groupByUnit, axisLabel, type AxisGroup } from "./axisGroups";
 import { mark, measure } from "../perf";
 import styles from "./PlotPanel.module.css";
 
@@ -49,9 +77,11 @@ export interface PlotSyncSnapshot {
   // One entry per bound channel, in binding order. `null` when no sample
   // in that channel has `ts <= cursorNs` yet — callers must treat this
   // as "not yet resolvable", not as a valid value.
-  sampleAtCursor: Array<
-    { channelId: string; tsNs: bigint; value: number } | null
-  >;
+  sampleAtCursor: Array<{
+    channelId: string;
+    tsNs: bigint;
+    value: number;
+  } | null>;
   // T6.3 — per-series min/max over the most recent fetched range. Used
   // by `signalAlignment.spec.ts` to assert two sources agree on the same
   // underlying signal within one sample. Empty when no render has
@@ -66,10 +96,7 @@ declare global {
 }
 
 // Largest index `i` with `tsNs[i] <= cursorNs`, or -1 if none.
-function lastIndexAtOrBefore(
-  tsNs: BigInt64Array,
-  cursorNs: bigint,
-): number {
+function lastIndexAtOrBefore(tsNs: BigInt64Array, cursorNs: bigint): number {
   let lo = 0;
   let hi = tsNs.length - 1;
   let ans = -1;
@@ -89,10 +116,6 @@ const EMPTY_X = new Float64Array();
 const EMPTY_Y = new Float64Array();
 const EMPTY_DATA: uPlot.AlignedData = [EMPTY_X, EMPTY_Y];
 
-function labelFor(c: Channel): string {
-  return c.unit ? `${c.name} (${c.unit})` : c.name;
-}
-
 function channelMap(sources: SourceMeta[]): Map<string, Channel> {
   const m = new Map<string, Channel>();
   for (const s of sources) for (const c of s.channels) m.set(c.id, c);
@@ -105,23 +128,41 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
 // theme switch at v1, so re-reading on every plot rebuild (one per
 // binding-set change) is wasted `getComputedStyle` work. Mirrors
 // `cursorStrokeColor` in cursorOverlay.
-let axisStyleCache: { fg: string; grid: string } | null = null;
-function axisStyle(): { fg: string; grid: string } {
+let axisStyleCache: {
+  fg: string;
+  grid: string;
+  ticks: string;
+} | null = null;
+function axisStyle(): { fg: string; grid: string; ticks: string } {
   if (axisStyleCache !== null) return axisStyleCache;
-  const fallback = { fg: "#e0e0e0", grid: "#2a2a2a" };
+  // Tuned for legibility on `--color-bg-3` (#151515):
+  //   - axis labels: `--color-fg-3` (#bbbbbb) ≈ 9.4:1 — well above 4.5.
+  //   - grid lines: `#2f2f2f` ≈ 1.4:1 — visible but unobtrusive,
+  //     replaces the v1 `--color-border-subtle` (#2a2a2a) which sat
+  //     too close to the panel surface to register at a glance.
+  //   - tick marks: same as grid.
+  const fallback = { fg: "#bbbbbb", grid: "#2f2f2f", ticks: "#2f2f2f" };
   if (typeof document === "undefined") {
     axisStyleCache = fallback;
     return axisStyleCache;
   }
   const cs = getComputedStyle(document.documentElement);
-  const fg = cs.getPropertyValue("--color-fg-2").trim();
-  const grid = cs.getPropertyValue("--color-border-subtle").trim();
+  const fg = cs.getPropertyValue("--color-fg-3").trim();
+  // Allow a panel-local override token if anyone introduces one; fall
+  // back to the hand-picked `#2f2f2f` rather than the default border
+  // colour, which is too dark on the deepest panel surface.
+  const grid = cs.getPropertyValue("--color-plot-grid").trim() || fallback.grid;
   axisStyleCache = {
     fg: fg || fallback.fg,
-    grid: grid || fallback.grid,
+    grid,
+    ticks: grid,
   };
   return axisStyleCache;
 }
+
+// Above this many chips we collapse into "N channels" with a popover.
+// Picked so the chip row never exceeds two rows at typical panel widths.
+const CHIP_COLLAPSE_THRESHOLD = 6;
 
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
@@ -138,20 +179,44 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     (s) => s.plotPanelSettings[panelId]?.gapThresholdSec ?? null,
   );
 
-  const boundChannelIds = useMemo(
-    () => storedBindings ?? [],
-    [storedBindings],
-  );
+  const boundChannelIds = useMemo(() => storedBindings ?? [], [storedBindings]);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
+  // When the chip count exceeds CHIP_COLLAPSE_THRESHOLD we hide the chip
+  // row and surface a "N channels" pill that opens a popover. Collapsed
+  // is the default at the threshold; the user can pin it open.
+  const [chipsCollapsed, setChipsCollapsed] = useState(true);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const channels = useMemo(() => channelMap(sources), [sources]);
   const boundChannels = useMemo(
-    () => boundChannelIds.map((id) => channels.get(id)).filter((c): c is Channel => !!c),
+    () =>
+      boundChannelIds
+        .map((id) => channels.get(id))
+        .filter((c): c is Channel => !!c),
     [boundChannelIds, channels],
   );
+
+  // Pre-compute the source-disambiguation badges so chips and the
+  // cursor readout agree on what's shown.
+  const badges = useMemo(() => {
+    const show = shouldShowSourceBadges(boundChannels);
+    const m = new Map<string, string>();
+    for (const c of boundChannels) {
+      m.set(c.id, show ? sourceBadgeFor(c, sources) : "");
+    }
+    return m;
+  }, [boundChannels, sources]);
+
+  // Group by unit for multi-axis rendering (issue #3). Calculated once
+  // per binding-set change; downstream consumers (uPlot opts builder,
+  // axis warning chip) read this.
+  const axisGroups: AxisGroup[] = useMemo(
+    () => groupByUnit(boundChannels),
+    [boundChannels],
+  );
+  const hasMixedUnits = axisGroups.length >= 3;
 
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user
@@ -183,13 +248,19 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // binary-search raw ns timestamps. Parallel to `lastRangeRef`: both
   // are updated in lockstep after a successful fetch and cleared when
   // the binding set changes.
-  const decodedRef = useRef<
-    { channelId: string; series: PlotSeries }[]
-  >([]);
+  const decodedRef = useRef<{ channelId: string; series: PlotSeries }[]>([]);
+
+  // Cursor-readout entries. Recomputed in the same effect that publishes
+  // the sync snapshot — no extra binary searches on the hot path.
+  const [readoutEntries, setReadoutEntries] = useState<CursorReadoutEntry[]>(
+    [],
+  );
 
   const publishSync = useCallback(() => {
-    const store =
-      (window.__drivelinePlotPanels ??= {});
+    const t0 = `plot:cursor:${panelId}:start`;
+    const t1 = `plot:cursor:${panelId}:end`;
+    mark(t0);
+    const store = (window.__drivelinePlotPanels ??= {});
     const decoded = decodedRef.current;
     const sampleAtCursor: PlotSyncSnapshot["sampleAtCursor"] = decoded.map(
       ({ channelId, series }) => {
@@ -229,7 +300,32 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       sampleAtCursor,
       seriesStats,
     };
-  }, [boundChannelIds, cursorNs, panelId]);
+
+    // Build the cursor-readout entries piggybacking on the same loop:
+    // one entry per bound channel in binding order, value picked from
+    // the binary search above. `null` value renders as `—`.
+    const byIdx = new Map<string, (typeof sampleAtCursor)[number]>();
+    for (let i = 0; i < decoded.length; i++) {
+      byIdx.set(decoded[i].channelId, sampleAtCursor[i]);
+    }
+    const entries: CursorReadoutEntry[] = boundChannels.map((c) => {
+      const s = byIdx.get(c.id) ?? null;
+      const valueStr =
+        s && Number.isFinite(s.value) ? formatReadoutValue(s.value) : null;
+      return {
+        channelId: c.id,
+        shortLabel: shortChannelLabel(c),
+        value: valueStr,
+        unit: c.unit,
+        sourceBadge: badges.get(c.id) ?? "",
+      };
+    });
+    setReadoutEntries(entries);
+    mark(t1);
+    // Cheap one-shot mark; do not measure on every cursor tick (would
+    // pollute the perf timeline). Caller can `performance.measure`
+    // between the marks when investigating regressions.
+  }, [boundChannelIds, boundChannels, badges, cursorNs, panelId]);
 
   const resizePlotToContainer = useCallback(() => {
     const plot = plotRef.current;
@@ -272,21 +368,48 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // gap-threshold mode changes. The threshold flips `spanGaps` (which
   // is a per-series option that uPlot bakes into its draw plan), so
   // mode changes need a fresh plot instance.
+  //
+  // Axis grouping is also baked in here: each unit-group gets its own
+  // uPlot scale (`y`, `y2`, …) so heterogeneous channels are not
+  // compared on the same vertical axis.
+  const axisGroupKey = axisGroups
+    .map(
+      (g) => `${g.scaleKey}:${g.unit}:${g.channels.map((c) => c.id).join(",")}`,
+    )
+    .join("|");
   const seriesKey = `${boundChannelIds.join("|")}::g=${
     gapThresholdSec ?? "off"
-  }`;
+  }::axes=${axisGroupKey}`;
+  // Build a quick lookup from channel-id → scale key for the series opts.
+  const scaleByChannelId = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const g of axisGroups) {
+      for (const c of g.channels) m.set(c.id, g.scaleKey);
+    }
+    return m;
+  }, [axisGroups]);
+
   useEffect(() => {
     const mount = plotMountRef.current;
     const container = containerRef.current;
     if (!mount || !container) return;
 
     const rect = container.getBoundingClientRect();
-    const { fg, grid } = axisStyle();
-    const axisOpts: uPlot.Axis = {
+    const { fg, grid, ticks } = axisStyle();
+    const mkAxis = (
+      side: 0 | 1 | 2 | 3,
+      scale: string,
+      label?: string,
+    ): uPlot.Axis => ({
+      scale,
+      side,
       stroke: fg,
-      ticks: { stroke: grid },
-      grid: { stroke: grid },
-    };
+      ticks: { stroke: ticks, size: 4 },
+      grid: { stroke: grid, width: 1 },
+      // Render only on canvas axes (sides 2 = bottom-x, 3 = right-y,
+      // 1 = left-y); uPlot ignores `label` for unused axes anyway.
+      ...(label ? { label } : {}),
+    });
     // Default mode: `mergeSeries` emits `null` at every union timestamp
     // where *this* series has no sample. With two same-rate signals on
     // different CAN mailboxes (e.g. /vehicle/speed and
@@ -301,22 +424,44 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // renderer must NOT span — `spanGaps:false` lets those nulls draw
     // as actual gaps without losing the multi-mailbox interleave fix.
     const spanGaps = gapThresholdSec === null;
+
+    // Per-scale config: every group gets a `scales` entry. Only the
+    // first two groups get a visible axis (left + right); the rest
+    // still scale independently but their gridlines are suppressed so
+    // the canvas doesn't become unreadable.
+    const scales: uPlot.Options["scales"] = { x: { time: true } };
+    const axesOpts: uPlot.Axis[] = [mkAxis(2, "x")]; // bottom x-axis
+    for (let i = 0; i < axisGroups.length; i++) {
+      const g = axisGroups[i];
+      (scales as Record<string, uPlot.Scale>)[g.scaleKey] = { auto: true };
+      if (i === 0) {
+        axesOpts.push(mkAxis(3, g.scaleKey, axisLabel(g))); // left
+      } else if (i === 1) {
+        axesOpts.push(mkAxis(1, g.scaleKey, axisLabel(g))); // right
+      }
+      // i >= 2: scale exists but no visible axis — see Mixed-units warning
+    }
+
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height)),
-      scales: { x: { time: true }, y: { auto: true } },
+      scales,
       series: [
         {},
         ...boundChannels.map((c) => ({
-          label: labelFor(c),
+          label: c.name,
           stroke: colorFor(c.id),
-          width: 1,
+          width: 1.25,
           spanGaps,
+          scale: scaleByChannelId.get(c.id) ?? "y",
         })),
       ],
-      axes: [axisOpts, axisOpts],
+      axes: axesOpts,
       cursor: { show: false },
-      legend: { show: boundChannels.length > 0 },
+      // The header chips + the under-plot readout strip already list
+      // every bound series with its value — uPlot's built-in legend
+      // would duplicate that and steal vertical space from the canvas.
+      legend: { show: false },
     };
     const plot = new uPlot(opts, EMPTY_DATA, mount);
     plotRef.current = plot;
@@ -391,7 +536,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return () => {
       aborted = true;
     };
-  }, [boundChannels, globalRange, gapThresholdSec, publishSync]);
+  }, [boundChannels, globalRange, gapThresholdSec, publishSync, panelId]);
 
   // Cursor overlay redraw on every cursor tick.
   useEffect(() => {
@@ -468,30 +613,48 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     removePlotChannel(panelId, id);
   };
 
+  // Collapse rule (issue #1): when many channels are bound, the chip
+  // row becomes a single "N channels" pill that expands on click.
+  // Disabled when at-or-below the threshold so a 3-chip panel is never
+  // hidden behind a click.
+  const collapseEligible = boundChannelIds.length >= CHIP_COLLAPSE_THRESHOLD;
+  const showChipsExpanded = !collapseEligible || !chipsCollapsed;
+
   return (
     <section className={styles.panel} data-testid="plot-panel">
       <div className={styles.controls}>
-        <div className={styles.chips} data-testid="plot-chips">
-          {boundChannels.map((c) => (
-            <span key={c.id} className={styles.chip} data-testid={`chip-${c.id}`}>
-              <span
-                className={styles.chipSwatch}
-                style={{ background: colorFor(c.id) }}
-                aria-hidden
+        {collapseEligible && (
+          <button
+            type="button"
+            className={styles.collapseBtn}
+            onClick={() => setChipsCollapsed((v) => !v)}
+            aria-expanded={!chipsCollapsed}
+            data-testid="plot-chips-collapse"
+          >
+            {chipsCollapsed ? `${boundChannelIds.length} channels` : "Hide"}
+          </button>
+        )}
+        {showChipsExpanded && (
+          <div className={styles.chips} data-testid="plot-chips">
+            {boundChannels.map((c) => (
+              <ChannelChip
+                key={c.id}
+                channel={c}
+                sourceBadge={badges.get(c.id) ?? ""}
+                onRemove={onRemove}
               />
-              <span className={styles.chipLabel}>{labelFor(c)}</span>
-              <button
-                type="button"
-                className={styles.chipRemove}
-                aria-label={`remove ${c.name}`}
-                onClick={() => onRemove(c.id)}
-                data-testid={`remove-${c.id}`}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+        {hasMixedUnits && (
+          <span
+            className={styles.warningChip}
+            title={`Channels span ${axisGroups.length} unit groups. Only the first two are shown on visible axes; the rest scale independently against their own group.`}
+            data-testid="plot-mixed-units-warning"
+          >
+            Mixed units · {axisGroups.length}
+          </span>
+        )}
         <button
           ref={addBtnRef}
           type="button"
@@ -499,11 +662,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           onClick={togglePicker}
           disabled={!hasAnyScalar || atCap}
           aria-expanded={pickerOpen}
+          title={`Up to ${MAX_PLOT_SERIES} channels per panel`}
           data-testid="plot-add-channel"
         >
-          + Add channel{" "}
+          Add channel
           <span className={styles.countBadge}>
-            {boundChannelIds.length} / {MAX_PLOT_SERIES}
+            {boundChannelIds.length} / {MAX_PLOT_SERIES} max
           </span>
         </button>
       </div>
@@ -528,6 +692,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           </div>
         )}
       </div>
+      <CursorReadout entries={readoutEntries} />
     </section>
   );
 }

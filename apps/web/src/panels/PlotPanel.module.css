@@ -1,11 +1,11 @@
 .panel {
   border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
-  padding: 0.5rem 0.75rem 0.75rem;
+  border-radius: var(--radius-6);
+  padding: var(--sp-4) var(--sp-6) var(--sp-6);
   background: var(--color-bg-3);
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: var(--sp-4);
   position: relative;
   width: 100%;
   height: 100%;
@@ -13,32 +13,53 @@
   min-height: 0;
 }
 
+/* Header row: chips on the left, warnings + Add button on the right.
+ * `max-height` keeps the row from eating more than two lines of chips
+ * even when the user has eight bound — anything beyond that scrolls
+ * horizontally inside `.chips`. */
 .controls {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-  font-size: 0.85rem;
+  gap: var(--sp-4);
+  font-size: var(--fs-13);
+  flex-wrap: nowrap;
+  min-height: 28px;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  gap: var(--sp-2);
   flex: 1;
+  min-width: 0;
+  /* Two-row cap. With the chip line-height ≈ 22px the row settles
+   * around 48px; anything beyond two rows is reachable by scrolling
+   * the panel itself (the user already has a popover for picking). */
+  max-height: 48px;
+  overflow-y: auto;
+  /* Hide scrollbar visually but keep keyboard scroll. The chip set is
+   * a low-information surface; a scrollbar would be louder than the
+   * chips themselves. */
+  scrollbar-width: thin;
 }
 
+/* Compact chip: short label · unit · optional badge · remove. The
+ * `max-width` budget is tight on purpose so a long topic name cannot
+ * push the Add button off-screen. The full path is in `title`. */
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.15rem 0.35rem 0.15rem 0.5rem;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-2) 2px var(--sp-3);
   background: var(--color-bg-2);
   border: 1px solid var(--color-border-subtle);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   color: var(--color-fg-2);
-  font-size: 0.8rem;
-  max-width: 18rem;
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  max-width: 14rem;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .chipSwatch {
@@ -53,6 +74,30 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: var(--fw-medium);
+  min-width: 0;
+}
+
+.chipUnit {
+  color: var(--color-fg-5);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Source badge (issue #2). Visually subordinate to the label and
+ * dimmed; appears only when the label alone would be ambiguous. */
+.chipBadge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--color-fg-4);
+  background: var(--color-bg-4);
+  border-radius: var(--radius-2);
+  padding: 0 4px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .chipRemove {
@@ -60,30 +105,88 @@
   border: none;
   color: var(--color-fg-5);
   cursor: pointer;
-  font-size: 1rem;
+  font-size: var(--fs-15);
   line-height: 1;
-  padding: 0 0.15rem;
+  padding: 0 2px;
+  border-radius: var(--radius-2);
+  flex-shrink: 0;
 }
 
 .chipRemove:hover {
   color: var(--color-fg-2);
+  background: var(--color-bg-5);
+}
+
+.chipRemove:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Collapse pill (issue #1) — replaces the chip row when there are too
+ * many channels. Reads "N channels" / "Hide". */
+.collapseBtn {
+  background: var(--color-bg-2);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--sp-5);
+  font-size: var(--fs-12);
+  cursor: pointer;
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.collapseBtn:hover {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+}
+
+.collapseBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Mixed-units warning chip (issue #3). Same chip shape as a channel
+ * chip but no swatch — communicates "this is meta, not a series". */
+.warningChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px var(--sp-3);
+  background: rgba(241, 196, 83, 0.12); /* var(--plot-6) tint */
+  border: 1px solid rgba(241, 196, 83, 0.4);
+  border-radius: var(--radius-pill);
+  color: #f1c453;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  cursor: help;
+  flex-shrink: 0;
 }
 
 .addBtn {
   background: var(--color-bg-2);
   color: var(--color-fg-2);
   border: 1px solid var(--color-border-strong);
-  border-radius: 4px;
-  padding: 0.25rem 0.6rem;
+  border-radius: var(--radius-4);
+  padding: 4px var(--sp-5);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: var(--sp-3);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .addBtn:hover:not(:disabled) {
   background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+}
+
+.addBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .addBtn:disabled {
@@ -93,7 +196,11 @@
 
 .countBadge {
   color: var(--color-fg-5);
-  font-size: 0.75rem;
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  background: var(--color-bg-4);
+  padding: 1px 6px;
+  border-radius: var(--radius-2);
 }
 
 .plotArea {
@@ -121,5 +228,66 @@
   align-items: center;
   justify-content: center;
   color: var(--color-fg-6);
-  font-size: 0.9rem;
+  font-size: var(--fs-14);
+}
+
+/* Cursor-value readout strip (issue #4). One row of compact pills,
+ * one per bound series, value formatted by `formatReadoutValue`. */
+.cursorReadout {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-4) var(--sp-6);
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-4);
+  font-size: var(--fs-12);
+  color: var(--color-fg-3);
+  min-height: 26px;
+  flex-shrink: 0;
+}
+
+.readoutItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.readoutSwatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.readoutLabel {
+  color: var(--color-fg-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 8rem;
+}
+
+.readoutBadge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  background: var(--color-bg-4);
+  border-radius: var(--radius-2);
+  padding: 0 4px;
+}
+
+.readoutValue {
+  color: var(--color-fg-2);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-weight: var(--fw-medium);
+}
+
+.readoutUnit {
+  color: var(--color-fg-5);
+  font-weight: var(--fw-regular);
 }
