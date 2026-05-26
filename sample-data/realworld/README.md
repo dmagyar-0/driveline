@@ -108,6 +108,28 @@ pnpm --filter e2e exec playwright test _demo-comma2k19-video.spec.ts
 The `_demo-*` prefix keeps the spec out of the default CI run — it
 needs the three large fixtures above, which aren't checked in.
 
+### Splitting signals across MCAP and MF4
+
+`scripts/convert_comma2k19_to_mf4.py` emits a second copy of the
+secondary signals (wheel speeds, IMU components, GNSS lat/lon/alt)
+as an MF4 file with `start_time` anchored to the same segment-start
+wall-clock the MCAP converter uses. Driveline opens both together,
+and a single plot panel can carry one channel from each. Demoed in
+`apps/e2e/tests/screenshots/comma2k19-mcap-plus-mf4.png`.
+
+```sh
+pip install asammdf 'pyarrow>=14,<20' 'numpy>=1.24,<3'
+python3 scripts/convert_comma2k19_to_mf4.py
+#   -> sample-data/realworld/comma2k19.mf4 (~0.45 MB, 13 scalars)
+```
+
+The second test in `_demo-comma2k19-video.spec.ts` drops the mp4 +
+sidecar + mcap + mf4 in one go, binds the plot panel to
+`/vehicle/speed` (from the MCAP) and `WheelSpeedFL` (from the MF4),
+and asserts the per-series stats land for both channel ids. The
+status line reads "3 sources" — the mp4 + sidecar pair counts as
+one, the mcap as a second, the mf4 as a third.
+
 > Bug history: this dataset originally hit a PlotPanel bug where
 > binding two CAN channels with non-coincident timestamps produced
 > two invisible traces. `mergeSeries` correctly emits `null` at every
