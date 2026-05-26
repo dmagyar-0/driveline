@@ -1,47 +1,52 @@
 .splash {
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-sans, system-ui, sans-serif);
   min-height: 100vh;
   box-sizing: border-box;
-  padding: 2rem;
+  padding: var(--sp-9, 1.5rem);
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #222;
+  background: var(--color-bg-1, #0b0b0b);
+  color: var(--color-fg-2, #e0e0e0);
 }
 
 .card {
   max-width: 40rem;
-  border: 1px solid #ddd;
-  border-radius: 8px;
-  padding: 2rem 2.25rem;
-  background: #fff;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--color-border-subtle, #2a2a2a);
+  border-radius: var(--radius-6, 6px);
+  padding: var(--sp-9, 1.5rem) var(--sp-9, 1.5rem);
+  background: var(--color-bg-3, #151515);
 }
 
 .title {
-  margin: 0 0 0.75rem;
-  font-size: 1.5rem;
-  color: #b23a00;
+  margin: 0 0 var(--sp-6, 0.75rem);
+  font-size: var(--fs-18, 1.125rem);
+  font-weight: var(--fw-semibold, 600);
+  color: var(--color-fg-1, #ffffff);
+  line-height: var(--lh-tight, 1.15);
 }
 
 .body {
-  margin: 0 0 1rem;
-  line-height: 1.5;
-  color: #333;
+  margin: 0 0 var(--sp-7, 1rem);
+  line-height: var(--lh-body, 1.5);
+  color: var(--color-fg-3, #bbbbbb);
 }
 
 .browsers {
   list-style: none;
   padding: 0;
-  margin: 0 0 1rem;
+  margin: 0 0 var(--sp-7, 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3, 0.35rem);
 }
 
 .browsers li {
-  padding: 0.35rem 0;
+  padding: 0;
 }
 
 .browsers a {
-  color: #2a6df4;
+  color: var(--color-accent-blue, #2a6df4);
   text-decoration: none;
 }
 
@@ -49,8 +54,14 @@
   text-decoration: underline;
 }
 
+.browsers a:focus-visible {
+  outline: var(--focus-ring, 2px solid #2a6df4);
+  outline-offset: var(--focus-offset, 2px);
+  border-radius: var(--radius-2, 2px);
+}
+
 .note {
   margin: 0;
-  font-size: 0.85rem;
-  color: #666;
+  font-size: var(--fs-12, 0.75rem);
+  color: var(--color-fg-5, #888888);
 }
