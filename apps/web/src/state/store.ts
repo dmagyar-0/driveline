@@ -218,6 +218,14 @@ export interface SessionState {
    * source has a pending fetch.
    */
   pendingFetch: Record<string, PendingFetch | null>;
+  /**
+   * Ingestion-in-progress flag. `true` while an `openFiles` batch is
+   * running (bucket → per-source open → merge); `false` otherwise.
+   * Read by VideoPanelContainer (and other empty-state surfaces) to
+   * render a "Decoding… / Indexing…" overlay so a multi-MB MCAP or a
+   * large mp4 doesn't drop into a silent UI. Issue #33.
+   */
+  ingesting: boolean;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
   /** Clear `lastOpenErrors` (used by the Sources drawer dismiss). */
@@ -465,6 +473,7 @@ export const useSession = create<SessionState>((set, get) => {
     lastOpenErrors: [],
     loadedRanges: {},
     pendingFetch: {},
+    ingesting: false,
 
     setWorker(w) {
       worker = w;
@@ -859,6 +868,12 @@ export const useSession = create<SessionState>((set, get) => {
       const run = (): Promise<OpenResult> => timed("open", async () => {
         if (!worker) throw new Error("session store: worker not initialised");
         const w = worker;
+        // Issue #33 — surface ingestion as a visible UI state. The empty
+        // state and per-panel surfaces read this to render a
+        // "Decoding… / Indexing…" affordance instead of dropping into a
+        // silent UI on a multi-MB drop. Flip back inside the run so a
+        // worker error still clears the flag.
+        set({ ingesting: true });
 
         const buckets = bucketFiles(files);
         const opened: string[] = [];
@@ -989,8 +1004,12 @@ export const useSession = create<SessionState>((set, get) => {
 
       const next = pending.then(run, run);
       // Keep the chain alive even if `run` throws so the next caller still
-      // queues behind it rather than racing.
-      pending = next.catch(() => undefined);
+      // queues behind it rather than racing. Always clear `ingesting`
+      // when the batch settles (success or failure) so a worker error
+      // can't leave the empty state stuck on the loading affordance.
+      pending = next.catch(() => undefined).finally(() => {
+        set({ ingesting: false });
+      });
       return next;
     },
 
