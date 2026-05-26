@@ -120,12 +120,44 @@ def main() -> None:
     ap.add_argument("--compression", default="zstd",
                     choices=["zstd", "none"])
     ap.add_argument(
+        "--segment-offset-seconds",
+        type=float,
+        default=0.0,
+        help=(
+            "Add this many seconds to the drive-start anchor before "
+            "emitting messages, so multiple segments of the same drive "
+            "land at distinct wall-clock positions on Driveline's unified "
+            "timeline. Each comma2k19 segment is nominally 60 s, so "
+            "segment N belongs at offset N*60. Defaults to 0 to preserve "
+            "the original single-segment behaviour."
+        ),
+    )
+    ap.add_argument(
         "--skip-hash-check",
         action="store_true",
         help="Bypass the SHA256 verification against EXPECTED_HASHES.txt. "
              "Useful when working against a locally-resharded copy.",
     )
+    ap.add_argument(
+        "--only",
+        default="",
+        help=(
+            "Comma-separated subset of topic groups to emit: "
+            "speed,steering_angle,wheel_speed,accel,gyro,gnss. "
+            "Empty (the default) emits all groups. Useful for splitting "
+            "a single segment into several topic-specific MCAPs."
+        ),
+    )
     args = ap.parse_args()
+    only = {t.strip() for t in args.only.split(",") if t.strip()}
+    known = {"speed", "steering_angle", "wheel_speed",
+             "accel", "gyro", "gnss"}
+    if only:
+        unknown = only - known
+        if unknown:
+            sys.exit(f"unknown --only group(s): {sorted(unknown)}; "
+                     f"known: {sorted(known)}")
+    enabled = only or known
 
     parquet = Path(args.parquet)
     if not parquet.exists():
@@ -150,7 +182,9 @@ def main() -> None:
 
     seg_id = seg_ids[args.segment_index]
     log = rg["log"][args.segment_index].as_py()
-    start_ns = parse_segment_start_ns(seg_id)
+    start_ns = parse_segment_start_ns(seg_id) + int(
+        args.segment_offset_seconds * 1_000_000_000
+    )
     print(f"segment {args.segment_index}: {seg_id}")
     print(f"  recording start ns: {start_ns}  "
           f"({datetime.fromtimestamp(start_ns/1e9, tz=timezone.utc).isoformat()})")
@@ -209,11 +243,19 @@ def main() -> None:
                 schema_id=vec3_schema, metadata=md,
             )
 
-        ch_speed = reg_f64("/vehicle/speed", "m/s")
-        ch_steer = reg_f64("/vehicle/steering_angle", "deg")
-        ch_wheel_fl = reg_f64("/vehicle/wheel_speed_fl", "m/s")
-        ch_wheel_fr = reg_f64("/vehicle/wheel_speed_fr", "m/s")
-        ch_wheel_rl = reg_f64("/vehicle/wheel_speed_rl", "m/s")
+        # Only register channels for groups the caller opted in to.
+        # Empty MCAP channels with no messages render as ghosts in the
+        # Channels drawer; gating registration keeps the file tight.
+        ch_speed = reg_f64("/vehicle/speed", "m/s") \
+            if "speed" in enabled else None
+        ch_steer = reg_f64("/vehicle/steering_angle", "deg") \
+            if "steering_angle" in enabled else None
+        ch_wheel_fl = reg_f64("/vehicle/wheel_speed_fl", "m/s") \
+            if "wheel_speed" in enabled else None
+        ch_wheel_fr = reg_f64("/vehicle/wheel_speed_fr", "m/s") \
+            if "wheel_speed" in enabled else None
+        ch_wheel_rl = reg_f64("/vehicle/wheel_speed_rl", "m/s") \
+            if "wheel_speed" in enabled else None
         # `wheel_speed_rr` is registered lazily on the first 4-wheel
         # sample we see. comma2k19's demo parquet does ship four
         # wheels, but if a future variant trims to three the converter
@@ -221,76 +263,95 @@ def main() -> None:
         # would produce `wheel_speed_rl - wheel_speed_rr == 0` and a
         # wrong conclusion in any downstream analysis.
         ch_wheel_rr: int | None = None
-        ch_accel = reg_vec3("/imu/accel", "m/s^2")
-        ch_gyro = reg_vec3("/imu/gyro", "rad/s")
-        ch_gnss = reg_vec3("/gnss/ublox", "deg,deg,m")
+        ch_accel = reg_vec3("/imu/accel", "m/s^2") \
+            if "accel" in enabled else None
+        ch_gyro = reg_vec3("/imu/gyro", "rad/s") \
+            if "gyro" in enabled else None
+        ch_gnss = reg_vec3("/gnss/ublox", "deg,deg,m") \
+            if "gnss" in enabled else None
 
         entries: list[tuple[int, int, bytes]] = []
 
-        # Speed (one element per sample).
-        for t, v in zip(log["processed_log__CAN__speed__t"],
-                        log["processed_log__CAN__speed__value"]):
-            ts = to_abs_ns(t)
-            entries.append((ts, ch_speed, f64_payload(ts, v[0])))
+        if ch_speed is not None:
+            for t, v in zip(log["processed_log__CAN__speed__t"],
+                            log["processed_log__CAN__speed__value"]):
+                ts = to_abs_ns(t)
+                entries.append((ts, ch_speed, f64_payload(ts, v[0])))
 
-        # Steering angle (scalar per sample).
-        for t, v in zip(log["processed_log__CAN__steering_angle__t"],
-                        log["processed_log__CAN__steering_angle__value"]):
-            ts = to_abs_ns(t)
-            entries.append((ts, ch_steer, f64_payload(ts, v)))
+        if ch_steer is not None:
+            for t, v in zip(
+                log["processed_log__CAN__steering_angle__t"],
+                log["processed_log__CAN__steering_angle__value"],
+            ):
+                ts = to_abs_ns(t)
+                entries.append((ts, ch_steer, f64_payload(ts, v)))
 
         # Wheel speeds: most comma2k19 variants (including the demo
         # parquet) ship four wheels (FL, FR, RL, RR). Some downstream
         # rlogs trim to three. Emit RR only when the source actually
         # has it — never synthesise from RL.
-        for t, vec in zip(log["processed_log__CAN__wheel_speed__t"],
-                          log["processed_log__CAN__wheel_speed__value"]):
-            if len(vec) < 3:
-                continue
-            ts = to_abs_ns(t)
-            fl, fr, rl = vec[0], vec[1], vec[2]
-            entries.append((ts, ch_wheel_fl, f64_payload(ts, fl)))
-            entries.append((ts, ch_wheel_fr, f64_payload(ts, fr)))
-            entries.append((ts, ch_wheel_rl, f64_payload(ts, rl)))
-            if len(vec) >= 4:
-                if ch_wheel_rr is None:
-                    # Mid-stream registration: any earlier 3-wheel samples
-                    # produced no RR value, so the resulting channel will
-                    # start later than its FL/FR/RL siblings. Surface this
-                    # so a downstream consumer expecting four parallel
-                    # series isn't surprised by the ragged start.
-                    print(
-                        f"warning: /vehicle/wheel_speed_rr registered at "
-                        f"ts={ts}; earlier samples in this segment had only "
-                        f"3 wheels — RR series will start later than FL/FR/RL.",
-                        file=sys.stderr,
+        if ch_wheel_fl is not None:
+            for t, vec in zip(
+                log["processed_log__CAN__wheel_speed__t"],
+                log["processed_log__CAN__wheel_speed__value"],
+            ):
+                if len(vec) < 3:
+                    continue
+                ts = to_abs_ns(t)
+                fl, fr, rl = vec[0], vec[1], vec[2]
+                entries.append((ts, ch_wheel_fl, f64_payload(ts, fl)))
+                entries.append((ts, ch_wheel_fr, f64_payload(ts, fr)))
+                entries.append((ts, ch_wheel_rl, f64_payload(ts, rl)))
+                if len(vec) >= 4:
+                    if ch_wheel_rr is None:
+                        # Mid-stream registration: any earlier 3-wheel
+                        # samples produced no RR value, so the resulting
+                        # channel will start later than its FL/FR/RL
+                        # siblings. Surface this so a downstream consumer
+                        # expecting four parallel series isn't surprised by
+                        # the ragged start.
+                        print(
+                            f"warning: /vehicle/wheel_speed_rr registered at "
+                            f"ts={ts}; earlier samples in this segment had only "
+                            f"3 wheels — RR series will start later than FL/FR/RL.",
+                            file=sys.stderr,
+                        )
+                        ch_wheel_rr = reg_f64(
+                            "/vehicle/wheel_speed_rr", "m/s"
+                        )
+                    entries.append(
+                        (ts, ch_wheel_rr, f64_payload(ts, vec[3]))
                     )
-                    ch_wheel_rr = reg_f64("/vehicle/wheel_speed_rr", "m/s")
-                entries.append((ts, ch_wheel_rr, f64_payload(ts, vec[3])))
 
-        # IMU accel.
-        for t, vec in zip(log["processed_log__IMU__accelerometer__t"],
-                          log["processed_log__IMU__accelerometer__value"]):
-            if len(vec) < 3:
-                continue
-            ts = to_abs_ns(t)
-            entries.append((ts, ch_accel, vec3_payload(ts, *vec[:3])))
+        if ch_accel is not None:
+            for t, vec in zip(
+                log["processed_log__IMU__accelerometer__t"],
+                log["processed_log__IMU__accelerometer__value"],
+            ):
+                if len(vec) < 3:
+                    continue
+                ts = to_abs_ns(t)
+                entries.append((ts, ch_accel, vec3_payload(ts, *vec[:3])))
 
-        # IMU gyro.
-        for t, vec in zip(log["processed_log__IMU__gyro__t"],
-                          log["processed_log__IMU__gyro__value"]):
-            if len(vec) < 3:
-                continue
-            ts = to_abs_ns(t)
-            entries.append((ts, ch_gyro, vec3_payload(ts, *vec[:3])))
+        if ch_gyro is not None:
+            for t, vec in zip(
+                log["processed_log__IMU__gyro__t"],
+                log["processed_log__IMU__gyro__value"],
+            ):
+                if len(vec) < 3:
+                    continue
+                ts = to_abs_ns(t)
+                entries.append((ts, ch_gyro, vec3_payload(ts, *vec[:3])))
 
-        # GNSS (lat, lon, alt) — drop NaN samples.
-        for t, vec in zip(log["processed_log__GNSS__live_gnss_ublox__t"],
-                          log["processed_log__GNSS__live_gnss_ublox__value"]):
-            if len(vec) < 3 or any(np.isnan(x) for x in vec[:3]):
-                continue
-            ts = to_abs_ns(t)
-            entries.append((ts, ch_gnss, vec3_payload(ts, *vec[:3])))
+        if ch_gnss is not None:
+            for t, vec in zip(
+                log["processed_log__GNSS__live_gnss_ublox__t"],
+                log["processed_log__GNSS__live_gnss_ublox__value"],
+            ):
+                if len(vec) < 3 or any(np.isnan(x) for x in vec[:3]):
+                    continue
+                ts = to_abs_ns(t)
+                entries.append((ts, ch_gnss, vec3_payload(ts, *vec[:3])))
 
         entries.sort(key=lambda e: (e[0], e[1]))
         seq: dict[int, int] = {}

@@ -63,6 +63,155 @@ Screenshot: `apps/e2e/tests/screenshots/comma2k19-multi-channel.png`
 shows both signals plotted on the same panel with the time axis at
 the actual recording wall-clock (`7/27/18, 6:04 am`).
 
+### Adding the dashcam video (video + signals demo)
+
+The HF demo parquet ships only CAN/IMU/GNSS — the dashcam HEVC for
+the same segment lives in the `compression_challenge/` directory
+alongside it. Pairing it with the converted MCAP gives the
+"camera + signals" visualisation in
+`apps/e2e/tests/screenshots/comma2k19-video-plus-signals.png`.
+
+```sh
+SEG="b0c9d2329ad1606b%7C2018-07-27--06-03-57/10"
+OUT=sample-data/realworld
+
+# 1. Pull the 37 MB HEVC clip for segment 10.
+curl -sL -o /tmp/datasets/video_seg10.hevc \
+  "https://huggingface.co/datasets/commaai/comma2k19/resolve/main/compression_challenge/${SEG}/video.hevc"
+
+# 2. Transcode HEVC → H.264 MP4 at 20 fps. WebCodecs in Driveline is
+#    avc1.* only; HEVC isn't supported. GOP 20 keeps seeks snappy.
+ffmpeg -framerate 20 -i /tmp/datasets/video_seg10.hevc \
+  -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+  -g 20 -keyint_min 20 -movflags +faststart -an \
+  "$OUT/comma2k19_seg10.mp4"
+
+# 3. Generate the `.mp4.timestamps` sidecar. Anchor frame 0 to the
+#    same segment-start wall-clock the converter uses for the MCAP
+#    (parse_segment_start_ns) so video PTS and signal timestamps share
+#    a clock — otherwise the video would slide off the scrubber.
+python3 - <<'PY'
+from datetime import datetime, timezone
+start_ns = int(datetime.strptime(
+    "2018-07-27--06-03-57", "%Y-%m-%d--%H-%M-%S"
+).replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+with open("sample-data/realworld/comma2k19_seg10.mp4.timestamps", "w") as f:
+    for i in range(1200):                # 60 s × 20 fps
+        f.write(f"{i}\t{start_ns + i * 50_000_000}\n")
+PY
+
+# 4. Drop comma2k19.mcap + comma2k19_seg10.mp4 + the sidecar onto the
+#    browser at http://localhost:5173, or run the visualisation spec:
+pnpm --filter e2e exec playwright test _demo-comma2k19-video.spec.ts
+```
+
+The `_demo-*` prefix keeps the spec out of the default CI run — it
+needs the three large fixtures above, which aren't checked in.
+
+### Splitting signals across MCAP and MF4
+
+`scripts/convert_comma2k19_to_mf4.py` emits a second copy of the
+secondary signals (wheel speeds, IMU components, GNSS lat/lon/alt)
+as an MF4 file with `start_time` anchored to the same segment-start
+wall-clock the MCAP converter uses. Driveline opens both together,
+and a single plot panel can carry one channel from each. Demoed in
+`apps/e2e/tests/screenshots/comma2k19-mcap-plus-mf4.png`.
+
+```sh
+pip install asammdf 'pyarrow>=14,<20' 'numpy>=1.24,<3'
+python3 scripts/convert_comma2k19_to_mf4.py
+#   -> sample-data/realworld/comma2k19.mf4 (~0.45 MB, 13 scalars)
+```
+
+The second test in `_demo-comma2k19-video.spec.ts` drops the mp4 +
+sidecar + mcap + mf4 in one go, binds the plot panel to
+`/vehicle/speed` (from the MCAP) and `WheelSpeedFL` (from the MF4),
+and asserts the per-series stats land for both channel ids. The
+status line reads "3 sources" — the mp4 + sidecar pair counts as
+one, the mcap as a second, the mf4 as a third.
+
+### Multiple MCAPs + multiple MF4s on two panels
+
+Both converters take `--segment-offset-seconds N` so several segments
+of the same drive can land at distinct wall-clock positions on
+Driveline's timeline (each comma2k19 segment is 60 s, so segment N
+belongs at `N*60`). Generate per-segment MCAP + MF4 pairs for
+segments 4, 7, 10 of the 2018-07-27--06-03-57 drive:
+
+```sh
+for entry in 0:10:600 1:4:240 2:7:420; do
+  IFS=: read -r idx seg off <<<"$entry"
+  python3 scripts/convert_comma2k19_to_mcap.py \
+    --segment-index "$idx" --segment-offset-seconds "$off" \
+    --out "sample-data/realworld/comma2k19_seg${seg}.mcap"
+  python3 scripts/convert_comma2k19_to_mf4.py \
+    --segment-index "$idx" --segment-offset-seconds "$off" \
+    --out "sample-data/realworld/comma2k19_seg${seg}.mf4"
+done
+```
+
+The third test (`plots 3 MCAPs and 3 MF4s across two side-by-side
+panels`) drops the six files, installs a custom layout with two
+plot tabs, and binds:
+
+- `plot-1` to `/vehicle/speed` (MCAP) and `WheelSpeedFL` (MF4) for
+  each of the three segments — six series, all m/s.
+- `plot-2` to `/vehicle/steering_angle` (MCAP, deg) and `IMU_Gyro_Z`
+  (MF4, rad/s) for each segment — six series, two y-axes.
+
+Status line reads "6 sources" and the time axis spans 06:07–06:14
+with one 60 s data block per segment. Screenshot at
+`apps/e2e/tests/screenshots/comma2k19-multi-segment-multi-panel.png`.
+
+### Splitting one segment across multiple files
+
+Each comma2k19 segment carries ~15 distinct signal groups (CAN
+speed/steering/wheels, IMU accel/gyro, GNSS u-blox/qcom, …). Both
+converters take `--only NAME[,NAME]` to emit a subset, so a single
+segment can be fanned out into several topic-specific files without
+touching the parquet more than once. The known groups are:
+
+- MCAP: `speed`, `steering_angle`, `wheel_speed`, `accel`, `gyro`, `gnss`
+- MF4: `wheels`, `accel`, `gyro`, `gnss`
+
+Generate the four-file split used by the fourth demo test:
+
+```sh
+python3 scripts/convert_comma2k19_to_mcap.py --only speed,steering_angle \
+  --out sample-data/realworld/comma2k19_chassis.mcap
+python3 scripts/convert_comma2k19_to_mcap.py --only wheel_speed \
+  --out sample-data/realworld/comma2k19_wheels.mcap
+python3 scripts/convert_comma2k19_to_mf4.py --only accel,gyro \
+  --out sample-data/realworld/comma2k19_imu.mf4
+python3 scripts/convert_comma2k19_to_mf4.py --only gnss \
+  --out sample-data/realworld/comma2k19_gnss.mf4
+```
+
+The fourth test (`splits one segment across 4 files and plots them on
+2 panels`) drops the four files, installs the same two-plot layout,
+and binds:
+
+- `plot-1` — `/vehicle/speed` (chassis.mcap), four wheel speeds
+  (wheels.mcap), three IMU accel axes (imu.mf4) — 8 chips, the
+  panel's max, pulling from three files.
+- `plot-2` — `/vehicle/steering_angle` (chassis.mcap), three IMU
+  gyro axes (imu.mf4), `GNSS_Alt` (gnss.mf4) — 5 chips, also from
+  three files. `GNSS_Lat` / `GNSS_Lon` are deliberately omitted —
+  on the CA-280 segment those values sit at ~40 and ~-120 and
+  would squash every other series on the shared y-axis.
+
+Status line reads "4 sources" and both panels render a full 60 s of
+data with no gaps. Screenshot at
+`apps/e2e/tests/screenshots/comma2k19-split-by-topic.png`.
+
+The fifth test (`splits one segment + dashcam video across 3 panels`)
+drops the same four signal files plus the mp4 + sidecar pair, and
+uses a nested-row layout (`row[tabset(video), row[tabset(plot-1),
+tabset(plot-2)]]`) so the dashcam takes the left 40 % and the two
+plots stack on the right 60 %. Status line reads "5 sources".
+Screenshot at
+`apps/e2e/tests/screenshots/comma2k19-split-by-topic-with-video.png`.
+
 > Bug history: this dataset originally hit a PlotPanel bug where
 > binding two CAN channels with non-coincident timestamps produced
 > two invisible traces. `mergeSeries` correctly emits `null` at every
