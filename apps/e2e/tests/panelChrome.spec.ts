@@ -1,8 +1,9 @@
-// Phase 7 · Per-panel chrome e2e.
+// Phase 7+ · Per-panel chrome e2e.
 //
 // Exercises the new tab chrome wired by Workspace.tsx's `onRenderTab`:
-//   1. Each tab carries a kind badge (VIDEO / PLOT) injected by
-//      `kindLabel(panelKindOf(...))`.
+//   1. Each tab carries a kind identifier — Agent D dropped the text
+//      badge in favour of a per-kind SVG icon, but `data-panel-kind`
+//      stays on the header span so e2e (and CSS) can read it.
 //   2. Clicking the settings icon flips the rail to the Panel drawer
 //      and selects the clicked panel.
 //   3. Clicking inside the panel body marks that panel as selected via
@@ -31,21 +32,19 @@ const VIDEO_PANEL_ID = "video-1";
 const PLOT_PANEL_ID = "plot-1";
 
 async function getLayout(page: Page): Promise<string> {
-  return await page.evaluate(() =>
-    window.__drivelineDevHooks!.getLayoutJson(),
-  );
+  return await page.evaluate(() => window.__drivelineDevHooks!.getLayoutJson());
 }
 
 test.describe("Per-panel chrome (Phase 7)", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByTestId("worker-status")).toHaveText(
-      "workers ready",
-    );
+    await expect(page.getByTestId("worker-status")).toHaveText("workers ready");
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
     // The default layout's two panels are Video (`video-1`) and Plot
     // (`plot-1`), each in its own tabset.
-    await expect(page.getByTestId(`panel-body-${VIDEO_PANEL_ID}`)).toBeVisible();
+    await expect(
+      page.getByTestId(`panel-body-${VIDEO_PANEL_ID}`),
+    ).toBeVisible();
     await expect(page.getByTestId(`panel-body-${PLOT_PANEL_ID}`)).toBeVisible();
   });
 
@@ -55,12 +54,19 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     });
   });
 
-  test("each tab renders its kind badge", async ({ page }) => {
-    const badges = page.getByTestId("tab-kind-badge");
-    // Two default panels → two badges, one VIDEO and one PLOT.
-    await expect(badges).toHaveCount(2);
-    const labels = await badges.allInnerTexts();
-    expect(labels.sort()).toEqual(["PLOT", "VIDEO"]);
+  test("each tab carries its kind identifier", async ({ page }) => {
+    // Agent D overhaul (UX issue #14+): the visible text badge was
+    // replaced with a per-kind SVG glyph so the chrome doesn't bloat.
+    // `data-panel-kind` is the durable, scriptable identifier and
+    // remains the same surface tests/CSS pivot on.
+    const headers = page.locator(
+      '[data-panel-id="video-1"], [data-panel-id="plot-1"]',
+    );
+    await expect(headers).toHaveCount(2);
+    const kinds = await headers.evaluateAll((nodes) =>
+      nodes.map((n) => n.getAttribute("data-panel-kind")),
+    );
+    expect(kinds.sort()).toEqual(["plot", "video"]);
   });
 
   test("settings click selects panel and flips drawer to Panel tab", async ({
@@ -78,9 +84,7 @@ test.describe("Per-panel chrome (Phase 7)", () => {
 
     await expect
       .poll(() =>
-        page.evaluate(() =>
-          window.__drivelineDevHooks!.getActiveRailTab(),
-        ),
+        page.evaluate(() => window.__drivelineDevHooks!.getActiveRailTab()),
       )
       .toBe("panel");
     expect(
@@ -102,9 +106,7 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     });
     await expect
       .poll(() =>
-        page.evaluate(() =>
-          window.__drivelineDevHooks!.getSelectedPanelId(),
-        ),
+        page.evaluate(() => window.__drivelineDevHooks!.getSelectedPanelId()),
       )
       .toBe(PLOT_PANEL_ID);
   });
@@ -142,17 +144,37 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     await expect
       .poll(async () => await getLayout(page))
       .not.toContain(`"id":"${PLOT_PANEL_ID}"`);
-    await expect(
-      page.getByTestId(`panel-body-${PLOT_PANEL_ID}`),
-    ).toHaveCount(0);
+    await expect(page.getByTestId(`panel-body-${PLOT_PANEL_ID}`)).toHaveCount(
+      0,
+    );
   });
 
-  test("collapse icon is rendered as disabled chrome", async ({ page }) => {
-    const collapses = page.getByTestId("tab-collapse");
-    await expect(collapses).toHaveCount(2);
-    // The disabled button advertises its state for assistive tech and
-    // is removed from tab order — assert both contracts.
-    await expect(collapses.first()).toHaveAttribute("aria-disabled", "true");
-    await expect(collapses.first()).toHaveAttribute("tabindex", "-1");
+  test("every tab action button advertises an accessible name", async ({
+    page,
+  }) => {
+    // Agent D shipped a 4-icon action cluster (rename / settings /
+    // maximize / close). Every icon-only control must carry both a
+    // `title` (sighted hover tooltip) AND an `aria-label` (assistive
+    // tech accessible name) — see PanelHeader.test.tsx for the unit
+    // contract; this is the cross-tab integration check.
+    for (const testId of [
+      "tab-rename",
+      "tab-settings",
+      "tab-maximize",
+      "tab-close",
+    ]) {
+      const buttons = page.getByTestId(testId);
+      await expect(buttons).toHaveCount(2);
+      const labels = await buttons.evaluateAll((nodes) =>
+        nodes.map((n) => ({
+          title: n.getAttribute("title"),
+          ariaLabel: n.getAttribute("aria-label"),
+        })),
+      );
+      for (const l of labels) {
+        expect(l.title).toBeTruthy();
+        expect(l.ariaLabel).toBeTruthy();
+      }
+    }
   });
 });
