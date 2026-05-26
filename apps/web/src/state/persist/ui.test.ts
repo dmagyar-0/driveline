@@ -29,9 +29,10 @@ function makeStorage(): Storage {
 }
 
 const SAMPLE: PersistedUi = {
-  version: 1,
+  version: 2,
   activeRailTab: "channels",
   railCollapsed: false,
+  timeMode: "relative",
 };
 
 describe("ui persist", () => {
@@ -55,9 +56,44 @@ describe("ui persist", () => {
     const s = makeStorage();
     s.setItem(
       UI_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 2 }),
+      JSON.stringify({ ...SAMPLE, version: 99 }),
     );
     expect(loadUiFromStorage(s)).toBeNull();
+  });
+
+  it("accepts a v1 payload and defaults timeMode to relative", () => {
+    const s = makeStorage();
+    s.setItem(
+      UI_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeRailTab: "channels",
+        railCollapsed: true,
+      }),
+    );
+    expect(loadUiFromStorage(s)).toEqual({
+      version: 2,
+      activeRailTab: "channels",
+      railCollapsed: true,
+      timeMode: "relative",
+    });
+  });
+
+  it("rejects an unknown timeMode in a v2 payload", () => {
+    const s = makeStorage();
+    // Unknown timeMode falls back to default rather than nulling the
+    // entire payload; this is consistent with how v1 → v2 upgrades the
+    // missing field. The whole record loads with `timeMode: "relative"`.
+    s.setItem(
+      UI_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        activeRailTab: null,
+        railCollapsed: false,
+        timeMode: "unix-epoch",
+      }),
+    );
+    expect(loadUiFromStorage(s)?.timeMode).toBe("relative");
   });
 
   it("returns null when activeRailTab is an unknown string", () => {
@@ -101,9 +137,10 @@ describe("ui persist", () => {
   it("accepts a null activeRailTab", () => {
     const s = makeStorage();
     const p: PersistedUi = {
-      version: 1,
+      version: 2,
       activeRailTab: null,
       railCollapsed: true,
+      timeMode: "absolute",
     };
     saveUiToStorage(p, s);
     expect(loadUiFromStorage(s)).toEqual(p);
@@ -114,9 +151,10 @@ describe("ui persist", () => {
     (tab) => {
       const s = makeStorage();
       const p: PersistedUi = {
-        version: 1,
+        version: 2,
         activeRailTab: tab,
         railCollapsed: false,
+        timeMode: "relative",
       };
       saveUiToStorage(p, s);
       expect(loadUiFromStorage(s)?.activeRailTab).toBe(tab);
@@ -186,7 +224,11 @@ function makeFakeStore(initial: UiSlice): FakeStore {
 }
 
 describe("attachUiPersistence", () => {
-  const initial: UiSlice = { activeRailTab: null, railCollapsed: false };
+  const initial: UiSlice = {
+    activeRailTab: null,
+    railCollapsed: false,
+    timeMode: "relative",
+  };
 
   it("writes when activeRailTab changes", () => {
     const s = makeStorage();
@@ -196,11 +238,12 @@ describe("attachUiPersistence", () => {
       s,
     );
     expect(loadUiFromStorage(s)).toBeNull();
-    store.push({ activeRailTab: "channels", railCollapsed: false });
+    store.push({ ...initial, activeRailTab: "channels" });
     expect(loadUiFromStorage(s)).toEqual({
-      version: 1,
+      version: 2,
       activeRailTab: "channels",
       railCollapsed: false,
+      timeMode: "relative",
     });
     stop();
   });
@@ -212,12 +255,25 @@ describe("attachUiPersistence", () => {
       store as unknown as typeof useSession,
       s,
     );
-    store.push({ activeRailTab: null, railCollapsed: true });
+    store.push({ ...initial, railCollapsed: true });
     expect(loadUiFromStorage(s)).toEqual({
-      version: 1,
+      version: 2,
       activeRailTab: null,
       railCollapsed: true,
+      timeMode: "relative",
     });
+    stop();
+  });
+
+  it("writes when timeMode changes", () => {
+    const s = makeStorage();
+    const store = makeFakeStore(initial);
+    const stop = attachUiPersistence(
+      store as unknown as typeof useSession,
+      s,
+    );
+    store.push({ ...initial, timeMode: "absolute" });
+    expect(loadUiFromStorage(s)?.timeMode).toBe("absolute");
     stop();
   });
 
@@ -226,13 +282,18 @@ describe("attachUiPersistence", () => {
     const store = makeFakeStore({
       activeRailTab: "layout",
       railCollapsed: false,
+      timeMode: "relative",
     });
     const stop = attachUiPersistence(
       store as unknown as typeof useSession,
       s,
     );
     // Push the same values again; persistence layer must not write.
-    store.push({ activeRailTab: "layout", railCollapsed: false });
+    store.push({
+      activeRailTab: "layout",
+      railCollapsed: false,
+      timeMode: "relative",
+    });
     expect(loadUiFromStorage(s)).toBeNull();
     stop();
   });
@@ -247,7 +308,7 @@ describe("attachUiPersistence", () => {
     expect(store.listenerCount()).toBe(1);
     stop();
     expect(store.listenerCount()).toBe(0);
-    store.push({ activeRailTab: "events", railCollapsed: false });
+    store.push({ ...initial, activeRailTab: "events" });
     expect(loadUiFromStorage(s)).toBeNull();
   });
 

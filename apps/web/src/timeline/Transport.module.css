@@ -1,17 +1,15 @@
-/* Phase 9 · Transport refinement.
+/* Phase 9 · Transport refinement → UX overhaul (issues #6-9).
  *
  * Dark-theme bar styled against `apps/web/src/styles/tokens.css`.
  * Wireframe reference: docs/design/wireframe-bundle/project/wireframes.css
  * lines 419-477 (.wf-transport).
  *
- * Layout: primary row (32 px) carries the prev / play / next button
- * group, two flanking time spans, the scrub track, and the speed
- * pill. A meta row (22 px) below holds the cursor readout and the
- * absolute/relative mode toggle.
- *
- * `.trackStrip` is `position: relative` because BookmarkMarkers
- * (Phase 8) layers absolutely against it (BookmarkMarkers.module.css
- * `inset: 0`).
+ * Layout:
+ *   .row              – controls + time-readout flexbox (auto height).
+ *   .scrubRow         – full-width scrubber stripe with segment ticks.
+ *   `.trackStrip` is `position: relative` because BookmarkMarkers
+ *   (Phase 8) layers absolutely against it (BookmarkMarkers.module.css
+ *   `inset: 0`).
  */
 
 .bar {
@@ -23,49 +21,49 @@
   background: var(--color-bg-2);
   border-top: 1px solid var(--color-border-subtle);
   font-family: var(--font-sans);
-  font-size: var(--fs-11);
-  color: var(--color-fg-4);
-  padding: 0 var(--sp-5);
+  font-size: var(--fs-12);
+  color: var(--color-fg-3);
+  padding: var(--sp-3) var(--sp-6) var(--sp-4);
+  gap: var(--sp-3);
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
-  height: 32px;
+  gap: var(--sp-6);
 }
 
-.metaRow {
+.transportGroup {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  height: 22px;
-  padding-bottom: var(--sp-2);
 }
 
 .btnGroup {
   display: flex;
-  gap: var(--sp-1);
+  gap: var(--sp-2);
 }
 
 .btnT {
-  width: 22px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: var(--color-bg-4);
   border: 1px solid var(--color-border-strong);
   color: var(--color-fg-3);
-  border-radius: var(--radius-3);
-  font-size: var(--fs-10);
+  border-radius: var(--radius-4);
+  font-size: var(--fs-12);
   line-height: 1;
   padding: 0;
   cursor: pointer;
+  transition: background var(--motion-fast), border-color var(--motion-fast);
 }
 
 .btnT:hover:not(:disabled) {
   background: var(--color-bg-6);
+  border-color: var(--color-border-hover);
 }
 
 .btnT:focus-visible {
@@ -79,31 +77,232 @@
 }
 
 .play {
+  width: 36px;
+  height: 36px;
+  font-size: var(--fs-14);
   color: var(--color-accent-orange);
+  background: var(--color-bg-5);
 }
 
+/* Issue #8 — promote the readout. The big mono `CURRENT / TOTAL` slot
+ * now reads as the third heaviest element on the bar (after the play
+ * button and the scrubber itself). */
+.readoutBlock {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.readoutLabel {
+  font-family: var(--font-sans);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-5);
+  line-height: 1;
+}
+
+.readoutTimes {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-16);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-2);
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.readoutCurrent {
+  color: var(--color-fg-1);
+}
+
+.readoutSep {
+  color: var(--color-fg-5);
+  margin: 0 var(--sp-2);
+  font-weight: var(--fw-regular);
+}
+
+.readoutTotal {
+  color: var(--color-fg-4);
+}
+
+.readoutSubLabel {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-5);
+  line-height: 1;
+  white-space: nowrap;
+}
+
+/* Issue #6 — labelled segmented control. No more mystery "relative"
+ * pill: a real two-segment toggle, with a visible label that says
+ * what the toggle is for. */
+.fieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.fieldLabel {
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-5);
+  line-height: 1;
+}
+
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  padding: 2px;
+  gap: 2px;
+}
+
+.segBtn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-3);
+  color: var(--color-fg-4);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  line-height: 1;
+  padding: 4px var(--sp-5);
+  cursor: pointer;
+  min-height: 22px;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+
+.segBtn:hover:not(:disabled) {
+  color: var(--color-fg-2);
+}
+
+.segBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.segBtn[aria-pressed="true"] {
+  background: var(--color-bg-6);
+  color: var(--color-fg-1);
+  box-shadow: 0 0 0 1px var(--color-border-hover) inset;
+}
+
+.segBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Issue #8 — speed needs a label, not a mystery pill. */
+.speed {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--color-fg-2);
+  height: 26px;
+  padding: 0 22px 0 var(--sp-5);
+  background: var(--color-bg-4)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5' fill='%23bbb'><path d='M0 0l4 5 4-5z'/></svg>")
+    no-repeat right 6px center;
+  background-size: 8px 5px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  appearance: none;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.speed:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Spacer between the readout column and the right-side controls so the
+ * readout doesn't fight with the speed/mode column for space. */
+.rowGrow {
+  flex: 1;
+  min-width: var(--sp-7);
+}
+
+/* === Scrubber row === */
+.scrubRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.scrubRowLabels {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-5);
+  white-space: nowrap;
+}
+
+.scrubRowLabels .scrubDateBadge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-5);
+}
+
+/* Issue #9 — the track is the heartbeat. Real height (8 px rest,
+ * 10 px on hover), real handle. Cursor remains ≤1 update per RAF
+ * via the existing `scheduleCommit` flow.
+ *
+ * `.track` is the hit target (16 px so the handle is grabbable
+ * without precise aim). `.trackStrip` is the visible bar. */
 .track {
   position: relative;
   flex: 1;
-  height: 20px;
+  height: 18px;
   display: flex;
   align-items: center;
   cursor: pointer;
   touch-action: none;
+  width: 100%;
 }
 
 .track:focus-visible {
+  outline: none;
+}
+
+.track:focus-visible .trackStrip {
   outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-  border-radius: var(--radius-3);
+  outline-offset: 2px;
+  border-radius: var(--radius-4);
 }
 
 .trackStrip {
   position: relative;
   width: 100%;
-  height: 6px;
+  height: 8px;
   background: var(--color-bg-4);
-  border-radius: var(--radius-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-4);
+  transition: height var(--motion-fast);
+}
+
+.track:hover .trackStrip,
+.track:active .trackStrip {
+  height: 10px;
 }
 
 .trackFill {
@@ -111,9 +310,12 @@
   left: 0;
   top: 0;
   height: 100%;
-  background: var(--color-accent-blue);
-  opacity: 0.55;
-  border-radius: var(--radius-3);
+  background: linear-gradient(
+    90deg,
+    var(--color-accent-blue) 0%,
+    color-mix(in srgb, var(--color-accent-blue) 85%, white 15%) 100%
+  );
+  border-radius: var(--radius-4) 0 0 var(--radius-4);
   pointer-events: none;
 }
 
@@ -125,7 +327,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  border-radius: var(--radius-3);
+  border-radius: var(--radius-4);
   overflow: hidden;
 }
 
@@ -135,6 +337,38 @@
   height: 100%;
   background: var(--color-fg-4);
   opacity: 0.18;
+}
+
+/* Issue #7 — segment boundary ticks on the scrubber. One per source's
+ * start (the union range's leading edge already aligns with the bar's
+ * left, so the first source's tick is suppressed visually by the
+ * border-radius). Heights extend a couple of pixels above and below
+ * the strip so they read as "this is a session marker", not part of
+ * the buffered shading. */
+.segmentTicks {
+  position: absolute;
+  inset: -4px 0;
+  pointer-events: none;
+}
+
+.segmentTick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-fg-3);
+  opacity: 0.6;
+  transform: translateX(-1px);
+  border-radius: 1px;
+}
+
+.segmentBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: currentColor;
+  opacity: 0.12;
+  pointer-events: none;
 }
 
 /* Spinner shown near the cursor while a seek waits on a cold sample fetch.
@@ -159,15 +393,36 @@
   }
 }
 
+/* Issue #9 — bigger, clearly-grabbable handle. `.thumbHit` is the
+ * pointer target (18 px wide) and stays invisible; `.thumb` is the
+ * visible disc (10 px rest, 12 px hover). */
+.thumbHit {
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
 .thumb {
   position: absolute;
   top: 50%;
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--color-fg-2);
+  background: var(--color-fg-1);
+  border: 2px solid var(--color-accent-blue);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
   transform: translate(-50%, -50%);
   pointer-events: none;
+  transition: width var(--motion-fast), height var(--motion-fast);
+}
+
+.track:hover .thumb,
+.track:active .thumb {
+  width: 14px;
+  height: 14px;
 }
 
 /* Issue #2 — subtle ring while we wait on a video decode. Plain
@@ -208,71 +463,5 @@
 .disabled {
   opacity: 0.5;
   pointer-events: none;
-  cursor: not-allowed;
-}
-
-.time {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--color-fg-3);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.speed {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--color-fg-4);
-  height: 20px;
-  padding: 0 var(--sp-5);
-  background: var(--color-bg-4);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-3);
-  appearance: none;
-  cursor: pointer;
-}
-
-.speed:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-}
-
-.speed:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.readout {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  color: var(--color-fg-3);
-  font-variant-numeric: tabular-nums;
-  min-width: 18ch;
-}
-
-.modeButton {
-  height: 20px;
-  padding: 0 var(--sp-4);
-  background: var(--color-bg-4);
-  border: 1px solid var(--color-border-strong);
-  color: var(--color-fg-4);
-  border-radius: var(--radius-3);
-  font-family: var(--font-sans);
-  font-size: var(--fs-10);
-  line-height: 1;
-  cursor: pointer;
-}
-
-.modeButton:hover:not(:disabled) {
-  background: var(--color-bg-6);
-}
-
-.modeButton:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-}
-
-.modeButton:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
 }

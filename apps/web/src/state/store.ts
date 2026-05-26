@@ -141,6 +141,15 @@ export interface SessionState {
   cursorNs: bigint;
   playing: boolean;
   speed: number;
+  // UX overhaul issue #6 — single source of truth for the time
+  // convention shown across the app. The Transport renders the
+  // segmented toggle; PlotPanel reads this slice (via selector) when
+  // building its X-axis values formatter. Default `relative` because
+  // engineer recordings rarely care about absolute wall-clock.
+  // Persisted alongside `activeRailTab` / `railCollapsed` in the
+  // `driveline.ui.v2` shard (back-compat with v1: missing field →
+  // default).
+  timeMode: "relative" | "absolute";
   // Monotonic counter bumped on every user-initiated cursor change
   // (`setCursor`, plus `play()` rewinds and end-of-session jumps).
   // Playback rAF advances via `advanceCursor` and do **not** bump it.
@@ -251,6 +260,8 @@ export interface SessionState {
   pause(): void;
   /** Set playback speed; clamped to [MIN_SPEED, MAX_SPEED]. */
   setSpeed(n: number): void;
+  /** Toggle / set the relative-vs-absolute time mode (Issue #6). */
+  setTimeMode(mode: "relative" | "absolute"): void;
   /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`.
    *  Bumps `seekEpoch` so the video pipeline issues a real seek even
    *  while `playing` is true. */
@@ -454,6 +465,7 @@ export const useSession = create<SessionState>((set, get) => {
     cursorNs: 0n,
     playing: false,
     speed: 1,
+    timeMode: hydratedUi?.timeMode ?? "relative",
     seekEpoch: 0,
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
@@ -506,6 +518,12 @@ export const useSession = create<SessionState>((set, get) => {
     setSpeed(n) {
       if (!Number.isFinite(n)) return;
       set({ speed: Math.min(MAX_SPEED, Math.max(MIN_SPEED, n)) });
+    },
+
+    setTimeMode(mode) {
+      if (mode !== "relative" && mode !== "absolute") return;
+      if (get().timeMode === mode) return;
+      set({ timeMode: mode });
     },
 
     setCursor(ns) {

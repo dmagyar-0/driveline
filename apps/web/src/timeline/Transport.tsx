@@ -2,12 +2,35 @@
 // the T3.1 state machine through the existing `useSession` actions — all
 // clamping, end-of-session auto-pause, and speed bounds live in the store
 // (see `state/store.ts:170-201`).
+//
+// UX overhaul (Agent B, issues #6-9):
+//
+//   #6 — Segmented relative/absolute control wired to a single
+//        `state.timeMode`. PlotPanel + every other readout consume the
+//        same flag so the entire app shows one convention.
+//   #7 — Per-source segment ticks rendered on the scrubber strip so the
+//        viewer can see "segment 4 / 7 / 10 starts here" on multi-source
+//        comma2k19 sessions. Source ranges already live in
+//        `session.sources` — no new ingest path.
+//   #8 — Promoted readout: large mono `HH:MM:SS.mmm / total`, with
+//        labelled SPEED + TIME mode controls.
+//   #9 — Real scrubber: 8 px track that grows to 10 px on hover, real
+//        12-14 px grab handle. A `transport:scrub` perf mark bounds the
+//        pointer-move work so the existing perfBudgets spec catches a
+//        regression past one RAF.
 
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { TimeRange } from "../state/store";
-import { formatAbsolute, formatDuration, formatRelative } from "./formatTime";
+import {
+  formatAbsolute,
+  formatAbsoluteClock,
+  formatDate,
+  formatDuration,
+  formatRelative,
+} from "./formatTime";
 import { BookmarkMarkers } from "./BookmarkMarkers";
+import { mark, measure } from "../perf";
 import {
   getReadinessSnapshot,
   subscribeReadiness,
@@ -137,10 +160,11 @@ export function Transport() {
   const globalRange = useSession((s) => s.globalRange);
   const loadedRanges = useSession((s) => s.loadedRanges);
   const pendingFetch = useSession((s) => s.pendingFetch);
+  const sources = useSession((s) => s.sources);
+  const timeMode = useSession((s) => s.timeMode);
   const decodeWaiting = useDecodeWaiting();
 
   const disabled = globalRange === null;
-  const [mode, setMode] = useState<"relative" | "absolute">("relative");
 
   const trackRef = useRef<HTMLDivElement | null>(null);
   const pendingNs = useRef<bigint | null>(null);
@@ -152,11 +176,17 @@ export function Transport() {
       pendingNs.current = null;
     }
     rafId.current = null;
+    // Issue #9 — perf budget mark closes the frame, paired with the
+    // `transport:scrub:start` mark scheduled below. The end-to-end
+    // budget spec asserts this stays ≤1 RAF.
+    mark("transport:scrub:flush");
+    measure("transport:scrub", "transport:scrub:start", "transport:scrub:flush");
   };
 
   const scheduleCommit = (ns: bigint) => {
     pendingNs.current = ns;
     if (rafId.current === null) {
+      mark("transport:scrub:start");
       rafId.current = requestAnimationFrame(flushPending);
     }
   };
@@ -270,12 +300,13 @@ export function Transport() {
     useSession.getState().setSpeed(Number(e.target.value));
   };
 
-  const onModeToggle = () => {
-    setMode((m) => (m === "relative" ? "absolute" : "relative"));
+  const setTimeMode = (mode: "relative" | "absolute") => {
+    useSession.getState().setTimeMode(mode);
   };
 
   const fillPct = globalRange ? percentOf(cursorNs, globalRange) : 0;
   const isFetching = Object.values(pendingFetch).some((p) => p !== null);
+
   const bufferedSegments: Array<{ key: string; left: number; width: number }> =
     [];
   if (globalRange) {
@@ -294,19 +325,80 @@ export function Transport() {
       }
     }
   }
-  const readout = globalRange
-    ? mode === "relative"
-      ? `${formatRelative(cursorNs, globalRange.startNs)} / ${formatDuration(
-          globalRange.endNs - globalRange.startNs,
-        )}`
-      : formatAbsolute(cursorNs)
+
+  // Issue #7 — segment markers. One tick per source's leading edge
+  // (excluding the first, which would visually merge with the bar's
+  // left rounding) plus a faint band so a gap between sources reads
+  // as "segment boundary", not just a buffered gap. Sources already
+  // carry `timeRange` so we don't invent a new ingest path.
+  type SegmentEntry = {
+    key: string;
+    label: string;
+    leftPct: number;
+    widthPct: number;
+    title: string;
+  };
+  const segmentEntries: SegmentEntry[] = [];
+  if (globalRange && sources.length > 1) {
+    const ordered = [...sources].sort((a, b) => {
+      const da = a.timeRange.startNs - b.timeRange.startNs;
+      return da === 0n ? 0 : da < 0n ? -1 : 1;
+    });
+    for (let i = 0; i < ordered.length; i++) {
+      const src = ordered[i];
+      const left = percentOf(src.timeRange.startNs, globalRange);
+      const right = percentOf(src.timeRange.endNs, globalRange);
+      const width = Math.max(0, right - left);
+      const offsetNs = src.timeRange.startNs - globalRange.startNs;
+      segmentEntries.push({
+        key: `seg:${src.id}:${i}`,
+        label: `${i + 1}`,
+        leftPct: left,
+        widthPct: width,
+        title:
+          `Segment ${i + 1} · ${src.name} · ` +
+          `${formatRelative(src.timeRange.startNs, globalRange.startNs)} → ` +
+          `${formatRelative(src.timeRange.endNs, globalRange.startNs)}` +
+          (offsetNs > 0n ? "" : ""),
+      });
+    }
+  }
+
+  const span = globalRange ? globalRange.endNs - globalRange.startNs : 0n;
+  // In absolute mode "/ total" reads more naturally as the session's
+  // wall-clock end time than as elapsed duration ("06:04:00 / 06:09:00"
+  // vs the off-key "06:04:00 / 00:05:00.000").
+  const total = !globalRange
+    ? "--:--.---"
+    : timeMode === "relative"
+      ? formatDuration(span)
+      : formatAbsoluteClock(globalRange.endNs);
+  const current = globalRange
+    ? timeMode === "relative"
+      ? formatRelative(cursorNs, globalRange.startNs)
+      : formatAbsoluteClock(cursorNs)
     : "--:--.---";
+  const subLabel = globalRange
+    ? timeMode === "relative"
+      ? formatAbsolute(globalRange.startNs)
+      : formatDate(globalRange.startNs)
+    : null;
   const startLabel = globalRange
-    ? formatRelative(globalRange.startNs, globalRange.startNs)
-    : "--:--.---";
+    ? timeMode === "relative"
+      ? formatRelative(globalRange.startNs, globalRange.startNs)
+      : formatAbsoluteClock(globalRange.startNs)
+    : "--:--";
   const endLabel = globalRange
-    ? formatDuration(globalRange.endNs - globalRange.startNs)
-    : "--:--.---";
+    ? timeMode === "relative"
+      ? formatDuration(globalRange.endNs - globalRange.startNs)
+      : formatAbsoluteClock(globalRange.endNs)
+    : "--:--";
+  const readoutLabel = timeMode === "relative" ? "Elapsed / Total" : "Wall clock";
+  const ariaValueText = globalRange
+    ? timeMode === "relative"
+      ? formatRelative(cursorNs, globalRange.startNs)
+      : formatAbsolute(cursorNs)
+    : "none";
 
   return (
     <div
@@ -314,57 +406,9 @@ export function Transport() {
       data-testid="transport"
       aria-disabled={disabled}
     >
-      <div className={styles.row}>
-        <div className={styles.btnGroup}>
-          <button
-            type="button"
-            className={styles.btnT}
-            data-testid="transport-prev-1s"
-            aria-label="Step back 1 second"
-            onClick={onPrev1s}
-            disabled={disabled}
-            title="Step back 1 s"
-          >
-            ◀◀
-          </button>
-          <button
-            type="button"
-            className={`${styles.btnT} ${styles.play}`}
-            data-testid="play-pause"
-            aria-label={playing ? "Pause" : "Play"}
-            aria-pressed={playing}
-            onClick={onPlayPause}
-            disabled={disabled}
-          >
-            {playing ? "❚❚" : "▶"}
-          </button>
-          <button
-            type="button"
-            className={styles.btnT}
-            data-testid="transport-next-1s"
-            aria-label="Step forward 1 second"
-            onClick={onNext1s}
-            disabled={disabled}
-            title="Step forward 1 s"
-          >
-            ▶▶
-          </button>
-          {/* Issue #2 — decode-waiting dot. Pulses when at least one
-           *  bound video panel has been "waiting" continuously for
-           *  ≥ 250 ms (hysteresis-managed in `useDecodeWaiting`).
-           *  Stalled panels surface their own per-panel error badge
-           *  instead, so they don't trigger this. */}
-          {decodeWaiting && (
-            <span
-              className={styles.decodeWaitingDot}
-              data-testid="transport-decode-waiting"
-              role="status"
-              aria-label="Waiting for video decode"
-              title="Waiting for video decode"
-            />
-          )}
-        </div>
-        <span className={styles.time}>{startLabel}</span>
+      {/* Scrubber row — full width above the controls so the heartbeat
+       *  of the app is the dominant element, not buried bottom-left.   */}
+      <div className={styles.scrubRow}>
         <div
           ref={trackRef}
           className={`${styles.track} ${disabled ? styles.disabled : ""}`}
@@ -374,9 +418,7 @@ export function Transport() {
           aria-valuemin={globalRange ? Number(globalRange.startNs) : 0}
           aria-valuemax={globalRange ? Number(globalRange.endNs) : 0}
           aria-valuenow={Number(cursorNs)}
-          aria-valuetext={
-            globalRange ? formatRelative(cursorNs, globalRange.startNs) : "none"
-          }
+          aria-valuetext={ariaValueText}
           aria-disabled={disabled}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
@@ -401,20 +443,38 @@ export function Transport() {
                 ))}
               </div>
             )}
+            {segmentEntries.length > 0 && (
+              <div
+                className={styles.segmentTicks}
+                data-testid="transport-segments"
+                aria-hidden
+              >
+                {segmentEntries.map((seg, i) => (
+                  <span
+                    key={seg.key}
+                    className={styles.segmentTick}
+                    data-segment-index={i}
+                    style={{ left: `${seg.leftPct}%` }}
+                    title={seg.title}
+                  />
+                ))}
+              </div>
+            )}
             <div
               className={styles.trackFill}
               style={{ width: `${fillPct}%` }}
             />
             <BookmarkMarkers />
-            <div
-              className={
-                decodeWaiting
-                  ? `${styles.thumb} ${styles.thumbWaiting}`
-                  : styles.thumb
-              }
-              data-testid="scrubber-thumb"
-              style={{ left: `${fillPct}%` }}
-            />
+            <div className={styles.thumbHit} style={{ left: `${fillPct}%` }}>
+              <div
+                className={
+                  decodeWaiting
+                    ? `${styles.thumb} ${styles.thumbWaiting}`
+                    : styles.thumb
+                }
+                data-testid="scrubber-thumb"
+              />
+            </div>
             {isFetching && (
               <div
                 className={styles.fetchSpinner}
@@ -425,41 +485,159 @@ export function Transport() {
             )}
           </div>
         </div>
-        <span className={styles.time}>{endLabel}</span>
-        <select
-          id="transport-speed"
-          className={styles.speed}
-          data-testid="transport-speed"
-          value={speed}
-          onChange={onSpeedChange}
-          disabled={disabled}
-          aria-label="Playback speed"
-        >
-          {SPEED_OPTIONS.map((v) => (
-            <option key={v} value={v}>
-              {v}×
-            </option>
-          ))}
-        </select>
+        <div className={styles.scrubRowLabels} aria-hidden>
+          <span>{startLabel}</span>
+          {sources.length > 1 ? (
+            <span
+              className={styles.scrubDateBadge}
+              data-testid="transport-segment-count"
+            >
+              {sources.length} segments
+            </span>
+          ) : (
+            <span />
+          )}
+          <span>{endLabel}</span>
+        </div>
       </div>
-      <div className={styles.metaRow}>
-        <span
-          className={styles.readout}
-          data-testid="transport-readout"
-          aria-live="off"
-        >
-          {readout}
-        </span>
-        <button
-          type="button"
-          className={styles.modeButton}
-          data-testid="transport-mode"
-          onClick={onModeToggle}
-          disabled={disabled}
-          title="Toggle absolute / relative time readout"
-        >
-          {mode === "relative" ? "relative" : "absolute"}
-        </button>
+
+      {/* Controls row — play group + big readout + speed + time-mode */}
+      <div className={styles.row}>
+        <div className={styles.transportGroup}>
+          <div className={styles.btnGroup}>
+            <button
+              type="button"
+              className={styles.btnT}
+              data-testid="transport-prev-1s"
+              aria-label="Step back 1 second"
+              onClick={onPrev1s}
+              disabled={disabled}
+              title="Step back 1 s"
+            >
+              ◀◀
+            </button>
+            <button
+              type="button"
+              className={`${styles.btnT} ${styles.play}`}
+              data-testid="play-pause"
+              aria-label={playing ? "Pause" : "Play"}
+              aria-pressed={playing}
+              onClick={onPlayPause}
+              disabled={disabled}
+            >
+              {playing ? "❚❚" : "▶"}
+            </button>
+            <button
+              type="button"
+              className={styles.btnT}
+              data-testid="transport-next-1s"
+              aria-label="Step forward 1 second"
+              onClick={onNext1s}
+              disabled={disabled}
+              title="Step forward 1 s"
+            >
+              ▶▶
+            </button>
+            {/* Issue #2 — decode-waiting dot. Pulses when at least one
+             *  bound video panel has been "waiting" continuously for
+             *  ≥ 250 ms (hysteresis-managed in `useDecodeWaiting`).
+             *  Stalled panels surface their own per-panel error badge
+             *  instead, so they don't trigger this. */}
+            {decodeWaiting && (
+              <span
+                className={styles.decodeWaitingDot}
+                data-testid="transport-decode-waiting"
+                role="status"
+                aria-label="Waiting for video decode"
+                title="Waiting for video decode"
+              />
+            )}
+          </div>
+
+          <div
+            className={styles.readoutBlock}
+            data-testid="transport-readout-block"
+          >
+            <span className={styles.readoutLabel}>{readoutLabel}</span>
+            <span
+              className={styles.readoutTimes}
+              data-testid="transport-readout"
+              aria-live="off"
+            >
+              <span className={styles.readoutCurrent}>{current}</span>
+              <span className={styles.readoutSep}>/</span>
+              <span className={styles.readoutTotal}>{total}</span>
+            </span>
+            {subLabel && (
+              <span
+                className={styles.readoutSubLabel}
+                data-testid="transport-readout-sub"
+              >
+                {timeMode === "relative" ? "starts " : ""}
+                {subLabel}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className={styles.rowGrow} />
+
+        <div className={styles.fieldGroup}>
+          <label className={styles.fieldLabel} htmlFor="transport-time-mode">
+            Time
+          </label>
+          <div
+            id="transport-time-mode"
+            className={styles.segmented}
+            data-testid="transport-mode-group"
+            role="group"
+            aria-label="Time readout mode"
+          >
+            <button
+              type="button"
+              className={styles.segBtn}
+              data-testid="transport-mode-relative"
+              aria-pressed={timeMode === "relative"}
+              disabled={disabled}
+              onClick={() => setTimeMode("relative")}
+              title="Show times relative to session start (00:12.345)"
+            >
+              Relative
+            </button>
+            <button
+              type="button"
+              className={styles.segBtn}
+              data-testid="transport-mode-absolute"
+              aria-pressed={timeMode === "absolute"}
+              disabled={disabled}
+              onClick={() => setTimeMode("absolute")}
+              title="Show wall-clock times (06:08:42)"
+            >
+              Absolute
+            </button>
+          </div>
+        </div>
+
+        <div className={styles.fieldGroup}>
+          <label className={styles.fieldLabel} htmlFor="transport-speed">
+            Speed
+          </label>
+          <select
+            id="transport-speed"
+            className={styles.speed}
+            data-testid="transport-speed"
+            value={speed}
+            onChange={onSpeedChange}
+            disabled={disabled}
+            aria-label="Playback speed"
+          >
+            {SPEED_OPTIONS.map((v) => (
+              <option key={v} value={v}>
+                {v}×
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   );

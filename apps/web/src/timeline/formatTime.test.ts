@@ -1,8 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   formatDuration,
+  formatDurationCoarse,
   formatRelative,
   formatAbsolute,
+  formatAbsoluteClock,
+  formatDate,
+  uPlotAxisValues,
 } from "./formatTime";
 
 describe("formatDuration", () => {
@@ -90,5 +94,51 @@ describe("formatAbsolute", () => {
 
   it("renders the unix epoch", () => {
     expect(formatAbsolute(0n)).toBe("1970-01-01 00:00:00.000");
+  });
+});
+
+describe("formatDurationCoarse", () => {
+  it("drops fractional seconds", () => {
+    expect(formatDurationCoarse(0n)).toBe("00:00");
+    expect(formatDurationCoarse(999_000_000n)).toBe("00:00");
+    expect(formatDurationCoarse(1_000_000_000n)).toBe("00:01");
+    expect(formatDurationCoarse(75_000_000_000n)).toBe("01:15");
+  });
+
+  it("adds hours prefix past the hour boundary", () => {
+    expect(formatDurationCoarse(3_600_000_000_000n)).toBe("01:00:00");
+    expect(formatDurationCoarse(3_599_000_000_000n)).toBe("59:59");
+  });
+});
+
+describe("formatAbsoluteClock", () => {
+  it("renders HH:MM:SS only", () => {
+    const ms = Date.UTC(2021, 0, 2, 6, 8, 42, 123);
+    expect(formatAbsoluteClock(BigInt(ms) * 1_000_000n)).toBe("06:08:42");
+  });
+});
+
+describe("formatDate", () => {
+  it("renders YYYY-MM-DD only", () => {
+    const ms = Date.UTC(2018, 6, 27, 6, 4, 0, 0);
+    expect(formatDate(BigInt(ms) * 1_000_000n)).toBe("2018-07-27");
+  });
+});
+
+describe("uPlotAxisValues", () => {
+  it("relative mode formats X-axis ticks as elapsed", () => {
+    // session starts at 2 s, tick at 12.5 s → 10.5 s elapsed.
+    const fn = uPlotAxisValues("relative", 2);
+    expect(fn([2, 12, 62])).toEqual(["00:00", "00:10", "01:00"]);
+  });
+
+  it("absolute mode formats X-axis ticks as wall clock", () => {
+    const start = Date.UTC(2018, 6, 27, 6, 8, 0, 0) / 1000;
+    const fn = uPlotAxisValues("absolute", start);
+    expect(fn([start, start + 60, start + 120])).toEqual([
+      "06:08:00",
+      "06:09:00",
+      "06:10:00",
+    ]);
   });
 });

@@ -6,11 +6,15 @@
 // the rail's drawer state across reloads — `selectedPanelId` is per-
 // session and is intentionally not persisted (Phase 7 owns that
 // decision).
+//
+// v2 (UX overhaul issue #6) — adds `timeMode`. When a v1 payload is
+// loaded we accept it and default `timeMode` to "relative" so existing
+// users don't lose their rail tab choice on first load after the upgrade.
 
 import type { useSession } from "../store";
 
 export const UI_STORAGE_KEY = "driveline.ui.v1";
-export const UI_SCHEMA_VERSION = 1 as const;
+export const UI_SCHEMA_VERSION = 2 as const;
 
 export type RailTab =
   | "sources"
@@ -18,6 +22,8 @@ export type RailTab =
   | "layout"
   | "panel"
   | "events";
+
+export type TimeMode = "relative" | "absolute";
 
 const RAIL_TABS: readonly RailTab[] = [
   "sources",
@@ -27,10 +33,13 @@ const RAIL_TABS: readonly RailTab[] = [
   "events",
 ];
 
+const TIME_MODES: readonly TimeMode[] = ["relative", "absolute"];
+
 export interface PersistedUi {
   version: typeof UI_SCHEMA_VERSION;
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
+  timeMode: TimeMode;
 }
 
 function defaultStorage(): Storage | undefined {
@@ -45,16 +54,26 @@ function isRailTab(v: unknown): v is RailTab {
   return typeof v === "string" && (RAIL_TABS as readonly string[]).includes(v);
 }
 
+function isTimeMode(v: unknown): v is TimeMode {
+  return typeof v === "string" && (TIME_MODES as readonly string[]).includes(v);
+}
+
 function validate(raw: unknown): PersistedUi | null {
   if (!isPlainObject(raw)) return null;
-  if (raw.version !== UI_SCHEMA_VERSION) return null;
+  // Accept both v1 and v2 — back-compat path keeps the rail-tab + collapse
+  // state across the schema bump rather than blowing it away.
+  if (raw.version !== 1 && raw.version !== UI_SCHEMA_VERSION) return null;
   const tab = raw.activeRailTab;
   if (tab !== null && !isRailTab(tab)) return null;
   if (typeof raw.railCollapsed !== "boolean") return null;
+  const tm = raw.timeMode;
+  const timeMode: TimeMode =
+    raw.version === UI_SCHEMA_VERSION && isTimeMode(tm) ? tm : "relative";
   return {
     version: UI_SCHEMA_VERSION,
     activeRailTab: tab,
     railCollapsed: raw.railCollapsed,
+    timeMode,
   };
 }
 
@@ -93,6 +112,7 @@ export function saveUiToStorage(
 export interface UiSlice {
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
+  timeMode: TimeMode;
 }
 
 function snapshot(s: UiSlice): PersistedUi {
@@ -100,6 +120,7 @@ function snapshot(s: UiSlice): PersistedUi {
     version: UI_SCHEMA_VERSION,
     activeRailTab: s.activeRailTab,
     railCollapsed: s.railCollapsed,
+    timeMode: s.timeMode,
   };
 }
 
@@ -112,7 +133,8 @@ export function attachUiPersistence(
   return store.subscribe((s: UiSlice) => {
     if (
       s.activeRailTab === last.activeRailTab &&
-      s.railCollapsed === last.railCollapsed
+      s.railCollapsed === last.railCollapsed &&
+      s.timeMode === last.timeMode
     ) {
       return;
     }

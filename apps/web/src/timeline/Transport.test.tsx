@@ -37,6 +37,7 @@ function seedSession(): void {
     cursorNs: 1_000_000_000n,
     playing: false,
     speed: 1,
+    timeMode: "relative",
     layoutJson: null,
     videoBindings: {},
     plotBindings: {},
@@ -186,15 +187,56 @@ describe("Transport", () => {
     expect(useSession.getState().cursorNs).toBe(6_000_000_000n);
   });
 
-  it("mode button toggles between relative and absolute readout", () => {
+  it("segmented control toggles store.timeMode between relative and absolute", () => {
     const { getByTestId } = render(<Transport />);
-    const mode = getByTestId("transport-mode") as HTMLButtonElement;
-    expect(mode.textContent).toBe("relative");
+    const relBtn = getByTestId("transport-mode-relative") as HTMLButtonElement;
+    const absBtn = getByTestId("transport-mode-absolute") as HTMLButtonElement;
+    expect(useSession.getState().timeMode).toBe("relative");
+    expect(relBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(absBtn.getAttribute("aria-pressed")).toBe("false");
 
     act(() => {
-      fireEvent.click(mode);
+      fireEvent.click(absBtn);
     });
-    expect(mode.textContent).toBe("absolute");
+    expect(useSession.getState().timeMode).toBe("absolute");
+    expect(absBtn.getAttribute("aria-pressed")).toBe("true");
+
+    act(() => {
+      fireEvent.click(relBtn);
+    });
+    expect(useSession.getState().timeMode).toBe("relative");
+  });
+
+  it("renders segment count badge when multiple sources are loaded", () => {
+    useSession.setState({
+      sources: [
+        {
+          id: "a",
+          kind: "mcap",
+          name: "a.mcap",
+          handle: 0,
+          timeRange: { startNs: 1_000_000_000n, endNs: 3_000_000_000n },
+          channels: [],
+        },
+        {
+          id: "b",
+          kind: "mcap",
+          name: "b.mcap",
+          handle: 1,
+          timeRange: { startNs: 6_000_000_000n, endNs: 11_000_000_000n },
+          channels: [],
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ] as any,
+    });
+    const { getByTestId } = render(<Transport />);
+    expect(getByTestId("transport-segment-count").textContent).toBe(
+      "2 segments",
+    );
+    const ticks = document.querySelectorAll(
+      "[data-testid='transport-segments'] span",
+    );
+    expect(ticks.length).toBe(2);
   });
 
   it("prev-1s steps cursor by 1 s and clamps at startNs", () => {

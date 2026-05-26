@@ -223,6 +223,17 @@ declare global {
         lastBlitPtsNs: string | null;
       }>;
       getCursorGated: () => boolean;
+      // Agent B (Transport / scrubber UX overhaul, issue #7) — seed
+      // synthetic offset segments so the screenshot spec can exercise
+      // the segment-tick path without the cost of building the real
+      // multi-segment comma2k19 fixtures. Test-only seam; do NOT use
+      // in production code. Each entry is a plain `{start,end,name}`
+      // tuple in nanoseconds-as-number (segment ranges are short
+      // enough to stay safely inside Number.MAX_SAFE_INTEGER for the
+      // synthetic timestamps we use).
+      seedSegmentsForScreenshot: (
+        segments: { start: number; end: number; name: string }[],
+      ) => void;
     };
   }
 }
@@ -492,6 +503,35 @@ export function App() {
         return out;
       },
       getCursorGated: () => isCursorGated(),
+      // Agent B — see the type-decl above. Bypasses the bucket/open
+      // path so the screenshot spec can paint multi-segment ticks
+      // without a real fixture build. Sets only `sources` /
+      // `channels` / `globalRange`; binding maps are untouched.
+      seedSegmentsForScreenshot: (segments) => {
+        const sources = segments.map((s, i) => ({
+          id: `${s.name}#${i}`,
+          kind: "mcap" as const,
+          name: s.name,
+          handle: -1 - i,
+          timeRange: {
+            startNs: BigInt(s.start),
+            endNs: BigInt(s.end),
+          },
+          channels: [],
+        }));
+        let startNs = sources[0]?.timeRange.startNs ?? 0n;
+        let endNs = sources[0]?.timeRange.endNs ?? 0n;
+        for (const s of sources) {
+          if (s.timeRange.startNs < startNs) startNs = s.timeRange.startNs;
+          if (s.timeRange.endNs > endNs) endNs = s.timeRange.endNs;
+        }
+        useSession.setState({
+          sources,
+          channels: [],
+          globalRange: { startNs, endNs },
+          cursorNs: startNs,
+        });
+      },
     };
     setReady(true);
     return () => {
