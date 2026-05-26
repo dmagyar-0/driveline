@@ -1,12 +1,37 @@
+/* UX overhaul (issues #15 #16 #17) — top bar.
+ *
+ * Layout:
+ *
+ *   [brand]            (auto)          [status: cursor · sources · status]
+ *
+ * The brand zone has no interactive treatment so it doesn't suggest
+ * navigation. The status zone uses three discrete chips with proper
+ * typographic hierarchy instead of dot-separated microscopic text.
+ */
+
 .bar {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: var(--shell-topbar-h);
   padding: 0 var(--sp-6);
-  gap: var(--sp-5);
+  gap: var(--sp-6);
   background: var(--color-bg-2);
   border-bottom: 1px solid var(--color-border-subtle);
   font-size: var(--fs-13);
+  position: relative;
+}
+
+/* Brand zone -------------------------------------------------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding-right: var(--sp-6);
+  border-right: 1px solid var(--color-border-subtle);
+  /* Explicitly NOT a button — cursor stays default. */
+  cursor: default;
+  user-select: none;
 }
 
 .logo {
@@ -18,25 +43,174 @@
 
 .wordmark {
   font-weight: var(--fw-semibold);
-  font-size: var(--fs-13);
+  font-size: var(--fs-14);
   color: var(--color-fg-2);
   letter-spacing: var(--tracking-tight);
 }
 
-.meta {
+.version {
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-6);
+  letter-spacing: var(--tracking-tight);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-2);
+  background: var(--color-bg-4);
+}
+
+/* Status zone ------------------------------------------------- */
+
+.status {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
-  font-size: var(--fs-12);
+  gap: var(--sp-5);
+}
+
+/* Cursor readout — labelled control with its own typographic block.
+ * Uppercase micro-label sits above a numeric readout so the two pieces
+ * of information are visibly distinct, not run together in a dot list. */
+.cursor {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-3);
+}
+
+.cursorLabel {
+  font-size: var(--fs-10);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
   color: var(--color-fg-5);
+  font-weight: var(--fw-medium);
+}
+
+.cursorValue {
+  font-size: var(--fs-13);
+  color: var(--color-fg-2);
   font-variant-numeric: tabular-nums;
 }
 
-.metaSep {
-  color: var(--color-fg-6);
+/* Generic chip used for the "N sources" trigger. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  height: 24px;
+  background: var(--color-bg-4);
+  color: var(--color-fg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  font: inherit;
+  font-size: var(--fs-12);
+  cursor: pointer;
+  transition:
+    background var(--motion-base),
+    border-color var(--motion-base),
+    color var(--motion-base);
 }
 
-.workerStatus {
-  color: var(--color-fg-4);
+.chip:hover {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+  color: var(--color-fg-2);
+}
+
+.chipActive {
+  background: var(--color-bg-5);
+  border-color: var(--color-accent-blue);
+  color: var(--color-fg-1);
+}
+
+.chip:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.chipIcon {
+  color: var(--color-fg-5);
+}
+
+.chipCount {
+  font-weight: var(--fw-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-2);
+}
+
+.chipLabel {
+  color: var(--color-fg-5);
+}
+
+/* Status chip — semantic dot + word. */
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  height: 24px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-12);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-subtle);
+  user-select: none;
+  position: relative;
+}
+
+.statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.dotReady {
+  background: #16a34a;
+  box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.18);
+}
+
+.dotBusy {
+  background: var(--color-accent-orange);
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.18);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.statusReady .statusWord {
+  color: var(--color-fg-3);
+}
+
+.statusBusy .statusWord {
+  color: var(--color-fg-2);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dotBusy {
+    animation: none;
+  }
+  .chip {
+    transition: none;
+  }
 }

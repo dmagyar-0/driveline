@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { TopBar } from "./TopBar";
 import { Rail } from "./Rail";
 import { Drawer } from "./Drawer";
+import { useSession } from "../state/store";
 import styles from "./Shell.module.css";
 
 export interface ShellProps {
@@ -60,6 +61,10 @@ export function Shell({
   transport,
   children,
 }: ShellProps) {
+  // Issue #17 — the topbar's sources popover offers an "Open Sources
+  // panel" link that flips the rail to the Sources drawer. Reading the
+  // setter via a selector keeps the dependency narrow.
+  const setActiveRailTab = useSession((s) => s.setActiveRailTab);
   return (
     <main
       className={styles.shell}
@@ -68,7 +73,10 @@ export function Shell({
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
     >
-      <TopBar ready={ready} />
+      <TopBar
+        ready={ready}
+        onOpenSourcesDrawer={() => setActiveRailTab("sources")}
+      />
       <div className={styles.work}>
         <Rail />
         <Drawer
