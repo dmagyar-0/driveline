@@ -65,11 +65,24 @@ export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
 
       {/* Status zone (issue #16) — three clearly-labelled controls. */}
       <div className={styles.status}>
-        <div className={styles.cursor} title="Cursor (relative time)">
-          <span className={styles.cursorLabel}>Cursor</span>
+        {/* The cursor readout is a status indicator (no interaction).
+         *  `role="status"` + `aria-live="off"` means AT can read it on
+         *  demand but it does NOT announce every rAF tick during
+         *  playback — which would be a screen-reader DOS. */}
+        <div
+          className={styles.cursor}
+          role="status"
+          aria-live="off"
+          aria-label={`Cursor at ${elapsed}`}
+          title="Cursor (relative time)"
+        >
+          <span className={styles.cursorLabel} aria-hidden="true">
+            Cursor
+          </span>
           <span
             className={`${styles.cursorValue} tabular`}
             data-testid="cursor-readout"
+            aria-hidden="true"
           >
             {elapsed}
           </span>

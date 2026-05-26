@@ -63,19 +63,38 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  /* a11y · ≥24 px row height for a sensible click target while
+   * keeping the dense list aesthetic. */
+  min-height: 24px;
   padding: 0.25rem 0.75rem 0.25rem 1.75rem;
   color: var(--color-fg-2);
   font-size: 0.85rem;
   cursor: pointer;
+  border-radius: var(--radius-3);
 }
 
 .channelRow:hover {
   background: var(--color-bg-5);
 }
 
+/* a11y · the row is a <label> wrapping a native checkbox; the focus
+ * ring lands on the checkbox by default and is hard to spot at this
+ * font size. Surface the focus by lighting up the whole row whenever
+ * the contained checkbox takes focus. */
+.channelRow:focus-within {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
 .rowDisabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.groupHeader:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-3);
 }
 
 .swatch {

@@ -10,86 +10,87 @@
 
 :root {
   /* ---------- Color: surfaces (dark, near-black ramp) ---------- */
-  --color-bg-0: #000000;          /* video panel, deepest */
-  --color-bg-1: #0b0b0b;          /* workspace shell */
-  --color-bg-2: #0f0f0f;          /* empty states / chip background */
-  --color-bg-3: #151515;          /* panel / popover / drop-zone */
-  --color-bg-4: #1a1a1a;          /* button, input rest */
-  --color-bg-5: #1e1e1e;          /* hover row */
-  --color-bg-6: #222222;          /* button hover */
+  --color-bg-0: #000000; /* video panel, deepest */
+  --color-bg-1: #0b0b0b; /* workspace shell */
+  --color-bg-2: #0f0f0f; /* empty states / chip background */
+  --color-bg-3: #151515; /* panel / popover / drop-zone */
+  --color-bg-4: #1a1a1a; /* button, input rest */
+  --color-bg-5: #1e1e1e; /* hover row */
+  --color-bg-6: #222222; /* button hover */
 
   /* ---------- Color: borders / dividers ---------- */
   --color-border-subtle: #2a2a2a; /* default panel + tabset borders */
   --color-border-strong: #333333; /* button / input borders */
-  --color-border-hover: #555555;  /* hover border */
-  --color-splitter-hover: #3a3a3a;/* flexlayout splitter hover */
+  --color-border-hover: #555555; /* hover border */
+  --color-splitter-hover: #3a3a3a; /* flexlayout splitter hover */
 
   /* ---------- Color: foreground / text ---------- */
-  --color-fg-1: #ffffff;          /* highest contrast (rare) */
-  --color-fg-2: #e0e0e0;          /* primary body text */
-  --color-fg-3: #bbbbbb;          /* secondary text */
-  --color-fg-4: #aaaaaa;          /* tertiary / labels */
-  --color-fg-5: #888888;          /* meta / muted */
-  --color-fg-6: #666666;          /* placeholder / disabled */
+  --color-fg-1: #ffffff; /* highest contrast (rare) */
+  --color-fg-2: #e0e0e0; /* primary body text */
+  --color-fg-3: #bbbbbb; /* secondary text */
+  --color-fg-4: #aaaaaa; /* tertiary / labels */
+  --color-fg-5: #888888; /* meta / muted */
+  --color-fg-6: #666666; /* placeholder / disabled */
 
   /* ---------- Color: accent (functional) ---------- */
   --color-accent-orange: #f97316; /* selected tab, splitter drag, brand */
-  --color-accent-blue:   #2a6df4; /* focus ring, scrubber fill, selection */
+  --color-accent-blue: #2a6df4; /* focus ring, scrubber fill, selection */
   --color-accent-blue-tint: rgba(42, 109, 244, 0.06);
 
   /* ---------- Color: status / semantic ---------- */
-  --color-error:        #b23a00;  /* light bg */
-  --color-error-dark:   #ff8a5c;  /* dark bg (used in app) */
+  --color-error: #b23a00; /* light bg */
+  --color-error-dark: #ff8a5c; /* dark bg (used in app) */
 
   /* ---------- Color: data viz palette (8 series, FNV-hashed) ---------- */
-  --plot-1: #3b82f6;  /* blue */
-  --plot-2: #f97316;  /* orange */
-  --plot-3: #10b981;  /* emerald */
-  --plot-4: #ef4444;  /* red */
-  --plot-5: #a855f7;  /* purple */
-  --plot-6: #eab308;  /* yellow */
-  --plot-7: #14b8a6;  /* teal */
-  --plot-8: #ec4899;  /* pink */
+  --plot-1: #3b82f6; /* blue */
+  --plot-2: #f97316; /* orange */
+  --plot-3: #10b981; /* emerald */
+  --plot-4: #ef4444; /* red */
+  --plot-5: #a855f7; /* purple */
+  --plot-6: #eab308; /* yellow */
+  --plot-7: #14b8a6; /* teal */
+  --plot-8: #ec4899; /* pink */
 
   /* ---------- Color: scrim / overlays ---------- */
-  --scrim-hud:     rgba(0, 0, 0, 0.6);     /* HUD bg over video */
-  --scrim-toggle:  rgba(20, 20, 20, 0.7);  /* HUD toggle bg */
+  --scrim-hud: rgba(0, 0, 0, 0.6); /* HUD bg over video */
+  --scrim-toggle: rgba(20, 20, 20, 0.7); /* HUD toggle bg */
   --shadow-popover: 0 8px 24px rgba(0, 0, 0, 0.5);
 
   /* ---------- Type: families ---------- */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto,
-               "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas,
-               "Liberation Mono", monospace;
+  --font-sans:
+    system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
   /* ---------- Type: weights ---------- */
   --fw-regular: 400;
-  --fw-medium:  500;
+  --fw-medium: 500;
   --fw-semibold: 600;
 
   /* ---------- Type: scale (rem-based, dense engineer UI) ---------- */
-  --fs-10:  0.625rem;   /* 10px — micro buttons (transport prev/next, mode pill) */
-  --fs-11:  0.6875rem;  /* 11px — HUD, smallest meta */
-  --fs-12:  0.75rem;    /* 12px — chip count, footer hints */
-  --fs-13:  0.8125rem;  /* 13px — secondary controls */
-  --fs-14:  0.875rem;   /* 14px — default body, controls */
-  --fs-15:  0.9375rem;  /* 15px — readable body */
-  --fs-16:  1rem;       /* 16px — base */
-  --fs-17:  1.0625rem;  /* 17px — h2 */
-  --fs-18:  1.125rem;   /* 18px — H1 (App shell) */
-  --fs-22:  1.375rem;
-  --fs-28:  1.75rem;
+  --fs-10: 0.625rem; /* 10px — micro buttons (transport prev/next, mode pill) */
+  --fs-11: 0.6875rem; /* 11px — HUD, smallest meta */
+  --fs-12: 0.75rem; /* 12px — chip count, footer hints */
+  --fs-13: 0.8125rem; /* 13px — secondary controls */
+  --fs-14: 0.875rem; /* 14px — default body, controls */
+  --fs-15: 0.9375rem; /* 15px — readable body */
+  --fs-16: 1rem; /* 16px — base */
+  --fs-17: 1.0625rem; /* 17px — h2 */
+  --fs-18: 1.125rem; /* 18px — H1 (App shell) */
+  --fs-22: 1.375rem;
+  --fs-28: 1.75rem;
 
   /* ---------- Type: line-height ---------- */
   --lh-tight: 1.15;
-  --lh-snug:  1.35;     /* HUD text */
-  --lh-body:  1.5;
+  --lh-snug: 1.35; /* HUD text */
+  --lh-body: 1.5;
   --lh-loose: 1.6;
 
   /* ---------- Type: tracking ---------- */
   --tracking-tight: -0.005em;
   --tracking-normal: 0;
-  --tracking-wide: 0.05em;     /* SOURCE-KIND etc, uppercase labels */
+  --tracking-wide: 0.05em; /* SOURCE-KIND etc, uppercase labels */
 
   /* ---------- Spacing (rem ramp; 1rem = 16px) ---------- */
   --sp-1: 0.15rem;
@@ -103,14 +104,16 @@
   --sp-9: 1.5rem;
 
   /* ---------- Radius ---------- */
-  --radius-2: 2px;   /* swatch, fine inner */
-  --radius-3: 3px;   /* inline pill */
-  --radius-4: 4px;   /* buttons, inputs, HUD */
-  --radius-6: 6px;   /* panels, cards, popovers */
+  --radius-2: 2px; /* swatch, fine inner */
+  --radius-3: 3px; /* inline pill */
+  --radius-4: 4px; /* buttons, inputs, HUD */
+  --radius-6: 6px; /* panels, cards, popovers */
   --radius-pill: 999px;
 
   /* ---------- Shadow / elevation ---------- */
-  --shadow-1: var(--shadow-popover); /* alias of --shadow-popover (scrim/overlays) */
+  --shadow-1: var(
+    --shadow-popover
+  ); /* alias of --shadow-popover (scrim/overlays) */
 
   /* ---------- Shell layout heights ---------- */
   --shell-topbar-h: 36px;
@@ -121,9 +124,9 @@
   --focus-offset: 2px;
 
   /* ---------- Motion ---------- */
-  --motion-fast:  0.1s ease;
-  --motion-base:  0.15s ease;     /* hover transitions in source */
-  --motion-pause: 250ms;          /* video seek settle target */
+  --motion-fast: 0.1s ease;
+  --motion-base: 0.15s ease; /* hover transitions in source */
+  --motion-pause: 250ms; /* video seek settle target */
 }
 
 /* =============================================================
@@ -131,7 +134,8 @@
  * Use as a base; component CSS Modules override locally.
  * ============================================================= */
 
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   height: 100%;
@@ -186,7 +190,11 @@ small,
   color: var(--color-fg-5);
 }
 
-code, pre, kbd, .mono, .hud {
+code,
+pre,
+kbd,
+.mono,
+.hud {
   font-family: var(--font-mono);
   font-size: var(--fs-11);
   line-height: var(--lh-snug);
@@ -196,11 +204,75 @@ a {
   color: var(--color-accent-blue);
   text-decoration: none;
 }
-a:hover { text-decoration: underline; }
+a:hover {
+  text-decoration: underline;
+}
+
+a:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-2);
+}
 
 /* tabular numbers everywhere readouts appear */
 .tabular,
 .readout,
 .timestamp {
   font-variant-numeric: tabular-nums;
+}
+
+/* =============================================================
+ * a11y · global focus-ring safety net.
+ *
+ * Component-level CSS Modules set their own `:focus-visible`
+ * styling (see PanelHeader, Rail, Transport, etc.). This base
+ * rule ensures any new interactive element that author forgets
+ * still surfaces a visible focus indicator — better a too-loud
+ * default than a black-on-black mystery focus.
+ *
+ * Component rules override because they are more specific
+ * (class + pseudo) than the bare element selector here.
+ * ============================================================= */
+
+button:focus-visible,
+[role="button"]:focus-visible,
+[role="slider"]:focus-visible,
+[role="tab"]:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Reduced-motion baseline · for users who opt out, drop the
+ * default link underline pulse and the system-level
+ * `scroll-behavior` so anchored jumps don't sail across the
+ * viewport. Component-level CSS handles its own animations
+ * (Rail label fade, Transport pulse/spin, video spinner) so we
+ * don't blanket every keyframe — some are functional status
+ * affordances (e.g. the FlexLayout drag preview). */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* a11y · visually-hidden utility, shared by any component that
+ * needs to surface a label to assistive tech without painting
+ * pixels. Mirrors the WAI-ARIA Authoring Practices "sr-only"
+ * pattern. Components that want their own may still define a
+ * local `.srOnly` (TopBar, PanelHeader); both behave the same. */
+.sr-only,
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

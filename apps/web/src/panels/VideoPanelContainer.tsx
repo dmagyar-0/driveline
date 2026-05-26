@@ -84,7 +84,11 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
           className={styles.clearBtn}
           onClick={() => setVideoBinding(panelId, null)}
           data-testid="video-clear-binding"
-          aria-label="clear video binding"
+          // a11y · accessible name must start with the visible label
+          // so dictation users can say "click change channel" and AT
+          // announces the visible text. WCAG 2.5.3 (Label in Name).
+          aria-label="Change channel — clear current video binding"
+          title="Pick a different video channel"
         >
           Change channel
         </button>
@@ -117,9 +121,7 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
       <VideoPanelEmptyState
         variant="compact"
         headline={
-          bindingId
-            ? "Channel no longer available"
-            : "Pick a video channel"
+          bindingId ? "Channel no longer available" : "Pick a video channel"
         }
         description={
           bindingId
