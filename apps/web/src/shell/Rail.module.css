@@ -1,42 +1,91 @@
+/* UX overhaul (issue #14):
+ *
+ * The rail expands on hover or when a button inside it is focused so
+ * keyboard users can see the same labels mouse users get. Idle width
+ * stays at 48 px (was 40 px) — wide enough to host a 36 px square hit
+ * target without the icon hugging the right edge. Expanded width is
+ * 168 px, which fits every label including "Channels" and "Events"
+ * without truncation at the default 13 px label size.
+ *
+ * The active state combines an accent bar (left edge) with a filled
+ * background and an accent foreground, instead of a colour-only
+ * change. The bar stays even when the rail is idle (so the active
+ * tab is identifiable from a glance).
+ */
+
 .rail {
   display: flex;
   flex-direction: column;
-  flex: 0 0 40px;
-  width: 40px;
+  flex: 0 0 48px;
+  width: 48px;
   background: var(--color-bg-2);
   border-right: 1px solid var(--color-border-subtle);
   padding: var(--sp-3) 0;
   gap: var(--sp-2);
   overflow: hidden;
+  transition:
+    flex-basis var(--motion-base),
+    width var(--motion-base);
 }
 
-.collapsed {
-  display: none;
+.rail:hover,
+.rail:focus-within {
+  flex: 0 0 168px;
+  width: 168px;
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 var(--sp-2);
+}
+
+.divider {
+  height: 1px;
+  margin: var(--sp-3) var(--sp-4);
+  background: var(--color-border-subtle);
 }
 
 .btn {
   position: relative;
-  flex: 0 0 auto;
-  height: 40px;
-  width: 40px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-5);
+  height: 36px;
+  min-width: 36px;
+  padding: 0 var(--sp-3);
   background: transparent;
   border: none;
-  color: var(--color-fg-5);
+  border-radius: var(--radius-4);
+  color: var(--color-fg-4);
   cursor: pointer;
-  padding: 0;
-  transition: color var(--motion-base);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: left;
+  overflow: hidden;
+  transition:
+    background var(--motion-base),
+    color var(--motion-base);
 }
 
 .btn:hover {
+  background: var(--color-bg-5);
   color: var(--color-fg-2);
 }
 
+.btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* Accent bar on the active item. Anchored to the rail edge so the bar
+ * remains visible even when the rail is collapsed and the label is
+ * hidden. */
 .btn::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: -8px;
   top: 6px;
   bottom: 6px;
   width: 2px;
@@ -46,6 +95,12 @@
 }
 
 .active {
+  background: var(--color-bg-5);
+  color: var(--color-accent-orange);
+}
+
+.active:hover {
+  background: var(--color-bg-6);
   color: var(--color-accent-orange);
 }
 
@@ -53,10 +108,35 @@
   background: var(--color-accent-orange);
 }
 
-.btn:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: -2px;
-  border-radius: var(--radius-2);
+/* Icon stays a fixed square. The label fades in once the rail expands.
+ * `min-width: 0` on the label lets ellipsis kick in for narrow rails. */
+.icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  color: inherit;
+}
+
+.label {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateX(-4px);
+  pointer-events: none;
+  transition:
+    opacity var(--motion-base),
+    transform var(--motion-base);
+}
+
+.rail:hover .label,
+.rail:focus-within .label {
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .spacer {
@@ -64,8 +144,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .rail,
   .btn,
-  .btn::before {
+  .btn::before,
+  .label {
     transition: none;
   }
 }
