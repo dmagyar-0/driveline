@@ -26,10 +26,12 @@ export type PanelComponent =
 
 export const defaultLayoutModel: IJsonModel = {
   global: {
-    tabEnableClose: true,
-    // Phase 7+ · inline rename is wired by `PanelHeader.tsx` (double-click
-    // a focused tab title or hit the rename button). The flag here keeps
-    // FlexLayout's built-in rename UI off so we don't double-up.
+    // Phase 7+ · `PanelHeader.tsx` renders our own close button (with
+    // `Actions.deleteTab`); disable FlexLayout's stock trailing close
+    // icon to avoid the "two × side-by-side" confusion called out in
+    // the UX review. Rename UI is wired the same way (double-click
+    // title on a focused tab, or the dedicated rename button).
+    tabEnableClose: false,
     tabEnableRename: false,
     splitterSize: 4,
     borderEnableAutoHide: true,

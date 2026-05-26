@@ -108,3 +108,13 @@
 .flexContainer :global(.flexlayout__tab_toolbar_button:hover) {
   background: var(--color-bg-5);
 }
+
+/* Belt-and-braces: hide FlexLayout's stock trailing-close icon. The
+ * model defaults `tabEnableClose: false` (see `defaultLayout.ts`) so
+ * fresh layouts never render this, but persisted layout JSON from
+ * before the chrome overhaul may still set the attribute on
+ * individual tab nodes. `PanelHeader.tsx` owns the close affordance
+ * now — keep exactly one × per tab. */
+.flexContainer :global(.flexlayout__tab_button_trailing) {
+  display: none !important;
+}
