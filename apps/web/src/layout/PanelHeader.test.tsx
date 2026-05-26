@@ -221,6 +221,26 @@ describe("PanelHeader", () => {
     expect(actions).toHaveLength(0);
   });
 
+  it("pointerdown on the header marks the panel as selected when not focused", () => {
+    const { model } = makeStubModel();
+    const { container } = render(
+      <PanelHeader
+        model={model}
+        panelId="plot-5"
+        tabsetId="ts-1"
+        name="A"
+        kind="plot"
+        isFocused={false}
+      />,
+    );
+    expect(useSession.getState().selectedPanelId).toBeNull();
+    const header = container.querySelector(
+      '[data-panel-id="plot-5"]',
+    ) as HTMLElement;
+    fireEvent.pointerDown(header);
+    expect(useSession.getState().selectedPanelId).toBe("plot-5");
+  });
+
   it("paints the kind data attribute so CSS can pick the per-kind accent", () => {
     const { model } = makeStubModel();
     const { container } = render(

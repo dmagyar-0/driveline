@@ -132,6 +132,18 @@ export function PanelHeader({
     setRenaming(true);
   }, []);
 
+  // A single click anywhere in the header (other than a button) marks
+  // this panel as the focused one — same write `panelFactory.tsx` does
+  // on pointerdown in the body. Tab strip pointerdown still flows
+  // through to FlexLayout so the tab is selected and a drag can start;
+  // this just keeps the store-level selection in lockstep with the
+  // visual focus state. No-op when the panel is already focused so we
+  // don't churn the store on every header re-render.
+  const onHeaderPointerDown = useCallback(() => {
+    if (isFocused) return;
+    useSession.getState().setSelectedPanelId(panelId);
+  }, [isFocused, panelId]);
+
   // The accent underline only appears for known kinds; unknown panels
   // (orphans / legacy ids) get a neutral border. Inline style is
   // appropriate here because the value is a CSS custom property name
@@ -149,6 +161,7 @@ export function PanelHeader({
       data-panel-id={panelId}
       data-panel-kind={kind ?? "unknown"}
       style={accentStyle}
+      onPointerDown={onHeaderPointerDown}
     >
       {kind !== null && (
         <span
