@@ -63,6 +63,51 @@ Screenshot: `apps/e2e/tests/screenshots/comma2k19-multi-channel.png`
 shows both signals plotted on the same panel with the time axis at
 the actual recording wall-clock (`7/27/18, 6:04 am`).
 
+### Adding the dashcam video (video + signals demo)
+
+The HF demo parquet ships only CAN/IMU/GNSS — the dashcam HEVC for
+the same segment lives in the `compression_challenge/` directory
+alongside it. Pairing it with the converted MCAP gives the
+"camera + signals" visualisation in
+`apps/e2e/tests/screenshots/comma2k19-video-plus-signals.png`.
+
+```sh
+SEG="b0c9d2329ad1606b%7C2018-07-27--06-03-57/10"
+OUT=sample-data/realworld
+
+# 1. Pull the 37 MB HEVC clip for segment 10.
+curl -sL -o /tmp/datasets/video_seg10.hevc \
+  "https://huggingface.co/datasets/commaai/comma2k19/resolve/main/compression_challenge/${SEG}/video.hevc"
+
+# 2. Transcode HEVC → H.264 MP4 at 20 fps. WebCodecs in Driveline is
+#    avc1.* only; HEVC isn't supported. GOP 20 keeps seeks snappy.
+ffmpeg -framerate 20 -i /tmp/datasets/video_seg10.hevc \
+  -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+  -g 20 -keyint_min 20 -movflags +faststart -an \
+  "$OUT/comma2k19_seg10.mp4"
+
+# 3. Generate the `.mp4.timestamps` sidecar. Anchor frame 0 to the
+#    same segment-start wall-clock the converter uses for the MCAP
+#    (parse_segment_start_ns) so video PTS and signal timestamps share
+#    a clock — otherwise the video would slide off the scrubber.
+python3 - <<'PY'
+from datetime import datetime, timezone
+start_ns = int(datetime.strptime(
+    "2018-07-27--06-03-57", "%Y-%m-%d--%H-%M-%S"
+).replace(tzinfo=timezone.utc).timestamp() * 1_000_000_000)
+with open("sample-data/realworld/comma2k19_seg10.mp4.timestamps", "w") as f:
+    for i in range(1200):                # 60 s × 20 fps
+        f.write(f"{i}\t{start_ns + i * 50_000_000}\n")
+PY
+
+# 4. Drop comma2k19.mcap + comma2k19_seg10.mp4 + the sidecar onto the
+#    browser at http://localhost:5173, or run the visualisation spec:
+pnpm --filter e2e exec playwright test _demo-comma2k19-video.spec.ts
+```
+
+The `_demo-*` prefix keeps the spec out of the default CI run — it
+needs the three large fixtures above, which aren't checked in.
+
 > Bug history: this dataset originally hit a PlotPanel bug where
 > binding two CAN channels with non-coincident timestamps produced
 > two invisible traces. `mergeSeries` correctly emits `null` at every
