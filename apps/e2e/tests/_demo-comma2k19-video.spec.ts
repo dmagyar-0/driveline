@@ -657,4 +657,192 @@ test.describe("comma2k19 dashcam + CAN", () => {
       path: path.join(SCREENSHOT_DIR, "comma2k19-split-by-topic.png"),
     });
   });
+
+  test("splits one segment + dashcam video across 3 panels", async ({
+    page,
+  }) => {
+    // Same four signal files as the split-by-topic test, plus the
+    // mp4 + sidecar pair. Layout: dashcam on the left, two plots
+    // stacked on the right. Status line should read "5 sources" —
+    // the mp4 + sidecar count as one.
+    const SIGNAL_RELS = [
+      "realworld/comma2k19_chassis.mcap",
+      "realworld/comma2k19_wheels.mcap",
+      "realworld/comma2k19_imu.mf4",
+      "realworld/comma2k19_gnss.mf4",
+    ];
+    const VIDEO_RELS = [REL.mp4, REL.ts];
+    const ALL_RELS = [...SIGNAL_RELS, ...VIDEO_RELS];
+    test.skip(
+      !ALL_RELS.every((r) =>
+        existsSync(path.resolve(__dirname, "../../../sample-data", r)),
+      ),
+      "split-by-topic + video fixtures missing — see sample-data/realworld/README.md",
+    );
+
+    // Nested rows: a horizontal split at the root puts the video on
+    // the left (weight 40); the right column is a row-inside-a-row
+    // which FlexLayout interprets as a vertical split, stacking
+    // plot-1 over plot-2 (50/50).
+    const LAYOUT = {
+      global: {
+        tabEnableClose: true,
+        tabEnableRename: false,
+        splitterSize: 4,
+        borderEnableAutoHide: true,
+      },
+      borders: [],
+      layout: {
+        type: "row",
+        weight: 100,
+        children: [
+          {
+            type: "tabset",
+            weight: 40,
+            children: [
+              {
+                type: "tab",
+                id: VIDEO_PANEL_ID,
+                name: "Dashcam",
+                component: "video",
+              },
+            ],
+          },
+          {
+            type: "row",
+            weight: 60,
+            children: [
+              {
+                type: "tabset",
+                weight: 50,
+                children: [
+                  {
+                    type: "tab",
+                    id: "plot-1",
+                    name: "Speed + IMU accel (2 MCAP + 1 MF4)",
+                    component: "plot",
+                  },
+                ],
+              },
+              {
+                type: "tabset",
+                weight: 50,
+                children: [
+                  {
+                    type: "tab",
+                    id: "plot-2",
+                    name: "Steering / Gyro / GNSS (1 MCAP + 2 MF4)",
+                    component: "plot",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    };
+    await page.evaluate(
+      (json) => window.__drivelineDevHooks!.setLayoutJson(json),
+      LAYOUT,
+    );
+
+    const open = await page.evaluate(async (rels) => {
+      const descs = await Promise.all(
+        rels.map(async (rel) => {
+          const r = await fetch(`/sample-data/${rel}`);
+          if (!r.ok) throw new Error(`fetch ${rel}: ${r.status}`);
+          return {
+            name: rel.split("/").pop()!,
+            bytes: new Uint8Array(await r.arrayBuffer()),
+          };
+        }),
+      );
+      return await window.__drivelineDevHooks!.openFiles(descs);
+    }, ALL_RELS);
+    expect(open.errors).toEqual([]);
+    // mp4 + sidecar pair opens as one source; signals open as four more.
+    expect(open.opened).toEqual(
+      expect.arrayContaining([
+        "comma2k19_chassis.mcap",
+        "comma2k19_wheels.mcap",
+        "comma2k19_imu.mf4",
+        "comma2k19_gnss.mf4",
+        "comma2k19_seg10.mp4",
+      ]),
+    );
+    const sources = await page.evaluate(() =>
+      window.__drivelineDevHooks!.listSources(),
+    );
+    expect(sources).toHaveLength(5);
+
+    const videoChId = await page.evaluate(
+      ({ sourceName, nativeId }) =>
+        window.__drivelineDevHooks!.findChannelId({ sourceName, nativeId }),
+      { sourceName: VIDEO_SOURCE_NAME, nativeId: VIDEO_NATIVE_ID },
+    );
+    await page.evaluate(
+      ([panelId, id]) =>
+        window.__drivelineDevHooks!.setVideoChannelBinding(panelId, id),
+      [VIDEO_PANEL_ID, videoChId!],
+    );
+
+    const all = await page.evaluate(() =>
+      window
+        .__drivelineDevHooks!.listChannels()
+        .map((c) => ({ id: c.id, name: c.name, sourceId: c.sourceId })),
+    );
+    const sourceById = Object.fromEntries(sources.map((s) => [s.id, s.name]));
+    const pick = (sourcePattern: RegExp, channelName: string) => {
+      const ch = all.find(
+        (c) =>
+          c.name === channelName &&
+          sourcePattern.test(sourceById[c.sourceId] ?? ""),
+      );
+      if (!ch) {
+        throw new Error(
+          `channel ${channelName} not in source matching ${sourcePattern}`,
+        );
+      }
+      return ch.id;
+    };
+
+    const plot1Ids = [
+      pick(/chassis\.mcap/, "/vehicle/speed"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_fl"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_fr"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_rl"),
+      pick(/wheels\.mcap/, "/vehicle/wheel_speed_rr"),
+      pick(/imu\.mf4/, "IMU_Accel_X"),
+      pick(/imu\.mf4/, "IMU_Accel_Y"),
+      pick(/imu\.mf4/, "IMU_Accel_Z"),
+    ];
+    const plot2Ids = [
+      pick(/chassis\.mcap/, "/vehicle/steering_angle"),
+      pick(/imu\.mf4/, "IMU_Gyro_X"),
+      pick(/imu\.mf4/, "IMU_Gyro_Y"),
+      pick(/imu\.mf4/, "IMU_Gyro_Z"),
+      pick(/gnss\.mf4/, "GNSS_Alt"),
+    ];
+    await page.evaluate(
+      ({ a, b }: { a: string[]; b: string[] }) => {
+        const h = window.__drivelineDevHooks!;
+        for (const id of a) h.addPlotChannelBinding("plot-1", id);
+        for (const id of b) h.addPlotChannelBinding("plot-2", id);
+      },
+      { a: plot1Ids, b: plot2Ids },
+    );
+
+    await seekToOneSixthOfRange(page);
+    await waitForVideoFrame(page);
+    await waitForPlotSeries(page, "plot-1", 8);
+    await waitForPlotSeries(page, "plot-2", 5);
+    await paintAndSettle(page);
+
+    await page.screenshot({
+      path: path.join(
+        SCREENSHOT_DIR,
+        "comma2k19-split-by-topic-with-video.png",
+      ),
+    });
+  });
 });

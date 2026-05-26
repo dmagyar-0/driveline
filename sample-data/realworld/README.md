@@ -204,6 +204,14 @@ Status line reads "4 sources" and both panels render a full 60 s of
 data with no gaps. Screenshot at
 `apps/e2e/tests/screenshots/comma2k19-split-by-topic.png`.
 
+The fifth test (`splits one segment + dashcam video across 3 panels`)
+drops the same four signal files plus the mp4 + sidecar pair, and
+uses a nested-row layout (`row[tabset(video), row[tabset(plot-1),
+tabset(plot-2)]]`) so the dashcam takes the left 40 % and the two
+plots stack on the right 60 %. Status line reads "5 sources".
+Screenshot at
+`apps/e2e/tests/screenshots/comma2k19-split-by-topic-with-video.png`.
+
 > Bug history: this dataset originally hit a PlotPanel bug where
 > binding two CAN channels with non-coincident timestamps produced
 > two invisible traces. `mergeSeries` correctly emits `null` at every
