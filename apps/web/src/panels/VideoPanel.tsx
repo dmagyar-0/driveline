@@ -17,6 +17,7 @@ import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
 import { mark } from "../perf";
+import { formatAbsolute, formatRelative } from "../timeline/formatTime";
 import {
   clearPanelReadiness,
   getReadinessSnapshot,
@@ -123,6 +124,16 @@ export function VideoPanel({
   const hudDomRef = useRef<HTMLDivElement | null>(null);
   const hudOnRef = useRef<boolean>(false);
   const statsDomRef = useRef<HTMLDivElement | null>(null);
+  // Issue #20 — timestamp burn-in overlay. Driven from the rAF blit
+  // loop so the displayed time tracks the cursor without forcing a
+  // 60 Hz React render on this panel. The DOM is the only place the
+  // formatted string lives. `timeModeRef` mirrors the shared store
+  // slice (Agent B's segmented toggle, issue #6) so the overlay
+  // honours the user's preferred convention without re-rendering on
+  // every flip.
+  const tsOverlayRef = useRef<HTMLDivElement | null>(null);
+  const lastTsTextRef = useRef<string>("");
+  const timeModeRef = useRef<"relative" | "absolute">("relative");
 
   // Issue #2 — readiness bookkeeping. Reused across rAF ticks so the
   // hot path doesn't allocate per frame. `lastFrameIndexAtWaitStartRef`
@@ -177,6 +188,17 @@ export function VideoPanel({
   // playing state are read non-reactively below via `useSession.subscribe`
   // so a 60 Hz cursor tick during playback doesn't churn the React tree.
   const globalRange = useSession((s) => s.globalRange);
+  // `startNsRef` mirrors `globalRange.startNs` into the rAF hot path so
+  // the timestamp burn-in can compute a relative time without a React
+  // re-read on every frame.
+  const startNsRef = useRef<bigint | null>(globalRange?.startNs ?? null);
+  startNsRef.current = globalRange?.startNs ?? null;
+  // Mirror the shared time-mode toggle (issue #6, Agent B) into the
+  // rAF hot path. Reading via selector keeps this panel re-rendering
+  // only when the user flips the mode — rare — and the rAF loop picks
+  // up the change on the next tick via the ref.
+  const timeMode = useSession((s) => s.timeMode);
+  timeModeRef.current = timeMode;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -373,21 +395,22 @@ export function VideoPanel({
       };
       window.__drivelineVideoHud = snapshot;
       if (hudOnRef.current && hudDomRef.current) {
+        // Issue #19 — readable labels with consistent width so the
+        // HUD lines stay aligned in the monospace pill.
         hudDomRef.current.textContent =
-          `PTS         ${formatPts(snapshot.ptsNs)}\n` +
-          `frame #     ${snapshot.frameIndex}\n` +
-          `decodeQueue ${snapshot.decodeQueue}\n` +
-          `blitQueue   ${snapshot.blitQueueLen} / ${MAX_QUEUE}\n` +
-          `dropped     ${snapshot.dropped}\n` +
-          `codec       ${snapshot.codec ?? "—"}`;
+          `pts       ${formatPts(snapshot.ptsNs)}\n` +
+          `frame     #${snapshot.frameIndex}\n` +
+          `decode    ${snapshot.decodeQueue} q\n` +
+          `blit      ${snapshot.blitQueueLen} / ${MAX_QUEUE}\n` +
+          `dropped   ${snapshot.dropped}\n` +
+          `codec     ${snapshot.codec ?? "—"}`;
       }
-      // Subtle always-on stats strip. Lag is `cursor - lastBlitPts`,
-      // i.e. how far behind the cursor the visible frame is — usually
-      // 0–33 ms when the pipeline is healthy, larger if the decoder is
-      // falling behind. We light the strip up in the error colour when
-      // either drops > 0 or the visible frame is more than two content
-      // frames stale, so a glance at the panel is enough to catch
-      // regressions while watching playback.
+      // Diagnostic stats strip — used to be always-on, which produced
+      // the "drop drag flag g 12/19" junk-text bleed near the bottom
+      // of the dashcam (issue #21). It now only paints when (a) the
+      // user has explicitly opened the HUD, or (b) something has gone
+      // wrong (dropped frames or lag > 2 frames at 30 fps), so a
+      // healthy stream renders no cryptic chrome over the video.
       const stats = statsDomRef.current;
       if (stats) {
         let lagText = "—";
@@ -398,15 +421,47 @@ export function VideoPanel({
           lagText = `${lagMs}ms`;
           lagWarn = lagMs > 66; // > 2 frames at 30fps
         }
-        stats.textContent =
-          `drop ${snapshot.dropped}` +
-          `  lag ${lagText}` +
-          `  q ${snapshot.blitQueueLen}/${MAX_QUEUE}`;
         const warn = snapshot.dropped > 0 || lagWarn;
-        const cls = warn
-          ? `${styles.stats} ${styles.statsWarn}`
-          : styles.stats;
-        if (stats.className !== cls) stats.className = cls;
+        const show = hudOnRef.current || warn;
+        if (show) {
+          stats.textContent =
+            `drop ${snapshot.dropped}` +
+            `  lag ${lagText}` +
+            `  q ${snapshot.blitQueueLen}/${MAX_QUEUE}`;
+          const cls = warn
+            ? `${styles.stats} ${styles.statsWarn}`
+            : styles.stats;
+          if (stats.className !== cls) stats.className = cls;
+          if (stats.hidden) stats.hidden = false;
+        } else if (!stats.hidden) {
+          stats.hidden = true;
+          stats.textContent = "";
+        }
+      }
+
+      // Issue #20 — timestamp burn-in. Render the *cursor* time, not the
+      // PTS, so the overlay confirms the cursor↔video sync rather than
+      // restating the decoder's internal clock. The Transport's
+      // relative/absolute toggle (Agent B, issue #6) lives in the
+      // store; we honour it here so both readouts stay in sync.
+      // Falls back gracefully when `globalRange` is unset (no fixture
+      // loaded — overlay shows nothing).
+      const tsDom = tsOverlayRef.current;
+      if (tsDom) {
+        const range = startNsRef.current;
+        if (range !== null) {
+          const next =
+            timeModeRef.current === "absolute"
+              ? formatAbsolute(cursor)
+              : formatRelative(cursor, range);
+          if (lastTsTextRef.current !== next) {
+            tsDom.textContent = next;
+            lastTsTextRef.current = next;
+          }
+        } else if (lastTsTextRef.current !== "") {
+          tsDom.textContent = "";
+          lastTsTextRef.current = "";
+        }
       }
 
       // Issue #2 — publish per-panel readiness. The rAF blit loop is
@@ -656,55 +711,104 @@ export function VideoPanel({
     toggleHud();
   };
 
+  // Issue #33 — render a "Decoding…" overlay until the first frame
+  // makes it to the canvas. The rAF loop sets `lastBlitPtsRef.current`
+  // on the first blit (and writes to `__drivelineVideoLastBlitPtsNs`),
+  // and the readiness subscriber below mirrors that into local state
+  // exactly once per transition, so this re-render is rare.
+  const firstFrameReady = readyState === "ready" || readyState === "stalled";
+
   return (
     <div className={styles.panel} tabIndex={0} onKeyDown={onKeyDown}>
-      <canvas
-        ref={canvasRef}
-        data-testid="video-panel-canvas"
-        className={styles.canvas}
-      />
-      <button
-        type="button"
-        data-testid="video-hud-toggle"
-        className={styles.hudToggle}
-        aria-pressed={hudOn}
-        onClick={toggleHud}
-      >
-        HUD
-      </button>
-      {hudOn && (
-        <div
-          ref={hudDomRef}
-          data-testid="video-hud"
-          className={styles.hud}
+      {/* Issue #18 — explicit video frame. The inner wrapper carries
+       *  the border/shadow so the dashcam region is visually distinct
+       *  from the surrounding chrome even on a fully-black night
+       *  frame. We don't touch the canvas pixels; the frame is pure
+       *  chrome around them. */}
+      <div className={styles.frame}>
+        <canvas
+          ref={canvasRef}
+          data-testid="video-panel-canvas"
+          className={styles.canvas}
         />
-      )}
-      <div
-        ref={statsDomRef}
-        data-testid="video-stats"
-        className={styles.stats}
-        aria-live="off"
-      />
-      {/* Issue #2 — inline stalled badge. Inclusion-list rendering: only
-       *  the "stalled" state surfaces this UI; "waiting" is the
-       *  Transport's responsibility (the orange dot next to play). */}
-      {readyState === "stalled" && (
+        {/* Issue #20 — timestamp burn-in. Bottom-left so it doesn't
+         *  fight the HUD pill (top-right) or the stalled badge
+         *  (centered). Painted from the rAF loop directly to keep
+         *  React out of the hot path. */}
         <div
-          className={styles.stalledBadge}
-          data-testid="video-panel-stalled-badge"
-          role="status"
+          ref={tsOverlayRef}
+          data-testid="video-timestamp-overlay"
+          className={styles.timestamp}
+          aria-hidden="true"
+        />
+        <button
+          type="button"
+          data-testid="video-hud-toggle"
+          className={styles.hudToggle}
+          aria-pressed={hudOn}
+          aria-label={hudOn ? "Hide diagnostics HUD" : "Show diagnostics HUD"}
+          title="Toggle decode HUD (press H)"
+          onClick={toggleHud}
         >
-          <span>stream stalled</span>
-          <button
-            type="button"
-            className={styles.stalledRetry}
-            data-testid="video-panel-stalled-retry"
-            onClick={onRetry}
+          HUD
+        </button>
+        {hudOn && (
+          <div
+            ref={hudDomRef}
+            data-testid="video-hud"
+            className={styles.hud}
+            aria-label="Video decode diagnostics"
+          />
+        )}
+        {/* Stats strip is hidden by default; the rAF loop unhides it
+         *  when the HUD toggle is on OR when something has gone wrong
+         *  (drops/lag). Default `hidden` so the empty element is not
+         *  in the layout flow until needed — that's what was leaking
+         *  the cryptic text across the bottom of the dashcam (#21). */}
+        <div
+          ref={statsDomRef}
+          data-testid="video-stats"
+          className={styles.stats}
+          aria-live="off"
+          hidden
+        />
+        {/* Issue #33 — Decoding affordance. Visible from mount until
+         *  the first frame has actually been blitted to the canvas
+         *  (readiness flips out of `absent`/`waiting`). Keeps the
+         *  panel from looking dead during a multi-second indexing
+         *  pass on a fresh MCAP open. */}
+        {!firstFrameReady && (
+          <div
+            className={styles.loading}
+            data-testid="video-panel-loading"
+            role="status"
+            aria-live="polite"
           >
-            retry
-          </button>
-        </div>
-      )}
+            <div className={styles.spinner} aria-hidden="true" />
+            <span>Decoding video…</span>
+          </div>
+        )}
+        {/* Issue #2 — inline stalled badge. Inclusion-list rendering:
+         *  only the "stalled" state surfaces this UI; "waiting" is the
+         *  Transport's responsibility (the orange dot next to play). */}
+        {readyState === "stalled" && (
+          <div
+            className={styles.stalledBadge}
+            data-testid="video-panel-stalled-badge"
+            role="status"
+          >
+            <span>stream stalled</span>
+            <button
+              type="button"
+              className={styles.stalledRetry}
+              data-testid="video-panel-stalled-retry"
+              onClick={onRetry}
+            >
+              retry
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

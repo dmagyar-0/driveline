@@ -2,71 +2,165 @@
   position: relative;
   width: 100%;
   height: 100%;
+  background: var(--color-bg-1);
+  padding: var(--sp-4);
+  box-sizing: border-box;
+  display: flex;
+}
+
+/* Issue #18 — explicit video frame. A 1px inner border plus a subtle
+ * inset highlight separates the dashcam region from the surrounding
+ * dark chrome. The frame is just the wrapper; we never modify the
+ * decoded pixels. */
+.frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
   background: var(--color-bg-0);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 1px 3px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
 }
 
 .canvas {
   width: 100%;
   height: 100%;
   display: block;
-  /* Preserve the source aspect ratio when the panel is resized; the panel
-   * background (--color-bg-0 / black) shows through as letterbox bars. */
+  /* Preserve the source aspect ratio when the panel is resized; the
+   * frame background (--color-bg-0) shows through as letterbox bars. */
   object-fit: contain;
 }
 
+/* Issue #19 — HUD pill. Reads against arbitrary video pixels, so the
+ * background needs to be opaque-ish, blurred where supported, and the
+ * typography clearly chrome-not-content. */
 .hudToggle {
   position: absolute;
-  top: 6px;
-  right: 6px;
+  top: var(--sp-4);
+  right: var(--sp-4);
   z-index: 2;
-  padding: 2px 6px;
+  padding: var(--sp-2) var(--sp-5);
   font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
   font-family: var(--font-mono);
-  background: var(--scrim-toggle);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  background: rgba(0, 0, 0, 0.6);
   color: var(--color-fg-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-pill);
   cursor: pointer;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: color var(--motion-base), border-color var(--motion-base),
+    background var(--motion-base);
+}
+
+.hudToggle:hover {
+  color: var(--color-fg-1);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.hudToggle:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
 
 .hudToggle[aria-pressed="true"] {
-  border-color: var(--color-fg-5);
+  background: rgba(249, 115, 22, 0.18);
+  border-color: var(--color-accent-orange);
   color: var(--color-fg-1);
 }
 
 .hud {
   position: absolute;
-  top: 30px;
-  right: 6px;
+  top: calc(var(--sp-4) + var(--sp-9) + var(--sp-1));
+  right: var(--sp-4);
   z-index: 2;
-  padding: 6px 8px;
-  background: var(--scrim-hud);
+  padding: var(--sp-5) var(--sp-6);
+  background: rgba(0, 0, 0, 0.72);
   color: var(--color-fg-2);
-  font: 11px/1.35 ui-monospace, Menlo, monospace;
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-4);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
   pointer-events: none;
   white-space: pre;
+  font-variant-numeric: tabular-nums;
+  min-width: 14rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 
-/* Subtle always-on stats badge in the bottom-right corner. Reads from
- * the same HUD snapshot the toggleable overlay above shows; this strip
- * is just the at-a-glance subset (drops, blit lag, queue depth). */
+/* Issue #20 — timestamp burn-in. Bottom-left of the frame so it
+ * doesn't fight the HUD pill (top-right) or the centered stalled
+ * badge. Always-on while a session is loaded; cleared by the rAF
+ * loop when `globalRange === null`. Tabular numerals so the digits
+ * don't jitter horizontally while playing. */
+.timestamp {
+  position: absolute;
+  bottom: var(--sp-4);
+  left: var(--sp-4);
+  z-index: 2;
+  padding: var(--sp-2) var(--sp-5);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--color-fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  line-height: 1.2;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-3);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  user-select: none;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  white-space: nowrap;
+  /* Empty content (no fixture loaded) collapses the element so the
+   * border isn't visible as a stray rectangle. */
+  min-height: 1.2em;
+}
+
+.timestamp:empty {
+  display: none;
+}
+
+/* Subtle stats badge in the bottom-right corner. Reads from the same
+ * HUD snapshot the toggleable overlay above shows; this strip is the
+ * at-a-glance subset (drops, blit lag, queue depth). Issue #21 — the
+ * stats element is `hidden` from the markup by default; the rAF blit
+ * loop unhides it when the HUD toggle is on or when something has
+ * gone wrong. That kills the cryptic "drop 0 lag 51m q 12/16" bleed
+ * that used to show during normal playback. */
 .stats {
   position: absolute;
-  bottom: 6px;
-  right: 6px;
+  bottom: var(--sp-4);
+  right: var(--sp-4);
   z-index: 2;
-  padding: 2px 6px;
-  background: var(--scrim-hud);
-  color: var(--color-fg-5);
-  font: 10px/1.35 var(--font-mono, ui-monospace, Menlo, monospace);
-  border-radius: var(--radius-3, 3px);
+  padding: var(--sp-2) var(--sp-5);
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--color-fg-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  line-height: var(--lh-snug);
+  border-radius: var(--radius-3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   pointer-events: none;
   user-select: none;
   white-space: nowrap;
-  opacity: 0.7;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0.85;
+  transition: opacity var(--motion-base), color var(--motion-base);
 }
 
 .stats:hover {
@@ -75,42 +169,96 @@
 
 .statsWarn {
   color: var(--color-error-dark);
+  border-color: rgba(255, 138, 92, 0.4);
   opacity: 1;
+}
+
+/* Issue #33 — Decoding affordance. Centered overlay shown until the
+ * first frame is blitted to the canvas (readiness flips out of
+ * `absent`/`waiting`). Keeps the panel from looking dead during the
+ * decoder open/seek pass. */
+.loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-5);
+  background: rgba(0, 0, 0, 0.5);
+  color: var(--color-fg-2);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 2px solid rgba(255, 255, 255, 0.12);
+  border-top-color: var(--color-accent-orange);
+  border-radius: 50%;
+  animation: video-panel-spin 0.8s linear infinite;
+}
+
+@keyframes video-panel-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: none;
+    border-top-color: var(--color-fg-4);
+  }
 }
 
 /* Issue #2 — per-panel "stream stalled" badge. Surfaced when the
  * readiness registry escalates a panel from "waiting" to "stalled"
- * (decoder alive but producing no new frames for >5 s). Centered so it
- * doesn't fight the bottom-right stats strip; uses the error tint so
- * it reads as a problem at a glance. */
+ * (decoder alive but producing no new frames for >5 s). Centered so
+ * it doesn't fight the bottom-right stats strip; uses the error tint
+ * so it reads as a problem at a glance. */
 .stalledBadge {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 3;
+  z-index: 4;
   display: flex;
   align-items: center;
-  gap: var(--sp-3, 6px);
-  padding: 6px 10px;
-  background: var(--scrim-hud);
+  gap: var(--sp-5);
+  padding: var(--sp-5) var(--sp-7);
+  background: rgba(0, 0, 0, 0.72);
   color: var(--color-error-dark);
   border: 1px solid var(--color-error-dark);
-  border-radius: var(--radius-3, 3px);
-  font: var(--fs-11) / 1.35 var(--font-mono, ui-monospace, Menlo, monospace);
+  border-radius: var(--radius-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  line-height: var(--lh-snug);
   pointer-events: auto;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .stalledRetry {
   background: transparent;
   color: var(--color-fg-2);
   border: 1px solid var(--color-fg-4);
-  border-radius: var(--radius-3, 3px);
+  border-radius: var(--radius-3);
   font: inherit;
-  padding: 2px 6px;
+  padding: var(--sp-1) var(--sp-5);
   cursor: pointer;
 }
 
 .stalledRetry:hover {
   background: var(--color-bg-6);
+}
+
+.stalledRetry:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
 }
