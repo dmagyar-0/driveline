@@ -86,6 +86,14 @@ CI, and tests work without `wasm-pack` — don't add it to `.gitignore`.
 - WebCodecs is **required** for video (Chrome/Edge 130+, Firefox 130+).
   Safari is unsupported by design; `unsupportedSplash.ts` handles detection.
 
+## Working style
+
+- **Convert vague asks into verifiable goals before coding.** "Add validation"
+  → write tests for invalid inputs, then make them pass. "Fix the bug" → write
+  a test that reproduces it, then make it pass. "Refactor X" → confirm the
+  same tests pass before and after. Strong success criteria let you loop
+  without checking back; weak ones ("make it work") force rework.
+
 ## Testing & verification
 
 - For UI changes, **run `pnpm dev` and exercise the feature in the browser**
