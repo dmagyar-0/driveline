@@ -1,0 +1,163 @@
+/* Phase 7+ · Per-panel tab chrome.
+ *
+ * Layout: [kind icon] [name | input] [actions cluster]
+ * The whole row is draggable (FlexLayout owns the surrounding tab
+ * surface). The icon and name area use `cursor: grab` to advertise
+ * that. The actions cluster reverts to `cursor: pointer` per-button.
+ *
+ * Buttons are 24×24 hit targets with 14px glyphs — the accessibility
+ * floor for icon-only chrome. Larger than the 22-px previous size,
+ * still snug enough that the strip doesn't bloat. Hover surfaces a
+ * subtle background fill so the buttons read as graspable. */
+.header {
+  /* Per-kind accent colour — set inline on the wrapper. */
+  --panel-accent: var(--color-border-hover);
+
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  font-size: var(--fs-13);
+  color: inherit;
+  padding: 0 var(--sp-2);
+  /* Tab strip is the drag surface; advertise it. */
+  cursor: grab;
+}
+
+.header:active {
+  cursor: grabbing;
+}
+
+/* Per-panel-kind accent tokens — chrome only, kept distinct from the
+ * plot palette (--plot-1..8). Subtle, dark-mode tuned. */
+.header[data-panel-kind="video"] {
+  --panel-accent: #38bdf8; /* sky */
+}
+.header[data-panel-kind="plot"] {
+  --panel-accent: #a78bfa; /* violet */
+}
+.header[data-panel-kind="map"] {
+  --panel-accent: #34d399; /* emerald */
+}
+.header[data-panel-kind="scene"] {
+  --panel-accent: #fbbf24; /* amber */
+}
+.header[data-panel-kind="table"] {
+  --panel-accent: #9ca3af; /* slate */
+}
+.header[data-panel-kind="enum"] {
+  --panel-accent: #f472b6; /* pink */
+}
+
+/* The 2-px accent band sits under the tab text. It reads as a quiet
+ * identity marker, not a Christmas tree — kept at 40% opacity so it
+ * doesn't compete with the plot series accents inside the panel. */
+.header::after {
+  content: "";
+  position: absolute;
+  left: var(--sp-2);
+  right: var(--sp-2);
+  bottom: -1px;
+  height: 2px;
+  background: var(--panel-accent);
+  opacity: 0.4;
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.header.focused::after {
+  opacity: 1;
+}
+
+.kindIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--panel-accent);
+  flex: 0 0 auto;
+}
+
+.name {
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 20ch;
+  /* Inherit grab so the title participates in the drag affordance. */
+  cursor: inherit;
+  /* Avoid native double-click text selection — we use double-click
+   * as our maximize/rename gesture. */
+  user-select: none;
+}
+
+.focused .name {
+  color: var(--color-fg-1);
+}
+
+.nameInput {
+  font: inherit;
+  font-weight: var(--fw-medium);
+  background: var(--color-bg-2);
+  color: var(--color-fg-1);
+  border: 1px solid var(--color-border-hover);
+  border-radius: var(--radius-3);
+  padding: 1px var(--sp-3);
+  width: 18ch;
+  outline: none;
+  cursor: text;
+}
+
+.nameInput:focus {
+  border-color: var(--color-accent-blue);
+  box-shadow: 0 0 0 1px var(--color-accent-blue);
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: var(--sp-3);
+}
+
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-4);
+  border-radius: var(--radius-3);
+  cursor: pointer;
+  padding: 0;
+  transition:
+    background-color var(--motion-fast),
+    color var(--motion-fast);
+}
+
+.actionBtn:hover {
+  background: var(--color-bg-5);
+  color: var(--color-fg-2);
+}
+
+.actionBtn:active {
+  background: var(--color-bg-6);
+}
+
+.actionBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* The close button gets a danger-tinted hover so it visually
+ * distinguishes itself from the rest of the cluster — addresses the
+ * "two ×" review point: the panel close is the destructive one,
+ * stock FlexLayout's tabset close (still present at the strip's
+ * right edge) is the only other ×. */
+.actionBtnDanger:hover {
+  background: rgba(178, 58, 0, 0.18);
+  color: var(--color-error-dark);
+}
