@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colorFor, PLOT_PALETTE } from "./palette";
+import { colorFor, PLOT_PALETTE, MAX_PLOT_SERIES } from "./palette";
 
 describe("colorFor", () => {
   it("returns a colour from the palette", () => {
@@ -30,5 +30,20 @@ describe("colorFor", () => {
 
   it("handles the empty id without throwing", () => {
     expect(PLOT_PALETTE).toContain(colorFor(""));
+  });
+
+  it("has a palette length matching the plot-series cap", () => {
+    // The PlotPanel limits a panel to 8 channels (MAX_PLOT_SERIES) so the
+    // palette is sized to give every channel its own slot at the cap.
+    expect(PLOT_PALETTE).toHaveLength(MAX_PLOT_SERIES);
+  });
+
+  it("every palette colour is a 6-digit hex code", () => {
+    // The chip swatch is rendered with `background: colorFor(id)` and the
+    // uPlot stroke uses the same string. Both consumers need a canonical
+    // CSS colour; reject anything that drifted out of `#RRGGBB`.
+    for (const c of PLOT_PALETTE) {
+      expect(c).toMatch(/^#[0-9a-fA-F]{6}$/);
+    }
   });
 });
