@@ -47,7 +47,10 @@
 }
 
 .sourceKind {
-  color: var(--color-fg-6);
+  /* a11y · `--color-fg-6` (#666) on `--color-bg-3` (#151515) is
+   * only ~3.3:1, below the WCAG 4.5:1 floor for 12 px body text.
+   * Use `--color-fg-5` (#888) for ~5.6:1. */
+  color: var(--color-fg-5);
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
