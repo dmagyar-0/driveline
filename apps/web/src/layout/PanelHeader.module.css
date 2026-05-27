@@ -19,13 +19,51 @@
   gap: var(--sp-4);
   font-size: var(--fs-13);
   color: inherit;
-  padding: 0 var(--sp-2);
+  /* Iter5 · the left-edge accent inset on the focused panel needs a
+   * non-zero left padding so the 2-px stripe doesn't kiss the kind
+   * icon. The header is the entire drag surface; padding bumps the
+   * content right without changing the FlexLayout tab button box. */
+  padding: 0 var(--sp-2) 0 var(--sp-3);
   /* Tab strip is the drag surface; advertise it. */
   cursor: grab;
+  /* Iter5 · focused state paints a subtle accent wash under the
+   * header so active vs inactive isn't a 1-px underline alone. The
+   * default is transparent; .focused promotes it (see below). The
+   * transition kept short so tab-switching reads as immediate. */
+  background-color: transparent;
+  transition: background-color var(--motion-fast);
 }
 
 .header:active {
   cursor: grabbing;
+}
+
+/* Iter5 · the unmistakable "this is the active panel" cue cluster.
+ *
+ * Three coordinated affordances replace the previous lone 2-px
+ * underline: (1) a 2-px accent left-edge inset, (2) a 4 % accent
+ * background wash, (3) full-opacity title text (see `.focused .name`).
+ * The inset uses the per-kind `--panel-accent` colour so the cue is
+ * tied to the panel's identity, not generic blue. Inactive tabs have
+ * no left inset, no wash, and a dimmer (but ≥4.5:1) title colour. */
+.header.focused {
+  background-color: color-mix(
+    in srgb,
+    var(--panel-accent) 8%,
+    transparent
+  );
+}
+
+.header.focused::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--panel-accent);
+  border-radius: 1px;
+  pointer-events: none;
 }
 
 /* Per-panel-kind accent tokens — chrome only, kept distinct from the

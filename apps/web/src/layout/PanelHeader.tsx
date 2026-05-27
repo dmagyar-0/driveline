@@ -170,6 +170,7 @@ export function PanelHeader({
       className={`${styles.header} ${isFocused ? styles.focused : ""}`}
       data-panel-id={panelId}
       data-panel-kind={kind ?? "unknown"}
+      data-focused={isFocused ? "true" : "false"}
       style={accentStyle}
       onPointerDown={onHeaderPointerDown}
     >

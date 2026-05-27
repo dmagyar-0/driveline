@@ -292,4 +292,38 @@ describe("PanelHeader", () => {
     const header = container.querySelector('[data-panel-id="video-1"]');
     expect(header?.getAttribute("data-panel-kind")).toBe("video");
   });
+
+  // Iter5 · active vs inactive identity is no longer carried by a 1-px
+  // underline alone. The wrapper now stamps `data-focused="true"` so
+  // CSS can layer (a) a 2-px accent left-edge inset, (b) an 8 % accent
+  // wash, and (c) a brighter title — and so AT / tests can read the
+  // state without parsing hashed module class names. The audit point
+  // was "active state must be unmistakable"; the data attribute is the
+  // testable contract.
+  it("stamps data-focused to advertise the active panel state", () => {
+    const { model } = makeStubModel();
+    const { container, rerender } = render(
+      <PanelHeader
+        model={model}
+        panelId="plot-1"
+        tabsetId="ts-1"
+        name="A"
+        kind="plot"
+        isFocused={false}
+      />,
+    );
+    const header = container.querySelector('[data-panel-id="plot-1"]');
+    expect(header?.getAttribute("data-focused")).toBe("false");
+    rerender(
+      <PanelHeader
+        model={model}
+        panelId="plot-1"
+        tabsetId="ts-1"
+        name="A"
+        kind="plot"
+        isFocused
+      />,
+    );
+    expect(header?.getAttribute("data-focused")).toBe("true");
+  });
 });
