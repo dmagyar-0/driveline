@@ -30,21 +30,31 @@
   margin-top: auto;
   position: sticky;
   bottom: 0;
-  background: var(--color-bg-2);
+  background: var(--bg-chrome);
   border-top: 1px solid var(--color-border-subtle);
   font-family: var(--font-sans);
   font-size: var(--fs-12);
   color: var(--color-fg-3);
   padding: var(--sp-4) var(--sp-6) var(--sp-4);
-  gap: var(--sp-3);
+  /* iter8 · scrub row + playback row read as one composite control.
+   * The gap is gone; vertical rhythm is supplied by the .row's top
+   * hairline (below) so the eye binds the two sections together. */
+  gap: var(--sp-2);
   /* Anchors the absolutely-positioned shortcuts overlay. */
   position: sticky;
 }
 
+/* iter8 · the playback row sits BELOW the scrub track on the same
+ * chrome surface. A 1 px top hairline + a hair of padding-top are the
+ * only visual separation between the two — so the eye reads one
+ * transport bar, not two stacked toolbars. */
 .row {
   display: flex;
   align-items: center;
   gap: var(--sp-5);
+  border-top: 1px solid var(--color-border-subtle);
+  padding-top: var(--sp-3);
+  margin-top: var(--sp-2);
 }
 
 /* DEPRECATED iter3 wrapper — kept for any consumer still referencing
@@ -134,17 +144,22 @@
  * play buttons. Was a flex-column with a label above; now
  * horizontal so it fits the row height of the play group (32 px)
  * without bumping the bar's vertical footprint. Still a labelled
- * control so the meaning isn't carried by glyph alone. */
+ * control so the meaning isn't carried by glyph alone.
+ *
+ * iter8 · drop the dedicated card chrome (was bg-3 + border-subtle).
+ * Sharing the chrome surface with the rest of the transport bar lets
+ * the playback cluster read as ONE composite control instead of a
+ * tray of separate pills. The inner <select> keeps its own button
+ * border so the actionable element remains identifiable. */
 .speedPill {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-2) 0 var(--sp-3);
+  padding: 0;
   height: 32px;
-  border-radius: var(--radius-4);
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-border-subtle);
+  background: transparent;
+  border: none;
 }
 
 /* DEPRECATED iter3 wrapper — iter4 keeps the class hook so the
@@ -473,29 +488,39 @@
 .track:focus-visible .trackStrip {
   outline: var(--focus-ring);
   outline-offset: 2px;
-  border-radius: var(--radius-4);
+  border-radius: var(--radius-3);
 }
 
-/* Iter4 (issue #1) — track background. Stay on the deepest neutral
- * (`--color-bg-3` = #0e0f12) so the unplayed remainder reads as a
- * dark channel against the chrome (`--color-bg-2` = #1c1f24). This
- * is the unplayed side of the contrast pair with `.trackFill`. */
+/* iter8 (lane affordance) — track background lifted ABOVE the chrome
+ * surface so the scrub lane reads as "this is interactive" at a
+ * glance instead of fading into the bar. Iter4 used `--color-bg-3`
+ * (#0e0f12), DARKER than the chrome (`--bg-chrome` = #1c1f24); the
+ * UX critic flagged that as nearly the same value as the panel
+ * background. Now we use `--color-bg-4` (#24272d) — one step
+ * lighter than chrome — so the lane sits on the same elevation as
+ * the buttons in the playback cluster: clearly tappable, clearly
+ * the heartbeat of the bar. The `--color-border-strong` outline
+ * doubles as a shape cue at narrow zoom. */
 .trackStrip {
   position: relative;
   width: 100%;
   height: 24px;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-4);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
   overflow: visible;
-  transition: background var(--motion-fast);
+  transition:
+    background var(--motion-fast),
+    border-color var(--motion-fast);
 }
 
-/* On hover lift only the unplayed area; do not let it approach the
- * fill colour or the played/unplayed boundary will weaken. */
+/* On hover lift the lane another step (bg-5) so the interactive
+ * affordance stays unambiguous; the border tightens to the hover
+ * token. We never approach the trackFill tint, which keeps the
+ * played/unplayed boundary readable. */
 .track:hover .trackStrip {
-  background: #16181d;
-  border-color: var(--color-border-strong);
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
 }
 
 /* Iter5 (issue #1) — toned-down played region. Iter4 used a solid,
@@ -518,7 +543,9 @@
   top: 0;
   height: 100%;
   background: color-mix(in srgb, var(--color-accent-blue) 15%, transparent);
-  border-radius: var(--radius-4) 0 0 var(--radius-4);
+  /* iter8 · match the new strip rounding so the played fill clips to
+   * the lane's left edge cleanly. */
+  border-radius: var(--radius-3) 0 0 var(--radius-3);
   pointer-events: none;
   z-index: 1;
   /* Hairline on the played/unplayed border so the boundary still
@@ -533,7 +560,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  border-radius: var(--radius-4);
+  border-radius: var(--radius-3);
   overflow: hidden;
   z-index: 2;
 }
@@ -564,7 +591,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  border-radius: var(--radius-4);
+  border-radius: var(--radius-3);
   overflow: hidden;
   z-index: 0;
 }
@@ -620,18 +647,19 @@
  * underneath the track. Both render the same multi-line title now
  * (iter4 issue #6 in Transport.tsx).
  *
- * Iter5 (issue #2): width 1 → 2 px, opacity 0.55 → 0.85, colour
- * lifted to fg-2 so the boundary contrasts strongly with both the
- * dark track (#0e0f12) and the played fill (~15 % accent). */
+ * iter8 (segment dividers) — paint the boundary with the canonical
+ * `--color-border-strong` divider token rather than an opacity-faded
+ * fg-2. The new lane background (`--color-bg-4`) makes a fg-white
+ * tick over-shout; the border-strong token reads as "a real
+ * divider" at the same 2 px weight without trying to be a label. */
 .segmentTick {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 2px;
-  background: var(--color-fg-2);
-  opacity: 0.85;
+  background: var(--color-border-strong);
   transform: translateX(-1px);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
 /* Spinner shown near the cursor while a seek waits on a cold sample fetch.
