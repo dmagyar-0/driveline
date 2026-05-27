@@ -31,6 +31,12 @@ export interface ChipOverflowProps {
   onToggle: () => void;
   onClose: () => void;
   onRemove: (id: string) => void;
+  /** Iter5 issue #7 — start index of the *first* hidden channel in
+   *  the parent's bound-channel list, plus the total count. Together
+   *  they let each popover chip render its dash pattern consistent
+   *  with the in-row chips. */
+  hiddenStartIndex?: number;
+  totalSeriesCount?: number;
 }
 
 export function ChipOverflow({
@@ -40,6 +46,8 @@ export function ChipOverflow({
   onToggle,
   onClose,
   onRemove,
+  hiddenStartIndex,
+  totalSeriesCount,
 }: ChipOverflowProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -87,12 +95,18 @@ export function ChipOverflow({
           aria-label="Additional bound channels"
           data-testid="plot-chips-overflow-popover"
         >
-          {hiddenChannels.map((c) => (
+          {hiddenChannels.map((c, i) => (
             <ChannelChip
               key={c.id}
               channel={c}
               sourceBadge={badges.get(c.id) ?? ""}
               onRemove={onRemove}
+              seriesIndex={
+                typeof hiddenStartIndex === "number"
+                  ? hiddenStartIndex + i
+                  : undefined
+              }
+              seriesCount={totalSeriesCount}
             />
           ))}
         </div>

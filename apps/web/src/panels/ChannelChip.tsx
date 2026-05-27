@@ -15,7 +15,7 @@
 // take over the panel header.
 
 import type { Channel } from "../state/store";
-import { colorFor, colorForSource } from "./palette";
+import { colorFor, colorForSource, dashForIndex } from "./palette";
 import { fullChannelLabel, shortChannelLabel } from "./channelLabels";
 import styles from "./PlotPanel.module.css";
 
@@ -30,6 +30,12 @@ interface Props {
    *  element stays in place so ResizeObserver-driven measurements
    *  remain consistent. */
   hidden?: boolean;
+  /** Iter5 issue #7 — index within the bound-channel list, used to
+   *  render the dash pattern in the chip swatch. */
+  seriesIndex?: number;
+  /** Iter5 issue #7 — total bound-channel count, gates whether the
+   *  dash pattern kicks in (no dashes below DASH_THRESHOLD). */
+  seriesCount?: number;
 }
 
 export function ChannelChip({
@@ -37,6 +43,8 @@ export function ChannelChip({
   sourceBadge,
   onRemove,
   hidden,
+  seriesIndex,
+  seriesCount,
 }: Props) {
   const full = fullChannelLabel(channel);
   const short = shortChannelLabel(channel);
@@ -63,10 +71,20 @@ export function ChannelChip({
         aria-hidden
       />
       <span className={styles.chipBody}>
-        <span
-          className={styles.chipSwatch}
-          style={{ background: colorFor(channel.id) }}
-          aria-hidden
+        {/* Iter5 issue #7 — chip swatch now renders the trace's dash
+            pattern (when active) so the chip reads exactly like the
+            plotted line. The swatch is an SVG line with the same colour
+            + dash array as the uPlot series. Below the dash threshold
+            (4 traces) it falls back to a solid colour line, matching
+            the trace. */}
+        <ChipSwatch
+          color={colorFor(channel.id)}
+          dash={
+            typeof seriesIndex === "number" && typeof seriesCount === "number"
+              ? dashForIndex(seriesIndex, seriesCount)
+              : []
+          }
+          data-testid={`chip-swatch-${channel.id}`}
         />
         <span className={styles.chipLabel}>{short}</span>
         {channel.unit && (
@@ -92,5 +110,47 @@ export function ChannelChip({
         </button>
       </span>
     </span>
+  );
+}
+
+/** Iter5 issue #7 — chip swatch that mirrors the trace's stroke
+ *  pattern. Renders as a 10×10 SVG with a single horizontal stroke
+ *  through the middle; `dash` is the uPlot-style `[on, off, …]`
+ *  pixel array (empty array → solid). The colour matches the trace
+ *  exactly so the chip and the line agree on both hue *and* texture.
+ *
+ *  Kept inline in this file because it's the only consumer; promoting
+ *  it would force a separate test file for what is effectively one
+ *  SVG path. */
+interface ChipSwatchProps {
+  color: string;
+  dash: readonly number[];
+  "data-testid"?: string;
+}
+function ChipSwatch({
+  color,
+  dash,
+  "data-testid": testId,
+}: ChipSwatchProps) {
+  const dashAttr = dash.length > 0 ? dash.join(" ") : undefined;
+  return (
+    <svg
+      className={styles.chipSwatch}
+      viewBox="0 0 10 10"
+      aria-hidden
+      data-testid={testId}
+      data-dash={dashAttr ?? ""}
+    >
+      <line
+        x1={0}
+        y1={5}
+        x2={10}
+        y2={5}
+        stroke={color}
+        strokeWidth={2.5}
+        strokeDasharray={dashAttr}
+        strokeLinecap="butt"
+      />
+    </svg>
   );
 }

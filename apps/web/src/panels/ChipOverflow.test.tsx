@@ -126,6 +126,32 @@ describe("<ChipOverflow />", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("propagates dash-pattern indices to popover chips (iter5 #7)", () => {
+    // With 5 total series and 3 hidden, the hidden chips occupy
+    // indices 2..4 of the bound list. The chip at index 2 should
+    // wear the dotted pattern (DASH_PATTERNS[2]).
+    const channels = [
+      mkChannel({ id: "h0" }),
+      mkChannel({ id: "h1" }),
+      mkChannel({ id: "h2" }),
+    ];
+    const { getByTestId } = render(
+      <ChipOverflow
+        hiddenChannels={channels}
+        badges={new Map()}
+        open
+        onToggle={() => {}}
+        onClose={() => {}}
+        onRemove={() => {}}
+        hiddenStartIndex={2}
+        totalSeriesCount={5}
+      />,
+    );
+    // The first hidden chip = index 2 → DASH_PATTERNS[2] = "2 4".
+    const swatch = getByTestId("chip-swatch-h0") as HTMLElement;
+    expect(swatch.getAttribute("data-dash")).toBe("2 4");
+  });
+
   it("calls onClose when a click lands outside the popover", () => {
     const onClose = vi.fn();
     render(

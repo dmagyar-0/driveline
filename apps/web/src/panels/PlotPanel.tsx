@@ -39,7 +39,7 @@ import type { Channel, SourceMeta, TimeRange } from "../state/store";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
 import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
-import { MAX_PLOT_SERIES, colorFor } from "./palette";
+import { MAX_PLOT_SERIES, colorFor, dashForIndex } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import { ChannelChip } from "./ChannelChip";
 import { ChipOverflow } from "./ChipOverflow";
@@ -713,13 +713,23 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       scales,
       series: [
         {},
-        ...boundChannels.map((c) => ({
-          label: c.name,
-          stroke: colorFor(c.id),
-          width: 1.25,
-          spanGaps,
-          scale: scaleByChannelId.get(c.id) ?? "y",
-        })),
+        // Iter5 issue #7 — at ≥4 traces, cycle dash patterns alongside
+        // the colour palette so two same-colour series (palette wraps
+        // at 8) and colourblind users can disambiguate by pattern. The
+        // `dashForIndex(i, count)` helper returns `[]` (solid) for any
+        // plot with fewer than DASH_THRESHOLD traces.
+        ...boundChannels.map((c, i) => {
+          const dash = dashForIndex(i, boundChannels.length);
+          const opts: uPlot.Series = {
+            label: c.name,
+            stroke: colorFor(c.id),
+            width: 1.25,
+            spanGaps,
+            scale: scaleByChannelId.get(c.id) ?? "y",
+          };
+          if (dash.length > 0) opts.dash = [...dash];
+          return opts;
+        }),
       ],
       axes: axesOpts,
       cursor: { show: false },
@@ -1033,6 +1043,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                   sourceBadge={badges.get(c.id) ?? ""}
                   onRemove={onRemove}
                   hidden={hidden}
+                  seriesIndex={i}
+                  seriesCount={boundChannels.length}
                 />
               );
             })}
@@ -1045,6 +1057,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                   onToggle={() => setOverflowOpen((v) => !v)}
                   onClose={() => setOverflowOpen(false)}
                   onRemove={onRemove}
+                  hiddenStartIndex={visibleChipCount}
+                  totalSeriesCount={boundChannels.length}
                 />
               )}
           </div>

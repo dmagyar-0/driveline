@@ -100,12 +100,16 @@
   flex: 1;
 }
 
+/* Iter5 issue #7 — chip swatch is an SVG so it can render the
+ * series's dash pattern (solid / dashed / dotted / dash-dot) the same
+ * way the line does. The line is centred horizontally in the swatch;
+ * any dash array set on the `<line>` paints exactly as uPlot's. */
 .chipSwatch {
-  width: 0.625rem;
+  width: 0.875rem;
   height: 0.625rem;
-  border-radius: 2px;
   display: inline-block;
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .chipLabel {
