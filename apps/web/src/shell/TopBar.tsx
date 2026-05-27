@@ -1,14 +1,21 @@
 // UX overhaul (issues #15, #16, #17) · Top bar.
 //
-// Structure:
+// Structure (post-iter5 #1):
 //
-//   [ brand zone | center spacer | status zone | divider | help cluster ]
+//   [ brand | session-title (centre, grows) | status zone | divider | help ]
 //
 //   brand zone   — Driveline logo + wordmark. No version string,
 //                  no hover treatment; it does not behave like a nav
 //                  target. (iter2 #1 — version moved to About dialog.)
+//   session zone — iter5 #1: filling the previously empty centre with a
+//                  brief session identity:
+//                    - 0 sources: hint "Drop a recording to begin".
+//                    - 1 source: the file name and the duration (monospaced).
+//                    - 2+ sources: "N sources" + the union duration.
+//                  Centre-aligned, muted colour, truncates with ellipsis
+//                  if the file name is long.
 //   status zone  — sources chip (clickable — opens SourcesPopover),
-//                  system status chip (only while transient).
+//                  system status chip (semantic four-state, iter5 #2).
 //   help cluster — small "i" (About) and "?" (Keyboard shortcuts)
 //                  buttons, separated from the status zone by a vertical
 //                  divider. The "?" is the rightmost top-bar item.
@@ -37,6 +44,7 @@ import { useSession } from "../state/store";
 import { SourcesPopover } from "./SourcesPopover";
 import { AboutDialog } from "./AboutDialog";
 import { ShortcutsOverlay } from "../timeline/ShortcutsOverlay";
+import { formatDurationCoarse } from "../timeline/formatTime";
 import styles from "./TopBar.module.css";
 
 // How long the "Ready" chip stays visible after we transition to ready.
@@ -51,24 +59,98 @@ export interface TopBarProps {
   onOpenSourcesDrawer: () => void;
 }
 
+// iter5 issue #2 — failure-mode status taxonomy.
+//
+// The status chip used to be a binary `ready` ↔ `initialising` flag.
+// That communicated nothing on failure paths (decode crash, corrupt
+// file, low-memory). We now derive a four-state semantic from existing
+// store flags (no store-shape change):
+//
+//   loading   — workers booting, first sources still ingesting.
+//   ready     — green; auto-hides 5 s after settling.
+//   degraded  — open errors persist after at least one source loaded.
+//   error     — open errors and no sources at all (load failed).
+//
+// `degraded` vs `error` is a soft heuristic: if any source DID load
+// (so the user has something to look at) we show yellow `degraded`;
+// if no source loaded but errors are pending, the session is in an
+// `error` state. The chip surfaces an inline "Details" toggle that
+// expands a small list of error names — wired to the same
+// `lastOpenErrors` array the SourcesDrawer reads.
+type DerivedStatus = "loading" | "ready" | "degraded" | "error";
+
+function deriveStatus(
+  ready: boolean,
+  sourceCount: number,
+  errorCount: number,
+): DerivedStatus {
+  if (!ready) return "loading";
+  if (errorCount > 0) return sourceCount > 0 ? "degraded" : "error";
+  return "ready";
+}
+
+const STATUS_WORD: Record<DerivedStatus, string> = {
+  loading: "Initialising",
+  ready: "Ready",
+  degraded: "Degraded",
+  error: "Error",
+};
+
+const STATUS_TITLE: Record<DerivedStatus, string> = {
+  loading: "Workers initialising",
+  ready: "All workers ready",
+  degraded: "Some sources failed to load — session is partial",
+  error: "Decode failed. No sources loaded.",
+};
+
 export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
   // Single-key selectors only (frontend skill).
   const sourceCount = useSession((s) => s.sources.length);
+  const sources = useSession((s) => s.sources);
+  const globalRange = useSession((s) => s.globalRange);
+  const lastOpenErrors = useSession((s) => s.lastOpenErrors);
 
   const sourceLabel = `${sourceCount} source${sourceCount === 1 ? "" : "s"}`;
 
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   const sourcesTriggerId = useId();
+
+  // Derived status from the ready flag + any persistent open errors.
+  // Kept as a single selector boundary so we don't widen the slice.
+  const errorCount = lastOpenErrors.length;
+  const status = deriveStatus(ready, sourceCount, errorCount);
 
   // Coalesce the visible status to a single semantic word; the hidden
   // sibling keeps the load-bearing e2e text.
-  const statusWord = ready ? "Ready" : "Initialising";
+  const statusWord = STATUS_WORD[status];
 
-  // iter3 #2 — the visible status chip auto-hides 5 s after we settle
-  // into the ready state. Any change (ready ↔ busy) re-shows it.
-  // The hidden e2e sentinel below is unaffected.
+  // iter5 issue #1 — session-title summary. The text shown in the
+  // top-bar centre is purely derived from `sources` + `globalRange`.
+  // 0 sources → hint copy; 1 source → file name + duration; 2+ →
+  // `N sources · duration`. Duration uses the coarse formatter
+  // (HH:MM:SS), monospaced, so the eye latches onto it.
+  let sessionPrimary = "";
+  let sessionDuration = "";
+  if (sourceCount === 1) {
+    sessionPrimary = sources[0].name;
+  } else if (sourceCount > 1) {
+    sessionPrimary = `${sourceCount} sources`;
+  }
+  if (globalRange !== null) {
+    sessionDuration = formatDurationCoarse(
+      globalRange.endNs - globalRange.startNs,
+    );
+  }
+  const sessionHint = sourceCount === 0 ? "Drop a recording to begin" : "";
+
+  // iter3 #2 / iter5 #2 — the visible status chip auto-hides 5 s after
+  // we settle into the *ready* state. Any other state (loading,
+  // degraded, error) stays sticky — failure modes are the whole point
+  // of the chip and the user needs to see them. The hidden e2e
+  // sentinel below is unaffected.
   const [statusVisible, setStatusVisible] = useState(true);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -78,7 +160,12 @@ export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
     }
     // Always show the chip immediately on a state change.
     setStatusVisible(true);
-    if (ready) {
+    // Collapse any open error-detail panel when we leave the
+    // degraded/error states so it doesn't dangle.
+    if (status !== "degraded" && status !== "error") {
+      setErrorDetailsOpen(false);
+    }
+    if (status === "ready") {
       timerRef.current = setTimeout(() => {
         setStatusVisible(false);
         timerRef.current = null;
@@ -90,7 +177,26 @@ export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
         timerRef.current = null;
       }
     };
-  }, [ready]);
+  }, [status]);
+
+  // iter5 #2 — map derived status → CSS modifier so we don't ship four
+  // boolean class twiddles in JSX.
+  const statusClass =
+    status === "ready"
+      ? styles.statusReady
+      : status === "loading"
+        ? styles.statusBusy
+        : status === "degraded"
+          ? styles.statusDegraded
+          : styles.statusError;
+  const dotClass =
+    status === "ready"
+      ? styles.dotReady
+      : status === "loading"
+        ? styles.dotBusy
+        : status === "degraded"
+          ? styles.dotDegraded
+          : styles.dotError;
 
   return (
     <header className={styles.bar} data-testid="topbar">
@@ -109,8 +215,45 @@ export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
         <span className={styles.wordmark}>driveline</span>
       </div>
 
-      {/* Status zone (issue #16, iter3 #2) — sources + status chips
-       *  share one pill shape and one baseline. The topbar cursor
+      {/* Session zone (iter5 #1) — fills the previously empty centre with
+       *  the current session identity. Pure-derived from `sources` +
+       *  `globalRange`; no state changes. Truncates with ellipsis so a
+       *  long filename never crowds the help cluster. */}
+      <div
+        className={styles.session}
+        data-testid="topbar-session-title"
+        aria-live="polite"
+      >
+        {sessionPrimary !== "" ? (
+          <>
+            <span
+              className={styles.sessionPrimary}
+              title={sessionPrimary}
+              data-testid="topbar-session-primary"
+            >
+              {sessionPrimary}
+            </span>
+            {sessionDuration !== "" ? (
+              <span
+                className={styles.sessionDuration}
+                data-testid="topbar-session-duration"
+              >
+                {sessionDuration}
+              </span>
+            ) : null}
+          </>
+        ) : (
+          <span
+            className={styles.sessionHint}
+            data-testid="topbar-session-hint"
+          >
+            {sessionHint}
+          </span>
+        )}
+      </div>
+
+      {/* Status zone (issue #16, iter3 #2, iter5 #2) — sources + status
+       *  chips share one pill shape and one baseline. The topbar cursor
        *  readout is gone: the transport bar carries the load-bearing
        *  cursor display. */}
       <div className={styles.status}>
@@ -150,27 +293,86 @@ export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
           </span>
         </button>
 
-        {/* The visible status chip auto-hides after ready-idle (iter3 #2).
-         *  We keep it mounted-but-hidden via a CSS modifier so AT users
-         *  with assistive focus already on it don't lose context. */}
+        {/* The visible status chip (iter5 #2): four states share the same
+         *  pill chrome with a colour-coded dot + word. Only `ready`
+         *  auto-hides — loading / degraded / error are sticky because
+         *  surfacing failures is the whole point. The error state adds
+         *  a "Details" toggle that expands a list of recent error names. */}
         <div
-          className={`${styles.statusChip} ${
-            ready ? styles.statusReady : styles.statusBusy
-          } ${statusVisible ? "" : styles.statusHidden}`}
+          className={`${styles.statusChip} ${statusClass} ${statusVisible ? "" : styles.statusHidden}`}
           role="status"
           aria-live="polite"
           aria-hidden={statusVisible ? undefined : true}
-          title={ready ? "All workers ready" : "Workers initialising"}
+          title={STATUS_TITLE[status]}
           data-testid="status-chip"
+          data-status={status}
         >
           <span
-            className={`${styles.statusDot} ${
-              ready ? styles.dotReady : styles.dotBusy
-            }`}
+            className={`${styles.statusDot} ${dotClass}`}
             aria-hidden="true"
           />
           <span className={styles.statusWord}>{statusWord}</span>
+          {(status === "error" || status === "degraded") &&
+          errorCount > 0 ? (
+            <button
+              type="button"
+              className={styles.statusDetailsBtn}
+              aria-expanded={errorDetailsOpen}
+              aria-controls="status-details"
+              onClick={() => setErrorDetailsOpen((v) => !v)}
+              data-testid="status-details-toggle"
+              title={`${errorCount} error${errorCount === 1 ? "" : "s"} — click to ${
+                errorDetailsOpen ? "hide" : "show"
+              } details`}
+            >
+              {errorDetailsOpen ? "Hide" : "Details"}
+            </button>
+          ) : null}
         </div>
+
+        {/* Inline details flyout for the failure states. Anchored beneath
+         *  the chip; outside-click and Escape do not dismiss it — the
+         *  same toggle button collapses it. Wired to `lastOpenErrors` so
+         *  it stays useful even before a richer per-channel decoder
+         *  status lands in the store. */}
+        {errorDetailsOpen &&
+        (status === "error" || status === "degraded") &&
+        lastOpenErrors.length > 0 ? (
+          <div
+            id="status-details"
+            className={styles.statusDetails}
+            role="region"
+            aria-label="Recent open errors"
+            data-testid="status-details"
+          >
+            <ul className={styles.statusDetailsList}>
+              {lastOpenErrors.slice(0, 5).map((err, i) => (
+                <li
+                  key={`${err.name}-${i}`}
+                  className={styles.statusDetailsRow}
+                >
+                  <span
+                    className={styles.statusDetailsName}
+                    title={err.name}
+                  >
+                    {err.name}
+                  </span>
+                  <span
+                    className={styles.statusDetailsReason}
+                    title={err.reason}
+                  >
+                    {err.reason}
+                  </span>
+                </li>
+              ))}
+              {lastOpenErrors.length > 5 ? (
+                <li className={styles.statusDetailsMore}>
+                  +{lastOpenErrors.length - 5} more in the Sources panel
+                </li>
+              ) : null}
+            </ul>
+          </div>
+        ) : null}
 
         {/* Screen-reader / e2e sentinel — preserves the literal text
          *  ~14 Playwright specs assert against. Visually hidden.

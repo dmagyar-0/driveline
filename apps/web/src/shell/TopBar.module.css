@@ -1,8 +1,8 @@
 /* UX overhaul (issues #15 #16 #17) — top bar.
  *
- * Layout:
+ * Layout (iter5 #1):
  *
- *   [brand]            (auto)          [status zone] | [help cluster]
+ *   [brand] [session-title (grows, centred)] [status zone] | [help cluster]
  *
  * The brand zone has no interactive treatment so it doesn't suggest
  * navigation. The status zone uses a unified pill shape for both the
@@ -17,6 +17,19 @@
  *   - The status chip auto-hides after ready-idle (`.statusHidden`).
  *   - A vertical divider separates the status zone from the help
  *     cluster (`.help` already has `border-left`; pulled inward).
+ *
+ * iter5 #1: a `.session` block fills the previously empty centre with
+ *           the current session identity (file name + duration). It
+ *           grows with `flex: 1` so it dominates the bar and centres
+ *           its content with `justify-content: center`. Long names
+ *           ellipsis-truncate via `min-width: 0` + `overflow: hidden`.
+ *
+ * iter5 #2: status chip taxonomy widened from binary ready/busy to
+ *           four colour-coded states (loading / ready / degraded /
+ *           error). Each carries its own dot colour and reuses the
+ *           existing pill chrome. An optional inline "Details" toggle
+ *           expands a `.statusDetails` flyout under the chip for the
+ *           failure states.
  */
 
 .bar {
@@ -58,13 +71,64 @@
   letter-spacing: var(--tracking-tight);
 }
 
+/* Session zone (iter5 #1) ------------------------------------- */
+
+/* Fills the centre. `flex: 1 1 auto` lets it consume slack between the
+ * brand and the status zone; `justify-content: center` keeps the text
+ * centred regardless of the chip cluster's width.
+ *
+ * `min-width: 0` is critical so the inner `.sessionPrimary` can apply
+ * `text-overflow: ellipsis` instead of forcing the flex parent to grow
+ * past the row. */
+.session {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: var(--sp-4);
+  /* Hard width cap so the file name never gets close enough to the
+   * chip cluster to clip it; the ellipsis takes over earlier. */
+  padding: 0 var(--sp-4);
+  user-select: none;
+}
+
+.sessionPrimary {
+  font-size: var(--fs-13);
+  color: var(--color-fg-3);
+  /* Truncate long names — `min-width: 0` on the parent allows this. */
+  min-width: 0;
+  max-width: 480px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionDuration {
+  font-family: var(--font-mono, ui-monospace, "SF Mono", monospace);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-5);
+  flex: 0 0 auto;
+}
+
+.sessionHint {
+  font-size: var(--fs-12);
+  color: var(--color-fg-6);
+  font-style: italic;
+}
+
 /* Status zone ------------------------------------------------- */
 
 .status {
-  margin-left: auto;
+  /* iter5 #1 — the session block now consumes the centre, so the status
+   * zone no longer needs `margin-left: auto` to push itself right. It
+   * still sits to the right of `.session` because that's its declaration
+   * order in the JSX. */
   display: flex;
   align-items: center;
   gap: var(--sp-5);
+  position: relative;
 }
 
 /* Generic chip used for the "N sources" trigger. */
@@ -157,6 +221,131 @@
 
 .statusBusy .statusWord {
   color: var(--color-fg-2);
+}
+
+/* iter5 #2 — degraded / error semantic states.
+ *
+ * `degraded` = yellow; some sources failed but at least one loaded, so
+ * the session is partial-but-usable. Word colour stays close to fg-2
+ * so the chip reads as informational rather than alarming.
+ *
+ * `error` = red; nothing usable. Word colour matches the dot so the
+ * chip reads as a single alarm cluster. The chip stays sticky (no
+ * auto-hide) so the failure mode is not missed. */
+.statusDegraded {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(234, 179, 8, 0.45);
+}
+
+.statusDegraded .statusWord {
+  color: #eab308;
+}
+
+.dotDegraded {
+  background: #eab308;
+  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.18);
+}
+
+.statusError {
+  background: rgba(220, 38, 38, 0.12);
+  border-color: rgba(220, 38, 38, 0.45);
+}
+
+.statusError .statusWord {
+  color: #ef4444;
+  font-weight: var(--fw-semibold);
+}
+
+.dotError {
+  background: #ef4444;
+  box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.22);
+  /* Subtle pulse so the eye picks it up even in peripheral vision. */
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Inline "Details" toggle inside the chip for failure-mode states. */
+.statusDetailsBtn {
+  margin-left: var(--sp-2);
+  height: 18px;
+  padding: 0 var(--sp-3);
+  font: inherit;
+  font-size: var(--fs-11);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  cursor: pointer;
+  transition:
+    background var(--motion-base),
+    color var(--motion-base);
+}
+
+.statusDetailsBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.statusDetailsBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Anchored details flyout under the chip. We render it inside `.status`
+ * (which is `position: relative`) so right-anchoring puts the panel
+ * directly below the chip cluster. */
+.statusDetails {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 320px;
+  max-width: 420px;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-5);
+  box-shadow: var(--shadow-popover);
+  padding: var(--sp-4);
+  color: var(--color-fg-2);
+}
+
+.statusDetailsList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.statusDetailsRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3);
+  border-radius: var(--radius-3);
+  background: var(--color-bg-4);
+  font-size: var(--fs-12);
+}
+
+.statusDetailsName {
+  color: var(--color-fg-2);
+  font-weight: var(--fw-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusDetailsReason {
+  color: var(--color-fg-5);
+  font-size: var(--fs-11);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusDetailsMore {
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
+  padding: var(--sp-2) var(--sp-3);
 }
 
 /* iter3 #2 — the ready chip fades out 5 s after the system settles.
