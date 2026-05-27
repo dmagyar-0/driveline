@@ -65,9 +65,11 @@
 }
 
 .wordmark {
+  /* iter6 · brand wordmark uses role-brand (neutral fg-2) and the
+   * role-based `md` type scale (14 px). */
   font-weight: var(--fw-semibold);
-  font-size: var(--fs-14);
-  color: var(--color-fg-2);
+  font-size: var(--fs-md);
+  color: var(--color-role-brand);
   letter-spacing: var(--tracking-tight);
 }
 
@@ -94,7 +96,9 @@
 }
 
 .sessionPrimary {
-  font-size: var(--fs-13);
+  /* iter6 · uses the role-based `sm` scale (12 px tracks the topbar's
+   * dense rhythm). */
+  font-size: var(--fs-sm);
   color: var(--color-fg-3);
   /* Truncate long names — `min-width: 0` on the parent allows this. */
   min-width: 0;
@@ -106,14 +110,14 @@
 
 .sessionDuration {
   font-family: var(--font-mono, ui-monospace, "SF Mono", monospace);
-  font-size: var(--fs-12);
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
   color: var(--color-fg-5);
   flex: 0 0 auto;
 }
 
 .sessionHint {
-  font-size: var(--fs-12);
+  font-size: var(--fs-sm);
   color: var(--color-fg-6);
   font-style: italic;
 }

@@ -690,7 +690,9 @@
   color: var(--color-fg-1);
   font-family: var(--font-mono);
   font-weight: var(--fw-semibold, 600);
-  font-size: 1rem;
+  /* iter6 · cursor live value sits on the `lg` rung (16 px). Same role
+   * as the playhead badge time. */
+  font-size: var(--fs-lg);
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;

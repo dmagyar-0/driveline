@@ -17,7 +17,8 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-4);
-  font-size: var(--fs-13);
+  /* iter6 · panel header label sits on the `md` rung. */
+  font-size: var(--fs-md);
   color: inherit;
   /* Iter5 · the left-edge accent inset on the focused panel needs a
    * non-zero left padding so the 2-px stripe doesn't kiss the kind

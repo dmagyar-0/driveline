@@ -797,21 +797,26 @@
 }
 
 .playheadBadgeTime {
+  /* iter6 · the cursor live time is the single most-read number in
+   * the app — promote it to the `lg` rung (16 px) so it reads at a
+   * glance from across the screen. The total stays on `md` (14 px)
+   * so the `current / total` pair still reads as a unit but the
+   * current value dominates. */
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-13);
+  font-size: var(--fs-lg);
   font-weight: var(--fw-semibold);
   color: var(--color-fg-1);
   line-height: 1;
 }
 
-/* Iter3 (issue #3) — separator + total share the same font size as
- * the current readout so the eye reads `current / total` as a single
- * pair. The total uses a muted colour so it doesn't compete with the
- * primary number. */
+/* Iter3 (issue #3) — separator + total share the readout rung so the
+ * eye reads `current / total` as a single pair. The total uses a muted
+ * colour so it doesn't compete with the primary number; the separator
+ * stays the smaller `md` rung so the eye lands on the current value. */
 .playheadBadgeSep {
   font-family: var(--font-mono);
-  font-size: var(--fs-13);
+  font-size: var(--fs-md);
   color: var(--color-fg-5);
   line-height: 1;
 }
@@ -819,7 +824,7 @@
 .playheadBadgeTotal {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-13);
+  font-size: var(--fs-md);
   font-weight: var(--fw-medium);
   color: var(--color-fg-4);
   line-height: 1;
