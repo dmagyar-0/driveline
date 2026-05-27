@@ -188,43 +188,45 @@
   background: var(--color-bg-5);
 }
 
-/* iter6 · toggle "on" = active selection (blue), not a primary CTA.
- * Frees orange for the play button + playhead exclusively. */
+/* iter6 → iter7 wave1 · toggle "on" = active selection (blue), not a
+ * primary CTA. Retagged to the dedicated --color-active-blue* tokens
+ * so HUD-active reads as the same hue family as rail-active, focused
+ * drawer rows, and the splitter-in-motion. Frees CTA orange for the
+ * play button + playhead exclusively. */
 .utilBtnActive {
-  background: var(--color-role-active-tint-strong);
-  border-color: var(--color-role-active);
+  background: var(--color-active-blue-bg-strong);
+  border-color: var(--color-active-blue);
   color: var(--color-fg-1);
 }
 
 .utilBtnActive:hover {
-  background: var(--color-role-active-tint-strong);
-  border-color: var(--color-role-active);
+  background: var(--color-active-blue-bg-strong);
+  border-color: var(--color-active-blue);
 }
 
-/* iter6 · "Cropped" is a warning state ("you're missing some pixels"),
- * not a CTA. Move to --color-role-warning (amber) so orange stays a
- * CTA/playhead cue exclusively. The dot still reads as a non-control
- * status indicator. */
+/* iter6 → iter7 wave1 · "Cropped" is a warning state ("you're missing
+ * some pixels"), not a CTA. Retagged to --color-warn-amber* so every
+ * warning surface (chip, dot, badge hover) lands on one amber. */
 .utilBtnWarn {
   cursor: help;
-  color: var(--color-role-warning);
-  border-color: var(--color-role-warning);
-  background: var(--color-role-warning-tint);
+  color: var(--color-warn-amber);
+  border-color: var(--color-warn-amber);
+  background: var(--color-warn-amber-bg);
 }
 
 .utilBtnWarn:hover {
-  background: var(--color-role-warning-tint);
+  background: var(--color-warn-amber-bg);
   color: var(--color-fg-1);
-  border-color: var(--color-role-warning);
+  border-color: var(--color-warn-amber);
 }
 
 .cropDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--color-role-warning);
+  background: var(--color-warn-amber);
   flex: 0 0 auto;
-  box-shadow: 0 0 0 2px var(--color-role-warning-tint);
+  box-shadow: 0 0 0 2px var(--color-warn-amber-bg);
 }
 
 /* --------- compact decode-info chip (iter5 issue #1) ---------
@@ -334,7 +336,9 @@
 }
 
 .badge_warn:hover {
-  border-color: rgba(234, 179, 8, 0.5);
+  /* iter7 wave1 · token, not literal hex — keeps every warning border
+   * on the same amber as the chips. */
+  border-color: var(--color-warn-amber-border);
 }
 
 .badge_bad .dot {
@@ -365,8 +369,9 @@
 }
 
 .badge_buffering .dot {
-  /* iter6 · buffering = warning (amber), not CTA orange. */
-  background: var(--color-role-warning);
+  /* iter6 → iter7 wave1 · buffering = warning (amber), not CTA orange.
+   * Uses --color-warn-amber so it shares a hue with the chip + dot. */
+  background: var(--color-warn-amber);
   animation: video-toolbar-pulse 1.2s ease-in-out infinite;
 }
 

@@ -291,15 +291,22 @@
 }
 
 /* Mixed-units warning chip (issue #3). Same chip shape as a channel
- * chip but no swatch — communicates "this is meta, not a series". */
+ * chip but no swatch — communicates "this is meta, not a series".
+ *
+ * iter7 wave1 · this used a literal #f1c453 (Goldenrod) that pre-dated
+ * the design token system. Move to the dedicated --color-warn-amber*
+ * tokens so the chip shares semantics with the Cropped badge and the
+ * buffering dot. The hex drift is intentional: every warning surface
+ * now reads as the same amber, leaving CTA orange free for the play
+ * button + playhead. */
 .warningChip {
   display: inline-flex;
   align-items: center;
   padding: 2px var(--sp-3);
-  background: rgba(241, 196, 83, 0.12); /* var(--plot-6) tint */
-  border: 1px solid rgba(241, 196, 83, 0.4);
+  background: var(--color-warn-amber-bg);
+  border: 1px solid var(--color-warn-amber-border);
   border-radius: var(--radius-pill);
-  color: #f1c453;
+  color: var(--color-warn-amber);
   font-size: var(--fs-11);
   font-weight: var(--fw-medium);
   white-space: nowrap;
@@ -446,9 +453,11 @@
   font-family: var(--font-mono);
   font-size: var(--fs-10);
   font-weight: var(--fw-semibold, 600);
-  color: #f1c453;
-  background: rgba(241, 196, 83, 0.15);
-  border: 1px solid rgba(241, 196, 83, 0.45);
+  /* iter7 wave1 · matches the chip-bar `.warningChip` above so the
+   * on-canvas pill and the toolbar chip read as the same warning. */
+  color: var(--color-warn-amber);
+  background: var(--color-warn-amber-bg);
+  border: 1px solid var(--color-warn-amber-border);
   border-radius: var(--radius-pill);
   padding: 1px 8px;
   letter-spacing: 0.04em;

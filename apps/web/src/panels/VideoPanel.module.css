@@ -147,12 +147,14 @@
   white-space: nowrap;
 }
 
-/* iter6 · the dropped-frames row lights up amber only when the count
- * climbs above zero. A healthy stream reads as all-neutral so the
- * warning state pops at a glance. */
+/* iter6 → iter7 wave1 · the dropped-frames row lights up amber only
+ * when the count climbs above zero. A healthy stream reads as
+ * all-neutral so the warning state pops at a glance. Uses
+ * --color-warn-amber (the iter7 dedicated alias) so every "this is a
+ * caution, not an action" surface in the app lands on one hue. */
 .hudRow[data-warn="true"] .hudLabel,
 .hudRow[data-warn="true"] .hudValue {
-  color: var(--color-role-warning);
+  color: var(--color-warn-amber);
 }
 
 /* Issue #20 — timestamp burn-in. Bottom-left of the frame so it

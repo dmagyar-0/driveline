@@ -160,8 +160,54 @@
   --color-role-brand: var(--color-fg-2); /* brand wordmark + logo arrow — neutral */
   --color-role-brand-muted: var(--color-fg-4);
 
-  --color-role-warning: #eab308; /* amber — buffering / cropped / partial */
-  --color-role-warning-tint: rgba(234, 179, 8, 0.14);
+  --color-role-warning: #f2b33d; /* amber — buffering / cropped / partial (iter7: lifted from #eab308 for wider gap from CTA orange) */
+  --color-role-warning-tint: rgba(242, 179, 61, 0.14);
+
+  /* iter7 wave1 · "Orange off semantic load" ---------------------
+   *
+   * The iter6 role tokens (cta, cursor, active, focus, brand, warning)
+   * split the legacy `--color-accent-orange` into six jobs, but the
+   * downstream CSS still reaches for `--color-role-warning` for two
+   * semantically distinct uses:
+   *   1) transient buffering / mixed-units / cropped affordances
+   *   2) the "Degraded" status pill in the TopBar (a sticky failure mode)
+   *
+   * Wave 1 introduces dedicated *named* iter7 tokens so each use-site
+   * spells its intent and the next critic pass can tell which surfaces
+   * are "caution chips" vs "this session is partial":
+   *
+   *   --color-warn-amber          warning chips ("Mixed units · 3",
+   *                               Cropped, buffering)
+   *   --color-warn-amber-bg       subtle background tint for the chip
+   *   --color-warn-amber-border   border tint for the chip
+   *   --color-degraded-amber      "Degraded" status pill in TopBar
+   *   --color-active-blue         HUD-active toggle, "this is on"
+   *   --color-active-blue-bg      subtle blue background tint
+   *   --color-brand-neutral       brand wordmark + arrow glyph
+   *
+   * Hex values:
+   *   amber #f2b33d  — warm gold, distinctly NOT orange (#f97316). At
+   *                    L* ~76 it reads as "caution" without competing
+   *                    with the playhead.
+   *   blue  #4d8bff  — matches the iter6 active role so the language
+   *                    "this is on" is one hue across rail, drawer
+   *                    rows, splitter drag, HUD toggle.
+   *   neutral fg-2   — off-white (#e6e8ec), so the wordmark recedes
+   *                    behind the playhead and CTAs.
+   *
+   * All tokens here are *aliases* on the iter6 role tokens so a
+   * downstream rebrand still has a single edit point. */
+  --color-warn-amber: var(--color-role-warning);
+  --color-warn-amber-bg: var(--color-role-warning-tint);
+  --color-warn-amber-border: rgba(242, 179, 61, 0.45);
+  --color-degraded-amber: var(--color-role-warning);
+  --color-degraded-amber-bg: rgba(242, 179, 61, 0.12);
+  --color-degraded-amber-border: rgba(242, 179, 61, 0.45);
+  --color-active-blue: var(--color-role-active);
+  --color-active-blue-bg: var(--color-role-active-tint);
+  --color-active-blue-bg-strong: var(--color-role-active-tint-strong);
+  --color-brand-neutral: var(--color-role-brand);
+  --color-brand-neutral-muted: var(--color-role-brand-muted);
 
   /* Back-compat semantic aliases preserved (iter2 introduced these). */
   --accent-primary: var(--color-role-cta);

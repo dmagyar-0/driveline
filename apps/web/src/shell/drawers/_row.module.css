@@ -40,11 +40,12 @@
 }
 
 .rowActive {
-  /* iter6 · "you are here" rows use --color-role-active (blue), not
-   * the CTA orange. Same cue used by the rail + the focused FlexLayout
-   * tabset so the selection language is consistent across the shell. */
+  /* iter6 → iter7 wave1 · "you are here" rows use --color-active-blue
+   * (the dedicated iter7 alias), not the CTA orange. Same cue used by
+   * the rail + the focused FlexLayout tabset so the selection language
+   * is consistent across the shell. */
   background: var(--color-bg-4);
-  border-left-color: var(--color-role-active);
+  border-left-color: var(--color-active-blue);
   border-radius: 0 var(--radius-4) var(--radius-4) 0;
 }
 

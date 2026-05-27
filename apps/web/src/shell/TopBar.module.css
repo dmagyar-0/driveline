@@ -65,11 +65,13 @@
 }
 
 .wordmark {
-  /* iter6 · brand wordmark uses role-brand (neutral fg-2) and the
-   * role-based `md` type scale (14 px). */
+  /* iter6 → iter7 wave1 · brand wordmark uses the dedicated
+   * --color-brand-neutral (off-white) and the role-based `md` type
+   * scale (14 px). The brand mark deliberately does NOT compete with
+   * the orange playhead or CTA, so the hue is neutral. */
   font-weight: var(--fw-semibold);
   font-size: var(--fs-md);
-  color: var(--color-role-brand);
+  color: var(--color-brand-neutral);
   letter-spacing: var(--tracking-tight);
 }
 
@@ -214,10 +216,11 @@
 }
 
 .dotBusy {
-  /* iter6 · "busy" reads as warning/transient, not a CTA. Move to
-   * --color-role-warning (amber) so orange stays a CTA/playhead cue. */
-  background: var(--color-role-warning);
-  box-shadow: 0 0 0 2px var(--color-role-warning-tint);
+  /* iter6 → iter7 wave1 · "busy" reads as warning/transient, not a CTA.
+   * Uses the dedicated --color-warn-amber* so every transient amber
+   * affordance lands on one hue. */
+  background: var(--color-warn-amber);
+  box-shadow: 0 0 0 2px var(--color-warn-amber-bg);
   animation: pulse 1.4s ease-in-out infinite;
 }
 
@@ -238,18 +241,23 @@
  * `error` = red; nothing usable. Word colour matches the dot so the
  * chip reads as a single alarm cluster. The chip stays sticky (no
  * auto-hide) so the failure mode is not missed. */
+/* iter7 wave1 · the `Degraded` pill used literal #eab308 — same family
+ * as the iter6 warning amber but spelled out of the token system so
+ * the next critic couldn't tell "amber chip" apart from "amber status".
+ * Move to the dedicated --color-degraded-amber* tokens so the intent
+ * (sticky session-level warning) is legible from the CSS. */
 .statusDegraded {
-  background: rgba(234, 179, 8, 0.12);
-  border-color: rgba(234, 179, 8, 0.45);
+  background: var(--color-degraded-amber-bg);
+  border-color: var(--color-degraded-amber-border);
 }
 
 .statusDegraded .statusWord {
-  color: #eab308;
+  color: var(--color-degraded-amber);
 }
 
 .dotDegraded {
-  background: #eab308;
-  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.18);
+  background: var(--color-degraded-amber);
+  box-shadow: 0 0 0 2px var(--color-degraded-amber-bg);
 }
 
 .statusError {
