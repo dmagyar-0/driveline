@@ -65,7 +65,8 @@
    * hex to avoid a self-referential `var()` cycle. Same value as the
    * driveline token. */
   --color-splitter-hover: #3a3a3a;
-  --color-splitter-drag: var(--color-accent-orange);
+  /* iter6 · splitter drag = "selection in motion" → blue, not CTA orange. */
+  --color-splitter-drag: var(--color-role-active);
 }
 
 /* Phase 7+ · tabset border + focused-panel ring.

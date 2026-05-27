@@ -120,10 +120,13 @@
 }
 
 .play {
+  /* iter6 · the play button is one of only two surfaces where orange
+   * lives (the other is the cursor). Retag from the legacy alias to
+   * --color-role-cta so the intent is explicit. */
   width: 40px;
   height: 40px;
   font-size: var(--fs-14);
-  color: var(--color-accent-orange);
+  color: var(--color-role-cta);
   background: var(--color-bg-5);
 }
 
@@ -632,7 +635,11 @@
 }
 
 /* Spinner shown near the cursor while a seek waits on a cold sample fetch.
- * CSS-only rotation; positioned absolutely against `.trackStrip`. */
+ * CSS-only rotation; positioned absolutely against `.trackStrip`.
+ *
+ * iter6 · the spinner annotates the cursor's pending state, so it uses
+ * --color-role-cursor (the orange playhead hue) — same role, same
+ * colour. */
 .fetchSpinner {
   position: absolute;
   top: 50%;
@@ -641,7 +648,7 @@
   margin-left: 14px; /* offset clear of the thumb */
   transform: translateY(-50%);
   border-radius: 50%;
-  border: 2px solid var(--color-accent-orange);
+  border: 2px solid var(--color-role-cursor);
   border-top-color: transparent;
   animation: transport-spin 800ms linear infinite;
   pointer-events: none;
@@ -677,7 +684,9 @@
   bottom: -4px;
   left: 50%;
   width: 3px;
-  background: var(--color-accent-orange);
+  /* iter6 · use the cursor role token. Same hex as before, but the
+   * role name spells "this is the playhead" not "this is some accent". */
+  background: var(--color-role-cursor);
   transform: translateX(-1.5px);
   pointer-events: none;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
@@ -701,7 +710,7 @@
   bottom: calc(100% + 8px);
   transform: translateX(-50%);
   background: var(--color-bg-5);
-  border: 1.5px solid var(--color-accent-orange);
+  border: 1.5px solid var(--color-role-cursor);
   /* Iter4 (issue #3) — the badge can now grow a second line carrying
    * the YYYY-MM-DD date stamp in absolute mode. A pure `radius-pill`
    * makes the two-line layout look like a pill-rectangle hybrid; use
@@ -715,7 +724,7 @@
   pointer-events: none;
   white-space: nowrap;
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--color-accent-orange) 18%, transparent),
+    0 0 0 3px var(--color-role-cursor-tint),
     0 3px 10px rgba(0, 0, 0, 0.7);
   z-index: 6;
 }
@@ -756,7 +765,7 @@
   height: 0;
   border-left: 5px solid transparent;
   border-right: 5px solid transparent;
-  border-top: 5px solid var(--color-accent-orange);
+  border-top: 5px solid var(--color-role-cursor);
 }
 
 /* Iter5 (issue #3) — leader line from the bottom of the cursor badge
@@ -780,7 +789,7 @@
   /* 8 px badge→strip gap + half the 24 px strip (= 12 px) to land on
    * the thumb centre. Match the badge's accent shade. */
   height: 16px;
-  background: var(--color-accent-orange);
+  background: var(--color-role-cursor);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
   pointer-events: none;
   border-radius: 1px;
@@ -828,7 +837,7 @@
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--color-accent-orange);
+  background: var(--color-role-cursor);
   border: 1.5px solid var(--color-fg-1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
   transform: translate(-50%, -50%);
@@ -844,9 +853,11 @@
   height: 11px;
 }
 
-/* Issue #2 — subtle ring while we wait on a video decode. */
+/* Issue #2 — subtle ring while we wait on a video decode. The ring is
+ * a cursor-state cue (not a focus indicator) so it uses the cursor
+ * role token. */
 .thumbWaiting {
-  outline: 2px solid var(--color-accent-orange);
+  outline: 2px solid var(--color-role-cursor);
   outline-offset: 2px;
 }
 
@@ -925,13 +936,14 @@
   line-height: 1.1;
 }
 
-/* Issue #2 — decode-waiting dot in the play-button group. */
+/* Issue #2 — decode-waiting dot in the play-button group. Cursor-state
+ * cue, uses the cursor role token. */
 .decodeWaitingDot {
   display: inline-block;
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--color-accent-orange);
+  background: var(--color-role-cursor);
   margin-left: var(--sp-2, 4px);
   align-self: center;
   animation: decode-pulse 800ms ease-in-out infinite;
@@ -986,6 +998,6 @@
   }
   .fetchSpinner {
     animation: none;
-    border-top-color: var(--color-accent-orange);
+    border-top-color: var(--color-role-cursor);
   }
 }

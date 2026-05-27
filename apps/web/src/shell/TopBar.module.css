@@ -210,8 +210,10 @@
 }
 
 .dotBusy {
-  background: var(--color-accent-orange);
-  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.18);
+  /* iter6 · "busy" reads as warning/transient, not a CTA. Move to
+   * --color-role-warning (amber) so orange stays a CTA/playhead cue. */
+  background: var(--color-role-warning);
+  box-shadow: 0 0 0 2px var(--color-role-warning-tint);
   animation: pulse 1.4s ease-in-out infinite;
 }
 

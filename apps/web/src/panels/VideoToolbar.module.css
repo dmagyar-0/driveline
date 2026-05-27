@@ -188,42 +188,43 @@
   background: var(--color-bg-5);
 }
 
+/* iter6 · toggle "on" = active selection (blue), not a primary CTA.
+ * Frees orange for the play button + playhead exclusively. */
 .utilBtnActive {
-  background: rgba(249, 115, 22, 0.18);
-  border-color: var(--color-accent-orange);
+  background: var(--color-role-active-tint-strong);
+  border-color: var(--color-role-active);
   color: var(--color-fg-1);
 }
 
 .utilBtnActive:hover {
-  background: rgba(249, 115, 22, 0.26);
-  border-color: var(--color-accent-orange);
+  background: var(--color-role-active-tint-strong);
+  border-color: var(--color-role-active);
 }
 
-/* iter5 issue #4 — "Cropped" status chip. Same `.utilBtn` skeleton so
- * the toolbar stays visually consistent, but tinted with the orange
- * accent (matches the rest of the app's "attention without alarm"
- * surface) and carries a small dot so it reads as a status rather
- * than as a button (which it isn't — clicking it does nothing). */
+/* iter6 · "Cropped" is a warning state ("you're missing some pixels"),
+ * not a CTA. Move to --color-role-warning (amber) so orange stays a
+ * CTA/playhead cue exclusively. The dot still reads as a non-control
+ * status indicator. */
 .utilBtnWarn {
   cursor: help;
-  color: var(--color-accent-orange);
-  border-color: var(--color-accent-orange);
-  background: rgba(249, 115, 22, 0.1);
+  color: var(--color-role-warning);
+  border-color: var(--color-role-warning);
+  background: var(--color-role-warning-tint);
 }
 
 .utilBtnWarn:hover {
-  background: rgba(249, 115, 22, 0.18);
+  background: var(--color-role-warning-tint);
   color: var(--color-fg-1);
-  border-color: var(--color-accent-orange);
+  border-color: var(--color-role-warning);
 }
 
 .cropDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--color-accent-orange);
+  background: var(--color-role-warning);
   flex: 0 0 auto;
-  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+  box-shadow: 0 0 0 2px var(--color-role-warning-tint);
 }
 
 /* --------- compact decode-info chip (iter5 issue #1) ---------
@@ -364,7 +365,8 @@
 }
 
 .badge_buffering .dot {
-  background: var(--color-accent-orange);
+  /* iter6 · buffering = warning (amber), not CTA orange. */
+  background: var(--color-role-warning);
   animation: video-toolbar-pulse 1.2s ease-in-out infinite;
 }
 

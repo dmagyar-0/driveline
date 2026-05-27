@@ -86,17 +86,18 @@
   outline-offset: var(--focus-offset);
 }
 
-/* When a drag is over the zone, paint with the accent so the user
- * sees an unambiguous "drop here" affordance. */
+/* When a drag is over the zone, paint with the CTA accent so the
+ * user sees an unambiguous "drop here" affordance. iter6 · retagged
+ * to --color-role-cta (same hex) to spell intent. */
 .dropZoneActive {
-  background: rgba(249, 115, 22, 0.08);
-  border-color: var(--color-accent-orange);
+  background: var(--color-role-cta-tint);
+  border-color: var(--color-role-cta);
   border-style: solid;
   transform: scale(1.01);
 }
 
 .dropZoneActive:hover {
-  background: rgba(249, 115, 22, 0.12);
+  background: var(--color-role-cta-tint-strong);
 }
 
 .icon {
@@ -191,10 +192,10 @@
   font-family: var(--font-sans);
   font-size: var(--fs-12);
   font-weight: var(--fw-medium);
-  color: var(--color-accent-orange);
+  color: var(--color-role-cta);
   background: transparent;
   border: 0;
-  border-bottom: 1px dashed var(--color-accent-orange);
+  border-bottom: 1px dashed var(--color-role-cta);
   border-radius: 0;
   cursor: pointer;
   transition: color var(--motion-base);
@@ -292,10 +293,12 @@
 }
 
 .spinner {
+  /* iter6 · loading spinner uses --color-role-active (blue). Orange
+   * is reserved for the cursor + primary CTA only. */
   width: 14px;
   height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.2);
-  border-top-color: var(--color-accent-orange);
+  border-top-color: var(--color-role-active);
   border-radius: 50%;
   animation: video-empty-spin 0.7s linear infinite;
   display: inline-block;

@@ -1,9 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  
+
   <rect width="64" height="64" rx="10" fill="#0b0b0b"></rect>
-  
+
+  <!--
+    iter6 · "orange on a diet". The logo arrow used #f97316, which made
+    the brand mark compete with the playhead and the play button (the
+    same hue, the same weight). The mark moves to a neutral off-white
+    so orange can be reserved for the cursor + primary CTA.
+  -->
   <rect x="10" y="30" width="44" height="4" rx="2" fill="#2a2a2a"></rect>
-  <rect x="10" y="30" width="22" height="4" rx="2" fill="#f97316"></rect>
-  
-  <path d="M30 18 L42 32 L30 46" fill="none" stroke="#f97316" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter"></path>
+  <rect x="10" y="30" width="22" height="4" rx="2" fill="#e6e8ec"></rect>
+
+  <path d="M30 18 L42 32 L30 46" fill="none" stroke="#e6e8ec" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter"></path>
 </svg>

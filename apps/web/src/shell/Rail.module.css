@@ -76,18 +76,19 @@
   outline-offset: -2px;
 }
 
-/* iter2 #2 — strengthened active state.
- *
- * Active items must read as "you are here" for the full duration the
- * drawer is open. We use three concurrent affordances:
+/* iter6 · "orange on a diet". The active state used the CTA orange,
+ * which made the rail compete with the play button and the playhead
+ * for the eye's attention. The rail-active state moves to the
+ * `--color-role-active` blue — same role as a focused FlexLayout
+ * tabset, so "you are here" reads as one consistent cue across the
+ * shell. Three concurrent affordances still apply:
  *   1. A 3 px accent bar anchored to the rail's left edge so the
  *      "selected" cue persists even when the rail is collapsed and
  *      the label is hidden.
  *   2. A filled background one shade brighter than hover, so the row
  *      doesn't lose contrast when the cursor moves off it.
- *   3. An accent foreground colour (orange) — the same hue used for
- *      the selected FlexLayout tab, so the rail/tab pairing reads as
- *      one selection state. */
+ *   3. An accent foreground (blue) — the only colour cue is hue,
+ *      so the glyph still pops even at 80×56 px. */
 .btn::before {
   content: "";
   position: absolute;
@@ -105,23 +106,23 @@
 
 .active {
   background: var(--color-bg-6);
-  color: var(--color-accent-orange);
+  color: var(--color-role-active);
 }
 
 .active:hover {
   background: var(--color-bg-6);
-  color: var(--color-accent-orange);
+  color: var(--color-role-active);
 }
 
 .active::before {
-  background: var(--color-accent-orange);
+  background: var(--color-role-active);
 }
 
 /* When the rail is collapsed (idle width 48 px) the label fades out
  * but the accent bar + filled icon column should still be obvious.
  * Bumping icon contrast on active makes the glyph itself pop. */
 .active .icon {
-  color: var(--color-accent-orange);
+  color: var(--color-role-active);
 }
 
 /* iter5 #3 — vertical icon/label stack. Icon sits on top of the label so

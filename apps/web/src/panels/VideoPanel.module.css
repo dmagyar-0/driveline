@@ -195,10 +195,13 @@
 }
 
 .spinner {
+  /* iter6 · loading spinner = "in progress", not a CTA. Move off
+   * orange so the play button remains the only orange affordance in
+   * the video panel. Blue matches the active/focus role family. */
   width: 28px;
   height: 28px;
   border: 2px solid rgba(255, 255, 255, 0.12);
-  border-top-color: var(--color-accent-orange);
+  border-top-color: var(--color-role-active);
   border-radius: 50%;
   animation: video-panel-spin 0.8s linear infinite;
 }

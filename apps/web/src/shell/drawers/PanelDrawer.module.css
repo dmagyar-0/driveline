@@ -183,8 +183,10 @@
 }
 
 .toggleOn {
+  /* iter6 · toggle "on" reads as an active selection (blue), not a
+   * primary CTA (orange). Reserves orange for cursor + CTA only. */
   background: var(--color-bg-5);
-  border-color: var(--color-accent-orange);
+  border-color: var(--color-role-active);
 }
 
 .toggleState {
@@ -198,7 +200,7 @@
 }
 
 .toggleOn .toggleState {
-  color: var(--color-accent-orange);
+  color: var(--color-role-active);
 }
 
 .toggleDisabled {
@@ -251,9 +253,11 @@
 }
 
 .gapInput:focus-visible {
+  /* iter6 · the focus ring carries the blue cue; the border just
+   * lifts to the active blue to match. No more orange-on-input. */
   outline: var(--focus-ring);
   outline-offset: 1px;
-  border-color: var(--color-accent-orange);
+  border-color: var(--color-role-active);
 }
 
 .gapInputUnit {
