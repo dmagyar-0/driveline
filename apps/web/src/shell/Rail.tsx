@@ -1,10 +1,8 @@
 // Phase 1 · Left icon rail (5 buttons in a labelled column).
 //
-// UX overhaul (issue #14): every rail button is a labelled item with
-// a visible icon, an inline text label that fades in on hover/focus
-// (or on a keyboard focus inside the rail) and a clear active state
-// (accent bar + filled background). Icons remain 24 px hit targets;
-// labels never wrap. Items are grouped:
+// UX overhaul (issue #14, iter5 #3): every rail button is a labelled
+// item with an icon stacked on top of a short text label (vertical
+// stack inside an ~80 px-wide column). Items are grouped:
 //
 //   group 1 — data:    Sources, Channels
 //   group 2 — layout:  Layout, Panel
@@ -12,6 +10,13 @@
 //
 // Clicking the active rail button still collapses the drawer (VS Code
 // behaviour, integration plan §Phase 1.5).
+//
+// iter5 #3 — labels became always-visible. The previous hover-expanding
+// 48 → 168 px rail kept the labels behind a discovery wall ("engineers
+// who use this app daily will memorise the icons; new users will not",
+// per the audit). We now ship approach A: icon-on-top-of-label, rail
+// fixed at 80 px wide so labels read at rest. The active accent bar
+// stays the load-bearing "you-are-here" cue.
 //
 // iter2 #2:
 //   - Icons reworked to be domain-meaningful:
@@ -153,20 +158,11 @@ export function Rail() {
 
   if (railCollapsed) return null;
 
-  // a11y decision (Agent E carryover): the rail expands 48 → 168 px
-  // on hover / focus-within to reveal text labels. We deliberately do
-  // NOT put `aria-expanded` on the <nav> itself because:
-  //   1. The hover expansion is purely visual progressive disclosure
-  //      of *labels that are already in the accessible name*. Every
-  //      button carries `aria-label="<Label>"`, so AT announces the
-  //      label whether the rail is collapsed or not.
-  //   2. The expansion does not change what is focusable, what is
-  //      announced, nor what region content the rail discloses — the
-  //      drawer disclosure (`aria-expanded` on the active button) is
-  //      a separate concept.
-  // Putting `aria-expanded` on the rail itself would falsely imply
-  // that focus into the rail toggles a disclosure widget, which is
-  // not what happens.
+  // a11y decision (Agent E carryover, refreshed for iter5 #3): labels
+  // are now visible at rest so the AT story is straightforward — each
+  // button is a labelled toggle (`aria-label` matches the visible
+  // label, `aria-pressed` toggles, `aria-expanded` + `aria-controls`
+  // wire the drawer disclosure). No more hover-expansion ambiguity.
   return (
     <nav className={styles.rail} aria-label="Sections" data-testid="rail">
       {RAIL_GROUPS.map((group, groupIdx) => (

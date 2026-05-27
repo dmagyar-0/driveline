@@ -1,37 +1,32 @@
 /* UX overhaul (issue #14):
  *
- * The rail expands on hover or when a button inside it is focused so
- * keyboard users can see the same labels mouse users get. Idle width
- * stays at 48 px (was 40 px) — wide enough to host a 36 px square hit
- * target without the icon hugging the right edge. Expanded width is
- * 168 px, which fits every label including "Channels" and "Events"
- * without truncation at the default 13 px label size.
+ * iter5 #3 — labels are now always visible. The previous
+ * hover-expanding (48 → 168 px) design hid the labels from a casual
+ * glance — engineers who used the app daily would memorise the icons
+ * but new users would not. We pick approach A from the audit ("icon
+ * on top of label, rail widens to ~80 px") so the labels are part of
+ * the rest state.
+ *
+ * Layout per button:
+ *   - vertical stack: icon (top) then label (below).
+ *   - hit target is the whole 80×56 cell.
  *
  * The active state combines an accent bar (left edge) with a filled
  * background and an accent foreground, instead of a colour-only
- * change. The bar stays even when the rail is idle (so the active
- * tab is identifiable from a glance).
+ * change. The bar persists across the whole rest state since the bar
+ * was the only "you-are-here" cue when the rail was idle in iter2.
  */
 
 .rail {
   display: flex;
   flex-direction: column;
-  flex: 0 0 48px;
-  width: 48px;
+  flex: 0 0 80px;
+  width: 80px;
   background: var(--color-bg-2);
   border-right: 1px solid var(--color-border-subtle);
   padding: var(--sp-3) 0;
   gap: var(--sp-2);
   overflow: hidden;
-  transition:
-    flex-basis var(--motion-base),
-    width var(--motion-base);
-}
-
-.rail:hover,
-.rail:focus-within {
-  flex: 0 0 168px;
-  width: 168px;
 }
 
 .group {
@@ -50,19 +45,21 @@
 .btn {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--sp-5);
-  height: 36px;
-  min-width: 36px;
-  padding: 0 var(--sp-3);
+  justify-content: center;
+  gap: 4px;
+  height: 56px;
+  width: 100%;
+  padding: var(--sp-2) var(--sp-2);
   background: transparent;
   border: none;
   border-radius: var(--radius-4);
   color: var(--color-fg-4);
   cursor: pointer;
   font: inherit;
-  font-size: var(--fs-13);
-  text-align: left;
+  font-size: var(--fs-11);
+  text-align: center;
   overflow: hidden;
   transition:
     background var(--motion-base),
@@ -94,9 +91,12 @@
 .btn::before {
   content: "";
   position: absolute;
-  left: -8px;
-  top: 4px;
-  bottom: 4px;
+  /* iter5 #3 — the rail is now full-width with labels at rest, so the
+   * accent bar anchors to the left edge of the button (which sits
+   * inside an `.sp-2` padded group). */
+  left: -4px;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
   background: transparent;
   border-radius: 0 var(--radius-2) var(--radius-2) 0;
@@ -124,35 +124,30 @@
   color: var(--color-accent-orange);
 }
 
-/* Icon stays a fixed square. The label fades in once the rail expands.
- * `min-width: 0` on the label lets ellipsis kick in for narrow rails. */
+/* iter5 #3 — vertical icon/label stack. Icon sits on top of the label so
+ * the button reads as a labelled cell at a glance. The label is always
+ * visible (no fade) so the discoverability win is the whole point.
+ * `min-width: 0` on the label lets long words (e.g. "Channels") ellipsis
+ * if the rail is narrowed further in the future. */
 .icon {
   display: grid;
   place-items: center;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
   color: inherit;
 }
 
 .label {
-  flex: 1 1 auto;
+  width: 100%;
   min-width: 0;
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-tight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0;
-  transform: translateX(-4px);
-  pointer-events: none;
-  transition:
-    opacity var(--motion-base),
-    transform var(--motion-base);
-}
-
-.rail:hover .label,
-.rail:focus-within .label {
-  opacity: 1;
-  transform: translateX(0);
+  text-align: center;
+  line-height: 1.1;
 }
 
 .spacer {
@@ -160,10 +155,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .rail,
   .btn,
-  .btn::before,
-  .label {
+  .btn::before {
     transition: none;
   }
 }
