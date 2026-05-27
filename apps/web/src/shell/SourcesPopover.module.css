@@ -76,6 +76,67 @@
   line-height: var(--lh-snug);
 }
 
+/* iter5 #5 — promoted primary "Add file" action.
+ *
+ * Sits just under the header. Visually weighted (accent border + bold
+ * label + a "+" glyph) so it reads as the obvious next action when
+ * the user lands in the popover. */
+.addFileBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-13);
+  padding: var(--sp-4);
+  background: var(--color-bg-4);
+  color: var(--color-fg-1);
+  border: 1px dashed var(--color-accent-blue);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--motion-base),
+    border-color var(--motion-base),
+    color var(--motion-base);
+}
+
+.addFileBtn:hover {
+  background: var(--color-bg-5);
+  border-style: solid;
+  border-color: var(--color-accent-blue);
+  color: var(--color-fg-1);
+}
+
+.addFileBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.addFileIcon {
+  color: var(--color-accent-blue);
+  flex: 0 0 14px;
+}
+
+.addFileHint {
+  margin-left: auto;
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
+}
+
+/* Hidden file input — visible button (.addFileBtn) drives it. */
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* iter3 #1 — search + sort controls row.
  *
  * The search input expands to fill the available width; the sort
@@ -312,10 +373,14 @@
   opacity: 0.45;
 }
 
+/* iter5 #4 — the actions row used to host both "Open Sources panel"
+ * (primary) and "Clear all" (demoted). The redirect is gone; the row
+ * now carries only the demoted destructive affordance so we align it
+ * to the end rather than space-between. */
 .actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: var(--sp-4);
   padding-top: var(--sp-3);
   border-top: 1px solid var(--color-border-subtle);

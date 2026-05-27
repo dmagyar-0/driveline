@@ -54,9 +54,15 @@ const READY_CHIP_IDLE_TIMEOUT_MS = 5_000;
 
 export interface TopBarProps {
   ready: boolean;
-  /** Opens the Sources drawer (issue #17 — popover's "open drawer"
-   *  link). Owned by the Shell so it can flip the rail state. */
-  onOpenSourcesDrawer: () => void;
+  /**
+   * iter5 #4 — was the rail-flip callback that the SourcesPopover's
+   * "Open Sources panel" link invoked. The popover dropped that
+   * redirect (the popover IS the top-bar sources surface), so this
+   * prop is no longer used by the rendered tree. Kept optional on
+   * the type so Shell's existing wiring compiles untouched; remove
+   * the Shell call site in a follow-up sweep.
+   */
+  onOpenSourcesDrawer?: () => void;
 }
 
 // iter5 issue #2 — failure-mode status taxonomy.
@@ -103,7 +109,7 @@ const STATUS_TITLE: Record<DerivedStatus, string> = {
   error: "Decode failed. No sources loaded.",
 };
 
-export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
+export function TopBar({ ready }: TopBarProps) {
   // Single-key selectors only (frontend skill).
   const sourceCount = useSession((s) => s.sources.length);
   const sources = useSession((s) => s.sources);
@@ -437,11 +443,14 @@ export function TopBar({ ready, onOpenSourcesDrawer }: TopBarProps) {
         </button>
       </div>
 
+      {/* iter5 #4 — `onOpenDrawer` removed: the popover IS the top-bar
+       *  entry to source management, so it no longer redirects to a
+       *  second surface. The rail's Sources item remains the only
+       *  other path. */}
       <SourcesPopover
         open={sourcesOpen}
         anchorId={sourcesTriggerId}
         onClose={() => setSourcesOpen(false)}
-        onOpenDrawer={onOpenSourcesDrawer}
       />
 
       {aboutOpen ? (

@@ -6,7 +6,7 @@
 // test does not depend on the wasm worker. The popover only reads
 // `sources` and `clear` from the slice, so seeded state is enough.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   act,
   cleanup,
@@ -160,21 +160,35 @@ describe("SourcesPopover", () => {
     expect(removeA.getAttribute("aria-label")).toContain("short.mcap");
   });
 
-  it("Open Sources panel fires onOpenDrawer then onClose", () => {
+  // iter5 #4 — the "Open Sources panel" link was removed (the popover
+  // is now the top-bar entry; the rail's Sources item is the only
+  // other path). Lock that the link is gone so a regression can't
+  // sneak the duplicate wayfinding back in.
+  it("no longer renders the 'Open Sources panel' redirect (iter5 #4)", () => {
     seedTwoSources();
-    const onOpenDrawer = vi.fn();
-    const onClose = vi.fn();
-    render(
-      <SourcesPopover
-        open
-        anchorId="ax"
-        onClose={onClose}
-        onOpenDrawer={onOpenDrawer}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("sources-popover-open-drawer"));
-    expect(onOpenDrawer).toHaveBeenCalledTimes(1);
-    expect(onClose).toHaveBeenCalledTimes(1);
+    render(<SourcesPopover open anchorId="ax" onClose={() => {}} />);
+    expect(
+      screen.queryByTestId("sources-popover-open-drawer"),
+    ).toBeNull();
+  });
+
+  // iter5 #5 — primary "+ Add file" action lives at the top of the
+  // popover. Clicking it should open the system file picker (we can
+  // not fully drive a native file picker in jsdom, but we can
+  // confirm the button exists, has the right accessible name, and
+  // is rendered above the source list).
+  it("renders a primary 'Add file' button as the first action (iter5 #5)", () => {
+    seedTwoSources();
+    render(<SourcesPopover open anchorId="ax" onClose={() => {}} />);
+    const btn = screen.getByTestId("sources-popover-add-file");
+    expect(btn).toBeTruthy();
+    expect(btn.textContent).toMatch(/Add file/i);
+    // Same affordance is visible when no sources are loaded so the
+    // user has a discoverable way in from the cold-start state.
+    cleanup();
+    useSession.setState({ sources: [] });
+    render(<SourcesPopover open anchorId="ax" onClose={() => {}} />);
+    expect(screen.getByTestId("sources-popover-add-file")).toBeTruthy();
   });
 
   // iter3 #1 — search, sort, group, demoted clear-all.

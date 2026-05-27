@@ -6,6 +6,19 @@
 // the user can audit and prune the loaded session without opening the
 // Sources drawer.
 //
+// iter5 #4 + #5 — the popover IS the sources surface from the top bar.
+//
+//   #4 — The previous "Open Sources panel" link implied a second
+//        sources surface elsewhere, so users had two wayfinding paths
+//        for one concern. The rail's `Sources` item is enough; this
+//        popover no longer offers the redirect.
+//   #5 — Promote a `+ Add file` button to the top of the popover so
+//        adding a new source is a primary action from the top bar.
+//        Previously the only ways in were the Sources drawer's load
+//        row and drag-drop on the workspace. The button delegates to
+//        the same `openFiles` store action as those flows, and the
+//        popover closes once the file picker resolves.
+//
 // iter3 #1 — popover scales beyond two sources:
 //   - Text input at the top filters the list by name (case-insensitive
 //     substring match). Filtering preserves the active sort.
@@ -15,8 +28,8 @@
 //     rows are grouped under small subheading rows (MCAP / MF4 / MP4)
 //     within each section, sorted internally by the active sort.
 //   - Filter-empty state: "No sources match \"<query>\"".
-//   - "Clear all" demoted to a small secondary-text affordance so the
-//     "Open Sources panel" link reads as the primary navigation target.
+//   - "Clear all" demoted to a small secondary-text affordance — now
+//     it is the only action in the footer.
 //
 // iter2 #4:
 //   - Each row gets a small × button on the right. The store today
@@ -89,9 +102,18 @@ export interface SourcesPopoverProps {
   onClose: () => void;
   /** Used to position the popover relative to its trigger. */
   anchorId: string;
-  /** Opens the Sources drawer so the user can do per-source operations
-   *  that the popover does not (yet) support. */
-  onOpenDrawer: () => void;
+  /**
+   * iter5 #4 — `onOpenDrawer` was the "Open Sources panel" redirect
+   * that implied a second sources surface. It has been removed; the
+   * popover is now the top-bar entry to source management and the
+   * rail's Sources item is the only other path. New callers must
+   * not reintroduce this prop.
+   *
+   * Optional prop kept on the type so callers that still pass the
+   * value while we land the rest of the iter5 work don't break the
+   * type checker. Ignored inside the popover.
+   */
+  onOpenDrawer?: () => void;
 }
 
 function sortSources(list: SourceMeta[], key: SortKey): SourceMeta[] {
@@ -159,11 +181,27 @@ export function SourcesPopover({
   open,
   onClose,
   anchorId,
-  onOpenDrawer,
 }: SourcesPopoverProps) {
   const sources = useSession((st) => st.sources);
   const clear = useSession((st) => st.clear);
+  const openFiles = useSession((st) => st.openFiles);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // iter5 #5 — hidden `<input type="file" multiple>` driven by the
+  // promoted "+ Add file" button. Same flow as the Sources drawer's
+  // `+ drop / load file…` row: `openFiles` dispatches into the same
+  // store action drag-drop uses, so error surfacing and ingest state
+  // (`lastOpenErrors`, `ingesting`) stay coherent.
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const onAddFileClick = () => fileInputRef.current?.click();
+  const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = e.target.files;
+    // Reset before awaiting so picking the same file twice in a row
+    // still fires `onChange`.
+    e.target.value = "";
+    if (picked && picked.length > 0) {
+      await openFiles(Array.from(picked));
+    }
+  };
 
   // Search + sort are popover-local — no store touch. Both reset
   // implicitly when the popover unmounts (open === false).
@@ -234,6 +272,51 @@ export function SourcesPopover({
         <h2 className={s.heading}>Sources</h2>
         <span className={s.count}>{sources.length}</span>
       </div>
+
+      {/* iter5 #5 — primary "+ Add file" action.
+       *
+       * Sits directly under the header so it is the first interactive
+       * element in the popover. Delegates to the hidden file input
+       * which then routes through the standard `openFiles` flow. The
+       * popover stays open while the picker is up so the user can see
+       * the new sources land in the list. */}
+      <button
+        type="button"
+        className={s.addFileBtn}
+        onClick={onAddFileClick}
+        data-testid="sources-popover-add-file"
+        title="Open the system file picker to add MCAP, MF4, or MP4 files."
+      >
+        <svg
+          className={s.addFileIcon}
+          width="14"
+          height="14"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M8 3.5v9M3.5 8h9" />
+        </svg>
+        <span>Add file</span>
+        <span className={s.addFileHint}>
+          {sources.length === 0
+            ? ".mcap / .mf4 / .mp4"
+            : "or drop onto the workspace"}
+        </span>
+      </button>
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className={s.hiddenInput}
+        onChange={onFileChange}
+        aria-hidden="true"
+        tabIndex={-1}
+      />
 
       {/* Search + sort live above the list. We always render them when
        *  there is at least one source so the controls don't pop in
@@ -389,22 +472,12 @@ export function SourcesPopover({
         </ul>
       )}
 
-      <div className={s.actions}>
-        <button
-          type="button"
-          className={s.linkBtn}
-          onClick={() => {
-            onOpenDrawer();
-            onClose();
-          }}
-          data-testid="sources-popover-open-drawer"
-        >
-          Open Sources panel
-        </button>
-        {sources.length > 0 ? (
-          // iter3 #1 — demoted to a small secondary-coloured text
-          // button so it doesn't read as equal weight to the primary
-          // "Open Sources panel" link above.
+      {/* iter5 #4 — the "Open Sources panel" redirect was removed. The
+       *  popover is self-contained: list / add / remove / clear / close.
+       *  When there are sources to clear, render only the demoted
+       *  destructive affordance — no more dual-link footer. */}
+      {sources.length > 0 ? (
+        <div className={s.actions}>
           <button
             type="button"
             className={s.clearBtn}
@@ -416,8 +489,8 @@ export function SourcesPopover({
           >
             Clear all
           </button>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }
