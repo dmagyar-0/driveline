@@ -104,7 +104,14 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: var(--fw-medium);
-  min-width: 0;
+  /* Iter4 regression #2 — the channel name is the carrying piece of
+   * information; iter3 inverted the priority and let the source badge
+   * (e.g. `comma2k19_seg4`) sit unflinching while the channel name
+   * collapsed to `WheelSpe…`. Pin a generous min-width so the chip
+   * dedicates room to the channel name first; the source badge is now
+   * the truncation candidate (see `.chipBadge`). */
+  flex: 1 1 auto;
+  min-width: 6.5rem;
 }
 
 .chipUnit {
@@ -116,7 +123,14 @@
 }
 
 /* Source badge (issue #2). Visually subordinate to the label and
- * dimmed; appears only when the label alone would be ambiguous. */
+ * dimmed; appears only when the label alone would be ambiguous.
+ *
+ * Iter4 regression #2 — the badge is now the truncation candidate.
+ * Iter3 left the badge `flex-shrink: 0` so a long source stem (e.g.
+ * `comma2k19_seg4`) clobbered the channel name. The label carries the
+ * meaning, so we shrink the badge first: cap it at ~6 chars and let
+ * the rest fall off via ellipsis. The full source name remains in the
+ * chip `title` tooltip for hover-read. */
 .chipBadge {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
@@ -126,7 +140,11 @@
   padding: 0 4px;
   letter-spacing: 0.02em;
   white-space: nowrap;
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chipRemove {
