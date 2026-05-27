@@ -2,11 +2,16 @@
  *
  * Layout:
  *
- *   [brand]            (auto)          [status: cursor · sources · status]
+ *   [brand]            (auto)          [status zone]   [help cluster]
  *
  * The brand zone has no interactive treatment so it doesn't suggest
  * navigation. The status zone uses three discrete chips with proper
  * typographic hierarchy instead of dot-separated microscopic text.
+ * iter2 #1: the "v0.1" version string is no longer in the brand zone.
+ * iter2 #3: the cursor block uses an inline clock glyph + humane value
+ * (no debug-style "CURSOR" microcap).
+ * iter2 #5: a "?" icon button (rightmost) opens the keyboard-shortcuts
+ * overlay.
  */
 
 .bar {
@@ -48,16 +53,6 @@
   letter-spacing: var(--tracking-tight);
 }
 
-.version {
-  font-size: var(--fs-11);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-fg-6);
-  letter-spacing: var(--tracking-tight);
-  padding: 0 var(--sp-3);
-  border-radius: var(--radius-2);
-  background: var(--color-bg-4);
-}
-
 /* Status zone ------------------------------------------------- */
 
 .status {
@@ -67,23 +62,21 @@
   gap: var(--sp-5);
 }
 
-/* Cursor readout — labelled control with its own typographic block.
- * Uppercase micro-label sits above a numeric readout so the two pieces
- * of information are visibly distinct, not run together in a dot list. */
+/* Cursor readout — humanised. Clock glyph + monospace digits, no
+ * uppercase "CURSOR" microcap. The block is non-interactive. */
 .cursor {
-  display: flex;
-  align-items: baseline;
+  display: inline-flex;
+  align-items: center;
   gap: var(--sp-3);
   padding: 0 var(--sp-3);
+  height: 24px;
   border-radius: var(--radius-3);
+  color: var(--color-fg-3);
 }
 
-.cursorLabel {
-  font-size: var(--fs-10);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
+.cursorIcon {
   color: var(--color-fg-5);
-  font-weight: var(--fw-medium);
+  flex: 0 0 12px;
 }
 
 .cursorValue {
@@ -196,6 +189,43 @@
   border: 0;
 }
 
+/* Help cluster (iter2 #1, #5) ---------------------------------- */
+
+.help {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding-left: var(--sp-5);
+  border-left: 1px solid var(--color-border-subtle);
+}
+
+.iconBtn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-3);
+  color: var(--color-fg-4);
+  cursor: pointer;
+  transition:
+    background var(--motion-base),
+    color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.iconBtn:hover {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-subtle);
+  color: var(--color-fg-2);
+}
+
+.iconBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
 @keyframes pulse {
   0%,
   100% {
@@ -210,7 +240,8 @@
   .dotBusy {
     animation: none;
   }
-  .chip {
+  .chip,
+  .iconBtn {
     transition: none;
   }
 }

@@ -1,0 +1,160 @@
+/* About dialog · centred modal anchored to the viewport.
+ * Mirrors the look of `ShortcutsOverlay.module.css` so the two
+ * help-style modals stay visually coherent. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+  animation: fade-in var(--motion-base) ease;
+}
+
+.card {
+  min-width: 320px;
+  max-width: 420px;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-6);
+  box-shadow: var(--shadow-popover);
+  padding: var(--sp-7);
+  color: var(--color-fg-2);
+  outline: none;
+}
+
+.card:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  margin-bottom: var(--sp-6);
+}
+
+.title {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-1);
+  letter-spacing: var(--tracking-tight);
+}
+
+.closeBtn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-3);
+  color: var(--color-fg-4);
+  cursor: pointer;
+  font-size: var(--fs-16);
+  line-height: 1;
+}
+
+.closeBtn:hover {
+  background: var(--color-bg-5);
+  color: var(--color-fg-2);
+}
+
+.closeBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0 0 var(--sp-6) 0;
+}
+
+.metaRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-5);
+  padding: var(--sp-3) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.metaRow dt {
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  margin: 0;
+}
+
+.metaRow dd {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--color-fg-2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.link,
+.linkBtn {
+  display: inline-block;
+  padding: var(--sp-3) var(--sp-4);
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  color: var(--color-accent-blue);
+  font: inherit;
+  font-size: var(--fs-13);
+  text-decoration: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition:
+    background var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.link:hover,
+.linkBtn:hover {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+}
+
+.link:focus-visible,
+.linkBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop {
+    animation: none;
+  }
+  .link,
+  .linkBtn {
+    transition: none;
+  }
+}
