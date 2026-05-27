@@ -145,34 +145,72 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
 // theme switch at v1, so re-reading on every plot rebuild (one per
 // binding-set change) is wasted `getComputedStyle` work. Mirrors
 // `cursorStrokeColor` in cursorOverlay.
+//
+// iter7 wave2 — axis typography is now token-driven:
+//   - `tickFont` uses `--fs-xs` (10px) at `--color-fg-5` with tabular
+//     numerics so digit columns don't jitter across ticks.
+//   - `labelFont` uses `--fs-sm` (12px) at `--color-fg-4` — the unit
+//     caption is the louder of the two strings on the axis, but still
+//     subordinate to the trace data.
 let axisStyleCache: {
   fg: string;
+  tickFg: string;
+  labelFg: string;
   grid: string;
   ticks: string;
+  tickFont: string;
+  labelFont: string;
 } | null = null;
-function axisStyle(): { fg: string; grid: string; ticks: string } {
+function axisStyle(): {
+  fg: string;
+  tickFg: string;
+  labelFg: string;
+  grid: string;
+  ticks: string;
+  tickFont: string;
+  labelFont: string;
+} {
   if (axisStyleCache !== null) return axisStyleCache;
   // Tuned for legibility on `--color-bg-3` (#151515):
-  //   - axis labels: `--color-fg-3` (#bbbbbb) ≈ 9.4:1 — well above 4.5.
-  //   - grid lines: `#2f2f2f` ≈ 1.4:1 — visible but unobtrusive,
+  //   - tick numbers: `--color-fg-5` (#969ba4) ≈ 7.4:1.
+  //   - unit label:   `--color-fg-4` (#b4b9c1) ≈ 9.3:1.
+  //   - grid lines:   `#2f2f2f` ≈ 1.4:1 — visible but unobtrusive,
   //     replaces the v1 `--color-border-subtle` (#2a2a2a) which sat
   //     too close to the panel surface to register at a glance.
   //   - tick marks: same as grid.
-  const fallback = { fg: "#bbbbbb", grid: "#2f2f2f", ticks: "#2f2f2f" };
+  const fallback = {
+    fg: "#bbbbbb",
+    tickFg: "#969ba4",
+    labelFg: "#b4b9c1",
+    grid: "#2f2f2f",
+    ticks: "#2f2f2f",
+    tickFont: "10px system-ui, sans-serif",
+    labelFont: "12px system-ui, sans-serif",
+  };
   if (typeof document === "undefined") {
     axisStyleCache = fallback;
     return axisStyleCache;
   }
   const cs = getComputedStyle(document.documentElement);
   const fg = cs.getPropertyValue("--color-fg-3").trim();
+  const tickFg = cs.getPropertyValue("--color-fg-5").trim();
+  const labelFg = cs.getPropertyValue("--color-fg-4").trim();
   // Allow a panel-local override token if anyone introduces one; fall
   // back to the hand-picked `#2f2f2f` rather than the default border
   // colour, which is too dark on the deepest panel surface.
   const grid = cs.getPropertyValue("--color-plot-grid").trim() || fallback.grid;
+  // uPlot's `font`/`labelFont` properties want a CSS font string. We
+  // anchor on the `--fs-xs` / `--fs-sm` rungs from tokens.css (10 / 12 px)
+  // and reuse the same `system-ui` stack as the rest of the chrome so
+  // numerics align with the chip + readout strip text.
   axisStyleCache = {
     fg: fg || fallback.fg,
+    tickFg: tickFg || fallback.tickFg,
+    labelFg: labelFg || fallback.labelFg,
     grid,
     ticks: grid,
+    tickFont: "10px system-ui, sans-serif",
+    labelFont: "600 12px system-ui, sans-serif",
   };
   return axisStyleCache;
 }
@@ -554,7 +592,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (!mount || !container) return;
 
     const rect = container.getBoundingClientRect();
-    const { fg, grid, ticks } = axisStyle();
+    const { labelFg, grid, ticks, tickFont, labelFont } = axisStyle();
     // Iter2 issue #3 — when a y-axis is tinted (its group has a
     // homogeneous palette colour) we use that tint for the axis label,
     // ticks, and a slightly stronger grid colour so the user can tell
@@ -583,17 +621,34 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       tint?: string,
       gridTint?: string,
     ): uPlot.Axis => {
-      const stroke = tint ?? fg;
+      // iter7 wave2 — `stroke` is uPlot's single colour for both tick
+      // values and the axis label (uPlot uses it as `fillStyle` for
+      // both text runs). Use `labelFg` (≙ --color-fg-4) so the unit
+      // caption hits 9.3:1 contrast; the typographic hierarchy is
+      // carried by the font sizes (10 vs 12 px bold) below. Tinted
+      // axes still override the colour entirely so the L/R cue reads.
+      const stroke = tint ?? labelFg;
       const tickStroke = tint ?? ticks;
       const isTimeAxis = scale === "x";
       const gridStroke = gridTint ?? grid;
+      // Uppercase + wide tracking on the unit caption ("M/S", "DEG")
+      // so it reads as a small-caps header. The chip-bar already runs
+      // mixed-case unit text; this strip is a different role (axis
+      // qualifier) so the visual treatment differs intentionally.
+      const labelText = label
+        ? label === "(unitless)"
+          ? label
+          : label.toUpperCase()
+        : undefined;
       const axisOpts: uPlot.Axis = {
         scale,
         side,
         stroke,
+        font: tickFont,
+        labelFont,
         ticks: { stroke: tickStroke, size: 4 },
         grid: { stroke: gridStroke, width: 1 },
-        ...(label ? { label } : {}),
+        ...(labelText ? { label: labelText } : {}),
       };
       // Force 24h on the time axis; otherwise the Y-axis formatter so
       // the tick ladder reads cleanly even when the range zooms in.
@@ -759,10 +814,20 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // uPlot's label (the `mkAxis(1, …, "", …)` call above) and paint
     // our own here, sharing the axis tint so it still associates with
     // its trace.
+    //
+    // iter7 wave2 — match the left-axis treatment: uppercase the unit
+    // string and use the same `labelFont` (12 px bold) so left and
+    // right captions read as the same role.
     const secondaryGroup = axisGroups.length >= 2 ? axisGroups[1] : null;
-    const secondaryLabelText = secondaryGroup ? axisLabel(secondaryGroup) : "";
+    const secondaryLabelRaw = secondaryGroup ? axisLabel(secondaryGroup) : "";
+    const secondaryLabelText =
+      secondaryLabelRaw && secondaryLabelRaw !== "(unitless)"
+        ? secondaryLabelRaw.toUpperCase()
+        : secondaryLabelRaw;
     const secondaryLabelTint =
-      secondaryGroup && axisGroups.length >= 2 ? secondaryGroup.axisColor : fg;
+      secondaryGroup && axisGroups.length >= 2
+        ? secondaryGroup.axisColor
+        : labelFg;
 
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
@@ -812,7 +877,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                 ctx.translate(cx, cy);
                 ctx.rotate(-Math.PI / 2);
                 ctx.fillStyle = secondaryLabelTint;
-                ctx.font = `${12 * dpr}px system-ui, sans-serif`;
+                // iter7 wave2 — match left-axis `labelFont` (12 px
+                // semibold). `letterSpacing` is set when supported so
+                // the uppercase caption tracks ~`--tracking-wide`.
+                ctx.font = `600 ${12 * dpr}px system-ui, sans-serif`;
+                if ("letterSpacing" in ctx) {
+                  (ctx as unknown as { letterSpacing: string }).letterSpacing =
+                    `${0.05 * 12 * dpr}px`;
+                }
                 ctx.textAlign = "center";
                 ctx.textBaseline = "alphabetic";
                 ctx.fillText(secondaryLabelText, 0, 0);
@@ -1215,23 +1287,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                 {formatTime24h(globalRange.startNs)} →{" "}
                 {formatTime24h(globalRange.endNs)}
               </div>
-              {/* Iter5 issue #5 — the same Mixed Units pill that sits
-                  on the chip bar repeats on the chart's top-right
-                  corner, where the user actually looks at the data.
-                  The chip-bar pill stays so the bound-channel area
-                  still flags it; this one is the screenshot-friendly
-                  version. */}
-              {hasMixedUnits && (
-                <span
-                  className={styles.inChartMixedUnits}
-                  data-testid="plot-in-chart-mixed-units"
-                  title={`Channels span ${axisGroups.length} unit groups: ${axisGroups
-                    .map((g) => (g.unit ? g.unit : "(unitless)"))
-                    .join(", ")}. Only the first two map to visible axes.`}
-                >
-                  Mixed units · {axisGroups.length}
-                </span>
-              )}
+              {/* iter7 wave2 — the floating in-chart "Mixed units" pill
+                  has been retired. The toolbar `.warningChip` rendered
+                  above (in `.controls`) is the single surface for that
+                  warning; the on-canvas duplicate was occluding data in
+                  the upper-right quadrant and reading as the same chip
+                  twice in screenshots. */}
             </>
           )}
           {boundChannels.length === 0 && (

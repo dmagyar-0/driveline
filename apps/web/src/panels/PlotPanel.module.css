@@ -442,29 +442,10 @@
   z-index: 2;
 }
 
-/* Iter5 issue #5 — Mixed-units pill anchored to the plot's top-right
- * corner. Replaces (well, supplements) the chip-bar pill from iter3
- * so engineers see the warning where they look at the data: on the
- * chart. */
-.inChartMixedUnits {
-  position: absolute;
-  top: 4px;
-  right: 8px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-10);
-  font-weight: var(--fw-semibold, 600);
-  /* iter7 wave1 · matches the chip-bar `.warningChip` above so the
-   * on-canvas pill and the toolbar chip read as the same warning. */
-  color: var(--color-warn-amber);
-  background: var(--color-warn-amber-bg);
-  border: 1px solid var(--color-warn-amber-border);
-  border-radius: var(--radius-pill);
-  padding: 1px 8px;
-  letter-spacing: 0.04em;
-  cursor: help;
-  pointer-events: auto;
-  z-index: 2;
-}
+/* iter7 wave2 — the floating `.inChartMixedUnits` pill was removed.
+ * The toolbar `.warningChip` is the single surface for the Mixed Units
+ * warning; the on-canvas duplicate occluded data and read as the same
+ * chip twice on screenshots. */
 
 .empty {
   position: absolute;

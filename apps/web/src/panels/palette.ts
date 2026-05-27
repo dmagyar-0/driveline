@@ -17,15 +17,22 @@
 //   black, orange, sky blue, bluish green, yellow, blue, vermillion,
 //   reddish purple.
 // We replace Wong's "black" (which would vanish on the near-black
-// canvas) with a near-white grey so the first slot stays the most
-// neutral. Otherwise the colours and order are Wong's exactly.
+// canvas) with a desaturated cool grey — bright enough to read on
+// `--color-bg-3` but muted enough that it doesn't dominate the jewel-
+// tone hues. Otherwise the colours and order are Wong's exactly.
+//
+// iter7 wave2 — slot 0 was `#e6e6e6` (near-white), which over-fired:
+// any channel that hashed there (e.g. comma2k19's IMU_Accel) was the
+// brightest stroke on the canvas and visually swamped neighbouring
+// jewel-tones. `#9aa0aa` keeps slot 0 neutral but reads as "quiet
+// background trace" rather than "the most important series".
 //
 // The mapping algorithm is unchanged: FNV-1a hash on the channel id,
 // modulo palette length. Callers across panels MUST agree on the
 // colour for the same channel — see `palette.test.ts`.
 
 export const PLOT_PALETTE = [
-  "#e6e6e6", // near-white (replaces Wong's #000000 which would vanish on dark bg)
+  "#9aa0aa", // muted cool grey (replaces Wong's #000000; was #e6e6e6 pre-iter7w2)
   "#e69f00", // orange
   "#56b4e9", // sky blue
   "#009e73", // bluish green
