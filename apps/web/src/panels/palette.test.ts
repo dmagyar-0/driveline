@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   colorFor,
   colorForSource,
+  dashForIndex,
+  DASH_PATTERNS,
+  DASH_THRESHOLD,
   PLOT_PALETTE,
   SOURCE_PALETTE,
   MAX_PLOT_SERIES,
@@ -89,5 +92,50 @@ describe("colorForSource (iter3 issue #2 — source ribbons)", () => {
 
   it("handles the empty source id without throwing", () => {
     expect(SOURCE_PALETTE).toContain(colorForSource(""));
+  });
+});
+
+describe("dashForIndex (iter5 issue #7 — dash fallback)", () => {
+  it("returns solid for every series when count is below the threshold", () => {
+    for (let i = 0; i < 3; i++) {
+      expect(dashForIndex(i, 3)).toEqual([]);
+    }
+  });
+
+  it("cycles through DASH_PATTERNS at or above the threshold", () => {
+    // At 4 traces, all four patterns appear in order.
+    const count = DASH_THRESHOLD;
+    expect(dashForIndex(0, count)).toEqual(DASH_PATTERNS[0]);
+    expect(dashForIndex(1, count)).toEqual(DASH_PATTERNS[1]);
+    expect(dashForIndex(2, count)).toEqual(DASH_PATTERNS[2]);
+    expect(dashForIndex(3, count)).toEqual(DASH_PATTERNS[3]);
+  });
+
+  it("wraps past the pattern cycle so a 5th series reuses pattern 0", () => {
+    expect(dashForIndex(4, 8)).toEqual(DASH_PATTERNS[0]);
+    expect(dashForIndex(5, 8)).toEqual(DASH_PATTERNS[1]);
+  });
+
+  it("emits 4 distinct patterns and one of them is solid", () => {
+    expect(DASH_PATTERNS).toHaveLength(4);
+    expect(DASH_PATTERNS[0]).toEqual([]);
+    // The non-solid patterns each have a non-zero filled length.
+    for (let i = 1; i < DASH_PATTERNS.length; i++) {
+      expect(DASH_PATTERNS[i].length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("PLOT_PALETTE (iter5 issue #6 — Wong colourblind-safe)", () => {
+  it("contains 8 unique entries", () => {
+    expect(new Set(PLOT_PALETTE).size).toBe(PLOT_PALETTE.length);
+  });
+
+  it("does not include any of the iter4 'warm cluster' that collided", () => {
+    // Iter4 audit called out f07a6f (coral), and the wider problem was
+    // adjacent reds/pinks/oranges. We now include orange + vermillion +
+    // reddish-purple but they're widely separated in hue. The specific
+    // iter4 coral that the audit flagged is gone.
+    expect(PLOT_PALETTE).not.toContain("#f07a6f");
   });
 });
