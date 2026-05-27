@@ -27,6 +27,16 @@
 // jewel-tones. `#9aa0aa` keeps slot 0 neutral but reads as "quiet
 // background trace" rather than "the most important series".
 //
+// iter8 — slot 2 was Wong's sky blue `#56b4e9` (H≈202°), which sat
+// adjacent in hue to slot 5 blue `#0072b2` (same H≈202°, just darker)
+// AND slot 3 bluish-green `#009e73` (H≈164°). When `wheel_speed_*`
+// siblings hashed across slots 2/3/5 the three cool tones overplotted
+// as one indistinct cyan/teal band (iter8 critic). Bumping slot 2 to
+// `#22d3ee` (H≈187°, bright cyan) widens the gap to both neighbours
+// while staying inside the cool half so the palette still reads as
+// Wong's ordered scheme. Cyan is also distinguishable from green/blue
+// under deuteranopia, protanopia, and tritanopia simulations.
+//
 // The mapping algorithm is unchanged: FNV-1a hash on the channel id,
 // modulo palette length. Callers across panels MUST agree on the
 // colour for the same channel — see `palette.test.ts`.
@@ -34,7 +44,7 @@
 export const PLOT_PALETTE = [
   "#9aa0aa", // muted cool grey (replaces Wong's #000000; was #e6e6e6 pre-iter7w2)
   "#e69f00", // orange
-  "#56b4e9", // sky blue
+  "#22d3ee", // bright cyan (iter8; was Wong sky blue #56b4e9 — too close to slot 5 blue)
   "#009e73", // bluish green
   "#f0e442", // yellow
   "#0072b2", // blue

@@ -222,15 +222,21 @@
 
   /* ---------- Color: data viz palette (8 series, FNV-hashed) ---------- *
    * NOTE · owned by `apps/web/src/panels/palette.ts` (plot agent).
-   * Do not change these values from the tokens file. */
-  --plot-1: #3b82f6; /* blue */
-  --plot-2: #f97316; /* orange */
-  --plot-3: #10b981; /* emerald */
-  --plot-4: #ef4444; /* red */
-  --plot-5: #a855f7; /* purple */
-  --plot-6: #eab308; /* yellow */
-  --plot-7: #14b8a6; /* teal */
-  --plot-8: #ec4899; /* pink */
+   * Do not change these values from the tokens file.
+   *
+   * iter8 · mirrored to the Wong colourblind-safe palette currently
+   * shipping from palette.ts. Slot 2 was retuned from Wong sky blue
+   * `#56b4e9` to a brighter cyan `#22d3ee` so the wheel_speed_* sibling
+   * cluster (slots 2 + 3 + 5) no longer overplots as one cyan/teal
+   * band. See palette.ts for the full rationale. */
+  --plot-1: #9aa0aa; /* muted cool grey */
+  --plot-2: #e69f00; /* orange */
+  --plot-3: #22d3ee; /* bright cyan (iter8; was Wong sky blue #56b4e9) */
+  --plot-4: #009e73; /* bluish green */
+  --plot-5: #f0e442; /* yellow */
+  --plot-6: #0072b2; /* blue */
+  --plot-7: #d55e00; /* vermillion */
+  --plot-8: #cc79a7; /* reddish purple */
 
   /* ---------- Trace dash patterns (colour-blind redundancy) ----------
    *
@@ -312,6 +318,30 @@
   --tracking-tight: -0.005em;
   --tracking-normal: 0;
   --tracking-wide: 0.05em; /* SOURCE-KIND etc, uppercase labels */
+
+  /* ---------- Unit-pill micro-typography (iter8) ----------
+   *
+   * Single role-token block for the "M/S" / "DEG" / "M/S^2" unit
+   * pill that appears in three places on the plot panel:
+   *   1) chip row    — `.chipUnit` next to each bound channel
+   *   2) gutter      — `.cursorGutterUnit` next to each live value
+   *   3) axis label  — uPlot canvas-drawn caption on Y axes
+   *
+   * Before iter8 these three sites used three different treatments
+   * (lower-case vs uppercase, fg-4 vs fg-5, fw-regular vs 600, 10/11/
+   * 12 px, no tracking vs 0.05em). The critic flagged this as the most
+   * visible inconsistency on the plot. Tokens here define the unified
+   * spec — small caps, muted, medium weight, wide-tracked — so every
+   * surface reads as the same "unit qualifier" role.
+   *
+   * Canvas axis labels (drawn by uPlot) read the values via
+   * `getComputedStyle(document.documentElement).getPropertyValue('--unit-pill-*')`
+   * in PlotPanel's `axisStyle()` helper. */
+  --unit-pill-font: var(--font-sans);
+  --unit-pill-size: var(--fs-11); /* 11px — small qualifier, legible on canvas */
+  --unit-pill-weight: var(--fw-medium); /* 500 — distinct from the value (600+) */
+  --unit-pill-color: var(--color-fg-5); /* 6.6:1 on bg-3, still AA */
+  --unit-pill-tracking: var(--tracking-wide); /* 0.05em — small-caps feel */
 
   /* ---------- Spacing (rem ramp; 1rem = 16px) ---------- */
   --sp-1: 0.15rem;

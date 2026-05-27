@@ -149,9 +149,14 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
 // iter7 wave2 — axis typography is now token-driven:
 //   - `tickFont` uses `--fs-xs` (10px) at `--color-fg-5` with tabular
 //     numerics so digit columns don't jitter across ticks.
-//   - `labelFont` uses `--fs-sm` (12px) at `--color-fg-4` — the unit
-//     caption is the louder of the two strings on the axis, but still
-//     subordinate to the trace data.
+//   - `labelFont` (the unit caption) used to be `--fs-sm` (12px) /
+//     weight 600 at `--color-fg-4`.
+//
+// iter8 — the chip row, gutter, and axis unit label all read the same
+// `--unit-pill-*` tokens from tokens.css. The axis is canvas-drawn so
+// we synthesise the CSS font string from `--unit-pill-size` and
+// `--unit-pill-weight`; colour comes from `--unit-pill-color`. That
+// way "M/S" reads identically on the chip pill, gutter, and axis.
 let axisStyleCache: {
   fg: string;
   tickFg: string;
@@ -160,6 +165,15 @@ let axisStyleCache: {
   ticks: string;
   tickFont: string;
   labelFont: string;
+  /** Pixel size of the axis unit caption; downstream consumers (the
+   *  right-axis `drawAxes` hook) draw the rotated label by hand and
+   *  need the numeric size for the dpr-scaled `ctx.font`. */
+  labelFontSizePx: number;
+  /** Weight string (e.g. `"500"`) for the same hand-drawn label. */
+  labelFontWeight: string;
+  /** Tracking in em (e.g. `0.05`) so the hand-drawn label can match
+   *  the chip + gutter letter-spacing exactly. */
+  labelTrackingEm: number;
 } | null = null;
 function axisStyle(): {
   fg: string;
@@ -169,11 +183,16 @@ function axisStyle(): {
   ticks: string;
   tickFont: string;
   labelFont: string;
+  labelFontSizePx: number;
+  labelFontWeight: string;
+  labelTrackingEm: number;
 } {
   if (axisStyleCache !== null) return axisStyleCache;
-  // Tuned for legibility on `--color-bg-3` (#151515):
-  //   - tick numbers: `--color-fg-5` (#969ba4) ≈ 7.4:1.
-  //   - unit label:   `--color-fg-4` (#b4b9c1) ≈ 9.3:1.
+  // Tuned for legibility on `--color-bg-3` (#0e0f12):
+  //   - tick numbers: `--color-fg-5` (#969ba4) ≈ 6.6:1.
+  //   - unit label:   `--color-fg-5` (iter8 — was `--color-fg-4`; the
+  //     unified `--unit-pill-color` puts the qualifier at the muted
+  //     rung so the trace itself dominates).
   //   - grid lines:   `#2f2f2f` ≈ 1.4:1 — visible but unobtrusive,
   //     replaces the v1 `--color-border-subtle` (#2a2a2a) which sat
   //     too close to the panel surface to register at a glance.
@@ -181,11 +200,14 @@ function axisStyle(): {
   const fallback = {
     fg: "#bbbbbb",
     tickFg: "#969ba4",
-    labelFg: "#b4b9c1",
+    labelFg: "#969ba4",
     grid: "#2f2f2f",
     ticks: "#2f2f2f",
     tickFont: "10px system-ui, sans-serif",
-    labelFont: "12px system-ui, sans-serif",
+    labelFont: "500 11px system-ui, sans-serif",
+    labelFontSizePx: 11,
+    labelFontWeight: "500",
+    labelTrackingEm: 0.05,
   };
   if (typeof document === "undefined") {
     axisStyleCache = fallback;
@@ -194,15 +216,36 @@ function axisStyle(): {
   const cs = getComputedStyle(document.documentElement);
   const fg = cs.getPropertyValue("--color-fg-3").trim();
   const tickFg = cs.getPropertyValue("--color-fg-5").trim();
-  const labelFg = cs.getPropertyValue("--color-fg-4").trim();
+  // iter8 — axis unit label adopts the unified `--unit-pill-*` tokens
+  // so it reads identically to the chip + gutter unit pill. Colour
+  // resolves through the chain `--unit-pill-color -> --color-fg-5`.
+  const unitColor = cs.getPropertyValue("--unit-pill-color").trim();
+  const labelFg = unitColor || cs.getPropertyValue("--color-fg-5").trim();
   // Allow a panel-local override token if anyone introduces one; fall
   // back to the hand-picked `#2f2f2f` rather than the default border
   // colour, which is too dark on the deepest panel surface.
   const grid = cs.getPropertyValue("--color-plot-grid").trim() || fallback.grid;
-  // uPlot's `font`/`labelFont` properties want a CSS font string. We
-  // anchor on the `--fs-xs` / `--fs-sm` rungs from tokens.css (10 / 12 px)
-  // and reuse the same `system-ui` stack as the rest of the chrome so
-  // numerics align with the chip + readout strip text.
+  // Parse the unit-pill size token. `--unit-pill-size` resolves to a
+  // `--fs-NN` rem value (e.g. `0.6875rem`); convert to px against
+  // the document root's font-size for `ctx.font`. Fallback to 11 px.
+  const sizeRaw = cs.getPropertyValue("--unit-pill-size").trim();
+  const rootFontPx = parseFloat(cs.fontSize) || 16;
+  let labelSizePx = fallback.labelFontSizePx;
+  if (sizeRaw.endsWith("rem")) {
+    const rem = parseFloat(sizeRaw);
+    if (Number.isFinite(rem) && rem > 0) labelSizePx = rem * rootFontPx;
+  } else if (sizeRaw.endsWith("px")) {
+    const px = parseFloat(sizeRaw);
+    if (Number.isFinite(px) && px > 0) labelSizePx = px;
+  }
+  const weightRaw = cs.getPropertyValue("--unit-pill-weight").trim();
+  const labelWeight = /^\d+$/.test(weightRaw) ? weightRaw : fallback.labelFontWeight;
+  const trackingRaw = cs.getPropertyValue("--unit-pill-tracking").trim();
+  let labelTracking = fallback.labelTrackingEm;
+  if (trackingRaw.endsWith("em")) {
+    const em = parseFloat(trackingRaw);
+    if (Number.isFinite(em)) labelTracking = em;
+  }
   axisStyleCache = {
     fg: fg || fallback.fg,
     tickFg: tickFg || fallback.tickFg,
@@ -210,7 +253,10 @@ function axisStyle(): {
     grid,
     ticks: grid,
     tickFont: "10px system-ui, sans-serif",
-    labelFont: "600 12px system-ui, sans-serif",
+    labelFont: `${labelWeight} ${labelSizePx}px system-ui, sans-serif`,
+    labelFontSizePx: labelSizePx,
+    labelFontWeight: labelWeight,
+    labelTrackingEm: labelTracking,
   };
   return axisStyleCache;
 }
@@ -592,7 +638,16 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (!mount || !container) return;
 
     const rect = container.getBoundingClientRect();
-    const { labelFg, grid, ticks, tickFont, labelFont } = axisStyle();
+    const {
+      labelFg,
+      grid,
+      ticks,
+      tickFont,
+      labelFont,
+      labelFontSizePx,
+      labelFontWeight,
+      labelTrackingEm,
+    } = axisStyle();
     // Iter2 issue #3 — when a y-axis is tinted (its group has a
     // homogeneous palette colour) we use that tint for the axis label,
     // ticks, and a slightly stronger grid colour so the user can tell
@@ -877,13 +932,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                 ctx.translate(cx, cy);
                 ctx.rotate(-Math.PI / 2);
                 ctx.fillStyle = secondaryLabelTint;
-                // iter7 wave2 — match left-axis `labelFont` (12 px
-                // semibold). `letterSpacing` is set when supported so
-                // the uppercase caption tracks ~`--tracking-wide`.
-                ctx.font = `600 ${12 * dpr}px system-ui, sans-serif`;
+                // iter8 — match left-axis `labelFont` derived from the
+                // unified `--unit-pill-*` tokens so the right-axis caption
+                // reads identically to the chip pill, the gutter unit, and
+                // the left-axis caption. `letterSpacing` is set when
+                // supported so the uppercase caption tracks the token.
+                ctx.font = `${labelFontWeight} ${labelFontSizePx * dpr}px system-ui, sans-serif`;
                 if ("letterSpacing" in ctx) {
                   (ctx as unknown as { letterSpacing: string }).letterSpacing =
-                    `${0.05 * 12 * dpr}px`;
+                    `${labelTrackingEm * labelFontSizePx * dpr}px`;
                 }
                 ctx.textAlign = "center";
                 ctx.textBaseline = "alphabetic";

@@ -145,9 +145,32 @@
   min-width: 6.5rem;
 }
 
+/* iter8 — unified unit-pill micro-typography.
+ *
+ * `.unitPill` is the shared spec used by the chip row, the cursor gutter,
+ * and (via canvas-drawn font strings) the axis label. Three sites previously
+ * styled `"m/s"` three different ways; the audit asked for one role. The
+ * tokens live in `apps/web/src/styles/tokens.css` (`--unit-pill-*`) so the
+ * three surfaces — including the canvas one — read from the same numbers. */
+.unitPill {
+  font-family: var(--unit-pill-font);
+  font-size: var(--unit-pill-size);
+  font-weight: var(--unit-pill-weight);
+  color: var(--unit-pill-color);
+  letter-spacing: var(--unit-pill-tracking);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .chipUnit {
-  color: var(--color-fg-5);
-  font-size: var(--fs-11);
+  font-family: var(--unit-pill-font);
+  font-size: var(--unit-pill-size);
+  font-weight: var(--unit-pill-weight);
+  color: var(--unit-pill-color);
+  letter-spacing: var(--unit-pill-tracking);
+  text-transform: uppercase;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
   flex-shrink: 0;
@@ -395,7 +418,21 @@
  * corner of the plot canvas so a screenshot reads as
  * `<panel name> · Δ 30 s`. Subtle by design — low opacity, monospaced
  * — so it doesn't distract during interaction but makes a screenshot
- * self-explanatory. */
+ * self-explanatory.
+ *
+ * iter8 — promoted to a proper chip/tag. Pre-iter8 it was free-floating
+ * mono text on a near-transparent scrim; the critic flagged the
+ * typography as "unbranded mono". Now it reads as a small solid tag:
+ *   - solid `--color-bg-4` chip surface (one tonal step above the
+ *     panel body so the tag pops without competing with the trace),
+ *   - subtle border so it doesn't bleed into a light region of the
+ *     canvas (an unbordered chip on the IMU_Accel white series
+ *     vanished in iter7 wave2 screenshots),
+ *   - `--radius-3` so it shares the same chip shape vocabulary as the
+ *     count badge on the Add-channel button,
+ *   - mono retained for the Δ-time digits (these read as a numeric
+ *     instrument) but bumped to `--fw-medium` so it reads as a
+ *     deliberate label not a console echo. */
 .inChartTitle {
   position: absolute;
   top: 4px;
@@ -405,10 +442,12 @@
   gap: var(--sp-3);
   font-family: var(--font-mono);
   font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
   color: var(--color-fg-3);
-  background: rgba(15, 15, 15, 0.55);
-  padding: 1px 6px;
-  border-radius: var(--radius-2);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-subtle);
+  padding: 2px var(--sp-3);
+  border-radius: var(--radius-3);
   letter-spacing: 0.02em;
   pointer-events: none;
   /* The title must sit above SegmentBands but below the cursor
@@ -527,9 +566,17 @@
   font-weight: var(--fw-medium);
 }
 
+/* iter8 — readout strip's unit suffix also adopts the unified
+ * `.unitPill` spec so the chip row, gutter, axis, and bottom strip
+ * all read "M/S" identically. */
 .readoutUnit {
-  color: var(--color-fg-5);
-  font-weight: var(--fw-regular);
+  font-family: var(--unit-pill-font);
+  font-size: var(--unit-pill-size);
+  font-weight: var(--unit-pill-weight);
+  color: var(--unit-pill-color);
+  letter-spacing: var(--unit-pill-tracking);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Iter3 issue #3 — numeric cells. Apply to any value that lives in a
@@ -720,11 +767,20 @@
 }
 
 /* Unit suffix on the live-value line. Stays smaller and dimmer than
- * the digits so the eye lands on the number, not the unit. */
+ * the digits so the eye lands on the number, not the unit.
+ *
+ * iter8 — adopted the shared `.unitPill` spec (see `--unit-pill-*` in
+ * tokens.css). Pre-iter8 this read as mixed-case `m/s` at 12 px/regular
+ * while the axis screamed `M/S` at 12 px/600 and the chip pill ran
+ * `m/s` at 11 px/regular. All three now match. */
 .cursorGutterUnit {
-  color: var(--color-fg-4);
-  font-weight: var(--fw-regular);
-  font-size: var(--fs-12);
+  font-family: var(--unit-pill-font);
+  font-size: var(--unit-pill-size);
+  font-weight: var(--unit-pill-weight);
+  color: var(--unit-pill-color);
+  letter-spacing: var(--unit-pill-tracking);
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Floating cursor tooltip — retained for backwards-compatible callers
