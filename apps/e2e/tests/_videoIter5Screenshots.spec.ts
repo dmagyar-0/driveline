@@ -141,8 +141,10 @@ test.describe("video iter5 polish", () => {
     const hud = page.getByTestId("video-hud").first();
     await expect(hud).toBeVisible();
     const hudText = await hud.textContent();
-    // "frame N / total" — the sidecar PTS table size is the total.
-    expect(hudText ?? "").toMatch(/frame\s+\d+\s+\/\s+\d+/);
+    // "frame N / total" — the sidecar PTS table size is the total. iter6
+    // splits label/value into <dt>/<dd> so textContent concatenates with
+    // no whitespace ("Frame3 / 1200"); regex tolerates that and the case.
+    expect(hudText ?? "").toMatch(/frame\s*\d+\s*\/\s*\d+/i);
 
     await clipTo(
       page,
