@@ -10,6 +10,20 @@
 // FlexLayout sets up for the tab — pointerdown on the grip / name area
 // flows through to FlexLayout and initiates a drag. The action cluster
 // stops pointerdown locally so per-button clicks don't seed a tab drag.
+//
+// Iter5 chrome layout (left → right):
+//   [drag-handle] [kind icon] [name / rename input] [settings] [maximize]
+//   [hairline divider] [close]
+//
+// Iter5 changes vs iter4 chrome:
+//   * pencil ("rename") dropped — rename is a subset of settings; the
+//     only entry point is now double-click on the focused title
+//   * six-dot drag handle painted on the left so the drag affordance
+//     is no longer mystery-meat
+//   * hairline divider + extra spacing before the close button
+//   * focused panel paints an accent left-edge inset + 8% wash so the
+//     active panel is unmistakable
+//   * inactive title + icons hit AA 4.5:1 vs bg-2 (no opacity crush)
 
 import {
   useCallback,
@@ -90,12 +104,12 @@ export function PanelHeader({
   }, [name]);
 
   // Title double-click toggles maximize unless it landed on the input
-  // (which gets its own double-click → select-word behaviour). The
-  // user opens rename via the dedicated rename button or the inline
-  // input that appears after a single click on a focused tab — see
-  // `onTitleDoubleClick` below: when the panel is the *selected* one
-  // double-click enters rename, otherwise it maximises. This gives a
-  // single gesture for both cases without a hidden mode switch.
+  // (which gets its own double-click → select-word behaviour). Iter5
+  // dropped the pencil button — rename is now invoked exclusively by
+  // double-clicking the title when the panel is focused. When the
+  // panel is *unfocused* the double-click maximises instead. This
+  // gives a single gesture for both cases without a hidden mode
+  // switch.
   const onTitleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
