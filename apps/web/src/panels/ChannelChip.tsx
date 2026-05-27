@@ -15,7 +15,7 @@
 // take over the panel header.
 
 import type { Channel } from "../state/store";
-import { colorFor } from "./palette";
+import { colorFor, colorForSource } from "./palette";
 import { fullChannelLabel, shortChannelLabel } from "./channelLabels";
 import styles from "./PlotPanel.module.css";
 
@@ -29,6 +29,13 @@ interface Props {
 export function ChannelChip({ channel, sourceBadge, onRemove }: Props) {
   const full = fullChannelLabel(channel);
   const short = shortChannelLabel(channel);
+  // Iter3 issue #2 — the chip splits into a leading source-coloured
+  // ribbon (`.chipRibbon`) and the existing pill body (`.chipBody`).
+  // The ribbon makes the source unmistakable at a glance even when the
+  // text badge is hidden (single-source view) or invisible at small
+  // panel widths. Ribbon is rendered even without a badge so the same
+  // colour signal exists in single-source layouts too — but in a more
+  // muted way (the ribbon doubles as a visual anchor).
   return (
     <span
       className={styles.chip}
@@ -36,30 +43,40 @@ export function ChannelChip({ channel, sourceBadge, onRemove }: Props) {
       title={sourceBadge ? `${full}  ·  ${sourceBadge}` : full}
     >
       <span
-        className={styles.chipSwatch}
-        style={{ background: colorFor(channel.id) }}
+        className={styles.chipRibbon}
+        style={{ background: colorForSource(channel.sourceId) }}
+        data-testid={`chip-ribbon-${channel.id}`}
         aria-hidden
       />
-      <span className={styles.chipLabel}>{short}</span>
-      {channel.unit && <span className={styles.chipUnit}>{channel.unit}</span>}
-      {sourceBadge && (
+      <span className={styles.chipBody}>
         <span
-          className={styles.chipBadge}
-          data-testid={`chip-badge-${channel.id}`}
+          className={styles.chipSwatch}
+          style={{ background: colorFor(channel.id) }}
+          aria-hidden
+        />
+        <span className={styles.chipLabel}>{short}</span>
+        {channel.unit && (
+          <span className={styles.chipUnit}>{channel.unit}</span>
+        )}
+        {sourceBadge && (
+          <span
+            className={styles.chipBadge}
+            data-testid={`chip-badge-${channel.id}`}
+          >
+            {sourceBadge}
+          </span>
+        )}
+        <button
+          type="button"
+          className={styles.chipRemove}
+          aria-label={`Remove channel ${channel.name}`}
+          title={`Remove ${short}`}
+          onClick={() => onRemove(channel.id)}
+          data-testid={`remove-${channel.id}`}
         >
-          {sourceBadge}
-        </span>
-      )}
-      <button
-        type="button"
-        className={styles.chipRemove}
-        aria-label={`Remove channel ${channel.name}`}
-        title={`Remove ${short}`}
-        onClick={() => onRemove(channel.id)}
-        data-testid={`remove-${channel.id}`}
-      >
-        ×
-      </button>
+          ×
+        </button>
+      </span>
     </span>
   );
 }

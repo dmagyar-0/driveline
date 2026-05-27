@@ -47,7 +47,7 @@ import {
   formatReadoutValue,
   type CursorReadoutEntry,
 } from "./CursorReadout";
-import { CursorTooltip } from "./CursorTooltip";
+import { CursorGutter, type CursorGutterEntry } from "./CursorGutter";
 import { SegmentBands, formatSegmentTime } from "./SegmentBands";
 import {
   shortChannelLabel,
@@ -55,6 +55,11 @@ import {
   sourceBadge as sourceBadgeFor,
 } from "./channelLabels";
 import { groupByUnit, axisLabel, type AxisGroup } from "./axisGroups";
+import {
+  formatRelativeTime24h,
+  formatAxisTime24h,
+  makeAxisValueFormatter,
+} from "./plotFormat";
 import { mark, measure } from "../perf";
 import styles from "./PlotPanel.module.css";
 
@@ -258,15 +263,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     [],
   );
 
-  // Iter2 issue #1 — floating cursor tooltip. The X position is the
-  // cursor playhead's CSS-pixel offset inside `.plotArea`. `null` while
-  // the cursor sits outside the rendered range so the tooltip hides
-  // alongside the overlay cursor line. The width of the container is
-  // tracked here so the tooltip's flip-when-near-right-edge decision
-  // doesn't have to measure on every render. Both update at most once
-  // per cursor tick (≤1 / rAF in the hot path budget).
-  const [tooltipX, setTooltipX] = useState<number | null>(null);
-  const [plotAreaWidth, setPlotAreaWidth] = useState<number>(0);
+  // Iter3 issue #1 — cursor gutter entries. Replaces the iter2 floating
+  // tooltip; the gutter never overlaps the data, so we no longer need
+  // the tooltip pixel-X state or the panel-width flip decision. Both
+  // are computed in the same hot-path effect as `readoutEntries`.
+  const [gutterEntries, setGutterEntries] = useState<CursorGutterEntry[]>([]);
 
   // Iter2 issue #4 — segment-band geometry. We rebuild bands when
   // `sources` change (a new file is dropped or one is closed); the
@@ -342,9 +343,31 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         value: valueStr,
         unit: c.unit,
         sourceBadge: badges.get(c.id) ?? "",
+        sourceId: c.sourceId,
       };
     });
     setReadoutEntries(entries);
+
+    // Iter3 issue #1 — gutter entries carry the raw numeric value so
+    // the gutter can format it with the unit-aware fixed-decimal
+    // helper (issue #3). The readout strip below the plot continues to
+    // use `formatReadoutValue` for backwards compatibility with the
+    // T6.3 spec — both surfaces show the same number to the same
+    // precision the user expects from their unit.
+    const gutter: CursorGutterEntry[] = boundChannels.map((c) => {
+      const s = byIdx.get(c.id) ?? null;
+      return {
+        channelId: c.id,
+        shortLabel: shortChannelLabel(c),
+        value:
+          s && Number.isFinite(s.value) ? formatReadoutValue(s.value) : null,
+        unit: c.unit,
+        sourceBadge: badges.get(c.id) ?? "",
+        sourceId: c.sourceId,
+        rawValue: s && Number.isFinite(s.value) ? s.value : null,
+      };
+    });
+    setGutterEntries(gutter);
     mark(t1);
     // Cheap one-shot mark; do not measure on every cursor tick (would
     // pollute the perf timeline). Caller can `performance.measure`
@@ -426,26 +449,63 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // at a glance which trace owns which side. The bottom x-axis stays
     // neutral; tinting it would suggest the time axis belongs to one
     // series. Pass `tint` only for tinted Y axes.
+    //
+    // Iter3 issue #4 — for Y axes we install a custom `values`
+    // formatter that prints uniform decimals across the tick ladder.
+    // uPlot's default trims trailing zeros which produces ladders like
+    // `33, 33.4, 33.6, 33.8` — the lone `33` reads as missing a decimal.
+    //
+    // Iter3 issue #5 — when there are two y-axis groups, the left and
+    // right gridlines are tinted to match their owning axis. Tints are
+    // dialled way down (alpha ~0.12) so the canvas stays readable —
+    // the goal is "which group does this gridline belong to", not
+    // "shout the axis colour".
+    //
+    // Iter3 issue #6 — the bottom (time) axis uses a strict 24h
+    // `HH:MM:SS` formatter; uPlot's default mixes `6:08am` and 24h
+    // depending on the tick magnitude.
     const mkAxis = (
       side: 0 | 1 | 2 | 3,
       scale: string,
       label?: string,
       tint?: string,
+      gridTint?: string,
     ): uPlot.Axis => {
       const stroke = tint ?? fg;
       const tickStroke = tint ?? ticks;
-      // Grid keeps the subdued tone — a fully tinted grid drowns the
-      // canvas. Tick + label tint is enough to associate the axis.
-      return {
+      const isTimeAxis = scale === "x";
+      const gridStroke = gridTint ?? grid;
+      const axisOpts: uPlot.Axis = {
         scale,
         side,
         stroke,
         ticks: { stroke: tickStroke, size: 4 },
-        grid: { stroke: grid, width: 1 },
-        // Render only on canvas axes (sides 2 = bottom-x, 3 = right-y,
-        // 1 = left-y); uPlot ignores `label` for unused axes anyway.
+        grid: { stroke: gridStroke, width: 1 },
         ...(label ? { label } : {}),
       };
+      // Force 24h on the time axis; otherwise the Y-axis formatter so
+      // the tick ladder reads cleanly even when the range zooms in.
+      if (isTimeAxis) {
+        axisOpts.values = (_self, splits) => splits.map(formatAxisTime24h);
+      } else {
+        axisOpts.values = makeAxisValueFormatter() as uPlot.Axis.Values;
+      }
+      return axisOpts;
+    };
+
+    // Per-side gridline tint (iter3 issue #5). Use the group's
+    // `axisColor` at low opacity so the gridlines associate without
+    // overpowering the canvas. We only tint when there are ≥2 groups;
+    // a single-axis plot keeps the neutral grid (tinting one side
+    // doesn't differentiate anything in that case).
+    const tintedGrid = (hex: string): string => {
+      // Convert `#rrggbb` → `rgba(r,g,b,0.12)`. Defensive: if the input
+      // isn't a 6-digit hex, fall back to the default grid colour.
+      if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return grid;
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r}, ${g}, ${b}, 0.18)`;
     };
     // Default mode: `mergeSeries` emits `null` at every union timestamp
     // where *this* series has no sample. With two same-rate signals on
@@ -476,10 +536,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // series, adding noise instead of signal. Pass `undefined` to
       // mkAxis so single-axis plots retain the neutral fg colour.
       const tint = axisGroups.length >= 2 ? g.axisColor : undefined;
+      // Iter3 issue #5 — gridline tint per side. Only applied when
+      // there are two visible Y axes (left + right); otherwise we'd
+      // tint both lines the same colour, which doesn't differentiate.
+      const gridTint =
+        axisGroups.length >= 2 && tint ? tintedGrid(tint) : undefined;
       if (i === 0) {
-        axesOpts.push(mkAxis(3, g.scaleKey, axisLabel(g), tint)); // left
+        axesOpts.push(mkAxis(3, g.scaleKey, axisLabel(g), tint, gridTint));
       } else if (i === 1) {
-        axesOpts.push(mkAxis(1, g.scaleKey, axisLabel(g), tint)); // right
+        axesOpts.push(mkAxis(1, g.scaleKey, axisLabel(g), tint, gridTint));
       }
       // i >= 2: scale exists but no visible axis — see Mixed-units warning
     }
@@ -617,37 +682,18 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         ? prev
         : { leftPx: left, topPx: top, widthPx: width, heightPx: height },
     );
-    const containerWidth = containerEl.getBoundingClientRect().width;
-    setPlotAreaWidth((w) => (w === containerWidth ? w : containerWidth));
-
     // Issue #5 — hide the cursor line in an empty plot. A stray orange
     // vertical bar over an unbound canvas reads as noise, not a
     // playhead. With no bound series the overlay clears to empty and
     // returns; once the user picks a channel the next cursor tick
     // redraws normally.
-    if (boundChannels.length === 0) {
-      setTooltipX(null);
-      return;
-    }
+    if (boundChannels.length === 0) return;
 
     const range = lastRangeRef.current ?? globalRange;
-    if (!range) {
-      setTooltipX(null);
-      return;
-    }
+    if (!range) return;
 
     const x = cursorXPx(cursorNs, range, width);
-    if (x === null) {
-      setTooltipX(null);
-      return;
-    }
-
-    // Tooltip anchor — bbox-relative cursor X plus the bbox's own
-    // left offset gives a coordinate inside `.plotArea`. Only update
-    // when the rounded value actually changes to avoid a no-op
-    // re-render every tick.
-    const cursorCssX = Math.round(left + x);
-    setTooltipX((prev) => (prev === cursorCssX ? prev : cursorCssX));
+    if (x === null) return;
 
     ctx.strokeStyle = cursorStrokeColor();
     ctx.lineWidth = 1;
@@ -687,14 +733,20 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       const endOff = s.timeRange.endNs - originNs;
       const leftFrac = Number(startOff) / Number(spanNs);
       const widthFrac = Number(endOff - startOff) / Number(spanNs);
-      const startLbl = formatSegmentTime(s.timeRange.startNs, originNs);
-      const endLbl = formatSegmentTime(s.timeRange.endNs, originNs);
+      // Iter3 issue #7 — segment tooltips were "S1" with an
+      // unexplained one-line title. Reword as a multi-line hover so
+      // the user gets the name, the 24h start time, and the duration
+      // (relative ms-precise stamp for the start; HH:MM:SS for the
+      // span). Browsers render `title` line breaks as separators.
+      const startRel = formatSegmentTime(s.timeRange.startNs, originNs);
+      const endRel = formatSegmentTime(s.timeRange.endNs, originNs);
+      const startWall = formatRelativeTime24h(s.timeRange.startNs, originNs);
       return {
         id: `${s.id}:${i}`,
         label: `S${i + 1}`,
         leftFrac,
         widthFrac,
-        title: `Segment ${i + 1} · ${s.name} · ${startLbl} → ${endLbl}`,
+        title: `Segment ${i + 1}: ${s.name}\nStart: ${startWall} (${startRel})\nEnd: ${endRel}`,
       };
     });
   }, [sources, globalRange]);
@@ -713,12 +765,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     }
   }, [sources, globalRange]);
 
-  // Time label for the cursor tooltip — formatted once per cursor tick.
-  // Relative to the session origin so segment correlations are obvious
-  // (a 1.5-minute mark inside seg #2 reads cleanly).
-  const tooltipTimeLabel = useMemo(() => {
+  // Iter3 issue #6 — gutter time header. Always 24h `HH:MM:SS`, never
+  // 12h. Relative to the session origin so segment correlations are
+  // obvious (a 1.5-hour mark inside seg #2 reads as `01:30:00`).
+  const gutterTimeLabel = useMemo(() => {
     if (!globalRange) return null;
-    return formatSegmentTime(cursorNs, globalRange.startNs);
+    return formatRelativeTime24h(cursorNs, globalRange.startNs);
   }, [cursorNs, globalRange]);
 
   const atCap = boundChannelIds.length >= MAX_PLOT_SERIES;
@@ -822,39 +874,43 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           onClose={() => setPickerOpen(false)}
         />
       )}
-      <div ref={containerRef} className={styles.plotArea}>
-        <div ref={plotMountRef} className={styles.plotMount} />
-        {/* Iter2 issue #4 — segment bands sit between the canvas and
-            the cursor overlay so the cursor line stays visible over the
-            band tint. Rendered only when geometry is known + ≥2
-            sources. */}
-        {bbox && boundChannels.length > 0 && segmentBandsList.length > 1 && (
-          <SegmentBands
-            bands={segmentBandsList}
-            bboxLeftPx={bbox.leftPx}
-            bboxTopPx={bbox.topPx}
-            bboxWidthPx={bbox.widthPx}
-            bboxHeightPx={bbox.heightPx}
-          />
-        )}
-        <canvas ref={overlayRef} className={styles.overlay} />
-        {/* Iter2 issue #1 — floating tooltip anchored to the playhead.
-            Wrapped inside `.plotArea` so the absolute `left`/`top` are
-            relative to the panel canvas, not the document. */}
+      <div className={styles.plotArea}>
+        {/* Iter3 issue #1 — `.plotCanvasWrap` is the resize target the
+            ResizeObserver tracks; the gutter beside it is fixed-width
+            so the plot canvas owns the remaining flex space. The plot
+            no longer reflows when cursor values change. */}
+        <div ref={containerRef} className={styles.plotCanvasWrap}>
+          <div ref={plotMountRef} className={styles.plotMount} />
+          {/* Iter2 issue #4 — segment bands sit between the canvas and
+              the cursor overlay so the cursor line stays visible over the
+              band tint. Rendered only when geometry is known + ≥2
+              sources. */}
+          {bbox &&
+            boundChannels.length > 0 &&
+            segmentBandsList.length > 1 && (
+              <SegmentBands
+                bands={segmentBandsList}
+                bboxLeftPx={bbox.leftPx}
+                bboxTopPx={bbox.topPx}
+                bboxWidthPx={bbox.widthPx}
+                bboxHeightPx={bbox.heightPx}
+              />
+            )}
+          <canvas ref={overlayRef} className={styles.overlay} />
+          {boundChannels.length === 0 && (
+            <div className={styles.empty} data-testid="plot-empty">
+              {hasAnyScalar
+                ? "Pick one or more channels to plot."
+                : "Drop an MCAP or MF4 file to load scalar channels."}
+            </div>
+          )}
+        </div>
+        {/* Iter3 issue #1 — right-side cursor-value gutter. Replaces
+            the iter2 floating tooltip. The gutter is rendered only
+            when there is at least one bound channel so the empty
+            state has the full panel width. */}
         {boundChannels.length > 0 && (
-          <CursorTooltip
-            xPx={tooltipX}
-            containerWidthPx={plotAreaWidth}
-            timeLabel={tooltipTimeLabel}
-            entries={readoutEntries}
-          />
-        )}
-        {boundChannels.length === 0 && (
-          <div className={styles.empty} data-testid="plot-empty">
-            {hasAnyScalar
-              ? "Pick one or more channels to plot."
-              : "Drop an MCAP or MF4 file to load scalar channels."}
-          </div>
+          <CursorGutter timeLabel={gutterTimeLabel} entries={gutterEntries} />
         )}
       </div>
       <CursorReadout entries={readoutEntries} />

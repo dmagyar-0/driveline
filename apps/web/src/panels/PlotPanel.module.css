@@ -43,23 +43,52 @@
   scrollbar-width: thin;
 }
 
-/* Compact chip: short label · unit · optional badge · remove. The
- * `max-width` budget is tight on purpose so a long topic name cannot
- * push the Add button off-screen. The full path is in `title`. */
+/* Compact chip: source ribbon · swatch · short label · unit · optional
+ * badge · remove. The `max-width` budget is tight on purpose so a long
+ * topic name cannot push the Add button off-screen. The full path is
+ * in `title`.
+ *
+ * Iter3 issue #2 — the chip now carries a 4 px source-coloured ribbon
+ * down its left edge (`.chipRibbon`). The ribbon is rendered before
+ * the swatch so the user can pre-attentively bucket chips by source
+ * (e.g. all `comma2k19__seg4` chips share a violet leading bar) before
+ * resolving the per-channel swatch.
+ */
 .chip {
   display: inline-flex;
-  align-items: center;
-  gap: var(--sp-2);
-  padding: 2px var(--sp-2) 2px var(--sp-3);
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
   background: var(--color-bg-2);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-pill);
   color: var(--color-fg-2);
   font-size: var(--fs-12);
   line-height: 1.4;
-  max-width: 14rem;
+  max-width: 16rem;
   min-width: 0;
   white-space: nowrap;
+  overflow: hidden;
+}
+
+.chipRibbon {
+  width: 4px;
+  align-self: stretch;
+  flex-shrink: 0;
+  /* The ribbon flows edge-to-edge along the left side of the pill —
+   * `border-radius: inherit` would leak through to the right edge, so
+   * we manually round only the leading corners. */
+  border-top-left-radius: var(--radius-pill);
+  border-bottom-left-radius: var(--radius-pill);
+}
+
+.chipBody {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 2px var(--sp-2) 2px var(--sp-3);
+  min-width: 0;
+  flex: 1;
 }
 
 .chipSwatch {
@@ -211,10 +240,29 @@
   border-radius: var(--radius-2);
 }
 
+/* Iter3 issue #1 — `.plotArea` now hosts two children side by side:
+ * the plot canvas on the left, the cursor gutter on the right. The
+ * gutter is a fixed-width column; the plot canvas claims the remainder
+ * via `flex: 1`. The overlay canvas (`.overlay`) and segment bands
+ * stack on top of `.plotMount`, so they continue to track the actual
+ * canvas geometry (not the gutter).
+ *
+ * The gutter never overlaps the traces — iter2's floating tooltip
+ * routinely occluded 25–30 % of the upper-right quadrant. */
 .plotArea {
   position: relative;
   width: 100%;
   flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+
+.plotCanvasWrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -267,6 +315,17 @@
   min-width: 0;
 }
 
+.readoutRibbon {
+  /* Iter3 issue #2 — per-source ribbon. Slim vertical bar so the row
+   * stays compact while the colour is impossible to miss. */
+  width: 3px;
+  height: 14px;
+  border-radius: 1px;
+  display: inline-block;
+  flex-shrink: 0;
+  margin-right: 2px;
+}
+
 .readoutSwatch {
   width: 0.625rem;
   height: 0.625rem;
@@ -303,15 +362,153 @@
   font-weight: var(--fw-regular);
 }
 
-/* Floating cursor tooltip (iter2 issue #1). Anchored to the playhead
- * inside `.plotArea` (which is `position: relative`). Sits near the
- * top of the canvas so it never overlaps the under-plot readout strip.
+/* Iter3 issue #3 — numeric cells. Apply to any value that lives in a
+ * column the user scans top-to-bottom (axis labels, cursor values,
+ * readout strip values, chip units). Tabular figures keep every digit
+ * the same width so `30.60` and `7.30` align by decimal point; right
+ * alignment seals the deal when the cell is wider than the number. */
+.numCell {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  text-align: right;
+}
+
+/* Iter3 issue #1 — right-hand cursor-value gutter. Replaces the iter2
+ * floating tooltip; the gutter sits in the panel chrome on the right
+ * and never overlaps the data area. Width is fixed so the column
+ * doesn't reflow as the cursor moves.
  *
- * The tooltip is the primary "what is the value at the cursor" surface
- * — it puts the answer right next to where the user is already
- * looking. The strip below still exists as a persistent secondary
- * readout for users with wide panels.
+ * Iter3 issue #2 — each row begins with a coloured ribbon keyed to the
+ * channel's *source*, distinct from the per-channel swatch. The ribbon
+ * is wide and unmistakable; the iter2 grey suffix badge was the audit's
+ * #2 finding.
  */
+.cursorGutter {
+  width: 180px;
+  flex-shrink: 0;
+  background: var(--color-bg-2);
+  border-left: 1px solid var(--color-border-subtle);
+  padding: var(--sp-3) var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  font-size: var(--fs-12);
+  color: var(--color-fg-2);
+  /* Match the plot canvas's vertical extent — `align-items: stretch`
+   * on `.plotArea` already drives this, but pin the box-sizing so the
+   * scrollbar gutter doesn't push our 180 px target. */
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.cursorGutterTime {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  font-size: var(--fs-12);
+  color: var(--color-fg-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  letter-spacing: 0.02em;
+  text-align: right;
+}
+
+.cursorGutterList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.cursorGutterRow {
+  display: grid;
+  grid-template-columns: 4px 1fr;
+  grid-template-rows: auto auto;
+  grid-template-areas:
+    "ribbon label"
+    "ribbon value";
+  column-gap: var(--sp-2);
+  row-gap: 1px;
+  align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+
+.cursorGutterRow:last-child {
+  border-bottom: none;
+}
+
+/* The 4 px ribbon spanning the full row height. Coloured by source
+ * (iter3 issue #2) so two same-named channels from different files
+ * are unmistakable at a glance. */
+.cursorGutterRibbon {
+  grid-area: ribbon;
+  align-self: stretch;
+  border-radius: 2px;
+  min-height: 100%;
+}
+
+.cursorGutterLabelRow {
+  grid-area: label;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cursorGutterSwatch {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 1px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+.cursorGutterLabel {
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.cursorGutterBadge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--color-fg-4);
+  background: var(--color-bg-3);
+  border-radius: var(--radius-2);
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.cursorGutterValue {
+  grid-area: value;
+  color: var(--color-fg-1);
+  font-family: var(--font-mono);
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-12);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cursorGutterUnit {
+  color: var(--color-fg-5);
+  font-weight: var(--fw-regular);
+}
+
+/* Floating cursor tooltip — retained for backwards-compatible callers
+ * and tests (iter2). Not rendered by PlotPanel after iter3; the gutter
+ * is the cursor-value surface. Keeping the classes around so
+ * CursorTooltip continues to work as a standalone component for any
+ * future overlay use-case. */
 .cursorTooltip {
   position: absolute;
   pointer-events: none;
