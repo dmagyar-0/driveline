@@ -169,6 +169,26 @@ export function PanelHeader({
       style={accentStyle}
       onPointerDown={onHeaderPointerDown}
     >
+      {/* Iter5 · explicit drag affordance.
+       *
+       * Audit point: "no drag handle indicated, even though FlexLayout
+       * panels are drag-rearrangeable; users must discover that by
+       * accident." A six-dot glyph (the universal "drag handle"
+       * idiom) sits at the very left of the header. The whole header
+       * already accepts pointerdown — FlexLayout reads the drag from
+       * the surrounding tab button — so this is a *visual* cue, not a
+       * separate listener. Marked aria-hidden because the action lives
+       * on the tab button itself; the `title` is what hover-discovers
+       * it for sighted mouse users.
+       */}
+      <span
+        className={styles.dragHandle}
+        aria-hidden="true"
+        title="Drag to move panel"
+        data-testid="tab-drag-handle"
+      >
+        <DragHandleIcon />
+      </span>
       {kind !== null && (
         <span
           className={styles.kindIcon}
@@ -384,6 +404,31 @@ function CloseIcon(): React.ReactElement {
       aria-hidden="true"
     >
       <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" />
+    </svg>
+  );
+}
+
+/**
+ * Six-dot drag handle — the universal "grab to reorder" idiom. Two
+ * columns of three dots so the affordance reads at any tab size. Kept
+ * decorative-only: FlexLayout owns the actual drag, this just makes
+ * the affordance discoverable without a mystery-meat hover.
+ */
+function DragHandleIcon(): React.ReactElement {
+  return (
+    <svg
+      width="10"
+      height="14"
+      viewBox="0 0 10 14"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <circle cx="3" cy="3" r="1" />
+      <circle cx="7" cy="3" r="1" />
+      <circle cx="3" cy="7" r="1" />
+      <circle cx="7" cy="7" r="1" />
+      <circle cx="3" cy="11" r="1" />
+      <circle cx="7" cy="11" r="1" />
     </svg>
   );
 }

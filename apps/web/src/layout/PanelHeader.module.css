@@ -116,6 +116,36 @@
   opacity: 1 !important;
 }
 
+/* Iter5 · drag affordance.
+ *
+ * Six-dot handle painted at the very left of the header. The whole
+ * header already advertises `cursor: grab`, but the audit (and the
+ * skill's "no mystery-meat" rule) wants an explicit glyph so users
+ * don't have to discover the drag by hover.
+ *
+ * Colour starts at fg-5 so the handle reads as subordinate to the
+ * kind icon + title; on header hover it brightens to fg-3 to signal
+ * "I'm the thing you'd grab right now". Resting fg-5 (#969ba4) still
+ * clears 4.5:1 vs bg-2, so the handle never disappears below AA.
+ */
+.dragHandle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 10px;
+  height: 14px;
+  color: var(--color-fg-5);
+  flex: 0 0 auto;
+  /* Inherit grab so the handle reads as the drag target on hover. */
+  cursor: inherit;
+  transition: color var(--motion-fast);
+}
+
+.header:hover .dragHandle,
+.header.focused .dragHandle {
+  color: var(--color-fg-3);
+}
+
 .kindIcon {
   display: inline-flex;
   align-items: center;

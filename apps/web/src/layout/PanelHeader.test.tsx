@@ -297,6 +297,32 @@ describe("PanelHeader", () => {
     expect(header?.getAttribute("data-panel-kind")).toBe("video");
   });
 
+  // Iter5 · explicit drag affordance.
+  //
+  // Audit point: "no drag handle indicated, even though FlexLayout
+  // panels are drag-rearrangeable; users must discover that by
+  // accident." The header now stamps a 6-dot handle on the left with
+  // a `title` tooltip — assert it renders and carries the discovery
+  // copy. The element is aria-hidden because the drag target is the
+  // whole tab button (FlexLayout-owned).
+  it("renders a drag-handle affordance with a hover tooltip", () => {
+    const { model } = makeStubModel();
+    render(
+      <PanelHeader
+        model={model}
+        panelId="plot-1"
+        tabsetId="ts-1"
+        name="A"
+        kind="plot"
+        isFocused={false}
+      />,
+    );
+    const handle = screen.getByTestId("tab-drag-handle");
+    expect(handle).toBeTruthy();
+    expect(handle.getAttribute("title")).toBe("Drag to move panel");
+    expect(handle.getAttribute("aria-hidden")).toBe("true");
+  });
+
   // Iter5 · the destructive close button gets a visible hairline
   // divider + extra spacing so it's no longer adjacent to maximize.
   // Audit point: "× close sits one pixel from □ maximize; misclick
