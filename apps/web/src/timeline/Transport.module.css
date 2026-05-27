@@ -47,16 +47,42 @@
   gap: var(--sp-5);
 }
 
+/* DEPRECATED iter3 wrapper — kept for any consumer still referencing
+ * `.transportGroup` directly. New layout uses `.transportCluster`. */
 .transportGroup {
   display: flex;
   align-items: center;
   gap: var(--sp-5);
 }
 
+/* Iter4 (issue #4) — the primary playback cluster. Groups the play
+ * buttons + speed pill into a single visually-cohesive unit so the
+ * user reads "this is how I drive playback" in one glance, rather
+ * than scanning between the bottom-left and bottom-right corners. */
+.transportCluster {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+}
+
 .btnGroup {
   display: flex;
   gap: var(--sp-2);
   align-items: center;
+}
+
+/* Iter4 (issue #4) — vertical hairline between the play buttons and
+ * the speed pill inside the primary cluster. Same visual language
+ * as the iter3 right-edge divider but here it BINDS two related
+ * controls instead of separating them — the cluster reads as one
+ * unit because the divider is shorter than the buttons (12 px vs
+ * 32 px) so it's a subordinating mark, not a wall. */
+.clusterDivider {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-strong);
+  opacity: 0.55;
 }
 
 .btnT {
@@ -101,32 +127,48 @@
   background: var(--color-bg-5);
 }
 
-/* Iter3 (issue #4) — speed gets its own labelled pill on the right
- * edge. Visually heavier than the meta-cluster (mode + ?), because
- * speed is the higher-frequency setting used during scrubbing. */
+/* Iter4 (issue #4) — speed pill, now sitting inline next to the
+ * play buttons. Was a flex-column with a label above; now
+ * horizontal so it fits the row height of the play group (32 px)
+ * without bumping the bar's vertical footprint. Still a labelled
+ * control so the meaning isn't carried by glyph alone. */
 .speedPill {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding: 4px var(--sp-4);
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-2) 0 var(--sp-3);
+  height: 32px;
   border-radius: var(--radius-4);
   background: var(--color-bg-3);
   border: 1px solid var(--color-border-subtle);
 }
 
-/* Iter3 (issue #4) — meta cluster for the lower-frequency controls
- * (REL/ABS + `?`). Separated from the speed pill by a visible left
- * divider so the three controls no longer read as a single awkward
- * group. The cluster has internal padding so the two buttons feel
- * deliberate, not crammed. */
+/* DEPRECATED iter3 wrapper — iter4 keeps the class hook so the
+ * existing data-testid + class-name regressions don't trip, but
+ * visually the cluster now collapses to a quiet right-corner group
+ * (see `.utilityCluster` below). The iter3 border-right is gone:
+ * REL/ABS + `?` are now utility settings, not a peer of the play
+ * group. */
 .metaCluster {
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
-  padding: 0 var(--sp-5) 0 var(--sp-3);
-  margin-right: var(--sp-4);
-  border-right: 1px solid var(--color-border-strong);
-  align-self: stretch;
+  gap: var(--sp-3);
+}
+
+/* Iter4 (issue #5) — utility cluster: REL/ABS + `?` demoted to a
+ * quiet right-corner group, visually subordinate to the playback
+ * cluster on the left. Smaller gap, no padding ring, no divider
+ * outline. The two controls keep their existing per-control styles
+ * (`.modeChip`, `.helpBtn`) but those are sized below to match the
+ * new "utility" weight. */
+.utilityCluster {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  /* Vertically centre against the 32 px-tall play buttons without
+   * inflating the row to match. */
+  align-self: center;
 }
 
 .fieldLabel {
@@ -136,6 +178,11 @@
   letter-spacing: var(--tracking-wide);
   color: var(--color-fg-5);
   line-height: 1;
+  /* Iter4 (issue #4) — when inline next to the select, the label
+   * needs a stable vertical centre so it doesn't drop a baseline
+   * below the select's text. */
+  display: inline-flex;
+  align-items: center;
 }
 
 .speed {
@@ -171,22 +218,25 @@
   cursor: not-allowed;
 }
 
-/* Issue #5 — mode chip. Smaller than the speed selector by design —
- * it's a low-frequency setting. Stays compact on the right side of
- * the bar. */
+/* Iter4 (issue #5) — mode chip. Demoted to a 20-px utility pill,
+ * visually subordinate to the 32-px play buttons + speed pill in
+ * the primary cluster. Quieter background (transparent rest) so it
+ * only "fills in" when the user has it active, not by default. */
 .modeChip {
   appearance: none;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-pill);
-  color: var(--color-fg-4);
+  color: var(--color-fg-5);
   font-family: var(--font-mono);
   font-size: var(--fs-10);
   font-weight: var(--fw-semibold);
   letter-spacing: var(--tracking-wide);
-  padding: 4px 10px;
+  padding: 3px 9px;
   cursor: pointer;
-  min-height: 22px;
+  min-height: 20px;
+  height: 20px;
+  line-height: 1;
   transition:
     background var(--motion-fast),
     color var(--motion-fast),
@@ -215,24 +265,27 @@
   box-shadow: 0 0 0 1px var(--color-accent-blue) inset;
 }
 
-/* Issue #6 — `?` help button. Same visual weight as the mode chip so
- * the right-edge cluster feels balanced. */
+/* Iter4 (issue #5) — `?` help button. Demoted to 20 px to match the
+ * mode chip (20 px), so the utility cluster reads as one quiet
+ * group, well below the play group's 32–40 px weight. Quieter
+ * background (transparent rest) so the icon doesn't shout. */
 .helpBtn {
   appearance: none;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
   border-radius: 50%;
-  color: var(--color-fg-4);
+  color: var(--color-fg-5);
   font-family: var(--font-sans);
-  font-size: var(--fs-13);
+  font-size: var(--fs-11);
   font-weight: var(--fw-semibold);
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
   padding: 0;
+  line-height: 1;
   transition:
     background var(--motion-fast),
     color var(--motion-fast),

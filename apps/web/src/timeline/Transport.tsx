@@ -795,13 +795,29 @@ export function Transport() {
         </div>
       </div>
 
-      {/* Controls row — play group on the left, speed pill on the
-       *  right, with the mode toggle and `?` button kept visually
-       *  apart from speed by a dedicated meta-cluster (issue #4).
-       *  The big current-time readout is intentionally NOT duplicated
-       *  here (issue #1+#3); it lives in the playhead badge. */}
+      {/* Controls row.
+       *
+       * Iter4 (issue #4) — the iter3 layout had playback walled off
+       * on the LEFT and speed pinned to the FAR RIGHT, with REL/ABS
+       * and `?` between them. The designer audit: "speed and play
+       * controls belong together". Regrouped into:
+       *
+       *   ┌─────────────────────────────────────────────────────────┐
+       *   │ [⏮ ▶ ⏭] · [Speed ▾]              [REL/ABS] [?]          │
+       *   └─────────────────────────────────────────────────────────┘
+       *      └─── transportCluster (primary) ──┘   └ utilityCluster ┘
+       *
+       * Iter4 (issue #5) — REL/ABS and `?` are demoted to the right
+       * corner with smaller chrome (see `.utilityCluster` /
+       * `.helpBtn` rules) so they no longer compete with playback.
+       *
+       * The big current-time readout is intentionally NOT duplicated
+       * here (iter3 #1+#3); it lives in the playhead badge. */}
       <div className={styles.row}>
-        <div className={styles.transportGroup}>
+        <div
+          className={styles.transportCluster}
+          data-testid="transport-cluster"
+        >
           <div className={styles.btnGroup}>
             <button
               type="button"
@@ -852,18 +868,53 @@ export function Transport() {
               />
             )}
           </div>
+
+          {/* Divider between play group and speed — same visual
+           *  language as the iter3 meta-cluster divider, but it now
+           *  groups two related controls (play + speed) rather than
+           *  separating them. */}
+          <span className={styles.clusterDivider} aria-hidden />
+
+          {/* Iter4 (issue #4) — speed pill moved here, next to the
+           *  play buttons. Label sits above the select rather than as
+           *  floating microcaps so it's discoverable. */}
+          <div className={styles.speedPill}>
+            <label className={styles.fieldLabel} htmlFor="transport-speed">
+              Speed
+            </label>
+            <select
+              id="transport-speed"
+              className={styles.speed}
+              data-testid="transport-speed"
+              value={speed}
+              onChange={onSpeedChange}
+              disabled={disabled}
+              aria-label="Playback speed"
+              title="Playback speed"
+            >
+              {SPEED_OPTIONS.map((v) => (
+                <option key={v} value={v}>
+                  {v}×
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
 
         <div className={styles.rowGrow} />
 
-        {/* Iter3 (issue #4) — speed becomes its own labelled pill on the
-         *  far right; REL/ABS and `?` move into a separate "meta"
-         *  cluster with a divider so the three controls no longer
-         *  look like a single, awkward group. The meta cluster sits
-         *  to the LEFT of speed because speed is the higher-frequency
-         *  setting (used during scrubbing). */}
+        {/* Iter4 (issue #5) — utility cluster on the right. REL/ABS
+         *  and `?` are now visually subordinate to the playback
+         *  controls: smaller chrome, no labelled pill, no divider
+         *  outline. They live here together because both are
+         *  low-frequency view-mode controls.
+         *
+         *  Renamed from `metaCluster` → `utilityCluster` so the new
+         *  intent ("utility settings, secondary to playback") is
+         *  spelled out. The old testid is kept as a class hook on
+         *  the wrapper for back-compat with the iter3 spec. */}
         <div
-          className={styles.metaCluster}
+          className={`${styles.utilityCluster} ${styles.metaCluster}`}
           data-testid="transport-meta-cluster"
         >
           <button
@@ -892,9 +943,6 @@ export function Transport() {
             {timeMode === "relative" ? "REL" : "ABS"}
           </button>
 
-          {/* Issue #4 — `?` keeps its shortcut role but visually
-           *  separates from REL/ABS via the cluster gap + its own
-           *  circular shape. */}
           <button
             type="button"
             className={styles.helpBtn}
@@ -906,31 +954,6 @@ export function Transport() {
           >
             ?
           </button>
-        </div>
-
-        {/* Iter3 (issue #4) — speed pill in its own labelled column on
-         *  the far right. The label sits above the select rather than
-         *  as floating microcaps so it's discoverable. */}
-        <div className={styles.speedPill}>
-          <label className={styles.fieldLabel} htmlFor="transport-speed">
-            Speed
-          </label>
-          <select
-            id="transport-speed"
-            className={styles.speed}
-            data-testid="transport-speed"
-            value={speed}
-            onChange={onSpeedChange}
-            disabled={disabled}
-            aria-label="Playback speed"
-            title="Playback speed"
-          >
-            {SPEED_OPTIONS.map((v) => (
-              <option key={v} value={v}>
-                {v}×
-              </option>
-            ))}
-          </select>
         </div>
       </div>
     </div>
