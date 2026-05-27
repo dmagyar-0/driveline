@@ -297,6 +297,40 @@ describe("PanelHeader", () => {
     expect(header?.getAttribute("data-panel-kind")).toBe("video");
   });
 
+  // Iter5 · the destructive close button gets a visible hairline
+  // divider + extra spacing so it's no longer adjacent to maximize.
+  // Audit point: "× close sits one pixel from □ maximize; misclick
+  // risk is high." We assert the divider sits *between* maximize and
+  // close so a future refactor that shuffles the cluster ordering is
+  // caught at test time.
+  it("places a divider between maximize and close so misclicks are mitigated", () => {
+    const { model } = makeStubModel();
+    render(
+      <PanelHeader
+        model={model}
+        panelId="plot-1"
+        tabsetId="ts-1"
+        name="A"
+        kind="plot"
+        isFocused
+      />,
+    );
+    const divider = screen.getByTestId("tab-action-divider");
+    expect(divider).toBeTruthy();
+    // The divider should be a sibling between maximize and close.
+    const maximize = screen.getByTestId("tab-maximize");
+    const close = screen.getByTestId("tab-close");
+    // DOCUMENT_POSITION_FOLLOWING = 4. Two assertions: maximize is
+    // before the divider, and the divider is before close.
+    expect(
+      maximize.compareDocumentPosition(divider) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      divider.compareDocumentPosition(close) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
   // Iter5 · active vs inactive identity is no longer carried by a 1-px
   // underline alone. The wrapper now stamps `data-focused="true"` so
   // CSS can layer (a) a 2-px accent left-edge inset, (b) an 8 % accent

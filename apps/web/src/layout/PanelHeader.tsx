@@ -252,8 +252,14 @@ export function PanelHeader({
         </button>
         {/* Iter5 · destructive-action separator (see Issue 5). Gives the
          *  close button a clear visual + spatial gap from maximize so
-         *  the misclick risk the audit flagged is gone. */}
-        <span className={styles.actionDivider} aria-hidden="true" />
+         *  the misclick risk the audit flagged is gone. Marked with a
+         *  data-testid so the layout-test suite can assert it sits
+         *  exactly between the maximize and close buttons. */}
+        <span
+          className={styles.actionDivider}
+          aria-hidden="true"
+          data-testid="tab-action-divider"
+        />
         <button
           type="button"
           className={`${styles.actionBtn} ${styles.actionBtnClose}`}

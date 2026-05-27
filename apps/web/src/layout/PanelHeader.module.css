@@ -210,13 +210,17 @@
  * be adjacent to a benign control." The divider is a 1-px hairline +
  * symmetric padding so the close button reads as its own action zone
  * without disrupting the inline-flex cluster. Aria-hidden because it's
- * purely visual; the close button still has its own aria-label. */
+ * purely visual; the close button still has its own aria-label.
+ *
+ * The margin is `--sp-3` (8px) — combined with the cluster's `--sp-1`
+ * gap that puts the close button ~16px away from maximize, well past
+ * the Fitts'-law misclick threshold for 24-px hit targets. */
 .actionDivider {
   display: inline-block;
   width: 1px;
   height: 14px;
   background: var(--color-border-strong);
-  margin: 0 var(--sp-2);
+  margin: 0 var(--sp-3);
   flex: 0 0 auto;
 }
 
