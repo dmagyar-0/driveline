@@ -301,7 +301,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     const ro = new ResizeObserver(measure);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [boundChannels]);
+    // chipsCollapsed flips the chip row visibility — when chips become
+    // visible the container's geometry changes and the chip DOM
+    // appears. Without it in the deps, the measurement runs once on
+    // mount, sees no chips, and never updates.
+  }, [boundChannels, chipsCollapsed]);
 
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user

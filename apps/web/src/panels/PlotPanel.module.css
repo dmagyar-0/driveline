@@ -65,7 +65,17 @@
   font-size: var(--fs-12);
   line-height: 1.4;
   max-width: 16rem;
-  min-width: 0;
+  /* Iter4 alignment item #5 — chips never shrink below their content
+   * size. The `+N more` overflow pill is the responsive surface: when
+   * a chip wouldn't fit, the overflow detector hides it and renders
+   * it in the popover instead. Letting the chip shrink would defeat
+   * iter4 #2 (channel name takes priority) by collapsing the label
+   * back to `WheelSpe…` at narrow widths. Pin a hard floor wide
+   * enough for the channel-name min-width plus the badge max-width
+   * plus the chrome (ribbon, swatch, remove, gaps); the chip stays
+   * full-size and pushes its overflowed siblings into the popover. */
+  min-width: 13rem;
+  flex-shrink: 0;
   white-space: nowrap;
   overflow: hidden;
 }
@@ -209,17 +219,21 @@
 }
 
 .chipOverflowPill {
-  background: var(--color-bg-2);
+  background: var(--color-bg-4);
   color: var(--color-fg-2);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-pill);
-  padding: 2px var(--sp-4);
-  font-size: var(--fs-11);
+  padding: 3px var(--sp-4);
+  font-size: var(--fs-12);
   cursor: pointer;
   font-weight: var(--fw-medium);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
+  /* Iter4 alignment item #5 — keep the pill prominent so it reads as
+   * the surface affordance ("there are more chips than fit"). A
+   * subdued background would let it sink into the chip row. */
+  flex-shrink: 0;
 }
 
 .chipOverflowPill:hover {
