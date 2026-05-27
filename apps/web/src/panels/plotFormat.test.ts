@@ -10,6 +10,7 @@ import {
   decimalsForUnit,
   DEFAULT_DECIMALS,
   formatAxisTime24h,
+  formatDurationCompact,
   formatFixedForUnit,
   formatRelativeTime24h,
   formatTime24h,
@@ -94,6 +95,24 @@ describe("formatFixedForUnit", () => {
   it("returns em-dash for non-finite values", () => {
     expect(formatFixedForUnit(NaN, "m/s")).toBe("—");
     expect(formatFixedForUnit(Infinity, "m/s")).toBe("—");
+  });
+});
+
+describe("formatDurationCompact (iter5 issue #4 — in-chart Δ marker)", () => {
+  it("uses seconds for sub-minute durations", () => {
+    expect(formatDurationCompact(30_000_000_000n)).toBe("30s");
+    expect(formatDurationCompact(1_000_000_000n)).toBe("1s");
+  });
+  it("uses minutes (+seconds) for sub-hour durations", () => {
+    expect(formatDurationCompact(60_000_000_000n)).toBe("1m");
+    expect(formatDurationCompact(125_000_000_000n)).toBe("2m 5s");
+  });
+  it("uses hours (+minutes) for ≥1 hour", () => {
+    expect(formatDurationCompact(3_600_000_000_000n)).toBe("1h");
+    expect(formatDurationCompact(3_900_000_000_000n)).toBe("1h 5m");
+  });
+  it("emits em-dash for negative durations", () => {
+    expect(formatDurationCompact(-1n)).toBe("—");
   });
 });
 

@@ -110,6 +110,24 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
 
+/** Iter5 issue #4 — format a duration in nanoseconds as a compact
+ *  `m:ss` or `Hh Mm` string for the in-chart title delta marker. The
+ *  output is intentionally short so the overlay sits inside the
+ *  canvas's upper-left corner without competing with the data. */
+export function formatDurationCompact(deltaNs: bigint): string {
+  if (deltaNs < 0n) return "—";
+  const totalSec = Number(deltaNs / 1_000_000_000n);
+  if (totalSec < 60) return `${totalSec}s`;
+  const totalMin = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (totalMin < 60) {
+    return sec === 0 ? `${totalMin}m` : `${totalMin}m ${sec}s`;
+  }
+  const hours = Math.floor(totalMin / 60);
+  const min = totalMin % 60;
+  return min === 0 ? `${hours}h` : `${hours}h ${min}m`;
+}
+
 /** Iter5 issue #3 — time-axis tick ladder.
  *
  *  The audit found only two labels (`06:04:00`, `06:04:30`) for a 30 s

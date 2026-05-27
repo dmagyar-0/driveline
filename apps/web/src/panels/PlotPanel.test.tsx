@@ -310,6 +310,21 @@ describe("PlotPanel", () => {
     expect(snap.sampleAtCursor[1]?.value).toBe(2);
   });
 
+  it("renders the in-chart title and timestamp footer (iter5 #4)", async () => {
+    const { getByTestId } = render(<PlotPanel panelId="test-panel" />);
+    await waitFor(() => {
+      const snap = window.__drivelinePlotPanels?.["test-panel"];
+      return Boolean(snap && snap.seriesStats.length === 2);
+    });
+    // Title sits in the upper-left, footer in the bottom-right.
+    expect(getByTestId("plot-in-chart-title")).toBeTruthy();
+    expect(getByTestId("plot-in-chart-footer")).toBeTruthy();
+    // Δ marker reflects the 20 ms seeded range (1.000 s → 1.020 s).
+    // formatDurationCompact rounds to whole seconds; 0.02 s → "0s".
+    const delta = getByTestId("plot-in-chart-delta").textContent ?? "";
+    expect(delta).toMatch(/^Δ\s/);
+  });
+
   it("does not clear persisted bindings before any source loads", () => {
     // Pre-fix this would wipe the bindings on hydrate; with the
     // `sources.length > 0` gate persisted bindings survive until the

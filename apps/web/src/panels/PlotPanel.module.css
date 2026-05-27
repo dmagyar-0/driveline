@@ -384,6 +384,79 @@
   pointer-events: none;
 }
 
+/* Iter5 issue #4 — in-chart title overlay. Sits in the upper-left
+ * corner of the plot canvas so a screenshot reads as
+ * `<panel name> · Δ 30 s`. Subtle by design — low opacity, monospaced
+ * — so it doesn't distract during interaction but makes a screenshot
+ * self-explanatory. */
+.inChartTitle {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--color-fg-3);
+  background: rgba(15, 15, 15, 0.55);
+  padding: 1px 6px;
+  border-radius: var(--radius-2);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  /* The title must sit above SegmentBands but below the cursor
+   * overlay so it never obscures the playhead. */
+  z-index: 2;
+}
+
+.inChartTitleName {
+  color: var(--color-fg-2);
+  font-weight: var(--fw-semibold, 600);
+}
+
+.inChartTitleDelta {
+  color: var(--color-fg-4);
+}
+
+/* Iter5 issue #4 — bottom-right timestamp footer. Shows the visible
+ * range absolute timestamps so a screenshot tells the user *when*. */
+.inChartTimestampFooter {
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--color-fg-4);
+  background: rgba(15, 15, 15, 0.55);
+  padding: 1px 6px;
+  border-radius: var(--radius-2);
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Iter5 issue #5 — Mixed-units pill anchored to the plot's top-right
+ * corner. Replaces (well, supplements) the chip-bar pill from iter3
+ * so engineers see the warning where they look at the data: on the
+ * chart. */
+.inChartMixedUnits {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold, 600);
+  color: #f1c453;
+  background: rgba(241, 196, 83, 0.15);
+  border: 1px solid rgba(241, 196, 83, 0.45);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+  letter-spacing: 0.04em;
+  cursor: help;
+  pointer-events: auto;
+  z-index: 2;
+}
+
 .empty {
   position: absolute;
   inset: 0;

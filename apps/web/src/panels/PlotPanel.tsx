@@ -65,6 +65,8 @@ import {
 import {
   formatRelativeTime24h,
   formatAxisTime24h,
+  formatDurationCompact,
+  formatTime24h,
   makeAxisValueFormatter,
   timeAxisTicks,
 } from "./plotFormat";
@@ -1180,6 +1182,58 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
               />
             )}
           <canvas ref={overlayRef} className={styles.overlay} />
+          {/* Iter5 issue #4 — in-chart title + timestamp range footer.
+              Subtle overlays anchored to the plot canvas corners so a
+              screenshot reads as `<title> · Δ 30 s` (top-left) and
+              `06:04:00 → 06:04:30` (bottom-right). Both are rendered
+              only when there is geometry and bound channels, otherwise
+              they'd sit on an empty canvas reading as decoration. */}
+          {boundChannels.length > 0 && globalRange && (
+            <>
+              <div
+                className={styles.inChartTitle}
+                data-testid="plot-in-chart-title"
+              >
+                <span className={styles.inChartTitleName}>Plot</span>
+                <span
+                  className={styles.inChartTitleDelta}
+                  data-testid="plot-in-chart-delta"
+                >
+                  Δ{" "}
+                  {formatDurationCompact(
+                    globalRange.endNs - globalRange.startNs,
+                  )}
+                </span>
+                <span className={styles.inChartTitleDelta}>
+                  · {boundChannels.length} ch
+                </span>
+              </div>
+              <div
+                className={styles.inChartTimestampFooter}
+                data-testid="plot-in-chart-footer"
+              >
+                {formatTime24h(globalRange.startNs)} →{" "}
+                {formatTime24h(globalRange.endNs)}
+              </div>
+              {/* Iter5 issue #5 — the same Mixed Units pill that sits
+                  on the chip bar repeats on the chart's top-right
+                  corner, where the user actually looks at the data.
+                  The chip-bar pill stays so the bound-channel area
+                  still flags it; this one is the screenshot-friendly
+                  version. */}
+              {hasMixedUnits && (
+                <span
+                  className={styles.inChartMixedUnits}
+                  data-testid="plot-in-chart-mixed-units"
+                  title={`Channels span ${axisGroups.length} unit groups: ${axisGroups
+                    .map((g) => (g.unit ? g.unit : "(unitless)"))
+                    .join(", ")}. Only the first two map to visible axes.`}
+                >
+                  Mixed units · {axisGroups.length}
+                </span>
+              )}
+            </>
+          )}
           {boundChannels.length === 0 && (
             <div className={styles.empty} data-testid="plot-empty">
               {hasAnyScalar
