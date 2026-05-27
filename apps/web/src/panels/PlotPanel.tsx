@@ -66,6 +66,7 @@ import {
   formatRelativeTime24h,
   formatAxisTime24h,
   makeAxisValueFormatter,
+  timeAxisTicks,
 } from "./plotFormat";
 import { mark, measure } from "../perf";
 import styles from "./PlotPanel.module.css";
@@ -595,16 +596,43 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // Force 24h on the time axis; otherwise the Y-axis formatter so
       // the tick ladder reads cleanly even when the range zooms in.
       if (isTimeAxis) {
-        axisOpts.values = (_self, splits) => splits.map(formatAxisTime24h);
+        // Iter5 issue #3 — replace uPlot's auto-picker (which prefers
+        // 2–3 widely-spaced labels) with an explicit major/minor
+        // ladder. `timeAxisTicks` returns every tick position in
+        // seconds; the `values` formatter labels majors with the 24h
+        // time and emits `""` for minors so uPlot still draws the
+        // minor tick marks via `axis.ticks` without text labels.
+        let lastTicks: { all: number[]; majors: Set<number> } = {
+          all: [],
+          majors: new Set(),
+        };
+        axisOpts.splits = (_self, _axisIdx, scaleMin, scaleMax) => {
+          lastTicks = timeAxisTicks(scaleMin, scaleMax);
+          return lastTicks.all.length > 0 ? lastTicks.all : [scaleMin, scaleMax];
+        };
+        axisOpts.values = (_self, splits) =>
+          splits.map((s) =>
+            lastTicks.majors.has(s) || lastTicks.majors.size === 0
+              ? formatAxisTime24h(s)
+              : "",
+          );
         // Iter4 regression #1 — uPlot's default `space` (50 px) is
         // narrower than an `HH:MM:SS` label at the panel's chosen font
-        // (`06:04:30` measures ~58–62 px), so the auto-tick picker
-        // packs labels edge-to-edge and the screenshots showed
-        // `06:04:0006:04:1006:04:2006:04:30`. Bump the minimum spacing
-        // so every tick label keeps a visible breathing gap, and pin
-        // `gap` so the values column sits well clear of the baseline.
-        axisOpts.space = 90;
+        // (`06:04:30` measures ~58–62 px). With the iter5 major/minor
+        // ladder we only label the majors, so the *labelled* spacing
+        // is 10s majors × pixels-per-second — but uPlot uses `space`
+        // as a global minimum for adjacent ticks. Drop `space` to 30
+        // so minor ticks (which now share the axis) aren't filtered
+        // out as "too close together"; the unlabelled minors stay
+        // visible and the labelled majors keep their breathing gap
+        // because they're spaced 5× wider.
+        axisOpts.space = 30;
         axisOpts.gap = 6;
+        // Iter5 issue #3 — minor ticks should read as a subtler
+        // texture than the major labels. Override the per-tick `size`
+        // so all ticks share a 4 px stub (uPlot doesn't expose a per-
+        // tick size, so this is the best we can do without a hook).
+        axisOpts.ticks = { stroke: tickStroke, size: 4 };
       } else {
         axisOpts.values = makeAxisValueFormatter() as uPlot.Axis.Values;
       }

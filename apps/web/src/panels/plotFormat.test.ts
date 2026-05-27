@@ -14,6 +14,8 @@ import {
   formatRelativeTime24h,
   formatTime24h,
   makeAxisValueFormatter,
+  pickTimeIncrements,
+  timeAxisTicks,
 } from "./plotFormat";
 
 describe("formatTime24h", () => {
@@ -92,6 +94,55 @@ describe("formatFixedForUnit", () => {
   it("returns em-dash for non-finite values", () => {
     expect(formatFixedForUnit(NaN, "m/s")).toBe("—");
     expect(formatFixedForUnit(Infinity, "m/s")).toBe("—");
+  });
+});
+
+describe("pickTimeIncrements (iter5 issue #3 — tick density)", () => {
+  it("picks 10s majors / 2s minors for a 30s window", () => {
+    expect(pickTimeIncrements(30, 5)).toEqual({ majorInc: 10, minorInc: 2 });
+  });
+  it("picks 60s majors / 10s minors for a 5-minute window", () => {
+    expect(pickTimeIncrements(300, 5)).toEqual({ majorInc: 60, minorInc: 10 });
+  });
+  it("picks 1s majors / 0.2s minors for a 3-second window", () => {
+    expect(pickTimeIncrements(3, 5)).toEqual({ majorInc: 1, minorInc: 0.2 });
+  });
+});
+
+describe("timeAxisTicks (iter5 issue #3 — major + minor ladder)", () => {
+  it("returns at least 5 minor ticks across a 30s window", () => {
+    const { all, majors } = timeAxisTicks(0, 30);
+    expect(all.length).toBeGreaterThanOrEqual(5);
+    expect(majors.size).toBeGreaterThan(0);
+    expect(majors.size).toBeLessThanOrEqual(all.length);
+  });
+
+  it("majors are a subset of all", () => {
+    const { all, majors } = timeAxisTicks(100, 130);
+    for (const m of majors) {
+      expect(all).toContain(m);
+    }
+  });
+
+  it("major ticks fall on the major-increment boundary", () => {
+    const { majors } = timeAxisTicks(0, 30);
+    for (const m of majors) {
+      // 30s window → 10s majors → every major divisible by 10.
+      expect(Math.abs(m % 10)).toBeLessThan(1e-6);
+    }
+  });
+
+  it("emits minors between majors so the tick density is at least 3x", () => {
+    // 30s window with 4-major target → 10s majors + 2s minors. With
+    // majors at 0/10/20/30 we expect minors at 2,4,6,8,12,14,…,28.
+    const { all, majors } = timeAxisTicks(0, 30);
+    // Minor count must dominate so the user has texture between labels.
+    expect(all.length - majors.size).toBeGreaterThanOrEqual(majors.size * 2);
+  });
+
+  it("returns empty when min ≥ max or non-finite", () => {
+    expect(timeAxisTicks(10, 5)).toEqual({ all: [], majors: new Set() });
+    expect(timeAxisTicks(NaN, 1)).toEqual({ all: [], majors: new Set() });
   });
 });
 

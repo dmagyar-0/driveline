@@ -109,3 +109,109 @@ export function makeAxisValueFormatter(
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
 }
+
+/** Iter5 issue #3 — time-axis tick ladder.
+ *
+ *  The audit found only two labels (`06:04:00`, `06:04:30`) for a 30 s
+ *  window — uPlot's auto-picker prefers fewer, well-spaced labels, but
+ *  for engineers reading a screenshot the bare ladder gives no sense
+ *  of intermediate timing. We replace the auto-picker with an
+ *  explicit major/minor scheme:
+ *
+ *    - **majors** every 10 s by default (one labelled tick),
+ *    - **minors** every 2 s in between (unlabelled — drawn as the
+ *      lighter `axis.ticks` segments).
+ *
+ *  The numbers are picked from a 1/2/5/10 family scaled by the visible
+ *  span so a 5-minute window snaps to majors every 60 s, a 30-second
+ *  window to majors every 10 s, and a 3-second window to majors every
+ *  1 s. The function returns *all* tick positions in seconds-since-
+ *  epoch (uPlot's units for time scales) plus the major tick subset
+ *  so the values-formatter can know which to label.
+ *
+ *  Exported so the axis-builder + unit tests share one source of truth. */
+export interface TimeAxisTicks {
+  /** All tick positions (major + minor), sorted ascending. */
+  all: number[];
+  /** Subset of `all` that should carry a label. */
+  majors: Set<number>;
+}
+
+export function timeAxisTicks(
+  minSec: number,
+  maxSec: number,
+): TimeAxisTicks {
+  if (
+    !Number.isFinite(minSec) ||
+    !Number.isFinite(maxSec) ||
+    maxSec <= minSec
+  ) {
+    return { all: [], majors: new Set() };
+  }
+  const span = maxSec - minSec;
+  // Pick a "nice" major interval from the 1/2/5/10·10^n family so the
+  // ladder always has 3–5 labelled ticks regardless of zoom level.
+  const targetMajors = 5;
+  const { majorInc, minorInc } = pickTimeIncrements(span, targetMajors);
+
+  // Snap to nearest minor below start so the first tick falls on a
+  // round-number boundary (06:04:00 rather than 06:04:03).
+  const start = Math.ceil(minSec / minorInc) * minorInc;
+  const all: number[] = [];
+  const majors = new Set<number>();
+  // Floating-point tolerance for the major check — at 1 µs the rounded
+  // tick can drift below the modulo boundary.
+  const eps = minorInc * 1e-6;
+  for (let t = start; t <= maxSec + eps; t += minorInc) {
+    // Snap to grid so `t / majorInc` doesn't drift by a smidge.
+    const snapped = Math.round(t / minorInc) * minorInc;
+    all.push(snapped);
+    const ratio = snapped / majorInc;
+    if (Math.abs(ratio - Math.round(ratio)) < 1e-6) {
+      majors.add(snapped);
+    }
+  }
+  return { all, majors };
+}
+
+/** Choose a `(major, minor)` pair from a fixed family so the major
+ *  count lands near `targetMajors` and minor count is at most 5× the
+ *  major count. Exported so the helper and tests share the picker. */
+export function pickTimeIncrements(
+  spanSec: number,
+  targetMajors: number,
+): { majorInc: number; minorInc: number } {
+  // Candidate (major, minor) pairs in ascending order. The minor is
+  // always a fraction of the major chosen so 5–10 minors fall within
+  // each major step — enough texture without overwhelming.
+  const pairs: Array<[number, number]> = [
+    [0.1, 0.02],
+    [0.2, 0.05],
+    [0.5, 0.1],
+    [1, 0.2],
+    [2, 0.5],
+    [5, 1],
+    [10, 2],
+    [20, 5],
+    [30, 5],
+    [60, 10],
+    [120, 30],
+    [300, 60],
+    [600, 120],
+    [1800, 300],
+    [3600, 600],
+  ];
+  for (const [maj, min] of pairs) {
+    // Use a strict `<= targetMajors` test (no 1.5× headroom) so the
+    // ladder picks the smallest tested increment that still keeps the
+    // visible major-tick count at or below the target. This matches
+    // the audit's reference points: a 30 s window picks 10 s majors
+    // (3 majors), a 5-minute window picks 60 s majors (5 majors), a
+    // 3 s window picks 1 s majors (3 majors).
+    if (spanSec / maj <= targetMajors) {
+      return { majorInc: maj, minorInc: min };
+    }
+  }
+  // Very long windows — fall back to hourly majors with 10-min minors.
+  return { majorInc: 3600, minorInc: 600 };
+}
