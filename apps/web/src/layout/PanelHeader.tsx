@@ -294,20 +294,21 @@ function SettingsIcon(): React.ReactElement {
     <svg
       width="14"
       height="14"
-      viewBox="0 0 16 16"
+      viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.5"
+      strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {/* Cog teeth as a single closed path so the hub sits in the
-       * middle without a visible seam. Eight teeth, slightly rounded
-       * by stroke-linejoin so the icon reads cleanly at 14 px. */}
-      <path d="M9.4 1.8l-.3 1.7a4.9 4.9 0 00-1.5.6L6.2 3.2l-3 3 .9 1.4a4.9 4.9 0 00-.6 1.5l-1.7.3v4.2l1.7.3a4.9 4.9 0 00.6 1.5" />
-      <path d="M6.6 14.2l.3-1.7a4.9 4.9 0 001.5-.6l1.4.9 3-3-.9-1.4a4.9 4.9 0 00.6-1.5l1.7-.3" transform="rotate(180 8 8)" />
-      <circle cx="8" cy="8" r="2.4" />
+      {/* Classic Feather-style cog: a single closed path for the
+       * eight-toothed outline, plus an inner circle for the hub.
+       * 24×24 viewBox so the curves stay crisp at 14 px. The
+       * previous sun (dot + 8 spokes) read as theme/brightness; a
+       * recognisable gear disambiguates the "settings" intent. */}
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }

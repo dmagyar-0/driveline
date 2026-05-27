@@ -93,12 +93,34 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 20ch covers "Speeds (MCAP + MF4)" comfortably; longer titles
+   * truncate but expand on hover (see `.name:hover` below). The
+   * native `title` attribute also surfaces the full string for
+   * screen readers + keyboard users. */
   max-width: 20ch;
   /* Inherit grab so the title participates in the drag affordance. */
   cursor: inherit;
   /* Avoid native double-click text selection — we use double-click
    * as our maximize/rename gesture. */
   user-select: none;
+  transition: max-width var(--motion-fast);
+}
+
+/* Iter3 · hover-expand long titles. CSS only — no measurement loop,
+ * no JS. The header is `inline-flex`, so growing the name pushes
+ * the action cluster right; the tabset takes the new size on the
+ * next paint without reflow drama. The cap of 40ch keeps insanely
+ * long names from pushing other tabs off-strip. Hover over the
+ * input would conflict with rename's own selection gesture, so we
+ * only expand the read-only `.name` span. */
+.name:hover {
+  max-width: 40ch;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .name {
+    transition: none;
+  }
 }
 
 .focused .name {
