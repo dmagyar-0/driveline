@@ -487,6 +487,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // the tick ladder reads cleanly even when the range zooms in.
       if (isTimeAxis) {
         axisOpts.values = (_self, splits) => splits.map(formatAxisTime24h);
+        // Iter4 regression #1 — uPlot's default `space` (50 px) is
+        // narrower than an `HH:MM:SS` label at the panel's chosen font
+        // (`06:04:30` measures ~58–62 px), so the auto-tick picker
+        // packs labels edge-to-edge and the screenshots showed
+        // `06:04:0006:04:1006:04:2006:04:30`. Bump the minimum spacing
+        // so every tick label keeps a visible breathing gap, and pin
+        // `gap` so the values column sits well clear of the baseline.
+        axisOpts.space = 90;
+        axisOpts.gap = 6;
       } else {
         axisOpts.values = makeAxisValueFormatter() as uPlot.Axis.Values;
       }
