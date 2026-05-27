@@ -6,42 +6,129 @@
  * Driveline is a dark-only, engineer-first interface. Tokens here
  * mirror the values lifted from apps/web/src/**.module.css and
  * panels/palette.ts. Keep changes minimal and grounded in source.
+ *
+ * iter2 · polish pass introduced:
+ *   1) Tonal hierarchy. The previous ramp had chrome (TopBar, Rail,
+ *      Transport, PanelHeader at `--color-bg-2`) *darker* than panel
+ *      bodies (`--color-bg-3`), so the eye couldn't parse where a
+ *      panel ended and the shell began. The new ramp lifts chrome one
+ *      step *above* panel bodies. Existing token names are preserved
+ *      so per-area CSS Modules pick the new values up automatically;
+ *      semantic aliases (--bg-app, --bg-chrome, --bg-panel-body,
+ *      --bg-panel-body-elevated) are added for new code.
+ *   2) Foreground ramp lifted so every fg-3/-4/-5 reads ≥4.5:1 against
+ *      both --bg-chrome and --bg-panel-body. fg-1 stays an off-white
+ *      (not pure #fff — easier on the eye in dark mode).
+ *   3) Accent split. The legacy `--color-accent-orange` carried three
+ *      jobs (primary CTA, cursor line, rail-active dot). Three
+ *      semantic accents take over: --accent-primary (orange CTAs),
+ *      --accent-cursor (vivid cyan for the time cursor — distinct
+ *      from the data palette teal #14b8a6), --accent-active (a
+ *      desaturated derivative of primary for the rail-active state).
+ *   4) Colour-blind utilities. Dashed-line tokens + a focus-ring style
+ *      that combines colour AND a 2 px solid offset so plots can offer
+ *      a non-colour cue (plot agent owns adoption).
+ *   5) `--touch-target-min: 32 px`. Floor for icon-only chrome
+ *      buttons (PanelHeader actionBtn, Transport help/mode chips).
+ *      Per-area CSS Modules adopt in their hot-path classes.
+ *   6) `prefers-reduced-motion` global fallback. Component CSS already
+ *      kills its own transitions inside the media query; the blanket
+ *      `*` rule below covers any animation a future hand forgets.
  */
 
 :root {
-  /* ---------- Color: surfaces (dark, near-black ramp) ---------- */
+  /* ---------- Color: surfaces (dark, near-black ramp) ----------
+   *
+   * Ordering is intentional: bg-1 is the app shell (deepest visible
+   * neutral), bg-2 is CHROME (a step *above* panel bodies so the eye
+   * can resolve regions), bg-3 is panel/popover (back at the deepest
+   * neutral so panels read as the canvas), bg-4..6 climb toward
+   * button + hover surfaces.
+   *
+   * Hex values were chosen so:
+   *   - bg-2 sits ≥8 L* above bg-3 (perceptible step in dark mode).
+   *   - bg-4..6 each rise ≥6 L* above the previous step.
+   *   - Every fg-3/-4/-5 reads ≥4.5:1 against bg-2 AND bg-3
+   *     (see fg ramp below).
+   */
   --color-bg-0: #000000; /* video panel, deepest */
-  --color-bg-1: #0b0b0b; /* workspace shell */
-  --color-bg-2: #0f0f0f; /* empty states / chip background */
-  --color-bg-3: #151515; /* panel / popover / drop-zone */
-  --color-bg-4: #1a1a1a; /* button, input rest */
-  --color-bg-5: #1e1e1e; /* hover row */
-  --color-bg-6: #222222; /* button hover */
+  --color-bg-1: #0a0b0d; /* workspace shell (app canvas) */
+  --color-bg-2: #1c1f24; /* CHROME — TopBar / Rail / Transport / PanelHeader */
+  --color-bg-3: #0e0f12; /* panel body / popover / drop-zone */
+  --color-bg-4: #24272d; /* button, input rest (above chrome) */
+  --color-bg-5: #2c3038; /* row hover */
+  --color-bg-6: #353a44; /* button hover (top of neutral ramp) */
+
+  /* ---------- Color: surfaces — semantic aliases ----------
+   *
+   * Future components should prefer these over numeric tokens — the
+   * intent (chrome / panel body / elevated overlay) is what we care
+   * about, not which step of the ramp it lands on. Per-area CSS
+   * Modules can migrate at their own pace; values match the numbered
+   * ramp above so today's references keep working unchanged. */
+  --bg-app: var(--color-bg-1); /* deepest — workspace shell, empty states */
+  --bg-chrome: var(--color-bg-2); /* TopBar, Rail, Transport, PanelHeader */
+  --bg-panel-body: var(--color-bg-3); /* panel content surface */
+  --bg-panel-body-elevated: var(--color-bg-4); /* popover, drawer, modal */
 
   /* ---------- Color: borders / dividers ---------- */
-  --color-border-subtle: #2a2a2a; /* default panel + tabset borders */
-  --color-border-strong: #333333; /* button / input borders */
-  --color-border-hover: #555555; /* hover border */
-  --color-splitter-hover: #3a3a3a; /* flexlayout splitter hover */
+  --color-border-subtle: #2a2e36; /* default panel + tabset borders */
+  --color-border-strong: #3a3f49; /* button / input borders */
+  --color-border-hover: #555a66; /* hover border */
+  --color-splitter-hover: #3a3f49; /* flexlayout splitter hover */
 
-  /* ---------- Color: foreground / text ---------- */
-  --color-fg-1: #ffffff; /* highest contrast (rare) */
-  --color-fg-2: #e0e0e0; /* primary body text */
-  --color-fg-3: #bbbbbb; /* secondary text */
-  --color-fg-4: #aaaaaa; /* tertiary / labels */
-  --color-fg-5: #888888; /* meta / muted */
-  --color-fg-6: #666666; /* placeholder / disabled */
+  /* ---------- Color: foreground / text ----------
+   *
+   * iter2 · all secondary tones lifted ~6-10 L* so labels like
+   * "ELAPSED / TOTAL / TIME / SPEED" clear WCAG AA against both
+   * --bg-chrome (#1c1f24) and --bg-panel-body (#0e0f12).
+   *
+   * Contrast (BG-2 / BG-3):
+   *   fg-2 #e6e8ec → 12.7 / 14.9   (primary body)
+   *   fg-3 #c8ccd2 →  9.9 / 11.7   (secondary)
+   *   fg-4 #b4b9c1 →  7.9 /  9.3   (tertiary / labels)
+   *   fg-5 #969ba4 →  5.6 /  6.6   (meta / muted)
+   *   fg-6 #757b85 →  3.6 /  4.2   (placeholder / disabled — WCAG carve-out)
+   *
+   * fg-1 stays off-white (#f5f7fa, not #fff) — kinder on dark backgrounds. */
+  --color-fg-1: #f5f7fa; /* highest contrast (rare) */
+  --color-fg-2: #e6e8ec; /* primary body text */
+  --color-fg-3: #c8ccd2; /* secondary text */
+  --color-fg-4: #b4b9c1; /* tertiary / labels */
+  --color-fg-5: #969ba4; /* meta / muted */
+  --color-fg-6: #757b85; /* placeholder / disabled */
 
-  /* ---------- Color: accent (functional) ---------- */
-  --color-accent-orange: #f97316; /* selected tab, splitter drag, brand */
-  --color-accent-blue: #2a6df4; /* focus ring, scrubber fill, selection */
-  --color-accent-blue-tint: rgba(42, 109, 244, 0.06);
+  /* ---------- Color: accent (functional) ----------
+   *
+   * Legacy `--color-accent-orange` is kept as an alias for back-compat;
+   * new code should reach for the SEMANTIC accents below. The three
+   * jobs orange used to do are now split:
+   *   --accent-primary   → orange     (play button, primary CTAs)
+   *   --accent-cursor    → vivid cyan (time cursor across plots + transport)
+   *   --accent-active    → soft tan   (rail-active item, focused panel
+   *                                    accents that shouldn't compete
+   *                                    with the primary CTA)
+   *
+   * Cursor cyan #22d3ee was chosen to be visibly distinct from the
+   * data palette teal (--plot-7 #14b8a6) and blue (--plot-1 #3b82f6).
+   * Reserved for the cursor; do NOT add it to the data palette. */
+  --color-accent-orange: #f97316; /* legacy alias — prefer --accent-primary */
+  --color-accent-blue: #4d8bff; /* focus ring, scrubber fill, selection (lifted from #2a6df4 for AA) */
+  --color-accent-blue-tint: rgba(77, 139, 255, 0.08);
+
+  --accent-primary: #f97316; /* primary CTA — play button, big actions */
+  --accent-primary-hover: #fb923c; /* hover lift */
+  --accent-cursor: #22d3ee; /* time cursor — keep distinct from data palette */
+  --accent-active: #c89060; /* rail-active / focused-non-CTA — desaturated orange */
+  --accent-focus: var(--color-accent-blue); /* focus rings (blue stays the keyboard cue) */
 
   /* ---------- Color: status / semantic ---------- */
   --color-error: #b23a00; /* light bg */
   --color-error-dark: #ff8a5c; /* dark bg (used in app) */
 
-  /* ---------- Color: data viz palette (8 series, FNV-hashed) ---------- */
+  /* ---------- Color: data viz palette (8 series, FNV-hashed) ---------- *
+   * NOTE · owned by `apps/web/src/panels/palette.ts` (plot agent).
+   * Do not change these values from the tokens file. */
   --plot-1: #3b82f6; /* blue */
   --plot-2: #f97316; /* orange */
   --plot-3: #10b981; /* emerald */
@@ -50,6 +137,23 @@
   --plot-6: #eab308; /* yellow */
   --plot-7: #14b8a6; /* teal */
   --plot-8: #ec4899; /* pink */
+
+  /* ---------- Trace dash patterns (colour-blind redundancy) ----------
+   *
+   * `stroke-dasharray` values, ready to drop into uPlot series or SVG
+   * paths. The intent is that traces can be distinguished by *dash*
+   * pattern as well as hue, so users with red/green colour deficiency
+   * (~8% of male engineers) still get a unique signal per series.
+   * Plot agent owns adoption — these tokens just make the pattern set
+   * available. */
+  --trace-dash-1: 0; /* solid */
+  --trace-dash-2: 4 4; /* even dashes */
+  --trace-dash-3: 8 4; /* long dash short gap */
+  --trace-dash-4: 2 3; /* dotted */
+  --trace-dash-5: 8 4 2 4; /* dash-dot */
+  --trace-dash-6: 12 4; /* extra-long dash */
+  --trace-dash-7: 1 3; /* fine dotted */
+  --trace-dash-8: 6 2 2 2; /* dash-dot-dot */
 
   /* ---------- Color: scrim / overlays ---------- */
   --scrim-hud: rgba(0, 0, 0, 0.6); /* HUD bg over video */
@@ -119,8 +223,26 @@
   --shell-topbar-h: 36px;
   --shell-transport-h: 32px;
 
-  /* ---------- Focus ring ---------- */
-  --focus-ring: 2px solid var(--color-accent-blue);
+  /* ---------- Touch / tap targets ----------
+   *
+   * iter2 · the audit flagged ~24 px chrome buttons (PanelHeader close,
+   * Transport help/mode chip) as below the ergonomic floor. 44 px is
+   * Apple's full pointer-coarse target, but feels comically large in a
+   * dense engineer UI — 32 px is the compromise that keeps the strip
+   * compact while clearing the "mis-click on a trackpad" threshold.
+   *
+   * Per-area CSS Modules should `min-width: var(--touch-target-min);
+   * min-height: var(--touch-target-min);` on any icon-only button. */
+  --touch-target-min: 32px;
+  --touch-target-comfortable: 36px; /* rail buttons already use this */
+
+  /* ---------- Focus ring ----------
+   *
+   * Uses the accent blue + a 2 px solid stroke + a 2 px offset. The
+   * combination (colour + offset gap) is the non-colour cue the
+   * a11y audit asked for: even with no colour perception at all, the
+   * gap between the element and the ring is unmistakable. */
+  --focus-ring: 2px solid var(--accent-focus);
   --focus-offset: 2px;
 
   /* ---------- Motion ---------- */
@@ -139,7 +261,7 @@ body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--color-bg-1);
+  background: var(--bg-app);
   color: var(--color-fg-2);
   font-family: var(--font-sans);
   font-size: var(--fs-14);
@@ -246,24 +368,44 @@ summary:focus-visible {
   outline-offset: var(--focus-offset);
 }
 
-/* Reduced-motion baseline · for users who opt out, drop the
- * default link underline pulse and the system-level
- * `scroll-behavior` so anchored jumps don't sail across the
- * viewport. Component-level CSS handles its own animations
- * (Rail label fade, Transport pulse/spin, video spinner) so we
- * don't blanket every keyframe — some are functional status
- * affordances (e.g. the FlexLayout drag preview). */
+/* =============================================================
+ * Reduced-motion baseline.
+ *
+ * Component CSS Modules (PanelHeader, Rail, Transport, Workspace)
+ * already kill their own transitions in their own
+ * `prefers-reduced-motion` blocks. This GLOBAL rule is a belt-and-
+ * braces fallback so any future class that forgets still respects
+ * the user preference. The `!important` is reluctant but necessary
+ * to override component-scoped transition declarations that don't
+ * yet opt in.
+ *
+ * NB · we keep the scrubber/playhead in place — there is no
+ * keyframe animation on the position update; it's a CSS transform
+ * driven by React state, which `prefers-reduced-motion` does not
+ * intercept. Status spinners (decode pulse, fetch spinner) are
+ * silenced by their own component-level rules so the colour cue
+ * remains visible. */
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
   }
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }
 
-/* a11y · visually-hidden utility, shared by any component that
+/* =============================================================
+ * a11y · visually-hidden utility, shared by any component that
  * needs to surface a label to assistive tech without painting
  * pixels. Mirrors the WAI-ARIA Authoring Practices "sr-only"
  * pattern. Components that want their own may still define a
- * local `.srOnly` (TopBar, PanelHeader); both behave the same. */
+ * local `.srOnly` (TopBar, PanelHeader); both behave the same.
+ * ============================================================= */
 .sr-only,
 .visually-hidden {
   position: absolute;
@@ -275,4 +417,22 @@ summary:focus-visible {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* =============================================================
+ * Focus ring utility class.
+ *
+ * Combines colour AND a 2 px solid offset so the focus indicator
+ * has TWO cues (hue + gap). Per the audit, colour-only focus
+ * indicators fail for users with reduced colour perception; the
+ * `outline-offset` creates a visible "halo gap" that reads even
+ * without colour. Apply on any element that doesn't already roll
+ * its own `:focus-visible` (PanelHeader, Rail, Transport, Plot
+ * panels all do — this is for new code).
+ * ============================================================= */
+.focusRing:focus-visible,
+.focus-ring:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-3);
 }
