@@ -119,6 +119,35 @@ function formatPts(ptsNs: bigint | null): string {
   return `${ms.toFixed(3)} ms`;
 }
 
+/**
+ * iter5 issue #3 — derive the sidecar frame index from the most recent
+ * blitted PTS via a binary search over `ptsNs`. Returns the 1-based
+ * index of the largest sample <= ptsNs. Returns null when no sidecar
+ * is bound or the table is empty so the HUD can omit the line.
+ */
+export function sidecarFrameIndex(
+  ptsNs: BigInt64Array | null,
+  blitPtsNs: bigint | null,
+): number | null {
+  if (!ptsNs || ptsNs.length === 0 || blitPtsNs === null) return null;
+  let lo = 0;
+  let hi = ptsNs.length - 1;
+  let idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ptsNs[mid] <= blitPtsNs) {
+      idx = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  if (idx < 0) return null;
+  // 1-based for human consumption — the HUD reads "frame 7 / 1800",
+  // not "frame 6 / 1800" on the 7th-from-start frame.
+  return idx + 1;
+}
+
 export function VideoPanel({
   sourceKind,
   sourceHandle,
@@ -156,6 +185,13 @@ export function VideoPanel({
   const tsOverlayRef = useRef<HTMLDivElement | null>(null);
   const lastTsTextRef = useRef<string>("");
   const timeModeRef = useRef<"relative" | "absolute">("relative");
+  // iter5 issue #3 — mirror the sidecar PTS table into the rAF hot
+  // path so the HUD can compute "frame N / total" from the last
+  // blitted PTS. Reading via a ref keeps the blit loop allocation-free
+  // and avoids re-rendering on sidecar changes (sidecar identity flips
+  // only on source binding, which already remounts this effect).
+  const sidecarPtsRef = useRef<BigInt64Array | null>(sidecarPtsNs ?? null);
+  sidecarPtsRef.current = sidecarPtsNs ?? null;
 
   // Issue #2 — readiness bookkeeping. Reused across rAF ticks so the
   // hot path doesn't allocate per frame. `lastFrameIndexAtWaitStartRef`
@@ -445,9 +481,28 @@ export function VideoPanel({
       if (hudOnRef.current && hudDomRef.current) {
         // Issue #19 — readable labels with consistent width so the
         // HUD lines stay aligned in the monospace pill.
+        //
+        // iter5 issue #3 — surface "frame N / total" when a sidecar
+        // exposes the PTS table. The decoder's internal frame index
+        // (`snapshot.frameIndex`) is the count of frames the decoder
+        // has emitted since open(), which is *not* the same thing as
+        // "where am I in the recording" — it resets on every seek.
+        // The user wants the latter, so we derive it from the most
+        // recent blit PTS via a binary search over the sidecar table.
+        // Omit the line gracefully on MCAP sources (no sidecar).
+        const sidecarTotal = sidecarPtsRef.current?.length ?? 0;
+        const sidecarIdx = sidecarFrameIndex(
+          sidecarPtsRef.current,
+          snapshot.ptsNs,
+        );
+        const sidecarLine =
+          sidecarTotal > 0
+            ? `frame     ${sidecarIdx ?? "—"} / ${sidecarTotal}\n`
+            : "";
         hudDomRef.current.textContent =
           `pts       ${formatPts(snapshot.ptsNs)}\n` +
-          `frame     #${snapshot.frameIndex}\n` +
+          sidecarLine +
+          `decoded   #${snapshot.frameIndex}\n` +
           `decode    ${snapshot.decodeQueue} q\n` +
           `blit      ${snapshot.blitQueueLen} / ${MAX_QUEUE}\n` +
           `dropped   ${snapshot.dropped}\n` +

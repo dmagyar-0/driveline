@@ -42,7 +42,14 @@ import {
   saveFitMode,
   __test,
 } from "./VideoToolbar";
+import { sidecarFrameIndex } from "./VideoPanel";
 import { useSession } from "../state/store";
+
+// CSS Module stub for VideoPanel.tsx — touched indirectly when we
+// import `sidecarFrameIndex`.
+vi.mock("./VideoPanel.module.css", () => ({
+  default: new Proxy({}, { get: (_t, p: string) => p }),
+}));
 
 function setRange(startNs: bigint, endNs: bigint, cursor = startNs) {
   useSession.setState({
@@ -70,6 +77,56 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+});
+
+describe("sidecarFrameIndex (iter5 issue #3)", () => {
+  // iter5 issue #3 — HUD now reads "frame N / total" where N is the
+  // 1-based sidecar index of the most recent blitted PTS. Pin the
+  // edge cases so the HUD line is correct on session start (no
+  // sidecar), at the head of the file, between two frames, and on
+  // the last frame.
+
+  it("returns null when no sidecar is provided", () => {
+    expect(sidecarFrameIndex(null, 100n)).toBeNull();
+  });
+
+  it("returns null when the sidecar is empty", () => {
+    expect(sidecarFrameIndex(new BigInt64Array([]), 100n)).toBeNull();
+  });
+
+  it("returns null when no blit has happened yet", () => {
+    expect(sidecarFrameIndex(new BigInt64Array([0n, 100n]), null)).toBeNull();
+  });
+
+  it("returns 1 for the first frame", () => {
+    const pts = new BigInt64Array([0n, 100n, 200n, 300n]);
+    expect(sidecarFrameIndex(pts, 0n)).toBe(1);
+  });
+
+  it("returns the frame whose PTS is the largest <= the blit PTS", () => {
+    const pts = new BigInt64Array([0n, 100n, 200n, 300n]);
+    expect(sidecarFrameIndex(pts, 50n)).toBe(1);
+    expect(sidecarFrameIndex(pts, 100n)).toBe(2);
+    expect(sidecarFrameIndex(pts, 150n)).toBe(2);
+    expect(sidecarFrameIndex(pts, 200n)).toBe(3);
+    expect(sidecarFrameIndex(pts, 300n)).toBe(4);
+  });
+
+  it("returns the last index when blit PTS exceeds the sidecar tail", () => {
+    // EOF case — the cursor may sit past the last sample for a beat;
+    // we want the HUD to show "frame N / N", not "—".
+    const pts = new BigInt64Array([0n, 100n, 200n]);
+    expect(sidecarFrameIndex(pts, 9999n)).toBe(3);
+  });
+
+  it("returns null when blit PTS is strictly before frame 0", () => {
+    // Defensive — `blitPtsNs` is always >= the channel's first PTS in
+    // practice (the decoder won't emit pre-stream frames), but a
+    // backwards seek to a negative-relative cursor can produce a
+    // transient blit < sidecar[0]. Return null so the HUD shows "—".
+    const pts = new BigInt64Array([100n, 200n, 300n]);
+    expect(sidecarFrameIndex(pts, 50n)).toBeNull();
+  });
 });
 
 describe("VideoToolbar pure helpers", () => {
