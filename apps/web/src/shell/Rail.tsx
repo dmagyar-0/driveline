@@ -12,6 +12,17 @@
 //
 // Clicking the active rail button still collapses the drawer (VS Code
 // behaviour, integration plan §Phase 1.5).
+//
+// iter2 #2:
+//   - Icons reworked to be domain-meaningful:
+//       Sources  → stacked files (file-stack)
+//       Channels → waveform / signal line
+//       Layout   → 3×3 grid
+//       Panel    → 2×2 cells with one accented
+//       Events   → flag
+//   - Active state widened (3 px accent bar) and uses an explicit
+//     accent foreground so the "you are here" affordance persists
+//     for the full duration the drawer is open.
 
 import type { ReactElement } from "react";
 import { useSession } from "../state/store";
@@ -53,10 +64,12 @@ const RAIL_GROUPS: readonly RailGroup[] = [
         id: "sources",
         label: "Sources",
         hint: "Loaded files (S)",
+        // file-stack — three stacked sheets, evokes loaded files.
         icon: (
           <svg {...ICON_PROPS}>
-            <path d="M21 8V7a2 2 0 0 0-2-2h-7l-2-2H5a2 2 0 0 0-2 2v11a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-1" />
-            <path d="M3 13h18" />
+            <path d="M7 7h7l3 3v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z" />
+            <path d="M9 4h7l3 3v8" />
+            <path d="M14 7v3h3" />
           </svg>
         ),
       },
@@ -64,10 +77,10 @@ const RAIL_GROUPS: readonly RailGroup[] = [
         id: "channels",
         label: "Channels",
         hint: "Signals from loaded sources",
+        // waveform — a square pulse traces left-to-right, evoking signals.
         icon: (
           <svg {...ICON_PROPS}>
-            <path d="M3 6h13M3 12h18M3 18h10" />
-            <circle cx="20" cy="6" r="1.5" fill="currentColor" />
+            <path d="M3 12h3l2-5 3 10 3-7 2 4h5" />
           </svg>
         ),
       },
@@ -81,10 +94,11 @@ const RAIL_GROUPS: readonly RailGroup[] = [
         id: "layout",
         label: "Layout",
         hint: "Saved layouts, add panels",
+        // grid-3x3 — explicit layout/dashboard glyph.
         icon: (
           <svg {...ICON_PROPS}>
             <rect x="3" y="3" width="18" height="18" rx="2" />
-            <path d="M3 12h18M12 3v18" />
+            <path d="M3 9h18M3 15h18M9 3v18M15 3v18" />
           </svg>
         ),
       },
@@ -92,10 +106,21 @@ const RAIL_GROUPS: readonly RailGroup[] = [
         id: "panel",
         label: "Panel",
         hint: "Settings for the selected panel",
+        // 2x2 cells with one accented — evokes "the active panel's settings".
         icon: (
           <svg {...ICON_PROPS}>
             <rect x="3" y="3" width="18" height="18" rx="2" />
-            <path d="M3 8h18" />
+            <path d="M3 12h18M12 3v18" />
+            <rect
+              x="13"
+              y="4"
+              width="7"
+              height="7"
+              rx="1"
+              fill="currentColor"
+              fillOpacity="0.35"
+              stroke="none"
+            />
           </svg>
         ),
       },
@@ -109,9 +134,11 @@ const RAIL_GROUPS: readonly RailGroup[] = [
         id: "events",
         label: "Events",
         hint: "Bookmarks at cursor times",
+        // flag — bookmark / marker semantics.
         icon: (
           <svg {...ICON_PROPS}>
-            <path d="M5 21V4a1 1 0 0 1 1-1h11l-2 5 2 5H6" />
+            <path d="M5 21V4" />
+            <path d="M5 4h12l-3 4 3 4H5" />
           </svg>
         ),
       },

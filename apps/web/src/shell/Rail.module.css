@@ -79,23 +79,32 @@
   outline-offset: -2px;
 }
 
-/* Accent bar on the active item. Anchored to the rail edge so the bar
- * remains visible even when the rail is collapsed and the label is
- * hidden. */
+/* iter2 #2 — strengthened active state.
+ *
+ * Active items must read as "you are here" for the full duration the
+ * drawer is open. We use three concurrent affordances:
+ *   1. A 3 px accent bar anchored to the rail's left edge so the
+ *      "selected" cue persists even when the rail is collapsed and
+ *      the label is hidden.
+ *   2. A filled background one shade brighter than hover, so the row
+ *      doesn't lose contrast when the cursor moves off it.
+ *   3. An accent foreground colour (orange) — the same hue used for
+ *      the selected FlexLayout tab, so the rail/tab pairing reads as
+ *      one selection state. */
 .btn::before {
   content: "";
   position: absolute;
   left: -8px;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
   background: transparent;
   border-radius: 0 var(--radius-2) var(--radius-2) 0;
   transition: background var(--motion-base);
 }
 
 .active {
-  background: var(--color-bg-5);
+  background: var(--color-bg-6);
   color: var(--color-accent-orange);
 }
 
@@ -106,6 +115,13 @@
 
 .active::before {
   background: var(--color-accent-orange);
+}
+
+/* When the rail is collapsed (idle width 48 px) the label fades out
+ * but the accent bar + filled icon column should still be obvious.
+ * Bumping icon contrast on active makes the glyph itself pop. */
+.active .icon {
+  color: var(--color-accent-orange);
 }
 
 /* Icon stays a fixed square. The label fades in once the rail expands.
