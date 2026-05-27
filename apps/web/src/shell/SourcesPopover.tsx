@@ -1,14 +1,22 @@
 // UX overhaul (issue #17) · Sources popover.
 //
 // Triggered from the topbar's "N sources" chip. Renders a compact list
-// of loaded sources with a per-row type icon, name, and time range, so
-// the user can see what's loaded without opening the Sources drawer.
+// of loaded sources with a per-row palette swatch, type icon, name,
+// kind badge, channel count, time range, and a remove affordance — so
+// the user can audit and prune the loaded session without opening the
+// Sources drawer.
 //
-// Open state is local (the topbar owns the disclosure trigger), but the
-// data is read from the existing Zustand store via selectors. The store
-// does not (today) expose a per-source unload action — Phase 1 only has
-// `clear()` — so the popover surfaces a "Clear all" CTA plus a hint to
-// open the full drawer for per-source operations.
+// iter2 #4:
+//   - Each row gets a small × button on the right. The store today
+//     only exposes `clear()` (no per-source remove); we surface the
+//     × disabled with a tooltip pointing at the Sources drawer.
+//     TODO: when the store grows a `removeSource(id)` action, wire
+//     this button to it (and drop the `disabled` attribute).
+//   - Each row prints a "N channels" count next to the kind badge.
+//   - The colour swatch already uses `palette.colorFor(src.id)` so it
+//     matches the per-source palette colour the plot panel uses.
+//     Width bumped from 4 px to 6 px to be legible at a glance.
+//   - Drag-reorder is deferred — would require a store-shape change.
 //
 // Closes on outside click, on Escape, on selecting an action, or when
 // the trigger loses the `aria-expanded` toggle.
@@ -126,6 +134,7 @@ export function SourcesPopover({
         <ul className={s.list}>
           {sources.map((src) => {
             const durationNs = src.timeRange.endNs - src.timeRange.startNs;
+            const channelCount = src.channels.length;
             return (
               <li
                 key={src.id}
@@ -140,13 +149,56 @@ export function SourcesPopover({
                 <span className={s.kindIcon}>
                   <KindIcon kind={src.kind} />
                 </span>
-                <span className={s.name} title={src.name}>
-                  {src.name}
-                </span>
-                <span className={s.kind}>{kindLabel(src.kind)}</span>
-                <span className={s.duration} title="Duration">
-                  {formatDuration(durationNs)}
-                </span>
+                <div className={s.text}>
+                  <span className={s.name} title={src.name}>
+                    {src.name}
+                  </span>
+                  <span className={s.meta}>
+                    <span className={s.kind}>{kindLabel(src.kind)}</span>
+                    <span
+                      className={s.channels}
+                      title={`${channelCount} channels in this source`}
+                    >
+                      {channelCount}{" "}
+                      {channelCount === 1 ? "channel" : "channels"}
+                    </span>
+                    <span className={s.duration} title="Duration">
+                      {formatDuration(durationNs)}
+                    </span>
+                  </span>
+                </div>
+                {/* iter2 #4 — per-row × placeholder. The store does
+                 *  not (today) expose a per-source unload action;
+                 *  only `clear()` exists. We render the button
+                 *  disabled so the affordance is discoverable and
+                 *  the tooltip points the user at the Sources
+                 *  drawer (which has the same limitation but is the
+                 *  natural home for a future remove action).
+                 *  TODO(driveline#removeSource): swap `disabled` for
+                 *  an `onClick` that calls the store's per-source
+                 *  remove action once it lands. */}
+                <button
+                  type="button"
+                  className={s.removeBtn}
+                  data-testid={`sources-popover-remove-${src.id}`}
+                  disabled
+                  aria-label={`Remove ${src.name}`}
+                  title="Per-source remove lives in the Sources panel (coming soon)."
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 12 12"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M3 3l6 6M9 3l-6 6" />
+                  </svg>
+                </button>
               </li>
             );
           })}

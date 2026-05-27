@@ -3,15 +3,24 @@
  * Positioned absolutely from the right edge of the topbar so the
  * popover stays anchored to the chip cluster regardless of viewport
  * width. The popover never grows past 360px so it doesn't crowd the
- * workspace. */
+ * workspace.
+ *
+ * iter2 #4 updates:
+ *   - Row layout switched from a fixed 5-col grid to swatch/icon/text
+ *     block/remove so we can stack "name" over a "kind · N channels ·
+ *     duration" meta line without truncating.
+ *   - Swatch widened from 4 → 6 px so the palette match with the plot
+ *     legend is readable at a glance.
+ *   - Per-row × button added on the right of each row.
+ */
 
 .popover {
   position: absolute;
   top: calc(var(--shell-topbar-h) - 2px);
   right: var(--sp-6);
   z-index: 30;
-  min-width: 280px;
-  max-width: 360px;
+  min-width: 300px;
+  max-width: 380px;
   background: var(--color-bg-3);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-6);
@@ -72,10 +81,11 @@
 
 .row {
   display: grid;
-  grid-template-columns: 4px 16px 1fr auto auto;
+  /* swatch | kind icon | text block (grows) | remove button */
+  grid-template-columns: 6px 16px 1fr auto;
   align-items: center;
   gap: var(--sp-4);
-  padding: var(--sp-3) var(--sp-4);
+  padding: var(--sp-4) var(--sp-4);
   border-radius: var(--radius-4);
   background: var(--color-bg-4);
   font-size: var(--fs-13);
@@ -83,8 +93,8 @@
 
 .swatch {
   display: inline-block;
-  width: 4px;
-  height: 16px;
+  width: 6px;
+  height: 22px;
   border-radius: var(--radius-2);
 }
 
@@ -94,27 +104,79 @@
   color: var(--color-fg-4);
 }
 
+.text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-fg-2);
+  font-size: var(--fs-13);
+}
+
+.meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
 }
 
 .kind {
-  font-size: var(--fs-11);
   letter-spacing: var(--tracking-wide);
-  color: var(--color-fg-5);
+  color: var(--color-fg-4);
   text-transform: uppercase;
   padding: 0 var(--sp-3);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-3);
 }
 
-.duration {
-  font-size: var(--fs-12);
-  color: var(--color-fg-5);
+.channels {
   font-variant-numeric: tabular-nums;
+}
+
+.duration {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Per-row remove button. Disabled until the store exposes a
+ * per-source remove action — see SourcesPopover.tsx TODO. */
+.removeBtn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-3);
+  color: var(--color-fg-5);
+  cursor: pointer;
+  transition:
+    background var(--motion-base),
+    color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.removeBtn:hover:not(:disabled) {
+  background: var(--color-bg-5);
+  color: var(--color-error-dark);
+  border-color: var(--color-border-hover);
+}
+
+.removeBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.removeBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .actions {
@@ -167,7 +229,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .linkBtn,
-  .dangerBtn {
+  .dangerBtn,
+  .removeBtn {
     transition: none;
   }
 }

@@ -30,7 +30,22 @@ function seedTwoSources() {
         name: "short.mcap",
         handle: 0,
         timeRange: { startNs: 0n, endNs: 5_000_000_000n },
-        channels: [],
+        // iter2 #4 — channel count is shown on each popover row, so
+        // seed at least one channel per source. The popover only
+        // reads `.length`, so a stub is enough.
+        channels: [
+          {
+            id: "a/ch0",
+            nativeId: "ch0",
+            sourceId: "a",
+            name: "ch0",
+            kind: "scalar",
+            dtype: null,
+            unit: null,
+            sampleCount: 0,
+            timeRange: { startNs: 0n, endNs: 1n },
+          },
+        ],
       },
       {
         id: "b",
@@ -38,7 +53,30 @@ function seedTwoSources() {
         name: "drive.mp4",
         handle: 1,
         timeRange: { startNs: 0n, endNs: 10_000_000_000n },
-        channels: [],
+        channels: [
+          {
+            id: "b/v",
+            nativeId: "1/video",
+            sourceId: "b",
+            name: "video",
+            kind: "video",
+            dtype: null,
+            unit: null,
+            sampleCount: 0,
+            timeRange: { startNs: 0n, endNs: 1n },
+          },
+          {
+            id: "b/a",
+            nativeId: "1/audio",
+            sourceId: "b",
+            name: "audio",
+            kind: "scalar",
+            dtype: null,
+            unit: null,
+            sampleCount: 0,
+            timeRange: { startNs: 0n, endNs: 1n },
+          },
+        ],
       },
     ],
   });
@@ -90,6 +128,28 @@ describe("SourcesPopover", () => {
     expect(
       container.querySelector('[data-testid="sources-popover"]'),
     ).toBeNull();
+  });
+
+  it("renders channel counts and per-row remove buttons (iter2 #4)", () => {
+    seedTwoSources();
+    render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    // Channel counts — singular vs plural.
+    expect(screen.getByText("1 channel")).toBeTruthy();
+    expect(screen.getByText("2 channels")).toBeTruthy();
+    // Per-row remove buttons exist and are disabled (no per-source
+    // remove action on the store today; see TODO in component).
+    const removeA = screen.getByTestId("sources-popover-remove-a");
+    const removeB = screen.getByTestId("sources-popover-remove-b");
+    expect(removeA.hasAttribute("disabled")).toBe(true);
+    expect(removeB.hasAttribute("disabled")).toBe(true);
+    expect(removeA.getAttribute("aria-label")).toContain("short.mcap");
   });
 
   it("Open Sources panel fires onOpenDrawer then onClose", () => {
