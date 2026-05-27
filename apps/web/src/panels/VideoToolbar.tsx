@@ -43,6 +43,18 @@ interface VideoToolbarProps {
   resolution: { width: number; height: number } | null;
   fitMode: FitMode;
   onFitModeChange: (mode: FitMode) => void;
+  /** Iter 4 issue #4 — the HUD toggle used to sit absolute-positioned
+   *  *inside* the video frame, on top of the letterbox bars. Lifting
+   *  it into the toolbar removes the overlap and reclaims pixels for
+   *  the actual video region. Container forwards both the current
+   *  bit and the toggle action so the toolbar stays state-free. */
+  hudOn?: boolean;
+  onHudToggle?: () => void;
+  /** Iter 4 issue #4 — the "Change channel" pill used to sit
+   *  hover-revealed inside the frame too. The container passes a
+   *  no-op when no binding is set or change is disallowed; we render
+   *  the button only when this is provided. */
+  onClearBinding?: () => void;
 }
 
 const SCRUB_NS = 1_000_000_000n; // 1 second scrubs
@@ -214,6 +226,9 @@ export function VideoToolbar({
   resolution,
   fitMode,
   onFitModeChange,
+  hudOn,
+  onHudToggle,
+  onClearBinding,
 }: VideoToolbarProps) {
   const playing = useSession((s) => s.playing);
   const play = useSession((s) => s.play);
@@ -615,6 +630,45 @@ export function VideoToolbar({
           Fill
         </button>
       </div>
+
+      {/* Iter 4 issue #4 — HUD toggle lives in the toolbar now so it
+       *  doesn't overlap the letterbox bars when the panel aspect
+       *  doesn't match the source's. The visual style stays distinct
+       *  from the FIT/FILL segments (smaller, monospaced) so it reads
+       *  as a diagnostic toggle, not a primary mode. */}
+      {onHudToggle && (
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnHud}`}
+          onClick={onHudToggle}
+          aria-pressed={hudOn ?? false}
+          aria-label={hudOn ? "Hide diagnostics HUD" : "Show diagnostics HUD"}
+          title="Toggle decode HUD (H)"
+          data-testid="video-hud-toggle"
+        >
+          HUD
+        </button>
+      )}
+
+      {/* Iter 4 issue #4 — clearing the binding moves out of the
+       *  frame too. Hover-reveal on a label that you can't see is
+       *  also bad UX (the iter3 audit didn't flag this directly but
+       *  the same letterbox argument applies — it was painted over
+       *  black bars). The toolbar carries it as a small text link
+       *  styled as a button so it stays discoverable but doesn't
+       *  fight the transport row for attention. */}
+      {onClearBinding && (
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnGhost}`}
+          onClick={onClearBinding}
+          aria-label="Change channel — clear current video binding"
+          title="Pick a different video channel"
+          data-testid="video-clear-binding"
+        >
+          Change
+        </button>
+      )}
     </div>
   );
 }

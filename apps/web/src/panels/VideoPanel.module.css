@@ -3,11 +3,18 @@
   width: 100%;
   height: 100%;
   background: var(--color-bg-1);
-  padding: var(--sp-4);
+  /* Iter 4 issue #4 — the outer panel padding used to be `--sp-4`,
+   * eating ~16 px of pixels on every side that were spent purely on
+   * a margin around the letterbox. Drop it to 0; the FlexLayout panel
+   * chrome already provides enough breathing room, and the toolbar +
+   * frame border together carry the visual edge.
+   *
+   * The toolbar lives above the frame, so the panel is a column
+   * flexbox. No gap between them — the toolbar squares its bottom
+   * border into the top of the frame so they read as one chrome
+   * unit. */
+  padding: 0;
   box-sizing: border-box;
-  /* Iter 3 — the toolbar lives above the frame, so the panel is now a
-   * column flexbox. Gap is tight (no token) so the toolbar visually
-   * unifies with the frame border below it instead of floating. */
   display: flex;
   flex-direction: column;
 }
@@ -29,13 +36,17 @@
    * black) made the bars indistinguishable from a night dashcam
    * frame but visually fought the surrounding panel chrome
    * (--color-bg-1). Aligning with --color-bg-1 makes the bars read
-   * as panel chrome, not as part of the video. */
+   * as panel chrome, not as part of the video.
+   *
+   * Iter 4 issue #4 — with the outer panel padding removed, the
+   * frame now hugs the FlexLayout edge. Drop the rounded corners +
+   * outer shadow so the chrome doesn't paint a 4 px sliver of
+   * background through them; the toolbar's bottom border + the
+   * panel chrome above us are enough edge definition. */
   background: var(--color-bg-1);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-4);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
-    0 1px 3px rgba(0, 0, 0, 0.5);
+  border: 0;
+  border-radius: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   overflow: hidden;
 }
 
@@ -55,50 +66,18 @@
   object-fit: cover;
 }
 
-/* Issue #19 — HUD pill. Reads against arbitrary video pixels, so the
- * background needs to be opaque-ish, blurred where supported, and the
- * typography clearly chrome-not-content. */
-.hudToggle {
-  position: absolute;
-  top: var(--sp-4);
-  right: var(--sp-4);
-  z-index: 2;
-  padding: var(--sp-2) var(--sp-5);
-  font-size: var(--fs-11);
-  font-weight: var(--fw-semibold);
-  font-family: var(--font-mono);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  background: rgba(0, 0, 0, 0.6);
-  color: var(--color-fg-3);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-  transition: color var(--motion-base), border-color var(--motion-base),
-    background var(--motion-base);
-}
-
-.hudToggle:hover {
-  color: var(--color-fg-1);
-  border-color: rgba(255, 255, 255, 0.24);
-}
-
-.hudToggle:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-}
-
-.hudToggle[aria-pressed="true"] {
-  background: rgba(249, 115, 22, 0.18);
-  border-color: var(--color-accent-orange);
-  color: var(--color-fg-1);
-}
+/* Iter 4 issue #4 — the absolutely-positioned `.hudToggle` pill that
+ * used to live here moved into the VideoToolbar so it stops overlapping
+ * the letterbox bars in fit mode. Its styling lives in
+ * `VideoToolbar.module.css :: .btnHud`. */
 
 .hud {
   position: absolute;
-  top: calc(var(--sp-4) + var(--sp-9) + var(--sp-1));
+  /* Iter 4 issue #4 — the HUD toggle pill that used to anchor this
+   * overlay moved into the toolbar above, so the overlay now hugs
+   * the top of the frame instead of stacking below a pill that no
+   * longer exists. */
+  top: var(--sp-4);
   right: var(--sp-4);
   z-index: 2;
   padding: var(--sp-5) var(--sp-6);

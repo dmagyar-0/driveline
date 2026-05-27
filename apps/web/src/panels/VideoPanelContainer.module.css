@@ -10,40 +10,10 @@
   flex: 1;
 }
 
-.clearBtn {
-  position: absolute;
-  /* Iter 3 — pushed below the per-panel toolbar (32 px) + panel
-   * padding (--sp-4) + a hair so the pill doesn't collide with the
-   * toolbar's bottom border. The button is hover-revealed, so the
-   * extra vertical offset isn't visible in the default state. */
-  top: calc(32px + var(--sp-4) + var(--sp-3));
-  left: var(--sp-5);
-  z-index: 3;
-  background: rgba(0, 0, 0, 0.6);
-  color: var(--color-fg-2);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-pill);
-  padding: var(--sp-2) var(--sp-5);
-  cursor: pointer;
-  font-size: var(--fs-11);
-  font-family: var(--font-mono);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  opacity: 0;
-  transition: opacity var(--motion-base), background var(--motion-base);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-
-.wrap:hover .clearBtn,
-.clearBtn:focus-visible {
-  opacity: 1;
-}
-
-.clearBtn:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: var(--focus-offset);
-}
+/* Iter 4 issue #4 — the absolutely-positioned `.clearBtn` pill that
+ * used to live here moved into the VideoToolbar so it no longer
+ * overlaps the letterbox bars. Its styling lives in
+ * `VideoToolbar.module.css :: .btnGhost`. */
 
 /* Wrapper for either the rich empty state (no candidates) or the
  * compact-explainer-plus-picker (candidates exist). Empty-state

@@ -313,3 +313,41 @@
   color: var(--color-fg-1);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
+
+/* Iter 4 issue #4 — HUD button. Lives in the toolbar now (used to be
+ * absolute-positioned on top of the letterbox). Pressed state uses
+ * the orange accent so a user with the HUD open at a glance knows
+ * which control owns it. */
+.btnHud {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  padding: 0 var(--sp-4);
+}
+
+.btnHud[aria-pressed="true"] {
+  background: rgba(249, 115, 22, 0.18);
+  border-color: var(--color-accent-orange);
+  color: var(--color-fg-1);
+}
+
+/* Iter 4 issue #4 — "Change" channel pill. Subtle by default; primary
+ * affordance is the picker that replaces the panel content when no
+ * channel is bound, so this control just needs to be discoverable
+ * without competing for attention. */
+.btnGhost {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-4);
+  padding: 0 var(--sp-4);
+  border-color: var(--color-border-subtle);
+}
+
+.btnGhost:hover:not(:disabled) {
+  color: var(--color-fg-1);
+  background: var(--color-bg-4);
+  border-color: var(--color-border-hover);
+}

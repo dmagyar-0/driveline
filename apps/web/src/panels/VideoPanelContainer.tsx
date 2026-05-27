@@ -77,6 +77,11 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
       resolved.source.kind === "mp4+sidecar"
         ? resolved.source.mp4Cache?.index.ptsNs ?? null
         : null;
+    // Iter 4 issue #4 — the "Change channel" button used to live here
+    // as an absolute-positioned, hover-revealed pill that painted over
+    // the letterbox bars. It now lives in the VideoToolbar so it never
+    // overlaps the video region; the container forwards the action and
+    // the toolbar renders the affordance.
     // Keyed by the binding id so switching channel tears down + remounts
     // the worker wiring.
     return (
@@ -88,20 +93,8 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
           channelId={resolved.channel.nativeId}
           panelId={panelId}
           sidecarPtsNs={sidecarPtsNs}
+          onClearBinding={() => setVideoBinding(panelId, null)}
         />
-        <button
-          type="button"
-          className={styles.clearBtn}
-          onClick={() => setVideoBinding(panelId, null)}
-          data-testid="video-clear-binding"
-          // a11y · accessible name must start with the visible label
-          // so dictation users can say "click change channel" and AT
-          // announces the visible text. WCAG 2.5.3 (Label in Name).
-          aria-label="Change channel — clear current video binding"
-          title="Pick a different video channel"
-        >
-          Change channel
-        </button>
       </div>
     );
   }

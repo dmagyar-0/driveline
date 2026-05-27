@@ -76,6 +76,12 @@ interface VideoPanelProps {
    * `null` for MCAP sources hides the frame-step buttons.
    */
   sidecarPtsNs?: BigInt64Array | null;
+  /** Iter 4 issue #4 — the container forwards its "clear current
+   *  video binding" action so the toolbar can render a Change pill
+   *  in-line (it used to be an absolutely-positioned button painted
+   *  over the letterbox). Optional so a future surface without
+   *  channel-binding semantics can mount VideoPanel directly. */
+  onClearBinding?: () => void;
 }
 
 interface QueueEntry {
@@ -119,6 +125,7 @@ export function VideoPanel({
   channelId,
   panelId,
   sidecarPtsNs = null,
+  onClearBinding,
 }: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const queueRef = useRef<QueueEntry[]>([]);
@@ -780,6 +787,9 @@ export function VideoPanel({
         resolution={resolution}
         fitMode={fitMode}
         onFitModeChange={onFitModeChange}
+        hudOn={hudOn}
+        onHudToggle={toggleHud}
+        onClearBinding={onClearBinding}
       />
       {/* Issue #18 — explicit video frame. The inner wrapper carries
        *  the border/shadow so the dashcam region is visually distinct
@@ -802,17 +812,11 @@ export function VideoPanel({
           className={styles.timestamp}
           aria-hidden="true"
         />
-        <button
-          type="button"
-          data-testid="video-hud-toggle"
-          className={styles.hudToggle}
-          aria-pressed={hudOn}
-          aria-label={hudOn ? "Hide diagnostics HUD" : "Show diagnostics HUD"}
-          title="Toggle decode HUD (press H)"
-          onClick={toggleHud}
-        >
-          HUD
-        </button>
+        {/* Iter 4 issue #4 — the absolutely-positioned HUD toggle
+         *  pill that used to live here moved into the toolbar above.
+         *  The HUD overlay itself still anchors here when toggled on
+         *  (it's a diagnostic readout that wants to sit on top of the
+         *  video frame). */}
         {hudOn && (
           <div
             ref={hudDomRef}
