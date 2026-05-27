@@ -571,7 +571,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         }
         axesOpts.push(axis);
       } else if (i === 1) {
-        const axis = mkAxis(1, g.scaleKey, axisLabel(g), tint, gridTint);
+        // Iter4 alignment item #4 — both Y-axis labels should read
+        // bottom-to-top (engineering convention). uPlot has no API
+        // for overriding the right axis's label rotation (it draws
+        // +90°, i.e. top-to-bottom). Pass an empty label so uPlot
+        // still allocates label space via `labelSize`, then redraw
+        // it ourselves counterclockwise in the `drawAxes` hook below.
+        const axis = mkAxis(1, g.scaleKey, "", tint, gridTint);
+        axis.labelSize = 28;
         // Borrow the primary's pixel rows for the secondary so dual-
         // axis gridlines coincide. The primary used `niceTicks(min,
         // max, 6)`; re-derive its splits + scale here, then map them
@@ -613,6 +620,17 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // i >= 2: scale exists but no visible axis — see Mixed-units warning
     }
 
+    // Iter4 alignment item #4 — counter-clockwise label for the right
+    // Y axis. uPlot rotates the right-axis label +90° (top-to-bottom);
+    // engineering convention is bottom-to-top on both axes. We hide
+    // uPlot's label (the `mkAxis(1, …, "", …)` call above) and paint
+    // our own here, sharing the axis tint so it still associates with
+    // its trace.
+    const secondaryGroup = axisGroups.length >= 2 ? axisGroups[1] : null;
+    const secondaryLabelText = secondaryGroup ? axisLabel(secondaryGroup) : "";
+    const secondaryLabelTint =
+      secondaryGroup && axisGroups.length >= 2 ? secondaryGroup.axisColor : fg;
+
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height)),
@@ -633,6 +651,33 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // every bound series with its value — uPlot's built-in legend
       // would duplicate that and steal vertical space from the canvas.
       legend: { show: false },
+      hooks: secondaryLabelText
+        ? {
+            drawAxes: [
+              (u: uPlot) => {
+                const ctx = u.ctx;
+                const dpr = window.devicePixelRatio || 1;
+                // uPlot's ctx draws in device pixels; `u.width` is CSS
+                // px and `u.bbox` is device px. Convert consistently
+                // so the label lines up with the right axis's
+                // allocated `labelSize` strip on a HiDPI display.
+                const cssRightX = u.width - 8;
+                const cssCenterY = (u.bbox.top + u.bbox.height / 2) / dpr;
+                const cx = cssRightX * dpr;
+                const cy = cssCenterY * dpr;
+                ctx.save();
+                ctx.translate(cx, cy);
+                ctx.rotate(-Math.PI / 2);
+                ctx.fillStyle = secondaryLabelTint;
+                ctx.font = `${12 * dpr}px system-ui, sans-serif`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "alphabetic";
+                ctx.fillText(secondaryLabelText, 0, 0);
+                ctx.restore();
+              },
+            ],
+          }
+        : undefined,
     };
     const plot = new uPlot(opts, EMPTY_DATA, mount);
     plotRef.current = plot;
