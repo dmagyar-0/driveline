@@ -38,7 +38,6 @@ import {
   formatDate,
   formatDuration,
   formatPlayheadPrimary,
-  formatPlayheadSecondary,
   formatRelative,
 } from "./formatTime";
 import { BookmarkMarkers } from "./BookmarkMarkers";
@@ -194,16 +193,17 @@ export function Transport() {
   // boundary line. Stored in state so the tooltip re-renders, but
   // updates land at most once per rAF via a shared scheduler so the
   // hot path stays within budget.
+  // Iter5 (issue #4) — hover chip is now a one-line scout: the
+  // playhead badge owns the rich readout. We keep the rAF-scheduled
+  // batch but the payload collapses to a single label string.
+  // Boundary detection runs in `labelForHover` and returns either
+  // "Segment N start"/"…end" near a tick, or the time otherwise.
   const [hoverPct, setHoverPct] = useState<number | null>(null);
-  const [hoverPrimary, setHoverPrimary] = useState<string>("");
-  const [hoverSub, setHoverSub] = useState<string>("");
-  const [hoverSegment, setHoverSegment] = useState<string>("");
+  const [hoverLabel, setHoverLabel] = useState<string>("");
   const hoverRafId = useRef<number | null>(null);
   const pendingHover = useRef<{
     pct: number;
-    primary: string;
-    sub: string;
-    segment: string;
+    label: string;
   } | null>(null);
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -236,21 +236,14 @@ export function Transport() {
   const flushHover = () => {
     if (pendingHover.current !== null) {
       setHoverPct(pendingHover.current.pct);
-      setHoverPrimary(pendingHover.current.primary);
-      setHoverSub(pendingHover.current.sub);
-      setHoverSegment(pendingHover.current.segment);
+      setHoverLabel(pendingHover.current.label);
       pendingHover.current = null;
     }
     hoverRafId.current = null;
   };
 
-  const scheduleHover = (
-    pct: number,
-    primary: string,
-    sub: string,
-    segment: string,
-  ) => {
-    pendingHover.current = { pct, primary, sub, segment };
+  const scheduleHover = (pct: number, label: string) => {
+    pendingHover.current = { pct, label };
     if (hoverRafId.current === null) {
       hoverRafId.current = requestAnimationFrame(flushHover);
     }
@@ -264,47 +257,47 @@ export function Transport() {
     return (e.clientX - rect.left) / rect.width;
   };
 
-  // Formatter pair shared by hover tooltip — single source of truth
-  // for the canonical playhead format AND the alternate convention
-  // shown below it in the tooltip. The cursor badge uses the same
-  // primary formatter so badge and tooltip never disagree on the
-  // canonical readout (issue #1).
-  const formatHoverPair = (
-    ns: bigint,
-  ): { primary: string; sub: string } => {
-    if (!globalRange) return { primary: "--:--.---", sub: "" };
-    return {
-      primary: formatPlayheadPrimary(ns, globalRange.startNs, timeMode),
-      sub: formatPlayheadSecondary(ns, globalRange.startNs, timeMode),
-    };
-  };
-
-  // Iter4 (issue #6) — return the human-readable segment label for a
-  // ratio inside the track, so the hover tooltip can name "Segment 2
-  // · drive_2.mcap" inline. The user no longer has to land precisely
-  // on a 1 px tick to discover what the boundaries mean. Returns ""
-  // when the session has ≤ 1 segment OR the ratio falls in a gap
-  // between segments (e.g. cold/buffered region with no source).
-  const segmentLabelAtRatio = (ratio: number): string => {
-    // `sources` may be empty during initial load — defer to refs via
-    // `useSession.getState()` so we don't widen the effect dep set.
-    const srcs = sources;
-    if (srcs.length <= 1 || !globalRange) return "";
+  // Iter5 (issue #4) — single label for the hover scout. When the
+  // pointer is within `BOUNDARY_SNAP_PCT` of a segment boundary,
+  // return "Segment N start" / "Segment N end" so the user
+  // immediately understands the tick mark. Otherwise return the
+  // canonical playhead time in the current mode. No more alt
+  // convention, no more inline segment name — the cursor badge owns
+  // the rich readout, this chip is just "where my mouse points".
+  //
+  // BOUNDARY_SNAP_PCT is generous (0.4 % of track width ≈ 5 px at
+  // 1280 px) so users discover the boundary label easily without
+  // having to hit the 2 px tick exactly.
+  const BOUNDARY_SNAP_PCT = 0.4;
+  const labelForHover = (ratio: number): string => {
+    if (!globalRange) return "--:--.---";
     const span = globalRange.endNs - globalRange.startNs;
-    if (span === 0n) return "";
-    const ns =
-      globalRange.startNs + BigInt(Math.round(ratio * Number(span)));
-    const ordered = [...srcs].sort((a, b) => {
-      const d = a.timeRange.startNs - b.timeRange.startNs;
-      return d === 0n ? 0 : d < 0n ? -1 : 1;
-    });
-    for (let i = 0; i < ordered.length; i++) {
-      const s = ordered[i];
-      if (ns >= s.timeRange.startNs && ns <= s.timeRange.endNs) {
-        return `Segment ${i + 1} · ${s.name}`;
+    if (span === 0n) return "--:--.---";
+    const ratioPct = ratio * 100;
+
+    // Multi-source: check boundary snap first. Compare in PERCENT
+    // space so the snap distance scales with the track regardless
+    // of zoom or device pixel ratio.
+    if (sources.length > 1) {
+      const ordered = [...sources].sort((a, b) => {
+        const d = a.timeRange.startNs - b.timeRange.startNs;
+        return d === 0n ? 0 : d < 0n ? -1 : 1;
+      });
+      for (let i = 0; i < ordered.length; i++) {
+        const s = ordered[i];
+        const startPct = percentOf(s.timeRange.startNs, globalRange);
+        const endPct = percentOf(s.timeRange.endNs, globalRange);
+        if (Math.abs(ratioPct - startPct) < BOUNDARY_SNAP_PCT) {
+          return `Segment ${i + 1} start`;
+        }
+        if (Math.abs(ratioPct - endPct) < BOUNDARY_SNAP_PCT) {
+          return `Segment ${i + 1} end`;
+        }
       }
     }
-    return "";
+
+    const ns = globalRange.startNs + BigInt(Math.round(ratio * Number(span)));
+    return formatPlayheadPrimary(ns, globalRange.startNs, timeMode);
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -328,14 +321,7 @@ export function Transport() {
       return;
     }
     const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
-    const ns = nsFromRatio(clamped, globalRange);
-    const pair = formatHoverPair(ns);
-    scheduleHover(
-      clamped * 100,
-      pair.primary,
-      pair.sub,
-      segmentLabelAtRatio(clamped),
-    );
+    scheduleHover(clamped * 100, labelForHover(clamped));
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -354,14 +340,7 @@ export function Transport() {
     if (disabled || !globalRange) return;
     const ratio = ratioFromEvent(e);
     const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
-    const ns = nsFromRatio(clamped, globalRange);
-    const pair = formatHoverPair(ns);
-    scheduleHover(
-      clamped * 100,
-      pair.primary,
-      pair.sub,
-      segmentLabelAtRatio(clamped),
-    );
+    scheduleHover(clamped * 100, labelForHover(clamped));
   };
 
   const onPointerLeave = () => {
@@ -371,9 +350,7 @@ export function Transport() {
       pendingHover.current = null;
     }
     setHoverPct(null);
-    setHoverPrimary("");
-    setHoverSub("");
-    setHoverSegment("");
+    setHoverLabel("");
   };
 
   // Cancel any in-flight rAF on unmount.
@@ -755,7 +732,14 @@ export function Transport() {
              *  current playhead position. Iter3 (issue #2): visually
              *  distinct from the cursor badge. Neutral border (no
              *  orange), softer shadow, no down-arrow tab. The cursor
-             *  badge is "where I am"; this is "where my mouse is". */}
+             *  badge is "where I am"; this is "where my mouse is".
+             *
+             *  Iter5 (issue #4): collapsed to a SINGLE short line.
+             *  The iter3/iter4 chip stacked the time + alt convention
+             *  + inline segment name, redundantly mirroring what the
+             *  cursor badge already shows. Now it's a quick scout:
+             *  just the time, or "Segment N start"/"…end" when the
+             *  pointer is near a boundary tick. */}
             {hoverPct !== null && (
               <>
                 <div
@@ -771,23 +755,8 @@ export function Transport() {
                   role="tooltip"
                 >
                   <span className={styles.hoverTooltipPrimary}>
-                    {hoverPrimary}
+                    {hoverLabel}
                   </span>
-                  {hoverSub && (
-                    <span className={styles.hoverTooltipSub}>{hoverSub}</span>
-                  )}
-                  {/* Iter4 (issue #6) — inline segment context so the
-                   *  tick marks aren't unexplained. Only renders in
-                   *  multi-source sessions when the pointer falls
-                   *  inside a known segment. */}
-                  {hoverSegment && (
-                    <span
-                      className={styles.hoverTooltipSegment}
-                      data-testid="transport-hover-tooltip-segment"
-                    >
-                      {hoverSegment}
-                    </span>
-                  )}
                 </div>
               </>
             )}

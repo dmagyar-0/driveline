@@ -259,6 +259,12 @@ describe("Transport", () => {
       "[data-testid='transport-segment-labels'] > span",
     );
     expect(labels.length).toBe(2);
+    // Iter5 (issue #2) — labels are now structured (S-pill + name)
+    // not bare text. The pill carries the index identifier.
+    expect(labels[0].textContent).toContain("S1");
+    expect(labels[0].textContent).toContain("a.mcap");
+    expect(labels[1].textContent).toContain("S2");
+    expect(labels[1].textContent).toContain("b.mcap");
   });
 
   it("prev-1s steps cursor by 1 s and clamps at startNs", () => {
@@ -443,11 +449,12 @@ describe("Transport", () => {
     expect(badge.querySelector("[class*='playheadBadgeSub']")).toBeNull();
   });
 
-  // Iteration 3 (issue #2) — the hover tooltip is visually distinct
-  // from the cursor badge AND now carries the *other* time
-  // convention as a sub-line so the cursor badge can be slimmed
-  // down to a single canonical number.
-  it("hover tooltip carries both conventions; cursor badge stays single-line", () => {
+  // Iteration 5 (issue #4) — the hover tooltip is now a single-line
+  // scout: just the time. Sub-line and inline segment-name (iter3/4)
+  // are gone; the cursor badge owns the rich readout. The hover chip
+  // only shows boundary labels when the pointer is near a segment
+  // tick (separate test below).
+  it("hover tooltip is a single-line time scout", () => {
     useSession.setState({ cursorNs: 6_000_000_000n });
     const { getByTestId } = render(<Transport />);
     const track = getByTestId("scrubber");
@@ -460,11 +467,10 @@ describe("Transport", () => {
       "[data-testid='transport-hover-tooltip']",
     );
     expect(tip).not.toBeNull();
-    // Primary line uses the canonical relative format (iter3 issue #1).
-    expect(tip?.textContent).toContain("00:05.000");
-    // Sub-line carries the wall-clock format so the user sees both
-    // conventions in one read.
-    expect(tip?.querySelectorAll("span").length).toBeGreaterThanOrEqual(2);
+    // Only the canonical relative format (iter3 issue #1) — no
+    // wall-clock alt convention sub-line in iter5.
+    expect(tip?.textContent).toBe("00:05.000");
+    expect(tip?.querySelectorAll("span").length).toBe(1);
   });
 
   // Iteration 3 (issue #4) — REL/ABS and `?` live in their own meta
@@ -525,11 +531,13 @@ describe("Transport", () => {
     expect(queryByTestId("transport-playhead-date")).toBeNull();
   });
 
-  // Iteration 4 (issue #6) — hovering inside a known segment band
-  // surfaces the segment context inline in the hover chip, so the
-  // tick marks aren't unexplained even if the user never lands on
-  // a 1 px boundary line.
-  it("hover tooltip names the segment under the pointer (multi-source)", () => {
+  // Iteration 5 (issue #4) — hover chip is terse. The iter3/4
+  // inline segment-name line is gone; instead, hovering NEAR a
+  // segment boundary (within ~0.4 % of track width) flips the chip
+  // to "Segment N start" / "Segment N end" so the boundary ticks
+  // are self-explanatory. Anywhere else (deep inside a segment),
+  // it's just the time.
+  it("hover chip shows boundary labels near segment ticks", () => {
     useSession.setState({
       sources: [
         {
@@ -551,41 +559,58 @@ describe("Transport", () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ] as any,
     });
-    const { getByTestId, queryByTestId } = render(<Transport />);
+    const { getByTestId } = render(<Transport />);
     const track = getByTestId("scrubber");
 
-    // Mid-track (500/1000) → 50 % → ns ≈ 6e9, inside segment B.
+    // Segment B starts at ns = 6e9, range = [1e9, 11e9] → 50 % of track.
+    // Hover EXACTLY on the boundary (500/1000 = 50 %).
     act(() => {
       fireEvent.pointerEnter(track, { pointerId: 1, clientX: 500 });
     });
-    const seg = queryByTestId("transport-hover-tooltip-segment");
-    expect(seg).not.toBeNull();
-    expect(seg?.textContent).toBe("Segment 2 · drive_2.mcap");
+    const tip = document.querySelector(
+      "[data-testid='transport-hover-tooltip']",
+    );
+    expect(tip?.textContent).toBe("Segment 2 start");
 
-    // 10 % → ns ≈ 2e9, inside segment A. Use pointerLeave then
-    // pointerEnter to re-trigger the hover handler — `pointerMove`
-    // is checked separately in the multi-hover test below.
+    // Segment A ends at ns = 5e9 → 40 % of track → 400/1000.
+    act(() => {
+      fireEvent.pointerLeave(track, { pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerEnter(track, { pointerId: 1, clientX: 400 });
+    });
+    expect(
+      document.querySelector("[data-testid='transport-hover-tooltip']")
+        ?.textContent,
+    ).toBe("Segment 1 end");
+
+    // Deep inside Segment A (10 % of track, far from any boundary)
+    // → fall back to the canonical time readout.
     act(() => {
       fireEvent.pointerLeave(track, { pointerId: 1 });
     });
     act(() => {
       fireEvent.pointerEnter(track, { pointerId: 1, clientX: 100 });
     });
-    expect(
-      getByTestId("transport-hover-tooltip-segment").textContent,
-    ).toBe("Segment 1 · drive_1.mcap");
+    const tipTime = document.querySelector(
+      "[data-testid='transport-hover-tooltip']",
+    );
+    // 10 % of [1e9, 11e9] → 2e9 ns → 1 s elapsed → 00:01.000.
+    expect(tipTime?.textContent).toBe("00:01.000");
   });
 
-  // Iteration 4 (issue #6) — single-source sessions don't have
-  // segments to name, so the segment line stays absent even when
-  // hovering.
-  it("hover tooltip omits the segment line in single-source sessions", () => {
-    const { getByTestId, queryByTestId } = render(<Transport />);
+  // Iteration 5 (issue #4) — single-source sessions never trigger
+  // boundary snapping; the chip always shows the time.
+  it("hover chip always shows time in single-source sessions", () => {
+    const { getByTestId } = render(<Transport />);
     const track = getByTestId("scrubber");
 
     act(() => {
       fireEvent.pointerEnter(track, { pointerId: 1, clientX: 500 });
     });
-    expect(queryByTestId("transport-hover-tooltip-segment")).toBeNull();
+    const tip = document.querySelector(
+      "[data-testid='transport-hover-tooltip']",
+    );
+    expect(tip?.textContent).toBe("00:05.000");
   });
 });
