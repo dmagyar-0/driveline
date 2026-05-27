@@ -1,0 +1,134 @@
+/* Transport · keyboard shortcuts overlay. Anchored to the transport
+ * bar (the parent `.bar` is `position: sticky`, so the backdrop sits
+ * over the workspace but only above the bar — matches the iteration-2
+ * spec that the help dialog should feel like a transport affordance,
+ * not a global modal). */
+
+.backdrop {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* Pull up a comfortable distance so the card hovers above the bar */
+  bottom: calc(100% + var(--sp-3));
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-end;
+  padding-right: var(--sp-6);
+  z-index: 30;
+  pointer-events: auto;
+}
+
+.card {
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-6);
+  padding: var(--sp-5) var(--sp-6);
+  min-width: 280px;
+  max-width: 380px;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.55);
+  color: var(--color-fg-2);
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.card:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--sp-4);
+}
+
+.title {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-1);
+  letter-spacing: var(--tracking-tight);
+}
+
+.closeBtn {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--color-fg-3);
+  font-size: var(--fs-18);
+  line-height: 1;
+  padding: 0 var(--sp-2);
+  cursor: pointer;
+  border-radius: var(--radius-3);
+}
+
+.closeBtn:hover {
+  color: var(--color-fg-1);
+  background: var(--color-bg-5);
+}
+
+.closeBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-5);
+}
+
+.keys {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.or {
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+}
+
+.key {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  background: var(--color-bg-5);
+  border: 1px solid var(--color-border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-3);
+  padding: 2px 6px;
+  color: var(--color-fg-1);
+  min-width: 18px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.label {
+  font-size: var(--fs-12);
+  color: var(--color-fg-3);
+}
+
+.hint {
+  margin: var(--sp-5) 0 0;
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  font-style: italic;
+}

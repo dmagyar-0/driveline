@@ -1,15 +1,27 @@
-/* Phase 9 · Transport refinement → UX overhaul (issues #6-9).
+/* Phase 9 → iteration 2 · Transport bar styles.
  *
  * Dark-theme bar styled against `apps/web/src/styles/tokens.css`.
- * Wireframe reference: docs/design/wireframe-bundle/project/wireframes.css
- * lines 419-477 (.wf-transport).
+ * Iteration 2 swaps the "thin track pinned to the top" layout for an
+ * integrated scrub track that is the dominant element. The transport
+ * controls sit under the track without a dark gap; play, total, speed,
+ * mode chip and shortcuts toggle line up flush against the bottom edge.
  *
- * Layout:
- *   .row              – controls + time-readout flexbox (auto height).
- *   .scrubRow         – full-width scrubber stripe with segment ticks.
- *   `.trackStrip` is `position: relative` because BookmarkMarkers
- *   (Phase 8) layers absolutely against it (BookmarkMarkers.module.css
- *   `inset: 0`).
+ * Layout (top → bottom):
+ *   .bar
+ *     .segmentLabelRow   – per-segment "S1 · S2" labels (multi-source only)
+ *     .scrubRow
+ *       .track           – the 32 px hit target
+ *         .trackStrip    – 24 px visible bar; everything inside is absolute
+ *           .segmentBands
+ *           .bufferedSegments
+ *           .segmentTicks
+ *           .trackFill
+ *           BookmarkMarkers
+ *           .hoverLine + .hoverTooltip
+ *           .playheadGroup (line + badge + thumb)
+ *           .fetchSpinner
+ *       .scrubRowLabels  – start / date / end (under the track)
+ *     .row               – play group + total + speed + mode + help
  */
 
 .bar {
@@ -23,30 +35,33 @@
   font-family: var(--font-sans);
   font-size: var(--fs-12);
   color: var(--color-fg-3);
-  padding: var(--sp-3) var(--sp-6) var(--sp-4);
+  padding: var(--sp-4) var(--sp-6) var(--sp-4);
   gap: var(--sp-3);
+  /* Anchors the absolutely-positioned shortcuts overlay. */
+  position: sticky;
 }
 
 .row {
   display: flex;
   align-items: center;
-  gap: var(--sp-6);
+  gap: var(--sp-5);
 }
 
 .transportGroup {
   display: flex;
   align-items: center;
-  gap: var(--sp-4);
+  gap: var(--sp-5);
 }
 
 .btnGroup {
   display: flex;
   gap: var(--sp-2);
+  align-items: center;
 }
 
 .btnT {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -79,25 +94,26 @@
 }
 
 .play {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   font-size: var(--fs-14);
   color: var(--color-accent-orange);
   background: var(--color-bg-5);
 }
 
-/* Issue #8 — promote the readout. The big mono `CURRENT / TOTAL` slot
- * now reads as the third heaviest element on the bar (after the play
- * button and the scrubber itself). */
-.readoutBlock {
+/* Issue #3 — secondary "Total" readout. Muted on purpose — the
+ * primary current-time readout is the playhead badge above the track. */
+.totalBlock {
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 2px;
   min-width: 0;
+  padding-left: var(--sp-3);
+  border-left: 1px solid var(--color-border-subtle);
 }
 
-.readoutLabel {
+.totalLabel {
   font-family: var(--font-sans);
   font-size: var(--fs-10);
   font-weight: var(--fw-medium);
@@ -107,42 +123,17 @@
   line-height: 1;
 }
 
-.readoutTimes {
+.totalValue {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
-  font-size: var(--fs-16);
+  font-size: var(--fs-13);
   font-weight: var(--fw-medium);
-  color: var(--color-fg-2);
+  color: var(--color-fg-3);
   line-height: 1.1;
   white-space: nowrap;
 }
 
-.readoutCurrent {
-  color: var(--color-fg-1);
-}
-
-.readoutSep {
-  color: var(--color-fg-5);
-  margin: 0 var(--sp-2);
-  font-weight: var(--fw-regular);
-}
-
-.readoutTotal {
-  color: var(--color-fg-4);
-}
-
-.readoutSubLabel {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  font-variant-numeric: tabular-nums;
-  color: var(--color-fg-5);
-  line-height: 1;
-  white-space: nowrap;
-}
-
-/* Issue #6 — labelled segmented control. No more mystery "relative"
- * pill: a real two-segment toggle, with a visible label that says
- * what the toggle is for. */
+/* Speed select column. Labelled so the field reads on its own. */
 .fieldGroup {
   display: flex;
   flex-direction: column;
@@ -158,60 +149,11 @@
   line-height: 1;
 }
 
-.segmented {
-  display: inline-flex;
-  align-items: stretch;
-  background: var(--color-bg-3);
-  border: 1px solid var(--color-border-strong);
-  border-radius: var(--radius-4);
-  padding: 2px;
-  gap: 2px;
-}
-
-.segBtn {
-  appearance: none;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-3);
-  color: var(--color-fg-4);
-  font-family: var(--font-sans);
-  font-size: var(--fs-11);
-  font-weight: var(--fw-medium);
-  line-height: 1;
-  padding: 4px var(--sp-5);
-  cursor: pointer;
-  min-height: 22px;
-  transition:
-    background var(--motion-fast),
-    color var(--motion-fast);
-}
-
-.segBtn:hover:not(:disabled) {
-  color: var(--color-fg-2);
-}
-
-.segBtn:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 1px;
-}
-
-.segBtn[aria-pressed="true"] {
-  background: var(--color-bg-6);
-  color: var(--color-fg-1);
-  box-shadow: 0 0 0 1px var(--color-border-hover) inset;
-}
-
-.segBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* Issue #8 — speed needs a label, not a mystery pill. */
 .speed {
   font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  color: var(--color-fg-2);
-  height: 26px;
+  font-size: var(--fs-13);
+  color: var(--color-fg-1);
+  height: 30px;
   padding: 0 22px 0 var(--sp-5);
   background: var(--color-bg-4)
     url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 5' fill='%23bbb'><path d='M0 0l4 5 4-5z'/></svg>")
@@ -222,6 +164,12 @@
   appearance: none;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
+  font-weight: var(--fw-medium);
+  min-width: 60px;
+}
+
+.speed:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
 }
 
 .speed:focus-visible {
@@ -232,6 +180,94 @@
 .speed:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Issue #5 — mode chip. Smaller than the speed selector by design —
+ * it's a low-frequency setting. Stays compact on the right side of
+ * the bar. */
+.modeChip {
+  appearance: none;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  color: var(--color-fg-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  padding: 4px 10px;
+  cursor: pointer;
+  min-height: 22px;
+  align-self: flex-end;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.modeChip:hover:not(:disabled) {
+  background: var(--color-bg-5);
+  color: var(--color-fg-2);
+  border-color: var(--color-border-hover);
+}
+
+.modeChip:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.modeChip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modeChipActive {
+  color: var(--color-fg-1);
+  background: var(--color-bg-5);
+  box-shadow: 0 0 0 1px var(--color-accent-blue) inset;
+}
+
+/* Issue #6 — `?` help button. Same visual weight as the mode chip so
+ * the right-edge cluster feels balanced. */
+.helpBtn {
+  appearance: none;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  color: var(--color-fg-4);
+  font-family: var(--font-sans);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  align-self: flex-end;
+  margin-bottom: 1px;
+  padding: 0;
+  transition:
+    background var(--motion-fast),
+    color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.helpBtn:hover {
+  color: var(--color-fg-1);
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+}
+
+.helpBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.helpBtn[aria-expanded="true"] {
+  color: var(--color-fg-1);
+  background: var(--color-bg-6);
+  border-color: var(--color-accent-blue);
 }
 
 /* Spacer between the readout column and the right-side controls so the
@@ -245,7 +281,7 @@
 .scrubRow {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-3);
   width: 100%;
 }
 
@@ -267,16 +303,46 @@
   color: var(--color-fg-5);
 }
 
-/* Issue #9 — the track is the heartbeat. Real height (8 px rest,
- * 10 px on hover), real handle. Cursor remains ≤1 update per RAF
- * via the existing `scheduleCommit` flow.
- *
- * `.track` is the hit target (16 px so the handle is grabbable
- * without precise aim). `.trackStrip` is the visible bar. */
+/* Issue #4 — per-segment labels above the track. Each label is
+ * positioned in the same coordinate space as the corresponding band
+ * below, so the eye reads a direct visual link. */
+.segmentLabelRow {
+  position: relative;
+  width: 100%;
+  height: 14px;
+  margin-bottom: -2px;
+}
+
+.segmentLabel {
+  position: absolute;
+  top: 0;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  padding: 0 var(--sp-2);
+}
+
+.segmentLabelActive {
+  color: var(--color-fg-1);
+}
+
+/* Issue #1 — the track is the heartbeat. 24 px visible (32 px hit
+ * target) so it feels deliberate, not vestigial. */
 .track {
   position: relative;
   flex: 1;
-  height: 18px;
+  height: 32px;
   display: flex;
   align-items: center;
   cursor: pointer;
@@ -297,18 +363,20 @@
 .trackStrip {
   position: relative;
   width: 100%;
-  height: 8px;
-  background: var(--color-bg-4);
+  height: 24px;
+  background: var(--color-bg-3);
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-4);
-  transition: height var(--motion-fast);
+  overflow: visible;
+  transition: background var(--motion-fast);
 }
 
-.track:hover .trackStrip,
-.track:active .trackStrip {
-  height: 10px;
+.track:hover .trackStrip {
+  background: var(--color-bg-4);
 }
 
+/* The "consumed so far" fill — sits behind the playhead handle and
+ * gently tints the section of the track that has been played. */
 .trackFill {
   position: absolute;
   left: 0;
@@ -316,23 +384,23 @@
   height: 100%;
   background: linear-gradient(
     90deg,
-    var(--color-accent-blue) 0%,
-    color-mix(in srgb, var(--color-accent-blue) 85%, white 15%) 100%
+    color-mix(in srgb, var(--color-accent-blue) 28%, transparent) 0%,
+    color-mix(in srgb, var(--color-accent-blue) 40%, transparent) 100%
   );
   border-radius: var(--radius-4) 0 0 var(--radius-4);
   pointer-events: none;
+  z-index: 1;
 }
 
-/* Lazy-load buffered ranges. One absolutely-positioned segment per
- * resident span of mp4 samples; renders behind the trackFill / thumb
- * but on top of the empty track background so the user can see how
- * much of the timeline is currently in the cache. */
+/* Buffered range overlay — sits above the segment bands but below
+ * the fill, so the user can see what's already in cache. */
 .bufferedSegments {
   position: absolute;
   inset: 0;
   pointer-events: none;
   border-radius: var(--radius-4);
   overflow: hidden;
+  z-index: 2;
 }
 
 .bufferedSegment {
@@ -340,39 +408,62 @@
   top: 0;
   height: 100%;
   background: var(--color-fg-4);
-  opacity: 0.18;
+  opacity: 0.1;
 }
 
-/* Issue #7 — segment boundary ticks on the scrubber. One per source's
- * start (the union range's leading edge already aligns with the bar's
- * left, so the first source's tick is suppressed visually by the
- * border-radius). Heights extend a couple of pixels above and below
- * the strip so they read as "this is a session marker", not part of
- * the buffered shading. */
+/* Issue #4 — segment bands. Alternating low-opacity fills paint the
+ * structure of a multi-source session directly onto the track. The
+ * "active" band (containing the cursor) gets a stronger tint so the
+ * user can see "you are in segment 2" at a glance. */
+.segmentBands {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: var(--radius-4);
+  overflow: hidden;
+  z-index: 0;
+}
+
+.segmentBand {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  pointer-events: none;
+}
+
+.segmentBandEven {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.segmentBandOdd {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.segmentBandActive {
+  background: color-mix(in srgb, var(--color-accent-blue) 16%, transparent);
+}
+
+/* Boundary ticks remain — they form crisp vertical divisions between
+ * adjacent bands so the band/band transition is unambiguous even when
+ * two bands have similar opacity. */
 .segmentTicks {
   position: absolute;
-  inset: -4px 0;
+  top: -4px;
+  bottom: -4px;
+  left: 0;
+  right: 0;
   pointer-events: none;
+  z-index: 3;
 }
 
 .segmentTick {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 1px;
   background: var(--color-fg-3);
-  opacity: 0.6;
-  transform: translateX(-1px);
-  border-radius: 1px;
-}
-
-.segmentBand {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  background: currentColor;
-  opacity: 0.12;
-  pointer-events: none;
+  opacity: 0.55;
+  transform: translateX(-0.5px);
 }
 
 /* Spinner shown near the cursor while a seek waits on a cold sample fetch.
@@ -382,13 +473,14 @@
   top: 50%;
   width: 14px;
   height: 14px;
-  margin-left: 10px; /* offset clear of the thumb */
+  margin-left: 14px; /* offset clear of the thumb */
   transform: translateY(-50%);
   border-radius: 50%;
   border: 2px solid var(--color-accent-orange);
   border-top-color: transparent;
   animation: transport-spin 800ms linear infinite;
   pointer-events: none;
+  z-index: 6;
 }
 
 @keyframes transport-spin {
@@ -397,27 +489,96 @@
   }
 }
 
-/* Issue #9 — bigger, clearly-grabbable handle. `.thumbHit` is the
- * pointer target (18 px wide) and stays invisible; `.thumb` is the
- * visible disc (10 px rest, 12 px hover). */
-.thumbHit {
+/* Issue #2 — full-height playhead line + handle + time badge.
+ * Group sits at the cursor's percent offset; translateX(-50%) keeps
+ * the line/handle/badge co-located. */
+.playheadGroup {
   position: absolute;
-  top: 50%;
-  width: 18px;
-  height: 18px;
-  transform: translate(-50%, -50%);
+  top: 0;
+  bottom: 0;
+  width: 0;
   pointer-events: none;
+  z-index: 5;
+}
+
+/* Full-height vertical line through the track. Inset slightly past
+ * the strip top/bottom so it visually breaks out of the bar (reads as
+ * a playhead, not a divider). */
+.playheadLine {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  left: 50%;
+  width: 2px;
+  background: var(--color-accent-orange);
+  transform: translateX(-1px);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+/* Issue #3 — time badge above the playhead handle. This is the
+ * primary current-time readout. Mono digits, tabular numerals so
+ * the badge doesn't reflow while scrubbing. */
+.playheadBadge {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translateX(-50%);
+  background: var(--color-bg-5);
+  border: 1px solid var(--color-accent-orange);
+  border-radius: var(--radius-4);
+  padding: 3px var(--sp-4);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  z-index: 6;
+}
+
+.playheadBadge::after {
+  /* Little arrow tab pointing down at the handle. */
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid var(--color-accent-orange);
+}
+
+.playheadBadgeTime {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-1);
+  line-height: 1;
+}
+
+.playheadBadgeSub {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  line-height: 1;
 }
 
 .thumb {
   position: absolute;
   top: 50%;
-  width: 12px;
-  height: 12px;
+  left: 50%;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: var(--color-fg-1);
-  border: 2px solid var(--color-accent-blue);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+  border: 2px solid var(--color-accent-orange);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
   transform: translate(-50%, -50%);
   pointer-events: none;
   transition:
@@ -427,23 +588,49 @@
 
 .track:hover .thumb,
 .track:active .thumb {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
-/* Issue #2 — subtle ring while we wait on a video decode. Plain
- * outline (not box-shadow) so we don't have to animate width / top
- * — the ring sits against the existing thumb. */
+/* Issue #2 — subtle ring while we wait on a video decode. */
 .thumbWaiting {
   outline: 2px solid var(--color-accent-orange);
   outline-offset: 2px;
 }
 
-/* Issue #2 — decode-waiting dot in the play-button group. Visibility
- * is gated by hysteresis in `useDecodeWaiting`; CSS here only handles
- * the visual pulse. Animating opacity (not size / position) keeps the
- * compositor on the fast path and avoids thrash on the surrounding
- * btnGroup layout. */
+/* Issue #2 — hover preview line + tooltip. Renders only while the
+ * pointer is over the track and the user is NOT actively dragging. */
+.hoverLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-fg-3);
+  opacity: 0.55;
+  transform: translateX(-0.5px);
+  pointer-events: none;
+  z-index: 4;
+}
+
+.hoverTooltip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  transform: translateX(-50%);
+  background: var(--color-bg-6);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  padding: 2px var(--sp-3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-11);
+  color: var(--color-fg-1);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  z-index: 7;
+}
+
+/* Issue #2 — decode-waiting dot in the play-button group. */
 .decodeWaitingDot {
   display: inline-block;
   width: 10px;
@@ -478,10 +665,10 @@
  * size transitions are pure UX delight; cut them too. */
 @media (prefers-reduced-motion: reduce) {
   .btnT,
-  .segBtn,
+  .modeChip,
+  .helpBtn,
   .trackStrip,
-  .thumb,
-  .chip {
+  .thumb {
     transition: none;
   }
   .decodeWaitingDot {

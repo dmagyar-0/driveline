@@ -115,10 +115,7 @@ declare global {
         binding: MapBinding | null,
       ) => void;
       addTableChannelBinding: (panelId: string, channelId: string) => void;
-      removeTableChannelBinding: (
-        panelId: string,
-        channelId: string,
-      ) => void;
+      removeTableChannelBinding: (panelId: string, channelId: string) => void;
       setEnumChannelBinding: (
         panelId: string,
         channelId: string | null,
@@ -127,9 +124,11 @@ declare global {
         cursorNs: string;
         boundChannelIds: string[];
         lastFetchedRange: { startNs: string; endNs: string } | null;
-        sampleAtCursor: Array<
-          { channelId: string; tsNs: string; value: number } | null
-        >;
+        sampleAtCursor: Array<{
+          channelId: string;
+          tsNs: string;
+          value: number;
+        } | null>;
       } | null;
       // T6.3 — per-series min/max stats over the most recent render for
       // `signalAlignment.spec.ts`.
@@ -157,8 +156,10 @@ declare global {
       // equality first, substring fallback so `"short.mp4 (2)"` still
       // resolves when a re-run collides on the base name. Returns null if
       // no source/channel matches.
-      findChannelId: (q: { sourceName: string; nativeId: string }) =>
-        string | null;
+      findChannelId: (q: {
+        sourceName: string;
+        nativeId: string;
+      }) => string | null;
       // Phase 2 (Sources drawer) — enumerate loaded sources and the
       // session's global range. BigInts are serialised as decimal
       // strings so `page.evaluate` can return them.
@@ -234,6 +235,19 @@ declare global {
       seedSegmentsForScreenshot: (
         segments: { start: number; end: number; name: string }[],
       ) => void;
+      // Agent B iteration 2 — synchronous cursor seek hook used by the
+      // next critique screenshot pass. Lets the spec place the cursor
+      // mid-timeline before snapshotting so the playhead badge +
+      // hover tooltip are visible. Accepts either a `bigint` (the
+      // store's native unit) or a finite `number` (decimal ns,
+      // converted via `BigInt(Math.round(n))`). Anything else is
+      // ignored. Clamps and seek-epoch bumping live in the store, so
+      // this is a pure call-through.
+      setCursorNs: (ns: bigint | number) => void;
+      // Agent B iteration 2 — direct setter for the time-display mode
+      // so the screenshot spec doesn't depend on the chip's current
+      // visible label (which depends on the starting state).
+      setTimeMode: (mode: "relative" | "absolute") => void;
     };
   }
 }
@@ -312,9 +326,7 @@ export function App() {
         };
       },
       openFiles: async (descs) => {
-        const files = descs.map(
-          (d) => new File([d.bytes as BlobPart], d.name),
-        );
+        const files = descs.map((d) => new File([d.bytes as BlobPart], d.name));
         return await useSession.getState().openFiles(files);
       },
       clearSession: async () => {
@@ -348,8 +360,7 @@ export function App() {
             : null,
         };
       },
-      getLayoutJson: () =>
-        JSON.stringify(useSession.getState().layoutJson),
+      getLayoutJson: () => JSON.stringify(useSession.getState().layoutJson),
       setLayoutJson: (json) => useSession.getState().setLayoutJson(json),
       addVideoPanel: (channelId) =>
         workspaceRef.current?.addVideoPanel(channelId),
@@ -444,20 +455,17 @@ export function App() {
           ? null
           : { startNs: r.startNs.toString(), endNs: r.endNs.toString() };
       },
-      setActiveRailTab: (tab) =>
-        useSession.getState().setActiveRailTab(tab),
+      setActiveRailTab: (tab) => useSession.getState().setActiveRailTab(tab),
       getActiveRailTab: () => useSession.getState().activeRailTab,
       setRailCollapsed: (collapsed) =>
         useSession.getState().setRailCollapsed(collapsed),
-      setSelectedPanelId: (id) =>
-        useSession.getState().setSelectedPanelId(id),
+      setSelectedPanelId: (id) => useSession.getState().setSelectedPanelId(id),
       getSelectedPanelId: () => useSession.getState().selectedPanelId,
       getVideoHudOn: (panelId) =>
         useSession.getState().videoHudOn[panelId] ?? false,
       saveCurrentLayoutAs: (name) =>
         useSession.getState().saveCurrentLayoutAs(name),
-      restoreNamedLayout: (id) =>
-        useSession.getState().restoreNamedLayout(id),
+      restoreNamedLayout: (id) => useSession.getState().restoreNamedLayout(id),
       listNamedLayouts: () => {
         const st = useSession.getState();
         const currentJsonStr = JSON.stringify(st.layoutJson ?? null);
@@ -507,6 +515,22 @@ export function App() {
       // path so the screenshot spec can paint multi-segment ticks
       // without a real fixture build. Sets only `sources` /
       // `channels` / `globalRange`; binding maps are untouched.
+      // Agent B iter 2 — synchronous cursor placement for the next
+      // critique's screenshot spec. Documented next to the other
+      // `__driveline*` hooks; see the type declaration above for
+      // accepted argument shapes and conversion semantics.
+      setCursorNs: (ns) => {
+        let asBigInt: bigint;
+        if (typeof ns === "bigint") {
+          asBigInt = ns;
+        } else if (typeof ns === "number" && Number.isFinite(ns)) {
+          asBigInt = BigInt(Math.round(ns));
+        } else {
+          return;
+        }
+        useSession.getState().setCursor(asBigInt);
+      },
+      setTimeMode: (mode) => useSession.getState().setTimeMode(mode),
       seedSegmentsForScreenshot: (segments) => {
         const sources = segments.map((s, i) => ({
           id: `${s.name}#${i}`,

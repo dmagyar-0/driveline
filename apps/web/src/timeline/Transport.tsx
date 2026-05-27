@@ -3,23 +3,33 @@
 // clamping, end-of-session auto-pause, and speed bounds live in the store
 // (see `state/store.ts:170-201`).
 //
-// UX overhaul (Agent B, issues #6-9):
+// UX overhaul (Agent B, original issues #6-9). Iteration 2 (this rev):
 //
-//   #6 — Segmented relative/absolute control wired to a single
-//        `state.timeMode`. PlotPanel + every other readout consume the
-//        same flag so the entire app shows one convention.
-//   #7 — Per-source segment ticks rendered on the scrubber strip so the
-//        viewer can see "segment 4 / 7 / 10 starts here" on multi-source
-//        comma2k19 sessions. Source ranges already live in
-//        `session.sources` — no new ingest path.
-//   #8 — Promoted readout: large mono `HH:MM:SS.mmm / total`, with
-//        labelled SPEED + TIME mode controls.
-//   #9 — Real scrubber: 8 px track that grows to 10 px on hover, real
-//        12-14 px grab handle. A `transport:scrub` perf mark bounds the
-//        pointer-move work so the existing perfBudgets spec catches a
-//        regression past one RAF.
+//   #1 — Tall integrated scrub track (24 px tall, 32 px hit target).
+//        The track is now the dominant element on the bar; controls
+//        sit beneath it without a visual gap. Buffered / segment
+//        colour bands fill the track so the eye reads the timeline
+//        shape immediately.
+//   #2 — Full-height playhead line + draggable handle + hover tooltip.
+//        Pointer-move over the track previews the time under the
+//        cursor; pointer-down on the line/handle scrubs.
+//   #3 — Single source of truth for current time. The bottom-right
+//        "Elapsed / Total" duplicate is gone; the time-of-day above
+//        the playhead handle owns the current readout, and a small
+//        "TOTAL hh:mm:ss" sits to the right of the controls.
+//   #4 — Segments are visually obvious: alternating low-opacity bands
+//        + per-segment labels ("S1 · S2 · S3") in the band row above
+//        the track.
+//   #5 — Speed stays prominent; relative/absolute is demoted to a
+//        compact icon chip with a tooltip ("REL"/"ABS" toggle).
+//   #6 — Keyboard shortcuts (Space / J / K / L / ←/→ / Home / End)
+//        plus title hints on every control. A `?` button opens a
+//        small overlay listing them all.
+//
+// A `transport:scrub` perf mark still bounds the pointer-move work so
+// the existing perfBudgets spec catches a regression past one RAF.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { TimeRange } from "../state/store";
 import {
@@ -30,6 +40,7 @@ import {
   formatRelative,
 } from "./formatTime";
 import { BookmarkMarkers } from "./BookmarkMarkers";
+import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import { mark, measure } from "../perf";
 import {
   getReadinessSnapshot,
@@ -170,6 +181,18 @@ export function Transport() {
   const pendingNs = useRef<bigint | null>(null);
   const rafId = useRef<number | null>(null);
 
+  // Issue #2 — hover tooltip state. `hoverPct` drives the floating
+  // ghost line (and the tooltip's `left`); `hoverLabel` is the
+  // formatted time the user is previewing. Stored in state so the
+  // tooltip re-renders, but updates land at most once per rAF via a
+  // shared scheduler so the hot path stays within budget.
+  const [hoverPct, setHoverPct] = useState<number | null>(null);
+  const [hoverLabel, setHoverLabel] = useState<string>("");
+  const hoverRafId = useRef<number | null>(null);
+  const pendingHover = useRef<{ pct: number; label: string } | null>(null);
+
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
   const flushPending = () => {
     if (pendingNs.current !== null) {
       useSession.getState().setCursor(pendingNs.current);
@@ -180,7 +203,11 @@ export function Transport() {
     // `transport:scrub:start` mark scheduled below. The end-to-end
     // budget spec asserts this stays ≤1 RAF.
     mark("transport:scrub:flush");
-    measure("transport:scrub", "transport:scrub:start", "transport:scrub:flush");
+    measure(
+      "transport:scrub",
+      "transport:scrub:start",
+      "transport:scrub:flush",
+    );
   };
 
   const scheduleCommit = (ns: bigint) => {
@@ -191,12 +218,37 @@ export function Transport() {
     }
   };
 
+  const flushHover = () => {
+    if (pendingHover.current !== null) {
+      setHoverPct(pendingHover.current.pct);
+      setHoverLabel(pendingHover.current.label);
+      pendingHover.current = null;
+    }
+    hoverRafId.current = null;
+  };
+
+  const scheduleHover = (pct: number, label: string) => {
+    pendingHover.current = { pct, label };
+    if (hoverRafId.current === null) {
+      hoverRafId.current = requestAnimationFrame(flushHover);
+    }
+  };
+
   const ratioFromEvent = (e: PointerEvent | React.PointerEvent): number => {
     const track = trackRef.current;
     if (!track) return 0;
     const rect = track.getBoundingClientRect();
     if (rect.width === 0) return 0;
     return (e.clientX - rect.left) / rect.width;
+  };
+
+  // Formatter shared by readout + hover tooltip — single source of
+  // truth so they always agree on the convention.
+  const formatNs = (ns: bigint): string => {
+    if (!globalRange) return "--:--.---";
+    return timeMode === "relative"
+      ? formatRelative(ns, globalRange.startNs)
+      : formatAbsoluteClock(ns);
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -210,8 +262,18 @@ export function Transport() {
   const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (disabled || !globalRange) return;
     const track = trackRef.current;
-    if (!track || !track.hasPointerCapture(e.pointerId)) return;
-    scheduleCommit(nsFromRatio(ratioFromEvent(e), globalRange));
+    if (!track) return;
+    const ratio = ratioFromEvent(e);
+    // Two responsibilities split by capture state: when the user is
+    // dragging (we hold pointer capture) we commit the cursor; when
+    // they're just hovering we paint the preview tooltip.
+    if (track.hasPointerCapture(e.pointerId)) {
+      scheduleCommit(nsFromRatio(ratio, globalRange));
+      return;
+    }
+    const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
+    const ns = nsFromRatio(clamped, globalRange);
+    scheduleHover(clamped * 100, formatNs(ns));
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -226,6 +288,24 @@ export function Transport() {
     flushPending();
   };
 
+  const onPointerEnter = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (disabled || !globalRange) return;
+    const ratio = ratioFromEvent(e);
+    const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
+    const ns = nsFromRatio(clamped, globalRange);
+    scheduleHover(clamped * 100, formatNs(ns));
+  };
+
+  const onPointerLeave = () => {
+    if (hoverRafId.current !== null) {
+      cancelAnimationFrame(hoverRafId.current);
+      hoverRafId.current = null;
+      pendingHover.current = null;
+    }
+    setHoverPct(null);
+    setHoverLabel("");
+  };
+
   // Cancel any in-flight rAF on unmount.
   useEffect(() => {
     return () => {
@@ -233,12 +313,16 @@ export function Transport() {
         cancelAnimationFrame(rafId.current);
         rafId.current = null;
       }
+      if (hoverRafId.current !== null) {
+        cancelAnimationFrame(hoverRafId.current);
+        hoverRafId.current = null;
+      }
     };
   }, []);
 
-  // Global keyboard shortcuts per `docs/06-ui-and-panels.md:156-157`.
-  // ArrowLeft / ArrowRight step the cursor by ±1 s; the store's
-  // setCursor clamps to [startNs, endNs].
+  // Global keyboard shortcuts. Iteration 2 adds VLC-style J/K/L on
+  // top of Space / arrows / Home/End, plus `?` to toggle the help
+  // overlay. Inputs and contentEditable still opt out.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -256,9 +340,16 @@ export function Transport() {
       }
       const store = useSession.getState();
       const range = store.globalRange;
+      // `?` is the one shortcut that works even with no session loaded
+      // (so users can discover bindings before they drop a file).
+      if (e.key === "?" || (e.shiftKey && e.code === "Slash")) {
+        e.preventDefault();
+        setShortcutsOpen((open) => !open);
+        return;
+      }
       if (!range) return;
 
-      if (e.code === "Space") {
+      if (e.code === "Space" || e.code === "KeyK") {
         e.preventDefault();
         if (store.playing) store.pause();
         else store.play();
@@ -268,10 +359,10 @@ export function Transport() {
       } else if (e.code === "End") {
         e.preventDefault();
         store.setCursor(range.endNs);
-      } else if (e.code === "ArrowLeft") {
+      } else if (e.code === "ArrowLeft" || e.code === "KeyJ") {
         e.preventDefault();
         store.setCursor(store.cursorNs - ONE_SEC_NS);
-      } else if (e.code === "ArrowRight") {
+      } else if (e.code === "ArrowRight" || e.code === "KeyL") {
         e.preventDefault();
         store.setCursor(store.cursorNs + ONE_SEC_NS);
       }
@@ -300,8 +391,10 @@ export function Transport() {
     useSession.getState().setSpeed(Number(e.target.value));
   };
 
-  const setTimeMode = (mode: "relative" | "absolute") => {
-    useSession.getState().setTimeMode(mode);
+  const toggleTimeMode = () => {
+    useSession
+      .getState()
+      .setTimeMode(timeMode === "relative" ? "absolute" : "relative");
   };
 
   const fillPct = globalRange ? percentOf(cursorNs, globalRange) : 0;
@@ -326,11 +419,10 @@ export function Transport() {
     }
   }
 
-  // Issue #7 — segment markers. One tick per source's leading edge
-  // (excluding the first, which would visually merge with the bar's
-  // left rounding) plus a faint band so a gap between sources reads
-  // as "segment boundary", not just a buffered gap. Sources already
-  // carry `timeRange` so we don't invent a new ingest path.
+  // Issue #4 — segments are now bands + boundary ticks + labels.
+  // Sources already carry `timeRange` so we don't invent a new
+  // ingest path. Ordering by start so adjacent bands alternate
+  // visually (even/odd index → two opacity classes).
   type SegmentEntry = {
     key: string;
     label: string;
@@ -338,37 +430,52 @@ export function Transport() {
     widthPct: number;
     title: string;
   };
-  const segmentEntries: SegmentEntry[] = [];
-  if (globalRange && sources.length > 1) {
+  const segmentEntries: SegmentEntry[] = useMemo(() => {
+    if (!globalRange || sources.length <= 1) return [];
     const ordered = [...sources].sort((a, b) => {
       const da = a.timeRange.startNs - b.timeRange.startNs;
       return da === 0n ? 0 : da < 0n ? -1 : 1;
     });
+    const entries: SegmentEntry[] = [];
     for (let i = 0; i < ordered.length; i++) {
       const src = ordered[i];
       const left = percentOf(src.timeRange.startNs, globalRange);
       const right = percentOf(src.timeRange.endNs, globalRange);
       const width = Math.max(0, right - left);
-      const offsetNs = src.timeRange.startNs - globalRange.startNs;
-      segmentEntries.push({
+      entries.push({
         key: `seg:${src.id}:${i}`,
-        label: `${i + 1}`,
+        label: `S${i + 1}`,
         leftPct: left,
         widthPct: width,
         title:
           `Segment ${i + 1} · ${src.name} · ` +
           `${formatRelative(src.timeRange.startNs, globalRange.startNs)} → ` +
-          `${formatRelative(src.timeRange.endNs, globalRange.startNs)}` +
-          (offsetNs > 0n ? "" : ""),
+          `${formatRelative(src.timeRange.endNs, globalRange.startNs)}`,
       });
     }
-  }
+    return entries;
+  }, [globalRange, sources]);
+
+  // Which segment does the cursor fall inside? Drives the "now in"
+  // hint above the readout and styles the active segment band.
+  const activeSegmentIndex = useMemo(() => {
+    if (segmentEntries.length === 0 || !globalRange) return -1;
+    const span = globalRange.endNs - globalRange.startNs;
+    if (span === 0n) return -1;
+    const cursorPct = percentOf(cursorNs, globalRange);
+    for (let i = 0; i < segmentEntries.length; i++) {
+      const e = segmentEntries[i];
+      if (cursorPct >= e.leftPct && cursorPct <= e.leftPct + e.widthPct) {
+        return i;
+      }
+    }
+    return -1;
+  }, [segmentEntries, cursorNs, globalRange]);
 
   const span = globalRange ? globalRange.endNs - globalRange.startNs : 0n;
-  // In absolute mode "/ total" reads more naturally as the session's
-  // wall-clock end time than as elapsed duration ("06:04:00 / 06:09:00"
-  // vs the off-key "06:04:00 / 00:05:00.000").
-  const total = !globalRange
+  // In absolute mode "TOTAL" reads as the session's wall-clock end
+  // time; in relative mode it's the elapsed duration.
+  const totalLabel = !globalRange
     ? "--:--.---"
     : timeMode === "relative"
       ? formatDuration(span)
@@ -378,10 +485,14 @@ export function Transport() {
       ? formatRelative(cursorNs, globalRange.startNs)
       : formatAbsoluteClock(cursorNs)
     : "--:--.---";
-  const subLabel = globalRange
+  // Compact subtext for the playhead badge — wall clock when in
+  // relative mode, date when in absolute mode. Same intent as the
+  // previous `readoutSubLabel` (let users locate the cursor in the
+  // *other* convention without flipping the mode toggle).
+  const playheadSub = globalRange
     ? timeMode === "relative"
-      ? formatAbsolute(globalRange.startNs)
-      : formatDate(globalRange.startNs)
+      ? formatAbsoluteClock(cursorNs)
+      : formatDate(cursorNs)
     : null;
   const startLabel = globalRange
     ? timeMode === "relative"
@@ -393,7 +504,11 @@ export function Transport() {
       ? formatDuration(globalRange.endNs - globalRange.startNs)
       : formatAbsoluteClock(globalRange.endNs)
     : "--:--";
-  const readoutLabel = timeMode === "relative" ? "Elapsed / Total" : "Wall clock";
+  const sessionDate = globalRange
+    ? timeMode === "relative"
+      ? formatAbsolute(globalRange.startNs)
+      : formatDate(globalRange.startNs)
+    : null;
   const ariaValueText = globalRange
     ? timeMode === "relative"
       ? formatRelative(cursorNs, globalRange.startNs)
@@ -406,8 +521,41 @@ export function Transport() {
       data-testid="transport"
       aria-disabled={disabled}
     >
-      {/* Scrubber row — full width above the controls so the heartbeat
-       *  of the app is the dominant element, not buried bottom-left.   */}
+      {shortcutsOpen && (
+        <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
+      )}
+
+      {/* Per-segment label row sits above the track so the band ↔ label
+       *  relationship is obvious. Suppressed when there's only one
+       *  source. */}
+      {segmentEntries.length > 0 && (
+        <div
+          className={styles.segmentLabelRow}
+          data-testid="transport-segment-labels"
+          aria-hidden
+        >
+          {segmentEntries.map((seg, i) => (
+            <span
+              key={`${seg.key}:label`}
+              className={
+                i === activeSegmentIndex
+                  ? `${styles.segmentLabel} ${styles.segmentLabelActive}`
+                  : styles.segmentLabel
+              }
+              style={{
+                left: `${seg.leftPct}%`,
+                width: `${seg.widthPct}%`,
+              }}
+              title={seg.title}
+            >
+              {seg.label}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Scrubber row — full width above the controls, tall enough to
+       *  feel like the heartbeat of the app. */}
       <div className={styles.scrubRow}>
         <div
           ref={trackRef}
@@ -424,8 +572,38 @@ export function Transport() {
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
           onPointerCancel={onPointerUp}
+          onPointerEnter={onPointerEnter}
+          onPointerLeave={onPointerLeave}
         >
           <div className={styles.trackStrip}>
+            {/* Segment bands — alternating low-opacity fills so the
+             *  scrub track reads as "segmented, with this bit being
+             *  segment 2". The active band gets a bit more colour. */}
+            {segmentEntries.length > 0 && (
+              <div
+                className={styles.segmentBands}
+                data-testid="transport-segment-bands"
+                aria-hidden
+              >
+                {segmentEntries.map((seg, i) => (
+                  <div
+                    key={`${seg.key}:band`}
+                    className={
+                      i === activeSegmentIndex
+                        ? `${styles.segmentBand} ${styles.segmentBandActive}`
+                        : i % 2 === 0
+                          ? `${styles.segmentBand} ${styles.segmentBandEven}`
+                          : `${styles.segmentBand} ${styles.segmentBandOdd}`
+                    }
+                    style={{
+                      left: `${seg.leftPct}%`,
+                      width: `${seg.widthPct}%`,
+                    }}
+                    title={seg.title}
+                  />
+                ))}
+              </div>
+            )}
             {bufferedSegments.length > 0 && (
               <div
                 className={styles.bufferedSegments}
@@ -443,21 +621,26 @@ export function Transport() {
                 ))}
               </div>
             )}
+            {/* Segment boundary ticks for hard separation between bands. */}
             {segmentEntries.length > 0 && (
               <div
                 className={styles.segmentTicks}
                 data-testid="transport-segments"
                 aria-hidden
               >
-                {segmentEntries.map((seg, i) => (
-                  <span
-                    key={seg.key}
-                    className={styles.segmentTick}
-                    data-segment-index={i}
-                    style={{ left: `${seg.leftPct}%` }}
-                    title={seg.title}
-                  />
-                ))}
+                {segmentEntries.map((seg, i) =>
+                  // Suppress the leading tick — it would visually
+                  // collide with the track's left border-radius.
+                  i === 0 ? null : (
+                    <span
+                      key={seg.key}
+                      className={styles.segmentTick}
+                      data-segment-index={i}
+                      style={{ left: `${seg.leftPct}%` }}
+                      title={seg.title}
+                    />
+                  ),
+                )}
               </div>
             )}
             <div
@@ -465,7 +648,53 @@ export function Transport() {
               style={{ width: `${fillPct}%` }}
             />
             <BookmarkMarkers />
-            <div className={styles.thumbHit} style={{ left: `${fillPct}%` }}>
+
+            {/* Hover ghost line + tooltip — appears whenever the user
+             *  is hovering somewhere on the track that isn't the
+             *  current playhead position. */}
+            {hoverPct !== null && (
+              <>
+                <div
+                  className={styles.hoverLine}
+                  style={{ left: `${hoverPct}%` }}
+                  aria-hidden
+                  data-testid="transport-hover-line"
+                />
+                <div
+                  className={styles.hoverTooltip}
+                  style={{ left: `${hoverPct}%` }}
+                  data-testid="transport-hover-tooltip"
+                  role="tooltip"
+                >
+                  {hoverLabel}
+                </div>
+              </>
+            )}
+
+            {/* Issue #2 — full-height playhead line + handle. The line
+             *  spans the strip; the handle is the grabbable disc on
+             *  top. Both belong to the same translateX(-50%) wrapper
+             *  so they stay co-located across resizes. */}
+            <div
+              className={styles.playheadGroup}
+              style={{ left: `${fillPct}%` }}
+              data-testid="transport-playhead"
+            >
+              <div className={styles.playheadLine} aria-hidden />
+              {/* Issue #3 — time badge above the handle. This is the
+               *  primary current-time readout for the app; the
+               *  secondary "TOTAL" below the controls is intentionally
+               *  smaller. */}
+              <div
+                className={styles.playheadBadge}
+                data-testid="transport-playhead-badge"
+                aria-hidden
+              >
+                <span className={styles.playheadBadgeTime}>{current}</span>
+                {playheadSub && (
+                  <span className={styles.playheadBadgeSub}>{playheadSub}</span>
+                )}
+              </div>
               <div
                 className={
                   decodeWaiting
@@ -475,6 +704,7 @@ export function Transport() {
                 data-testid="scrubber-thumb"
               />
             </div>
+
             {isFetching && (
               <div
                 className={styles.fetchSpinner}
@@ -494,6 +724,8 @@ export function Transport() {
             >
               {sources.length} segments
             </span>
+          ) : sessionDate ? (
+            <span className={styles.scrubDateBadge}>{sessionDate}</span>
           ) : (
             <span />
           )}
@@ -501,7 +733,9 @@ export function Transport() {
         </div>
       </div>
 
-      {/* Controls row — play group + big readout + speed + time-mode */}
+      {/* Controls row — play group + secondary total + speed + mode +
+       *  shortcuts help. The big current-time readout is intentionally
+       *  NOT duplicated here (issue #3); it lives in the playhead badge. */}
       <div className={styles.row}>
         <div className={styles.transportGroup}>
           <div className={styles.btnGroup}>
@@ -512,9 +746,9 @@ export function Transport() {
               aria-label="Step back 1 second"
               onClick={onPrev1s}
               disabled={disabled}
-              title="Step back 1 s"
+              title="Step back 1 s (J or ←)"
             >
-              ◀◀
+              <span aria-hidden>◀◀</span>
             </button>
             <button
               type="button"
@@ -524,8 +758,9 @@ export function Transport() {
               aria-pressed={playing}
               onClick={onPlayPause}
               disabled={disabled}
+              title={playing ? "Pause (Space or K)" : "Play (Space or K)"}
             >
-              {playing ? "❚❚" : "▶"}
+              <span aria-hidden>{playing ? "❚❚" : "▶"}</span>
             </button>
             <button
               type="button"
@@ -534,9 +769,9 @@ export function Transport() {
               aria-label="Step forward 1 second"
               onClick={onNext1s}
               disabled={disabled}
-              title="Step forward 1 s"
+              title="Step forward 1 s (L or →)"
             >
-              ▶▶
+              <span aria-hidden>▶▶</span>
             </button>
             {/* Issue #2 — decode-waiting dot. Pulses when at least one
              *  bound video panel has been "waiting" continuously for
@@ -554,70 +789,25 @@ export function Transport() {
             )}
           </div>
 
+          {/* Issue #3 — secondary "TOTAL" readout. Smaller, muted, and
+           *  unambiguous. The current time lives in the playhead badge. */}
           <div
-            className={styles.readoutBlock}
+            className={styles.totalBlock}
             data-testid="transport-readout-block"
           >
-            <span className={styles.readoutLabel}>{readoutLabel}</span>
-            <span
-              className={styles.readoutTimes}
-              data-testid="transport-readout"
-              aria-live="off"
-            >
-              <span className={styles.readoutCurrent}>{current}</span>
-              <span className={styles.readoutSep}>/</span>
-              <span className={styles.readoutTotal}>{total}</span>
+            <span className={styles.totalLabel}>Total</span>
+            <span className={styles.totalValue} data-testid="transport-readout">
+              {totalLabel}
             </span>
-            {subLabel && (
-              <span
-                className={styles.readoutSubLabel}
-                data-testid="transport-readout-sub"
-              >
-                {timeMode === "relative" ? "starts " : ""}
-                {subLabel}
-              </span>
-            )}
           </div>
         </div>
 
         <div className={styles.rowGrow} />
 
-        <div className={styles.fieldGroup}>
-          <label className={styles.fieldLabel} htmlFor="transport-time-mode">
-            Time
-          </label>
-          <div
-            id="transport-time-mode"
-            className={styles.segmented}
-            data-testid="transport-mode-group"
-            role="group"
-            aria-label="Time readout mode"
-          >
-            <button
-              type="button"
-              className={styles.segBtn}
-              data-testid="transport-mode-relative"
-              aria-pressed={timeMode === "relative"}
-              disabled={disabled}
-              onClick={() => setTimeMode("relative")}
-              title="Show times relative to session start (00:12.345)"
-            >
-              Relative
-            </button>
-            <button
-              type="button"
-              className={styles.segBtn}
-              data-testid="transport-mode-absolute"
-              aria-pressed={timeMode === "absolute"}
-              disabled={disabled}
-              onClick={() => setTimeMode("absolute")}
-              title="Show wall-clock times (06:08:42)"
-            >
-              Absolute
-            </button>
-          </div>
-        </div>
-
+        {/* Issue #5 — speed remains a labelled select; mode is demoted
+         *  to a compact icon-chip. The label sits above the speed
+         *  select rather than as floating microcaps so it's
+         *  discoverable. */}
         <div className={styles.fieldGroup}>
           <label className={styles.fieldLabel} htmlFor="transport-speed">
             Speed
@@ -630,6 +820,7 @@ export function Transport() {
             onChange={onSpeedChange}
             disabled={disabled}
             aria-label="Playback speed"
+            title="Playback speed"
           >
             {SPEED_OPTIONS.map((v) => (
               <option key={v} value={v}>
@@ -638,6 +829,50 @@ export function Transport() {
             ))}
           </select>
         </div>
+
+        {/* Issue #5 — mode is demoted to a single icon-chip toggle.
+         *  Clicking flips between relative and absolute; the visible
+         *  label and `aria-pressed` reflect the *current* mode so the
+         *  chip is meaningful on its own (no separate two-state
+         *  segmented control). */}
+        <button
+          type="button"
+          className={
+            timeMode === "absolute"
+              ? `${styles.modeChip} ${styles.modeChipActive}`
+              : styles.modeChip
+          }
+          data-testid="transport-mode-toggle"
+          data-time-mode={timeMode}
+          aria-pressed={timeMode === "absolute"}
+          aria-label={
+            timeMode === "relative"
+              ? "Time display: relative. Click for wall clock."
+              : "Time display: wall clock. Click for relative."
+          }
+          onClick={toggleTimeMode}
+          disabled={disabled}
+          title={
+            timeMode === "relative"
+              ? "Showing relative time (00:12.345). Click for wall clock."
+              : "Showing wall-clock time (06:08:42). Click for relative."
+          }
+        >
+          {timeMode === "relative" ? "REL" : "ABS"}
+        </button>
+
+        {/* Issue #6 — `?` opens the keyboard-shortcuts help overlay. */}
+        <button
+          type="button"
+          className={styles.helpBtn}
+          data-testid="transport-shortcuts-toggle"
+          aria-label="Show keyboard shortcuts"
+          aria-expanded={shortcutsOpen}
+          title="Keyboard shortcuts (?)"
+          onClick={() => setShortcutsOpen((open) => !open)}
+        >
+          ?
+        </button>
       </div>
     </div>
   );

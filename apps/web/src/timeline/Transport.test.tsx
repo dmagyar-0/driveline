@@ -25,7 +25,9 @@ import { useSession } from "../state/store";
 
 // React 19 RTL requires this flag so `act(...)` wrappers don't log
 // "environment not configured" noise.
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 function seedSession(): void {
   // Seed a 10 s session so Home/End land on distinct values and the
@@ -187,24 +189,28 @@ describe("Transport", () => {
     expect(useSession.getState().cursorNs).toBe(6_000_000_000n);
   });
 
-  it("segmented control toggles store.timeMode between relative and absolute", () => {
+  it("mode chip toggles store.timeMode between relative and absolute", () => {
+    // Iteration 2 (issue #5) — the relative/absolute toggle is demoted
+    // to a single chip that flips state. The chip's visible label and
+    // `aria-pressed` reflect the *current* mode; clicking flips.
     const { getByTestId } = render(<Transport />);
-    const relBtn = getByTestId("transport-mode-relative") as HTMLButtonElement;
-    const absBtn = getByTestId("transport-mode-absolute") as HTMLButtonElement;
+    const chip = getByTestId("transport-mode-toggle") as HTMLButtonElement;
     expect(useSession.getState().timeMode).toBe("relative");
-    expect(relBtn.getAttribute("aria-pressed")).toBe("true");
-    expect(absBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(chip.getAttribute("aria-pressed")).toBe("false");
+    expect(chip.textContent).toBe("REL");
 
     act(() => {
-      fireEvent.click(absBtn);
+      fireEvent.click(chip);
     });
     expect(useSession.getState().timeMode).toBe("absolute");
-    expect(absBtn.getAttribute("aria-pressed")).toBe("true");
+    expect(chip.getAttribute("aria-pressed")).toBe("true");
+    expect(chip.textContent).toBe("ABS");
 
     act(() => {
-      fireEvent.click(relBtn);
+      fireEvent.click(chip);
     });
     expect(useSession.getState().timeMode).toBe("relative");
+    expect(chip.textContent).toBe("REL");
   });
 
   it("renders segment count badge when multiple sources are loaded", () => {
@@ -233,10 +239,26 @@ describe("Transport", () => {
     expect(getByTestId("transport-segment-count").textContent).toBe(
       "2 segments",
     );
+    // Iteration 2 (issue #4) — the leading boundary tick is
+    // suppressed so it doesn't collide with the track's left
+    // border-radius. With 2 sources we render 1 boundary; with N
+    // sources we render N-1.
     const ticks = document.querySelectorAll(
       "[data-testid='transport-segments'] span",
     );
-    expect(ticks.length).toBe(2);
+    expect(ticks.length).toBe(1);
+    // The segment bands themselves are still rendered for every
+    // source — that's how the user sees the structure of the
+    // session at a glance.
+    const bands = document.querySelectorAll(
+      "[data-testid='transport-segment-bands'] > div",
+    );
+    expect(bands.length).toBe(2);
+    // Per-segment label row should also have one label per source.
+    const labels = document.querySelectorAll(
+      "[data-testid='transport-segment-labels'] > span",
+    );
+    expect(labels.length).toBe(2);
   });
 
   it("prev-1s steps cursor by 1 s and clamps at startNs", () => {
@@ -301,5 +323,114 @@ describe("Transport", () => {
     expect(select.options.length).toBe(5);
     const values = Array.from(select.options).map((o) => Number(o.value));
     expect(values).toEqual([0.25, 0.5, 1, 2, 4]);
+  });
+
+  // Iteration 2 — VLC-style J/K/L keys (issue #6). K = play/pause,
+  // J = step back 1 s, L = step forward 1 s. These complement the
+  // arrow-key + Space bindings rather than replacing them.
+  it("K toggles play, J/L step ±1 s (VLC-style)", () => {
+    render(<Transport />);
+    expect(useSession.getState().playing).toBe(false);
+
+    act(() => {
+      fireEvent.keyDown(window, { code: "KeyK" });
+    });
+    expect(useSession.getState().playing).toBe(true);
+
+    act(() => {
+      fireEvent.keyDown(window, { code: "KeyK" });
+    });
+    expect(useSession.getState().playing).toBe(false);
+
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+    act(() => {
+      fireEvent.keyDown(window, { code: "KeyL" });
+    });
+    expect(useSession.getState().cursorNs).toBe(2_000_000_000n);
+
+    act(() => {
+      fireEvent.keyDown(window, { code: "KeyJ" });
+    });
+    expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
+  });
+
+  // Iteration 2 (issue #6) — `?` toggles the shortcuts overlay.
+  it("`?` toggles the shortcuts overlay", () => {
+    render(<Transport />);
+    expect(
+      document.querySelector("[data-testid='transport-shortcuts-overlay']"),
+    ).toBeNull();
+
+    act(() => {
+      // jsdom dispatches `keydown` with `key: "?"` directly; we
+      // pass both shape variants the production code accepts.
+      fireEvent.keyDown(window, { key: "?", code: "Slash", shiftKey: true });
+    });
+    expect(
+      document.querySelector("[data-testid='transport-shortcuts-overlay']"),
+    ).not.toBeNull();
+
+    act(() => {
+      fireEvent.keyDown(window, { key: "?", code: "Slash", shiftKey: true });
+    });
+    expect(
+      document.querySelector("[data-testid='transport-shortcuts-overlay']"),
+    ).toBeNull();
+  });
+
+  // Iteration 2 (issue #6) — clicking the `?` button opens the overlay.
+  it("? button opens and the close button hides the shortcuts overlay", () => {
+    const { getByTestId } = render(<Transport />);
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-shortcuts-toggle"));
+    });
+    expect(getByTestId("transport-shortcuts-overlay")).toBeTruthy();
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-shortcuts-close"));
+    });
+    expect(
+      document.querySelector("[data-testid='transport-shortcuts-overlay']"),
+    ).toBeNull();
+  });
+
+  // Iteration 2 (issue #2) — hover tooltip appears on pointer-enter and
+  // disappears on pointer-leave; in production we throttle the
+  // intermediate updates to rAF, and the test polyfill above runs rAF
+  // synchronously so we can read the resulting label.
+  it("hover tooltip appears on track enter and disappears on leave", () => {
+    const { getByTestId } = render(<Transport />);
+    const track = getByTestId("scrubber");
+
+    act(() => {
+      fireEvent.pointerEnter(track, { pointerId: 1, clientX: 500 });
+    });
+    const tip = document.querySelector(
+      "[data-testid='transport-hover-tooltip']",
+    );
+    expect(tip).not.toBeNull();
+    // Mid-range of [1e9, 11e9] is 6e9 = 5 s elapsed → "00:05.000".
+    expect(tip?.textContent).toBe("00:05.000");
+
+    act(() => {
+      fireEvent.pointerLeave(track, { pointerId: 1 });
+    });
+    expect(
+      document.querySelector("[data-testid='transport-hover-tooltip']"),
+    ).toBeNull();
+  });
+
+  // Iteration 2 (issue #3) — the playhead badge owns the current-time
+  // readout and the "Total" block in the controls row owns the
+  // secondary total. There must NOT be two copies of the current time.
+  it("current time lives in the playhead badge; total in the controls row", () => {
+    useSession.setState({ cursorNs: 6_000_000_000n });
+    const { getByTestId } = render(<Transport />);
+    const badge = getByTestId("transport-playhead-badge");
+    expect(badge.textContent).toContain("00:05.000");
+    // The secondary readout shows only the total / duration.
+    const total = getByTestId("transport-readout");
+    expect(total.textContent).toBe("00:10.000");
   });
 });

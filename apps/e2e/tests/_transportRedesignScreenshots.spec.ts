@@ -47,9 +47,7 @@ async function screenshotTransport(
 test.describe("transport redesign", () => {
   test.beforeEach(async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByTestId("worker-status")).toHaveText(
-      "workers ready",
-    );
+    await expect(page.getByTestId("worker-status")).toHaveText("workers ready");
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
   });
 
@@ -78,9 +76,11 @@ test.describe("transport redesign", () => {
     });
     await page.waitForFunction(
       () =>
-        (window.__drivelineDevHooks!.getSessionSnapshot() as {
-          globalRange: unknown;
-        }).globalRange !== null,
+        (
+          window.__drivelineDevHooks!.getSessionSnapshot() as {
+            globalRange: unknown;
+          }
+        ).globalRange !== null,
     );
     await screenshotTransport(page, "transport-redesign-loaded.png");
 
@@ -129,8 +129,26 @@ test.describe("transport redesign", () => {
     });
     await screenshotTransport(page, "transport-redesign-segments.png");
 
-    // 4. Absolute mode — flip the segmented control.
-    await page.getByTestId("transport-mode-absolute").click();
+    // 4. Absolute mode — click the mode chip (iter 2: single toggle).
+    await page.evaluate(() => {
+      // Use the store directly so we don't depend on the chip's
+      // current label (REL ↔ ABS depending on starting state).
+      const w = window as unknown as {
+        __drivelineDevHooks?: {
+          setTimeMode?: (m: "relative" | "absolute") => void;
+        };
+      };
+      if (w.__drivelineDevHooks?.setTimeMode) {
+        w.__drivelineDevHooks.setTimeMode("absolute");
+        return;
+      }
+      // Fallback: drive the chip; one click is enough because the
+      // chip is a single toggle.
+      const chip = document.querySelector(
+        '[data-testid="transport-mode-toggle"]',
+      ) as HTMLButtonElement | null;
+      if (chip && chip.dataset.timeMode === "relative") chip.click();
+    });
     await screenshotTransport(page, "transport-redesign-absolute.png");
 
     // 5. Wide view including the workspace beneath so the segment
