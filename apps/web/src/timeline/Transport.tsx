@@ -818,6 +818,7 @@ export function Transport() {
                     : styles.thumb
                 }
                 data-testid="scrubber-thumb"
+                title="Drag to seek"
               />
             </div>
 
