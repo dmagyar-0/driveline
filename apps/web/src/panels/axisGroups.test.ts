@@ -12,6 +12,8 @@ import {
   groupByUnit,
   resolveAxisColor,
   axisLabel,
+  alignedSecondarySplits,
+  niceTicks,
   NEUTRAL_AXIS_COLOR,
 } from "./axisGroups";
 import { colorFor } from "./palette";
@@ -122,5 +124,51 @@ describe("axisLabel", () => {
   });
   it("falls back to '(unitless)' for the empty-string bucket", () => {
     expect(axisLabel({ scaleKey: "y", unit: "", channels: [], axisColor: NEUTRAL_AXIS_COLOR })).toBe("(unitless)");
+  });
+});
+
+describe("niceTicks (iter4 alignment item #3)", () => {
+  it("returns a single tick when min and max collapse", () => {
+    expect(niceTicks(5, 5)).toEqual([5]);
+  });
+  it("returns the empty array for non-finite inputs", () => {
+    expect(niceTicks(NaN, 1)).toEqual([]);
+    expect(niceTicks(0, Infinity)).toEqual([]);
+  });
+  it("produces a 1-2-5 ladder", () => {
+    // Span 10, 6 target ticks → incr 2 (10/6 ≈ 1.67 → bumped to 2).
+    expect(niceTicks(0, 10, 6)).toEqual([0, 2, 4, 6, 8, 10]);
+  });
+  it("snaps the start to the next multiple of incr", () => {
+    // Span 6.4, target 6 → rough 1.07 → mult picks 2 → incr 2;
+    // start ceil(2.3/2)*2 = 4, end floor(8.7/2)*2 = 8.
+    expect(niceTicks(2.3, 8.7, 6)).toEqual([4, 6, 8]);
+  });
+});
+
+describe("alignedSecondarySplits (iter4 alignment item #3)", () => {
+  it("returns the empty array when the primary domain collapses", () => {
+    expect(alignedSecondarySplits([5], 5, 5, 0, 100)).toEqual([]);
+  });
+  it("returns the empty array when primary splits are empty", () => {
+    expect(alignedSecondarySplits([], 0, 10, 0, 100)).toEqual([]);
+  });
+  it("returns the empty array for non-finite scale bounds", () => {
+    expect(alignedSecondarySplits([0, 5, 10], NaN, 10, 0, 100)).toEqual([]);
+    expect(alignedSecondarySplits([0, 5, 10], 0, 10, 0, Infinity)).toEqual([]);
+  });
+  it("maps primary splits to the secondary domain by linear interpolation", () => {
+    // Primary [0..10] with ticks at [0, 2, 4, 6, 8, 10]; secondary
+    // [0..100]. Each primary fraction (0%, 20%, …) maps to the same
+    // fraction in [0..100].
+    expect(alignedSecondarySplits([0, 2, 4, 6, 8, 10], 0, 10, 0, 100)).toEqual(
+      [0, 20, 40, 60, 80, 100],
+    );
+  });
+  it("handles inverted secondary domains (max < min)", () => {
+    // Useful when the secondary axis is rendered with reversed scale.
+    expect(alignedSecondarySplits([0, 5, 10], 0, 10, 100, 0)).toEqual([
+      100, 50, 0,
+    ]);
   });
 });

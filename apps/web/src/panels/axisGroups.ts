@@ -107,3 +107,85 @@ export function resolveAxisColor(channels: Channel[]): string {
 export function axisLabel(g: AxisGroup): string {
   return g.unit ? g.unit : "(unitless)";
 }
+
+/** Iter4 alignment item #3 — align dual-axis tick rows.
+ *
+ *  When the Plot panel shows two Y axes (one per unit group), the left
+ *  axis picks its own ticks via uPlot's `incrs` heuristic and the right
+ *  axis does the same in its own value space. The two ladders end up
+ *  on **different y-pixel rows** and the gridlines wander — useless for
+ *  reading two values off the same horizontal slice, which is the only
+ *  reason dual-axis plots exist.
+ *
+ *  This helper computes splits for the *secondary* axis by taking the
+ *  primary axis's splits as authoritative pixel positions and linearly
+ *  interpolating each one into the secondary's value domain. The
+ *  resulting secondary ticks land on exactly the same y-pixel rows as
+ *  the primary's, so a single horizontal slice of the canvas crosses
+ *  one tick on each side. The numbers themselves stay in the
+ *  secondary's unit space (`12, 10, 8, …` keep their meaning); only the
+ *  *positions* are forced into agreement.
+ *
+ *  Returns the empty array when the inputs are degenerate (primary
+ *  scale collapsed to a point); uPlot then falls back to its own
+ *  splits — better than a divide-by-zero `NaN`.
+ */
+export function alignedSecondarySplits(
+  primarySplits: number[],
+  primaryMin: number,
+  primaryMax: number,
+  secondaryMin: number,
+  secondaryMax: number,
+): number[] {
+  if (primarySplits.length === 0) return [];
+  if (!Number.isFinite(primaryMin) || !Number.isFinite(primaryMax)) return [];
+  if (!Number.isFinite(secondaryMin) || !Number.isFinite(secondaryMax)) {
+    return [];
+  }
+  const span = primaryMax - primaryMin;
+  if (span === 0) return [];
+  const secondarySpan = secondaryMax - secondaryMin;
+  return primarySplits.map((p) => {
+    const frac = (p - primaryMin) / span;
+    return secondaryMin + frac * secondarySpan;
+  });
+}
+
+/** Compute a "nice" tick ladder for the primary axis, mirroring uPlot's
+ *  default behaviour closely enough that we can compute it ourselves
+ *  before uPlot does its own pass. We pick the smallest increment from
+ *  the standard `1·10^n, 2·10^n, 5·10^n` family that yields no more than
+ *  `targetTicks` ticks across `[min, max]`.
+ *
+ *  Exported so the secondary-axis split function and unit tests can
+ *  share one source of truth. */
+export function niceTicks(
+  min: number,
+  max: number,
+  targetTicks = 6,
+): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return [];
+  if (min === max) return [min];
+  const span = Math.abs(max - min);
+  // Rough increment: span / targetTicks; round up to the next `1, 2, 5`.
+  const rough = span / Math.max(1, targetTicks);
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / pow;
+  // Pick the smallest "nice" multiplier ≥ norm so we don't exceed
+  // targetTicks.
+  let mult: number;
+  if (norm <= 1) mult = 1;
+  else if (norm <= 2) mult = 2;
+  else if (norm <= 5) mult = 5;
+  else mult = 10;
+  const incr = mult * pow;
+  const start = Math.ceil(min / incr) * incr;
+  const end = Math.floor(max / incr) * incr;
+  const out: number[] = [];
+  // Guard against floating-point drift accumulating an extra tick.
+  for (let v = start; v <= end + incr * 1e-9; v += incr) {
+    // Snap to incr to avoid 33.300000000000004 drift.
+    out.push(Math.round(v / incr) * incr);
+  }
+  return out;
+}

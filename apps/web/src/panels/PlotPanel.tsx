@@ -54,7 +54,13 @@ import {
   shouldShowSourceBadges,
   sourceBadge as sourceBadgeFor,
 } from "./channelLabels";
-import { groupByUnit, axisLabel, type AxisGroup } from "./axisGroups";
+import {
+  groupByUnit,
+  axisLabel,
+  alignedSecondarySplits,
+  niceTicks,
+  type AxisGroup,
+} from "./axisGroups";
 import {
   formatRelativeTime24h,
   formatAxisTime24h,
@@ -537,6 +543,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // the canvas doesn't become unreadable.
     const scales: uPlot.Options["scales"] = { x: { time: true } };
     const axesOpts: uPlot.Axis[] = [mkAxis(2, "x")]; // bottom x-axis
+
     for (let i = 0; i < axisGroups.length; i++) {
       const g = axisGroups[i];
       (scales as Record<string, uPlot.Scale>)[g.scaleKey] = { auto: true };
@@ -551,9 +558,57 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       const gridTint =
         axisGroups.length >= 2 && tint ? tintedGrid(tint) : undefined;
       if (i === 0) {
-        axesOpts.push(mkAxis(3, g.scaleKey, axisLabel(g), tint, gridTint));
+        const axis = mkAxis(3, g.scaleKey, axisLabel(g), tint, gridTint);
+        // Iter4 alignment item #3 — compute the primary's tick ladder
+        // ourselves (via `niceTicks`) instead of letting uPlot pick. We
+        // need it deterministic so the secondary axis can borrow the
+        // exact same pixel rows; uPlot's `incrs` heuristic is opaque
+        // from outside, so we mirror its behaviour with `niceTicks`
+        // (1·10^n, 2·10^n, 5·10^n) and own the result on both sides.
+        if (axisGroups.length >= 2) {
+          axis.splits = (_self, _axisIdx, scaleMin, scaleMax) =>
+            niceTicks(scaleMin, scaleMax, 6);
+        }
+        axesOpts.push(axis);
       } else if (i === 1) {
-        axesOpts.push(mkAxis(1, g.scaleKey, axisLabel(g), tint, gridTint));
+        const axis = mkAxis(1, g.scaleKey, axisLabel(g), tint, gridTint);
+        // Borrow the primary's pixel rows for the secondary so dual-
+        // axis gridlines coincide. The primary used `niceTicks(min,
+        // max, 6)`; re-derive its splits + scale here, then map them
+        // through the secondary's domain via lerp. Reading the primary
+        // scale from `self.scales` would race against uPlot's per-axis
+        // processing order — recomputing is cheap and side-effect-free.
+        const primary = axisGroups[0];
+        const primaryScaleKey = primary.scaleKey;
+        axis.splits = (self, _axisIdx, secMin, secMax) => {
+          const primaryScale = self.scales[primaryScaleKey];
+          const primaryMin = primaryScale?.min;
+          const primaryMax = primaryScale?.max;
+          if (
+            typeof primaryMin === "number" &&
+            typeof primaryMax === "number" &&
+            Number.isFinite(primaryMin) &&
+            Number.isFinite(primaryMax) &&
+            primaryMin !== primaryMax
+          ) {
+            const primSplits = niceTicks(primaryMin, primaryMax, 6);
+            const aligned = alignedSecondarySplits(
+              primSplits,
+              primaryMin,
+              primaryMax,
+              secMin,
+              secMax,
+            );
+            if (aligned.length > 0) return aligned;
+          }
+          // Defensive: even step ladder so the axis renders something.
+          return niceTicks(secMin, secMax, 6);
+        };
+        // The secondary's gridlines would coincide with the primary's
+        // (same pixel rows) and draw as a doubled line. Hide the grid
+        // on the secondary; ticks + labels still render.
+        axis.grid = { show: false };
+        axesOpts.push(axis);
       }
       // i >= 2: scale exists but no visible axis — see Mixed-units warning
     }
