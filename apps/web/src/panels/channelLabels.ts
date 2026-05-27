@@ -56,16 +56,24 @@ export function shortenSourceName(name: string): string {
   return `${stem.slice(0, 6)}…${stem.slice(-6)}`;
 }
 
-/** True when at least two of the bound channels share a `name`. When
- *  every short label is unique a source badge is just noise; we only
- *  surface it when it carries disambiguating information. */
+/** True when chips should carry a source-disambiguation badge.
+ *
+ *  v1 only surfaced the badge on short-label collision, but the designer
+ *  audit on `comma2k19-mcap-plus-mf4.png` flagged the opposite problem:
+ *  a cross-source view (e.g. `speed (m/s)` from `comma2k19.mcap` plus
+ *  `WheelSpeedFL (m/s)` from `comma2k19.mf4`) is *exactly* the case
+ *  where the user needs to know which file each chip came from — yet
+ *  the short labels don't collide, so the badge stayed hidden.
+ *
+ *  Updated rule: whenever the bound channels span **two or more
+ *  distinct sources**, every chip carries its source badge. With a
+ *  single source the badge is redundant noise and we hide it. */
 export function shouldShowSourceBadges(channels: Channel[]): boolean {
   if (channels.length < 2) return false;
-  const seen = new Set<string>();
+  const sourceIds = new Set<string>();
   for (const c of channels) {
-    const key = shortChannelLabel(c);
-    if (seen.has(key)) return true;
-    seen.add(key);
+    sourceIds.add(c.sourceId);
+    if (sourceIds.size >= 2) return true;
   }
   return false;
 }

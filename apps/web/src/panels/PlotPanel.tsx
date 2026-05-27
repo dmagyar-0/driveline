@@ -396,20 +396,33 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
     const rect = container.getBoundingClientRect();
     const { fg, grid, ticks } = axisStyle();
+    // Iter2 issue #3 — when a y-axis is tinted (its group has a
+    // homogeneous palette colour) we use that tint for the axis label,
+    // ticks, and a slightly stronger grid colour so the user can tell
+    // at a glance which trace owns which side. The bottom x-axis stays
+    // neutral; tinting it would suggest the time axis belongs to one
+    // series. Pass `tint` only for tinted Y axes.
     const mkAxis = (
       side: 0 | 1 | 2 | 3,
       scale: string,
       label?: string,
-    ): uPlot.Axis => ({
-      scale,
-      side,
-      stroke: fg,
-      ticks: { stroke: ticks, size: 4 },
-      grid: { stroke: grid, width: 1 },
-      // Render only on canvas axes (sides 2 = bottom-x, 3 = right-y,
-      // 1 = left-y); uPlot ignores `label` for unused axes anyway.
-      ...(label ? { label } : {}),
-    });
+      tint?: string,
+    ): uPlot.Axis => {
+      const stroke = tint ?? fg;
+      const tickStroke = tint ?? ticks;
+      // Grid keeps the subdued tone — a fully tinted grid drowns the
+      // canvas. Tick + label tint is enough to associate the axis.
+      return {
+        scale,
+        side,
+        stroke,
+        ticks: { stroke: tickStroke, size: 4 },
+        grid: { stroke: grid, width: 1 },
+        // Render only on canvas axes (sides 2 = bottom-x, 3 = right-y,
+        // 1 = left-y); uPlot ignores `label` for unused axes anyway.
+        ...(label ? { label } : {}),
+      };
+    };
     // Default mode: `mergeSeries` emits `null` at every union timestamp
     // where *this* series has no sample. With two same-rate signals on
     // different CAN mailboxes (e.g. /vehicle/speed and
@@ -434,10 +447,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     for (let i = 0; i < axisGroups.length; i++) {
       const g = axisGroups[i];
       (scales as Record<string, uPlot.Scale>)[g.scaleKey] = { auto: true };
+      // Only tint the axis when there are ≥2 unit groups; with a single
+      // axis the tint would just colour the chrome to match every
+      // series, adding noise instead of signal. Pass `undefined` to
+      // mkAxis so single-axis plots retain the neutral fg colour.
+      const tint = axisGroups.length >= 2 ? g.axisColor : undefined;
       if (i === 0) {
-        axesOpts.push(mkAxis(3, g.scaleKey, axisLabel(g))); // left
+        axesOpts.push(mkAxis(3, g.scaleKey, axisLabel(g), tint)); // left
       } else if (i === 1) {
-        axesOpts.push(mkAxis(1, g.scaleKey, axisLabel(g))); // right
+        axesOpts.push(mkAxis(1, g.scaleKey, axisLabel(g), tint)); // right
       }
       // i >= 2: scale exists but no visible axis — see Mixed-units warning
     }
@@ -555,6 +573,13 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
+    // Issue #5 — hide the cursor line in an empty plot. A stray orange
+    // vertical bar over an unbound canvas reads as noise, not a
+    // playhead. With no bound series the overlay clears to empty and
+    // returns; once the user picks a channel the next cursor tick
+    // redraws normally.
+    if (boundChannels.length === 0) return;
+
     const range = lastRangeRef.current ?? globalRange;
     if (!range) return;
     const bbox = plot.bbox;
@@ -624,6 +649,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     <section className={styles.panel} data-testid="plot-panel">
       <div className={styles.controls}>
         {collapseEligible && (
+          // Issue #6 — the standalone `"N channels"` count duplicated
+          // what the Add-channel button's `n / N max` badge already
+          // says. The collapse pill now just toggles visibility; the
+          // Add-channel button stays the single source of truth for
+          // the binding count.
           <button
             type="button"
             className={styles.collapseBtn}
@@ -631,7 +661,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
             aria-expanded={!chipsCollapsed}
             data-testid="plot-chips-collapse"
           >
-            {chipsCollapsed ? `${boundChannelIds.length} channels` : "Hide"}
+            {chipsCollapsed ? "Show chips" : "Hide chips"}
           </button>
         )}
         {showChipsExpanded && (
