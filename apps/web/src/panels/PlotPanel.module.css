@@ -302,3 +302,144 @@
   color: var(--color-fg-5);
   font-weight: var(--fw-regular);
 }
+
+/* Floating cursor tooltip (iter2 issue #1). Anchored to the playhead
+ * inside `.plotArea` (which is `position: relative`). Sits near the
+ * top of the canvas so it never overlaps the under-plot readout strip.
+ *
+ * The tooltip is the primary "what is the value at the cursor" surface
+ * — it puts the answer right next to where the user is already
+ * looking. The strip below still exists as a persistent secondary
+ * readout for users with wide panels.
+ */
+.cursorTooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 2;
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-12);
+  color: var(--color-fg-2);
+  max-width: 240px;
+  min-width: 120px;
+  /* Subtle elevation — the tooltip should read as floating above the
+   * canvas without competing with the cursor line. */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.cursorTooltipTime {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--color-fg-4);
+  margin-bottom: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+  letter-spacing: 0.02em;
+}
+
+.cursorTooltipList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cursorTooltipRow {
+  display: grid;
+  grid-template-columns: 0.625rem 1fr auto;
+  align-items: baseline;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.cursorTooltipSwatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+  /* Nudge baseline-aligned swatches up so they centre on the row x-height. */
+  transform: translateY(1px);
+}
+
+.cursorTooltipLabel {
+  color: var(--color-fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+.cursorTooltipBadge {
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  background: var(--color-bg-3);
+  border-radius: var(--radius-2);
+  padding: 0 4px;
+}
+
+.cursorTooltipValue {
+  color: var(--color-fg-1);
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+}
+
+.cursorTooltipUnit {
+  color: var(--color-fg-5);
+  font-weight: var(--fw-regular);
+}
+
+/* Segment-boundary overlay (iter2 issue #4). One subtly tinted band per
+ * loaded source, alternating between two near-invisible greys so the
+ * boundaries register without dominating the canvas. Labels sit in the
+ * top-left corner of each band so they don't clip the rendered line
+ * data, with a small inset so they don't kiss the band edge. */
+.segmentBands {
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.segmentBand {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  /* `box-sizing: border-box` so a 1 px boundary line on the right edge
+   * doesn't push the next band over. */
+  box-sizing: border-box;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.segmentBandEven {
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.segmentBandOdd {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.segmentBandLabel {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-2);
+  padding: 0 4px;
+  letter-spacing: 0.02em;
+  /* Subdue against the canvas; the band itself is the primary cue. */
+  opacity: 0.85;
+}

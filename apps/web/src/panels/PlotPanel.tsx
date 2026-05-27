@@ -47,6 +47,8 @@ import {
   formatReadoutValue,
   type CursorReadoutEntry,
 } from "./CursorReadout";
+import { CursorTooltip } from "./CursorTooltip";
+import { SegmentBands, formatSegmentTime } from "./SegmentBands";
 import {
   shortChannelLabel,
   shouldShowSourceBadges,
@@ -255,6 +257,28 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const [readoutEntries, setReadoutEntries] = useState<CursorReadoutEntry[]>(
     [],
   );
+
+  // Iter2 issue #1 — floating cursor tooltip. The X position is the
+  // cursor playhead's CSS-pixel offset inside `.plotArea`. `null` while
+  // the cursor sits outside the rendered range so the tooltip hides
+  // alongside the overlay cursor line. The width of the container is
+  // tracked here so the tooltip's flip-when-near-right-edge decision
+  // doesn't have to measure on every render. Both update at most once
+  // per cursor tick (≤1 / rAF in the hot path budget).
+  const [tooltipX, setTooltipX] = useState<number | null>(null);
+  const [plotAreaWidth, setPlotAreaWidth] = useState<number>(0);
+
+  // Iter2 issue #4 — segment-band geometry. We rebuild bands when
+  // `sources` change (a new file is dropped or one is closed); the
+  // band's pixel rect comes from the plot's bbox tracked in the cursor
+  // overlay effect. Decoupling these means scrubbing the cursor doesn't
+  // recompute band geometry on every tick.
+  const [bbox, setBbox] = useState<{
+    leftPx: number;
+    topPx: number;
+    widthPx: number;
+    heightPx: number;
+  } | null>(null);
 
   const publishSync = useCallback(() => {
     const t0 = `plot:cursor:${panelId}:start`;
@@ -565,7 +589,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
     const overlay = overlayRef.current;
     const plot = plotRef.current;
-    if (!overlay || !plot) return;
+    const containerEl = containerRef.current;
+    if (!overlay || !plot || !containerEl) return;
     const ctx = overlay.getContext("2d");
     if (!ctx) return;
 
@@ -573,25 +598,56 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
+    // Iter2 — track the plot canvas's CSS-pixel bbox inside the
+    // `.plotArea` container so the segment-band overlay and the cursor
+    // tooltip can position themselves over the same drawn area uPlot
+    // uses for series. This is the only place we read `plot.bbox`, so
+    // both consumers stay in lockstep with the canvas geometry.
+    const pbbox = plot.bbox;
+    const left = pbbox.left / dpr;
+    const top = pbbox.top / dpr;
+    const width = pbbox.width / dpr;
+    const height = pbbox.height / dpr;
+    setBbox((prev) =>
+      prev &&
+      prev.leftPx === left &&
+      prev.topPx === top &&
+      prev.widthPx === width &&
+      prev.heightPx === height
+        ? prev
+        : { leftPx: left, topPx: top, widthPx: width, heightPx: height },
+    );
+    const containerWidth = containerEl.getBoundingClientRect().width;
+    setPlotAreaWidth((w) => (w === containerWidth ? w : containerWidth));
+
     // Issue #5 — hide the cursor line in an empty plot. A stray orange
     // vertical bar over an unbound canvas reads as noise, not a
     // playhead. With no bound series the overlay clears to empty and
     // returns; once the user picks a channel the next cursor tick
     // redraws normally.
-    if (boundChannels.length === 0) return;
+    if (boundChannels.length === 0) {
+      setTooltipX(null);
+      return;
+    }
 
     const range = lastRangeRef.current ?? globalRange;
-    if (!range) return;
-    const bbox = plot.bbox;
-    // uPlot's bbox is in device pixels; convert to CSS pixels for the
-    // standard 2D context.
-    const left = bbox.left / dpr;
-    const top = bbox.top / dpr;
-    const width = bbox.width / dpr;
-    const height = bbox.height / dpr;
+    if (!range) {
+      setTooltipX(null);
+      return;
+    }
 
     const x = cursorXPx(cursorNs, range, width);
-    if (x === null) return;
+    if (x === null) {
+      setTooltipX(null);
+      return;
+    }
+
+    // Tooltip anchor — bbox-relative cursor X plus the bbox's own
+    // left offset gives a coordinate inside `.plotArea`. Only update
+    // when the rounded value actually changes to avoid a no-op
+    // re-render every tick.
+    const cursorCssX = Math.round(left + x);
+    setTooltipX((prev) => (prev === cursorCssX ? prev : cursorCssX));
 
     ctx.strokeStyle = cursorStrokeColor();
     ctx.lineWidth = 1;
@@ -599,7 +655,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.moveTo(left + x + 0.5, top);
     ctx.lineTo(left + x + 0.5, top + height);
     ctx.stroke();
-  }, [cursorNs, globalRange, seriesKey, publishSync]);
+  }, [boundChannels.length, cursorNs, globalRange, seriesKey, publishSync]);
 
   // Drop this panel's sync snapshot on unmount so stale ids don't leak
   // into a test after a panel is closed.
@@ -609,6 +665,61 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       if (store) delete store[panelId];
     };
   }, [panelId]);
+
+  // Iter2 issue #4 — derive segment-band geometries from the loaded
+  // sources. Each source is a "segment"; we sort by start time and
+  // produce one band per source. With ≤1 source we render nothing
+  // (no boundaries to indicate). When source list is empty after a
+  // load, log a single warning so we have a breadcrumb if the
+  // metadata path ever drops — the audit explicitly asked for the
+  // graceful skip.
+  const segmentBandsList = useMemo(() => {
+    if (!globalRange || sources.length <= 1) return [];
+    const spanNs = globalRange.endNs - globalRange.startNs;
+    if (spanNs <= 0n) return [];
+    const ordered = [...sources].sort((a, b) => {
+      const d = a.timeRange.startNs - b.timeRange.startNs;
+      return d === 0n ? 0 : d < 0n ? -1 : 1;
+    });
+    const originNs = globalRange.startNs;
+    return ordered.map((s, i) => {
+      const startOff = s.timeRange.startNs - originNs;
+      const endOff = s.timeRange.endNs - originNs;
+      const leftFrac = Number(startOff) / Number(spanNs);
+      const widthFrac = Number(endOff - startOff) / Number(spanNs);
+      const startLbl = formatSegmentTime(s.timeRange.startNs, originNs);
+      const endLbl = formatSegmentTime(s.timeRange.endNs, originNs);
+      return {
+        id: `${s.id}:${i}`,
+        label: `S${i + 1}`,
+        leftFrac,
+        widthFrac,
+        title: `Segment ${i + 1} · ${s.name} · ${startLbl} → ${endLbl}`,
+      };
+    });
+  }, [sources, globalRange]);
+
+  // One-shot warning when the audit's "no segment metadata available"
+  // path fires. Sources always carry `timeRange` today, so this is
+  // defensive — should never log on the supported readers.
+  const segmentWarnedRef = useRef(false);
+  useEffect(() => {
+    if (sources.length > 1 && !globalRange && !segmentWarnedRef.current) {
+      segmentWarnedRef.current = true;
+      // eslint-disable-next-line no-console
+      console.warn(
+        "PlotPanel: segment metadata unavailable — skipping segment bands.",
+      );
+    }
+  }, [sources, globalRange]);
+
+  // Time label for the cursor tooltip — formatted once per cursor tick.
+  // Relative to the session origin so segment correlations are obvious
+  // (a 1.5-minute mark inside seg #2 reads cleanly).
+  const tooltipTimeLabel = useMemo(() => {
+    if (!globalRange) return null;
+    return formatSegmentTime(cursorNs, globalRange.startNs);
+  }, [cursorNs, globalRange]);
 
   const atCap = boundChannelIds.length >= MAX_PLOT_SERIES;
   const hasAnyScalar = useMemo(
@@ -713,7 +824,31 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       )}
       <div ref={containerRef} className={styles.plotArea}>
         <div ref={plotMountRef} className={styles.plotMount} />
+        {/* Iter2 issue #4 — segment bands sit between the canvas and
+            the cursor overlay so the cursor line stays visible over the
+            band tint. Rendered only when geometry is known + ≥2
+            sources. */}
+        {bbox && boundChannels.length > 0 && segmentBandsList.length > 1 && (
+          <SegmentBands
+            bands={segmentBandsList}
+            bboxLeftPx={bbox.leftPx}
+            bboxTopPx={bbox.topPx}
+            bboxWidthPx={bbox.widthPx}
+            bboxHeightPx={bbox.heightPx}
+          />
+        )}
         <canvas ref={overlayRef} className={styles.overlay} />
+        {/* Iter2 issue #1 — floating tooltip anchored to the playhead.
+            Wrapped inside `.plotArea` so the absolute `left`/`top` are
+            relative to the panel canvas, not the document. */}
+        {boundChannels.length > 0 && (
+          <CursorTooltip
+            xPx={tooltipX}
+            containerWidthPx={plotAreaWidth}
+            timeLabel={tooltipTimeLabel}
+            entries={readoutEntries}
+          />
+        )}
         {boundChannels.length === 0 && (
           <div className={styles.empty} data-testid="plot-empty">
             {hasAnyScalar
