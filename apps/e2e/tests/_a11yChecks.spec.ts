@@ -70,7 +70,7 @@ test.describe("a11y polish (Agent F)", () => {
 
     // Capture a focused tab action button so the screenshot
     // demonstrates the visible focus ring.
-    await page.getByTestId("tab-rename").first().focus();
+    await page.getByTestId("tab-settings").first().focus();
     await page.screenshot({
       path: "tests/screenshots/a11y-tab-action-focused.png",
       clip: { x: 0, y: 0, width: 800, height: 80 },

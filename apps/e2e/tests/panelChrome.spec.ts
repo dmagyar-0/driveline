@@ -177,21 +177,18 @@ test.describe("Per-panel chrome (Phase 7)", () => {
   test("every tab action button advertises an accessible name", async ({
     page,
   }) => {
-    // Agent D shipped a 4-icon action cluster (rename / settings /
-    // maximize / close). Every icon-only control must carry both a
-    // `title` (sighted hover tooltip) AND an `aria-label` (assistive
-    // tech accessible name) — see PanelHeader.test.tsx for the unit
-    // contract; this is the cross-tab integration check.
+    // After iter5 the header action cluster is a 3-icon set
+    // (settings / maximize / close). Rename moved to a double-click
+    // gesture on the focused title. Every icon-only control must
+    // carry both a `title` (sighted hover tooltip) AND an
+    // `aria-label` (assistive tech accessible name) — see
+    // PanelHeader.test.tsx for the unit contract; this is the
+    // cross-tab integration check.
     //
     // FlexLayout's drag-preview "stamp" duplicates the tab DOM, so
     // each test-id appears 4× across both tabs. Pick the live ones
     // by scoping to the visible tab button.
-    for (const testId of [
-      "tab-rename",
-      "tab-settings",
-      "tab-maximize",
-      "tab-close",
-    ]) {
+    for (const testId of ["tab-settings", "tab-maximize", "tab-close"]) {
       const buttons = page.locator(
         `.flexlayout__tab_button [data-testid="${testId}"]`,
       );
