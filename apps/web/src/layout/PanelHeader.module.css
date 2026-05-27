@@ -156,10 +156,31 @@
  * distinguishes itself from the rest of the cluster — addresses the
  * "two ×" review point: the panel close is the destructive one,
  * stock FlexLayout's tabset close (still present at the strip's
- * right edge) is the only other ×. */
-.actionBtnDanger:hover {
-  background: rgba(178, 58, 0, 0.18);
+ * right edge) is the only other ×. Kept as `actionBtnDanger` for
+ * backwards compatibility with anything that might still reference
+ * it; the close button now uses `actionBtnClose` (same hover, plus
+ * a slightly heavier resting tone so it reads as the destructive
+ * action at idle, not only on hover). */
+.actionBtnDanger:hover,
+.actionBtnClose:hover {
+  background: var(--color-error-bg, rgba(178, 58, 0, 0.18));
   color: var(--color-error-dark);
+}
+
+/* Resting state for the close button: marginally brighter glyph than
+ * its peers so the destructive action is the first thing the eye
+ * picks up in the cluster (review note: "make the close × visually
+ * distinct"). Hover swaps to the danger tint above. */
+.actionBtnClose {
+  color: var(--color-fg-3);
+}
+
+/* The maximize button paints a 1-px offset shadow when the tabset
+ * is currently maximized so the toggle state is legible even before
+ * the user hovers to read the tooltip. */
+.actionBtn[data-maximized="true"] {
+  color: var(--color-fg-1);
+  background: var(--color-bg-5);
 }
 
 /* a11y · screen-reader-only sibling that surfaces the panel kind

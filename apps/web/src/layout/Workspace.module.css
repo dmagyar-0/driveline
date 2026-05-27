@@ -118,3 +118,16 @@
 .flexContainer :global(.flexlayout__tab_button_trailing) {
   display: none !important;
 }
+
+/* And the tabset-level close button (rendered into the tabset toolbar
+ * at the strip's right edge — `flexlayout__tab_toolbar_button-close`).
+ * Same reasoning: `PanelHeader.tsx` owns close per-panel. The tabset
+ * close otherwise sat next to FlexLayout's maximize toolbar button as
+ * the second × the design audit flagged. The maximize button itself
+ * is also redundant now that every PanelHeader has its own maximize
+ * toggle — hide it too so the toolbar collapses cleanly. */
+.flexContainer :global(.flexlayout__tab_toolbar_button-close),
+.flexContainer :global(.flexlayout__tab_toolbar_button-max),
+.flexContainer :global(.flexlayout__tab_toolbar_button-min) {
+  display: none !important;
+}

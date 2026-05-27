@@ -246,12 +246,20 @@ export const Workspace = forwardRef<WorkspaceHandle>(
       (node: TabNode, renderValues: ITabRenderValues) => {
         const panelId = node.getId();
         const kind = panelKindOf(panelId);
-        const tabsetId = node.getParent()?.getId();
+        const parent = node.getParent();
+        const tabsetId = parent?.getId();
         // Suppress FlexLayout's stock per-tab button cluster — `PanelHeader`
         // owns the close button now. The tabset-level close (top-right of
         // the strip, fired by `enableTabStrip`) stays as FlexLayout drew
         // it, since it operates on the *tabset*, not a tab.
         renderValues.buttons = [];
+        // The maximize toggle lives on each tab so the user can flip
+        // their own panel without targeting the tabset-level toolbar.
+        // Reading the maximized state from the model lets us swap the
+        // glyph (square → restore-down) and tooltip in sync.
+        const isMaximized =
+          tabsetId !== undefined &&
+          model.getMaximizedTabset()?.getId() === tabsetId;
         renderValues.content = (
           <PanelHeader
             model={model}
@@ -260,6 +268,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(
             name={node.getName()}
             kind={kind}
             isFocused={panelId === selectedPanelId}
+            isMaximized={isMaximized}
           />
         );
       },

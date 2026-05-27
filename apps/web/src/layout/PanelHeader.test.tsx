@@ -241,6 +241,42 @@ describe("PanelHeader", () => {
     expect(useSession.getState().selectedPanelId).toBe("plot-5");
   });
 
+  it("swaps the maximize button's tooltip + aria-label when the tabset is maximized", () => {
+    const { model } = makeStubModel();
+    const { rerender } = render(
+      <PanelHeader
+        model={model}
+        panelId="plot-1"
+        tabsetId="ts-1"
+        name="Speeds"
+        kind="plot"
+        isFocused
+        isMaximized={false}
+      />,
+    );
+    const btn = screen.getByTestId("tab-maximize");
+    expect(btn.getAttribute("title")).toBe("Maximize panel");
+    expect(btn.getAttribute("aria-label")).toBe("Maximize panel");
+    expect(btn.getAttribute("data-maximized")).toBe("false");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    rerender(
+      <PanelHeader
+        model={model}
+        panelId="plot-1"
+        tabsetId="ts-1"
+        name="Speeds"
+        kind="plot"
+        isFocused
+        isMaximized
+      />,
+    );
+    const btn2 = screen.getByTestId("tab-maximize");
+    expect(btn2.getAttribute("title")).toBe("Restore panel");
+    expect(btn2.getAttribute("aria-label")).toBe("Restore panel");
+    expect(btn2.getAttribute("data-maximized")).toBe("true");
+    expect(btn2.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("paints the kind data attribute so CSS can pick the per-kind accent", () => {
     const { model } = makeStubModel();
     const { container } = render(

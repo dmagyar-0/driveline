@@ -35,6 +35,15 @@ interface PanelHeaderProps {
   name: string;
   kind: PanelKind | null;
   isFocused: boolean;
+  /**
+   * Whether the panel's tabset is currently the maximized one. Drives
+   * the maximize/restore-down icon swap and the button's tooltip — the
+   * "mystery square" review point was largely about a single static
+   * icon that gave no hint of the toggle's current state. Optional so
+   * older call sites (and the unit tests) can omit it and get the
+   * default "not maximized" behaviour.
+   */
+  isMaximized?: boolean;
 }
 
 export function PanelHeader({
@@ -44,6 +53,7 @@ export function PanelHeader({
   name,
   kind,
   isFocused,
+  isMaximized = false,
 }: PanelHeaderProps): React.ReactElement {
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState(name);
@@ -218,7 +228,7 @@ export function PanelHeader({
           type="button"
           className={styles.actionBtn}
           aria-label="Rename panel"
-          title="Rename panel"
+          title="Rename panel (double-click title)"
           data-testid="tab-rename"
           onPointerDown={stopPointer}
           onClick={onRenameStart}
@@ -229,8 +239,8 @@ export function PanelHeader({
         <button
           type="button"
           className={styles.actionBtn}
-          aria-label="Configure panel"
-          title="Configure panel"
+          aria-label="Panel settings"
+          title="Panel settings"
           data-testid="tab-settings"
           onPointerDown={stopPointer}
           onClick={onSettings}
@@ -240,17 +250,19 @@ export function PanelHeader({
         <button
           type="button"
           className={styles.actionBtn}
-          aria-label="Maximize panel"
-          title="Maximize panel"
+          aria-label={isMaximized ? "Restore panel" : "Maximize panel"}
+          title={isMaximized ? "Restore panel" : "Maximize panel"}
           data-testid="tab-maximize"
+          data-maximized={isMaximized ? "true" : "false"}
+          aria-pressed={isMaximized}
           onPointerDown={stopPointer}
           onClick={onMaximize}
         >
-          <MaximizeIcon />
+          {isMaximized ? <RestoreIcon /> : <MaximizeIcon />}
         </button>
         <button
           type="button"
-          className={`${styles.actionBtn} ${styles.actionBtnDanger}`}
+          className={`${styles.actionBtn} ${styles.actionBtnClose}`}
           aria-label="Close panel"
           title="Close panel"
           data-testid="tab-close"
@@ -271,6 +283,12 @@ function stopPointer(e: React.PointerEvent): void {
   e.stopPropagation();
 }
 
+/**
+ * Standard gear / cog. The previous "settings" glyph was a sun (a
+ * dot surrounded by 8 spokes) that the design audit flagged as
+ * ambiguous — could read as theme, brightness, or "settings". A gear
+ * is the universal control-panel glyph and disambiguates intent.
+ */
 function SettingsIcon(): React.ReactElement {
   return (
     <svg
@@ -284,12 +302,22 @@ function SettingsIcon(): React.ReactElement {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <circle cx="8" cy="8" r="2" />
-      <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4" />
+      {/* Cog teeth as a single closed path so the hub sits in the
+       * middle without a visible seam. Eight teeth, slightly rounded
+       * by stroke-linejoin so the icon reads cleanly at 14 px. */}
+      <path d="M9.4 1.8l-.3 1.7a4.9 4.9 0 00-1.5.6L6.2 3.2l-3 3 .9 1.4a4.9 4.9 0 00-.6 1.5l-1.7.3v4.2l1.7.3a4.9 4.9 0 00.6 1.5" />
+      <path d="M6.6 14.2l.3-1.7a4.9 4.9 0 001.5-.6l1.4.9 3-3-.9-1.4a4.9 4.9 0 00.6-1.5l1.7-.3" transform="rotate(180 8 8)" />
+      <circle cx="8" cy="8" r="2.4" />
     </svg>
   );
 }
 
+/**
+ * Classic "maximize" frame: a solid square outline. Distinguishes
+ * itself from the close × (two diagonal strokes) and from the restore
+ * glyph (two overlapping squares). Tooltip swaps to "Restore" when
+ * the tabset is already maximized.
+ */
 function MaximizeIcon(): React.ReactElement {
   return (
     <svg
@@ -303,11 +331,44 @@ function MaximizeIcon(): React.ReactElement {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d="M3 3h4M3 3v4M13 3h-4M13 3v4M3 13h4M3 13v-4M13 13h-4M13 13v-4" />
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1" />
     </svg>
   );
 }
 
+/**
+ * Standard "restore down" glyph: the front square sits over a
+ * peeked-out back square so the icon visibly differs from maximize.
+ * Rendered only when `isMaximized` is true so the user can tell the
+ * toggle's current state at a glance — no more "what does the square
+ * do?" from the iter2 audit.
+ */
+function RestoreIcon(): React.ReactElement {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {/* Back square (top-right corner peeking) */}
+      <path d="M5.5 4.5V3a.5.5 0 01.5-.5h7a.5.5 0 01.5.5v7a.5.5 0 01-.5.5H12" />
+      {/* Front square (full) */}
+      <rect x="2.5" y="5.5" width="9" height="8" rx="0.5" />
+    </svg>
+  );
+}
+
+/**
+ * Close × — heavier stroke and a hair larger viewport scaling via
+ * `actionBtnClose` in CSS so it reads as the destructive action
+ * even before the danger-tinted hover kicks in.
+ */
 function CloseIcon(): React.ReactElement {
   return (
     <svg
@@ -316,7 +377,7 @@ function CloseIcon(): React.ReactElement {
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.6"
+      strokeWidth="1.8"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"
