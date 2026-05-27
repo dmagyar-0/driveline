@@ -173,3 +173,24 @@
 .flexContainer :global(.flexlayout__tab_toolbar_button-min) {
   display: none !important;
 }
+
+/* iter6 · a11y focus rings on FlexLayout chrome.
+ *
+ * FlexLayout renders its splitters + tab buttons as <div>s without
+ * role="button". The library does enroll them in the tab order, but
+ * the tab order alone isn't a visible focus indicator. Add explicit
+ * `:focus-visible` rings so keyboard users can see WHERE they are. */
+.flexContainer :global(.flexlayout__tab_button):focus-visible,
+.flexContainer :global(.flexlayout__tab_toolbar_button):focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+  border-radius: var(--radius-3);
+}
+
+.flexContainer :global(.flexlayout__splitter):focus-visible,
+.flexContainer :global(.flexlayout__splitter_vert):focus-visible,
+.flexContainer :global(.flexlayout__splitter_horz):focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -1px;
+  background: var(--color-role-active-tint);
+}

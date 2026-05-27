@@ -183,9 +183,15 @@
 }
 
 .searchInput:focus-visible {
-  outline: none;
-  border-color: var(--color-accent-blue);
-  box-shadow: 0 0 0 2px var(--color-accent-blue-tint);
+  /* iter6 · keep the input's blue border + tint glow as the
+   * primary cue, but pair it with an explicit outline so the focus
+   * indicator obeys the same "colour + offset gap" rule as every
+   * other interactive element. The outline-offset is negative so
+   * the ring nests inside the rounded border instead of doubling up. */
+  outline: 2px solid var(--color-role-focus);
+  outline-offset: -1px;
+  border-color: var(--color-role-active);
+  box-shadow: 0 0 0 2px var(--color-role-active-tint);
 }
 
 .sortGroup {

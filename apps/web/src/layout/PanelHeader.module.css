@@ -217,13 +217,24 @@
   border-radius: var(--radius-3);
   padding: 1px var(--sp-3);
   width: 18ch;
+  /* iter6 · this input is for renaming a panel inline; suppress the
+   * default browser outline only when focus came from pointing/typing
+   * (`:focus`). Keyboard focus (`:focus-visible`) below keeps the ring. */
   outline: none;
   cursor: text;
 }
 
+.nameInput:focus-visible {
+  /* iter6 · explicit keyboard focus ring so the inline-rename input
+   * still announces itself to keyboard users. */
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-color: var(--color-role-active);
+}
+
 .nameInput:focus {
-  border-color: var(--color-accent-blue);
-  box-shadow: 0 0 0 1px var(--color-accent-blue);
+  border-color: var(--color-role-active);
+  box-shadow: 0 0 0 1px var(--color-role-active);
 }
 
 .actions {

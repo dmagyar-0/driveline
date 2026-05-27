@@ -34,3 +34,13 @@
 .marker[data-out-of-range="true"] {
   opacity: 0.5;
 }
+
+/* iter6 · a11y · keyboard users can tab onto a bookmark marker
+ * (the React component sets tabindex). A 2 px marker is hard to see
+ * even when focused, so the ring offsets out to be visible against
+ * the track strip. */
+.marker:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+  border-radius: var(--radius-2);
+}
