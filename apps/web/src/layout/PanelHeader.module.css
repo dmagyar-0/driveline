@@ -211,7 +211,18 @@
   height: 24px;
   border: 0;
   background: transparent;
-  color: var(--color-fg-4);
+  /* Iter5 · resting icon contrast.
+   *
+   * Iter4 used `--color-fg-4` (#b4b9c1) which on its own clears AA
+   * against bg-2 (~8:1) — but combined with the tab_button opacity
+   * multiplier the audit measured the rendered glyph at ~3:1 (fails
+   * AA). The opacity crush is gone (Workspace.module.css), and we
+   * lift the rest token to `--color-fg-3` so the icons stay well
+   * above the 4.5:1 floor even at the 0.92 unselected nudge. They're
+   * still subordinate to title text (titles read at fg-1 when active,
+   * fg-3 when inactive — same colour as resting icons, but bolder).
+   */
+  color: var(--color-fg-3);
   border-radius: var(--radius-3);
   cursor: pointer;
   padding: 0;
@@ -222,7 +233,7 @@
 
 .actionBtn:hover {
   background: var(--color-bg-5);
-  color: var(--color-fg-2);
+  color: var(--color-fg-1);
 }
 
 .actionBtn:active {
@@ -252,9 +263,11 @@
 /* Resting state for the close button: marginally brighter glyph than
  * its peers so the destructive action is the first thing the eye
  * picks up in the cluster (review note: "make the close × visually
- * distinct"). Hover swaps to the danger tint above. */
+ * distinct"). Iter5: now that the other icons rest at fg-3, the close
+ * lifts to fg-2 to stay perceptibly brighter at rest. Hover swaps to
+ * the danger tint above. */
 .actionBtnClose {
-  color: var(--color-fg-3);
+  color: var(--color-fg-2);
 }
 
 /* The maximize button paints a 1-px offset shadow when the tabset
