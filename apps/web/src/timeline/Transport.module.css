@@ -355,6 +355,10 @@
   border-radius: var(--radius-4);
 }
 
+/* Iter4 (issue #1) — track background. Stay on the deepest neutral
+ * (`--color-bg-3` = #0e0f12) so the unplayed remainder reads as a
+ * dark channel against the chrome (`--color-bg-2` = #1c1f24). This
+ * is the unplayed side of the contrast pair with `.trackFill`. */
 .trackStrip {
   position: relative;
   width: 100%;
@@ -366,25 +370,43 @@
   transition: background var(--motion-fast);
 }
 
+/* On hover lift only the unplayed area; do not let it approach the
+ * fill colour or the played/unplayed boundary will weaken. */
 .track:hover .trackStrip {
-  background: var(--color-bg-4);
+  background: #16181d;
+  border-color: var(--color-border-strong);
 }
 
-/* The "consumed so far" fill — sits behind the playhead handle and
- * gently tints the section of the track that has been played. */
+/* Iter4 (issue #1) — high-contrast played region. The previous fill
+ * used a 28–40 % blue-on-transparent gradient that mixed down to a
+ * dim slate (~#1c2840) against the #0e0f12 track. Reviewer measured
+ * contrast < 1.5:1 against the track and asked for ≥4.5:1.
+ *
+ * Solution:
+ *   • Solid, fully-opaque accent blue (`--color-accent-blue` = #4d8bff)
+ *     as the base, with a faint top-down highlight so the eye reads
+ *     the surface as raised rather than flat.
+ *   • Computed luminance L ≈ 0.275 → contrast vs #0e0f12 (L ≈ 0.005)
+ *     is (0.275 + 0.05) / (0.005 + 0.05) ≈ 5.9:1, comfortably above
+ *     the 4.5:1 floor.
+ *   • Pairs with `.trackStrip`'s muted bg so the unplayed remainder
+ *     reads as a darker channel — strong played/unplayed boundary. */
 .trackFill {
   position: absolute;
   left: 0;
   top: 0;
   height: 100%;
   background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--color-accent-blue) 28%, transparent) 0%,
-    color-mix(in srgb, var(--color-accent-blue) 40%, transparent) 100%
+    180deg,
+    color-mix(in srgb, var(--color-accent-blue) 100%, white 8%) 0%,
+    var(--color-accent-blue) 60%,
+    color-mix(in srgb, var(--color-accent-blue) 92%, black 8%) 100%
   );
   border-radius: var(--radius-4) 0 0 var(--radius-4);
   pointer-events: none;
   z-index: 1;
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-accent-blue) 70%, white 30%);
 }
 
 /* Buffered range overlay — sits above the segment bands but below
