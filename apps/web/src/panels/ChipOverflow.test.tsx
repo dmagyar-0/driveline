@@ -126,6 +126,32 @@ describe("<ChipOverflow />", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("propagates the L/R axis indicator into popover chips (iter5 #2)", () => {
+    const channels = [mkChannel({ id: "h0" }), mkChannel({ id: "h1" })];
+    const axisSides = new Map<string, "" | "L" | "R">([
+      ["h0", "L"],
+      ["h1", "R"],
+    ]);
+    const axisTints = new Map<string, string>([
+      ["h0", "#56b4e9"],
+      ["h1", "#e69f00"],
+    ]);
+    const { getByTestId } = render(
+      <ChipOverflow
+        hiddenChannels={channels}
+        badges={new Map()}
+        open
+        onToggle={() => {}}
+        onClose={() => {}}
+        onRemove={() => {}}
+        axisSides={axisSides}
+        axisTints={axisTints}
+      />,
+    );
+    expect(getByTestId("chip-axis-h0").textContent).toBe("L");
+    expect(getByTestId("chip-axis-h1").textContent).toBe("R");
+  });
+
   it("propagates dash-pattern indices to popover chips (iter5 #7)", () => {
     // With 5 total series and 3 hidden, the hidden chips occupy
     // indices 2..4 of the bound list. The chip at index 2 should

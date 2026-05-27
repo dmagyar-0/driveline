@@ -37,6 +37,11 @@ export interface ChipOverflowProps {
    *  with the in-row chips. */
   hiddenStartIndex?: number;
   totalSeriesCount?: number;
+  /** Iter5 issue #2 — per-channel L/R axis indicator for dual-axis
+   *  plots. Optional; chips render without the badge when omitted. */
+  axisSides?: Map<string, "" | "L" | "R">;
+  /** Iter5 issue #2 — tint colour per channel for the L/R badge. */
+  axisTints?: Map<string, string>;
 }
 
 export function ChipOverflow({
@@ -48,6 +53,8 @@ export function ChipOverflow({
   onRemove,
   hiddenStartIndex,
   totalSeriesCount,
+  axisSides,
+  axisTints,
 }: ChipOverflowProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -107,6 +114,8 @@ export function ChipOverflow({
                   : undefined
               }
               seriesCount={totalSeriesCount}
+              axisSide={axisSides?.get(c.id) ?? ""}
+              axisTint={axisTints?.get(c.id)}
             />
           ))}
         </div>

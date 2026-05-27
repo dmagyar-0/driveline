@@ -36,6 +36,14 @@ interface Props {
   /** Iter5 issue #7 — total bound-channel count, gates whether the
    *  dash pattern kicks in (no dashes below DASH_THRESHOLD). */
   seriesCount?: number;
+  /** Iter5 issue #2 — `L` or `R` for the axis the channel belongs to
+   *  in a dual-axis plot. Empty string suppresses the badge (single
+   *  axis or third+ axis group). */
+  axisSide?: "" | "L" | "R";
+  /** Iter5 issue #2 — tint for the L/R badge so it shares the axis's
+   *  identity colour from `axisGroups`. Falls back to fg-2 when
+   *  undefined. */
+  axisTint?: string;
 }
 
 export function ChannelChip({
@@ -45,6 +53,8 @@ export function ChannelChip({
   hidden,
   seriesIndex,
   seriesCount,
+  axisSide,
+  axisTint,
 }: Props) {
   const full = fullChannelLabel(channel);
   const short = shortChannelLabel(channel);
@@ -89,6 +99,22 @@ export function ChannelChip({
         <span className={styles.chipLabel}>{short}</span>
         {channel.unit && (
           <span className={styles.chipUnit}>{channel.unit}</span>
+        )}
+        {/* Iter5 issue #2 — per-series L/R axis badge in dual-axis
+            plots. Tells the user which side's tick numbers track this
+            chip's value range. Single-axis plots omit the badge so a
+            one-chip panel doesn't read as cluttered. */}
+        {axisSide && (
+          <span
+            className={styles.chipAxisBadge}
+            data-axis-side={axisSide}
+            data-testid={`chip-axis-${channel.id}`}
+            style={axisTint ? { color: axisTint } : undefined}
+            aria-label={`Axis ${axisSide === "L" ? "left" : "right"}`}
+            title={`Plotted against ${axisSide === "L" ? "left" : "right"} axis`}
+          >
+            {axisSide}
+          </span>
         )}
         {sourceBadge && (
           <span

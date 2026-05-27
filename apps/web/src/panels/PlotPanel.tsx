@@ -518,6 +518,33 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return m;
   }, [axisGroups]);
 
+  // Iter5 issue #2 — per-channel L/R axis indicator for chips and the
+  // CursorGutter. Only meaningful when there are exactly 2 unit groups
+  // (the dual-axis case); single-axis plots get an empty map so the
+  // badge doesn't render, and ≥3 groups also stay empty because the
+  // "third axis" doesn't appear on screen — surfacing L/R/?/? would
+  // lie to the user.
+  const axisSideByChannelId = useMemo<Map<string, "" | "L" | "R">>(() => {
+    const m = new Map<string, "" | "L" | "R">();
+    if (axisGroups.length !== 2) return m;
+    const [left, right] = axisGroups;
+    for (const c of left.channels) m.set(c.id, "L");
+    for (const c of right.channels) m.set(c.id, "R");
+    return m;
+  }, [axisGroups]);
+
+  // Iter5 issue #2 — tint colour for the L/R badge, lifted from
+  // `axisGroups[i].axisColor` so the chip badge and the axis tick
+  // numbers always agree.
+  const axisTintByChannelId = useMemo<Map<string, string>>(() => {
+    const m = new Map<string, string>();
+    if (axisGroups.length !== 2) return m;
+    const [left, right] = axisGroups;
+    for (const c of left.channels) m.set(c.id, left.axisColor);
+    for (const c of right.channels) m.set(c.id, right.axisColor);
+    return m;
+  }, [axisGroups]);
+
   useEffect(() => {
     const mount = plotMountRef.current;
     const container = containerRef.current;
@@ -1045,6 +1072,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                   hidden={hidden}
                   seriesIndex={i}
                   seriesCount={boundChannels.length}
+                  axisSide={axisSideByChannelId.get(c.id) ?? ""}
+                  axisTint={axisTintByChannelId.get(c.id)}
                 />
               );
             })}
@@ -1059,6 +1088,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                   onRemove={onRemove}
                   hiddenStartIndex={visibleChipCount}
                   totalSeriesCount={boundChannels.length}
+                  axisSides={axisSideByChannelId}
+                  axisTints={axisTintByChannelId}
                 />
               )}
           </div>
