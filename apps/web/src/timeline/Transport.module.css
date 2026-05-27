@@ -335,6 +335,16 @@
   white-space: nowrap;
 }
 
+/* Iter5 (issue #5) — centre slot of the under-track label row.
+ * Hosts the REL/ABS toggle (visible) + sr-only segment-count
+ * (Playwright/AT consumers). Centred so the toggle stays equidistant
+ * to the start and end time labels it governs. */
+.scrubCenter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 /* Iter4 (issue #3) — start/end tick anchor labels. Demoted from
  * primary numbers (iter3 had them at fg-5 / fs-10 alongside a date
  * stamp in the middle, giving three competing formats) to muted

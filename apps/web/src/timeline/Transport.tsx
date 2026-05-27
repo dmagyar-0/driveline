@@ -831,26 +831,60 @@ export function Transport() {
             )}
           </div>
         </div>
-        {/* Iter4 (issue #3) — start/end tick anchors. Demoted from a
-         *  three-way row (which used to carry the date stamp in the
-         *  middle and conflict with the canonical cursor readout) to a
-         *  two-way pair of muted endpoint anchors. The middle slot is
-         *  now reserved for the sr-only segment-count signal that
-         *  Playwright/AT consumers need. */}
-        <div className={styles.scrubRowLabels} aria-hidden>
-          <span className={styles.scrubEdgeLabel}>{startLabel}</span>
-          {sources.length > 1 ? (
-            <span
-              className={styles.srOnly}
-              data-testid="transport-segment-count"
-              data-segment-count={sources.length}
+        {/* Iter5 (issue #5) — REL/ABS toggle promoted from the
+         *  bottom-right utility cluster (1300 px away from any time
+         *  it formats) into the label row directly beneath the
+         *  track, between the start and end edge labels. Proximity
+         *  fix: the toggle now lives next to the very labels it
+         *  governs (start / end / cursor badge), so the user reads
+         *  "this chip controls THESE numbers" in one glance.
+         *
+         *  The sr-only segment-count slot is preserved for the
+         *  e2e/AT consumers that read it; it's anchored as a
+         *  sibling of the visible toggle inside the centre slot. */}
+        <div className={styles.scrubRowLabels}>
+          <span className={styles.scrubEdgeLabel} aria-hidden>
+            {startLabel}
+          </span>
+          <span className={styles.scrubCenter}>
+            {sources.length > 1 && (
+              <span
+                className={styles.srOnly}
+                data-testid="transport-segment-count"
+                data-segment-count={sources.length}
+              >
+                {sources.length} segments
+              </span>
+            )}
+            <button
+              type="button"
+              className={
+                timeMode === "absolute"
+                  ? `${styles.modeChip} ${styles.modeChipActive}`
+                  : styles.modeChip
+              }
+              data-testid="transport-mode-toggle"
+              data-time-mode={timeMode}
+              aria-pressed={timeMode === "absolute"}
+              aria-label={
+                timeMode === "relative"
+                  ? "Relative time mode (elapsed since start). Click to switch to wall-clock."
+                  : "Wall-clock time mode (absolute). Click to switch to relative."
+              }
+              onClick={toggleTimeMode}
+              disabled={disabled}
+              title={
+                timeMode === "relative"
+                  ? "Relative time mode — readout shows elapsed since session start (00:12.345). Click for wall-clock."
+                  : "Wall-clock time mode — readout shows time of day (06:08:42.123). Click for relative."
+              }
             >
-              {sources.length} segments
-            </span>
-          ) : (
-            <span />
-          )}
-          <span className={styles.scrubEdgeLabel}>{endLabel}</span>
+              {timeMode === "relative" ? "REL" : "ABS"}
+            </button>
+          </span>
+          <span className={styles.scrubEdgeLabel} aria-hidden>
+            {endLabel}
+          </span>
         </div>
       </div>
 
@@ -962,46 +996,15 @@ export function Transport() {
 
         <div className={styles.rowGrow} />
 
-        {/* Iter4 (issue #5) — utility cluster on the right. REL/ABS
-         *  and `?` are now visually subordinate to the playback
-         *  controls: smaller chrome, no labelled pill, no divider
-         *  outline. They live here together because both are
-         *  low-frequency view-mode controls.
-         *
-         *  Renamed from `metaCluster` → `utilityCluster` so the new
-         *  intent ("utility settings, secondary to playback") is
-         *  spelled out. The old testid is kept as a class hook on
-         *  the wrapper for back-compat with the iter3 spec. */}
+        {/* Iter5 (issue #5) — utility cluster now carries only `?`.
+         *  REL/ABS moved up into the scrubRowLabels row next to the
+         *  start/end time labels (proximity fix). The cluster wrapper
+         *  + `transport-meta-cluster` testid stay so existing tests
+         *  that look up the cluster keep working. */}
         <div
           className={`${styles.utilityCluster} ${styles.metaCluster}`}
           data-testid="transport-meta-cluster"
         >
-          <button
-            type="button"
-            className={
-              timeMode === "absolute"
-                ? `${styles.modeChip} ${styles.modeChipActive}`
-                : styles.modeChip
-            }
-            data-testid="transport-mode-toggle"
-            data-time-mode={timeMode}
-            aria-pressed={timeMode === "absolute"}
-            aria-label={
-              timeMode === "relative"
-                ? "Relative time mode (elapsed since start). Click to switch to wall-clock."
-                : "Wall-clock time mode (absolute). Click to switch to relative."
-            }
-            onClick={toggleTimeMode}
-            disabled={disabled}
-            title={
-              timeMode === "relative"
-                ? "Relative time mode — readout shows elapsed since session start (00:12.345). Click for wall-clock."
-                : "Wall-clock time mode — readout shows time of day (06:08:42.123). Click for relative."
-            }
-          >
-            {timeMode === "relative" ? "REL" : "ABS"}
-          </button>
-
           <button
             type="button"
             className={styles.helpBtn}

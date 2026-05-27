@@ -473,21 +473,28 @@ describe("Transport", () => {
     expect(tip?.querySelectorAll("span").length).toBe(1);
   });
 
-  // Iteration 3 (issue #4) — REL/ABS and `?` live in their own meta
-  // cluster, separated from the speed pill by a divider so the three
-  // controls no longer cluster awkwardly.
-  it("meta cluster groups mode toggle + shortcuts; speed lives in its own pill", () => {
+  // Iteration 5 (issue #5) — REL/ABS toggle was previously 1300 px
+  // away from the time labels it formats. It now lives in the
+  // scrubRowLabels row right between the start/end edge labels, next
+  // to the very numbers it controls (proximity fix). The right-side
+  // utility cluster now carries only `?`.
+  it("REL/ABS toggle sits between start/end labels; meta cluster keeps `?`", () => {
     const { getByTestId } = render(<Transport />);
     const meta = getByTestId("transport-meta-cluster");
+    const modeToggle = getByTestId("transport-mode-toggle");
     expect(meta).toBeTruthy();
-    // Mode toggle and shortcuts button are children of the meta
-    // cluster, not of the speed column.
-    expect(meta.contains(getByTestId("transport-mode-toggle"))).toBe(true);
+    // Mode toggle is no longer inside the utility/meta cluster — it
+    // moved up to the proximity row.
+    expect(meta.contains(modeToggle)).toBe(false);
+    // `?` still lives in the utility cluster on the right.
     expect(meta.contains(getByTestId("transport-shortcuts-toggle"))).toBe(true);
-    // Iter4 (issue #4) — speed pill moved INTO the primary
-    // transport-cluster (next to the play group), no longer in the
-    // utility/meta cluster on the right.
+    // Speed pill is in the primary transport cluster (iter4 #4).
     expect(meta.contains(getByTestId("transport-speed"))).toBe(false);
+    // The toggle is also explicitly NOT inside the playback cluster
+    // — its new home is the under-track label row.
+    expect(
+      getByTestId("transport-cluster").contains(modeToggle),
+    ).toBe(false);
   });
 
   // Iteration 4 (issue #4) — play group + speed pill are siblings
