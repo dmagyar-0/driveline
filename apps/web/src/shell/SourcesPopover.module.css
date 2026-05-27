@@ -2,7 +2,7 @@
  *
  * Positioned absolutely from the right edge of the topbar so the
  * popover stays anchored to the chip cluster regardless of viewport
- * width. The popover never grows past 360px so it doesn't crowd the
+ * width. The popover never grows past 380px so it doesn't crowd the
  * workspace.
  *
  * iter2 #4 updates:
@@ -12,6 +12,14 @@
  *   - Swatch widened from 4 → 6 px so the palette match with the plot
  *     legend is readable at a glance.
  *   - Per-row × button added on the right of each row.
+ *
+ * iter3 #1 updates:
+ *   - Search input + sort toggle row above the list (`.controls`).
+ *   - Group subheadings (MCAP / MF4 / MP4) when ≥3 sources of mixed
+ *     kinds are present.
+ *   - "Clear all" demoted to a small secondary-text button so it does
+ *     not read as equal weight to the primary "Open Sources panel"
+ *     link.
  */
 
 .popover {
@@ -66,6 +74,131 @@
   font-size: var(--fs-13);
   color: var(--color-fg-5);
   line-height: var(--lh-snug);
+}
+
+/* iter3 #1 — search + sort controls row.
+ *
+ * The search input expands to fill the available width; the sort
+ * pill-group is fixed-content width on the right. On narrow popovers
+ * the two stack vertically. */
+.controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.searchWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.searchIcon {
+  position: absolute;
+  left: var(--sp-4);
+  color: var(--color-fg-5);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  font: inherit;
+  font-size: var(--fs-12);
+  height: 26px;
+  padding: 0 var(--sp-4) 0 calc(var(--sp-4) + 12px + var(--sp-3));
+  background: var(--color-bg-4);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-4);
+  transition: border-color var(--motion-base);
+}
+
+.searchInput::placeholder {
+  color: var(--color-fg-6);
+}
+
+.searchInput:hover {
+  border-color: var(--color-border-hover);
+}
+
+.searchInput:focus-visible {
+  outline: none;
+  border-color: var(--color-accent-blue);
+  box-shadow: 0 0 0 2px var(--color-accent-blue-tint);
+}
+
+.sortGroup {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  align-self: flex-start;
+}
+
+.sortBtn {
+  font: inherit;
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-tight);
+  padding: 2px var(--sp-4);
+  height: 20px;
+  background: transparent;
+  color: var(--color-fg-5);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition:
+    background var(--motion-base),
+    color var(--motion-base);
+}
+
+.sortBtn:hover {
+  color: var(--color-fg-2);
+}
+
+.sortBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.sortBtnActive {
+  background: var(--color-bg-6);
+  color: var(--color-fg-1);
+}
+
+.sortBtnActive:hover {
+  color: var(--color-fg-1);
+}
+
+/* Group subheadings — appear when ≥3 sources of mixed kinds exist.
+ * Visually subordinate to source rows so the eye still skims by row,
+ * not by header. */
+.groupHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-3) 2px var(--sp-3);
+  margin-top: var(--sp-2);
+}
+
+.groupHeading:first-child {
+  margin-top: 0;
+}
+
+.groupHeadingLabel {
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+}
+
+.groupHeadingCount {
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-6);
 }
 
 .list {
@@ -189,9 +322,8 @@
 }
 
 .linkBtn,
-.dangerBtn {
+.clearBtn {
   font: inherit;
-  font-size: var(--fs-12);
   padding: var(--sp-3) var(--sp-4);
   border-radius: var(--radius-3);
   cursor: pointer;
@@ -204,6 +336,7 @@
 }
 
 .linkBtn {
+  font-size: var(--fs-12);
   color: var(--color-accent-blue);
 }
 
@@ -211,26 +344,32 @@
   background: var(--color-bg-5);
 }
 
-.dangerBtn {
-  color: var(--color-error-dark);
-  border-color: var(--color-border-subtle);
+/* iter3 #1 — "Clear all" is deliberately demoted: smaller text and
+ * muted fg colour so it does not compete with "Open Sources panel".
+ * No border, no error-red — destructive confirmation lives in the
+ * Sources drawer if/when we ever need a heavier guard. */
+.clearBtn {
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
 }
 
-.dangerBtn:hover {
+.clearBtn:hover {
+  color: var(--color-error-dark);
   background: var(--color-bg-5);
-  border-color: var(--color-border-hover);
 }
 
 .linkBtn:focus-visible,
-.dangerBtn:focus-visible {
+.clearBtn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .linkBtn,
-  .dangerBtn,
-  .removeBtn {
+  .clearBtn,
+  .removeBtn,
+  .searchInput,
+  .sortBtn {
     transition: none;
   }
 }

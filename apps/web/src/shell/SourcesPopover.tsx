@@ -6,6 +6,18 @@
 // the user can audit and prune the loaded session without opening the
 // Sources drawer.
 //
+// iter3 #1 — popover scales beyond two sources:
+//   - Text input at the top filters the list by name (case-insensitive
+//     substring match). Filtering preserves the active sort.
+//   - Sort toggle (Name / Type / Duration) — three small pill buttons,
+//     default Name. Sort is local state (no store touch).
+//   - When ≥3 sources are loaded AND the type mix is heterogeneous,
+//     rows are grouped under small subheading rows (MCAP / MF4 / MP4)
+//     within each section, sorted internally by the active sort.
+//   - Filter-empty state: "No sources match \"<query>\"".
+//   - "Clear all" demoted to a small secondary-text affordance so the
+//     "Open Sources panel" link reads as the primary navigation target.
+//
 // iter2 #4:
 //   - Each row gets a small × button on the right. The store today
 //     only exposes `clear()` (no per-source remove); we surface the
@@ -15,24 +27,29 @@
 //   - Each row prints a "N channels" count next to the kind badge.
 //   - The colour swatch already uses `palette.colorFor(src.id)` so it
 //     matches the per-source palette colour the plot panel uses.
-//     Width bumped from 4 px to 6 px to be legible at a glance.
-//   - Drag-reorder is deferred — would require a store-shape change.
 //
 // Closes on outside click, on Escape, on selecting an action, or when
 // the trigger loses the `aria-expanded` toggle.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
-import type { SourceKind } from "../state/store";
+import type { SourceKind, SourceMeta } from "../state/store";
 import { colorFor } from "../panels/palette";
 import { formatDuration } from "../timeline/formatTime";
 import s from "./SourcesPopover.module.css";
+
+type SortKey = "name" | "type" | "duration";
 
 function kindLabel(k: SourceKind): "MCAP" | "MF4" | "MP4" {
   if (k === "mcap") return "MCAP";
   if (k === "mf4") return "MF4";
   return "MP4";
 }
+
+// Order used both for the "Type" sort and for the order in which type
+// subheadings render when grouping is active. Keeps MCAP/MF4 signal
+// formats above MP4 video sources.
+const KIND_ORDER: readonly SourceKind[] = ["mcap", "mf4", "mp4+sidecar"];
 
 interface IconProps {
   kind: SourceKind;
@@ -77,6 +94,67 @@ export interface SourcesPopoverProps {
   onOpenDrawer: () => void;
 }
 
+function sortSources(list: SourceMeta[], key: SortKey): SourceMeta[] {
+  const copy = list.slice();
+  if (key === "name") {
+    copy.sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+  } else if (key === "type") {
+    copy.sort((a, b) => {
+      const ai = KIND_ORDER.indexOf(a.kind);
+      const bi = KIND_ORDER.indexOf(b.kind);
+      if (ai !== bi) return ai - bi;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+  } else {
+    // duration — longest first; users usually scan for the "main"
+    // session, which is the longest source in mixed loads.
+    copy.sort((a, b) => {
+      const ad = a.timeRange.endNs - a.timeRange.startNs;
+      const bd = b.timeRange.endNs - b.timeRange.startNs;
+      if (bd > ad) return 1;
+      if (bd < ad) return -1;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    });
+  }
+  return copy;
+}
+
+interface Row {
+  type: "row";
+  src: SourceMeta;
+}
+interface Heading {
+  type: "heading";
+  kind: SourceKind;
+  count: number;
+}
+type Item = Row | Heading;
+
+/** Turn the filtered/sorted list into the flat render items. Inserts
+ *  per-kind subheadings when the list has ≥3 sources AND the type mix
+ *  is heterogeneous. With a single kind, headings would be visual
+ *  noise so we skip them. */
+function withGroupHeadings(list: SourceMeta[]): Item[] {
+  if (list.length < 3) return list.map((src) => ({ type: "row", src }) as Row);
+  const kinds = new Set(list.map((s) => s.kind));
+  if (kinds.size < 2) {
+    return list.map((src) => ({ type: "row", src }) as Row);
+  }
+  // Bucket per kind, in canonical KIND_ORDER, preserving the within-
+  // bucket order the caller already produced (so the active sort still
+  // works inside each group).
+  const out: Item[] = [];
+  for (const kind of KIND_ORDER) {
+    const bucket = list.filter((s) => s.kind === kind);
+    if (bucket.length === 0) continue;
+    out.push({ type: "heading", kind, count: bucket.length });
+    for (const src of bucket) out.push({ type: "row", src });
+  }
+  return out;
+}
+
 export function SourcesPopover({
   open,
   onClose,
@@ -86,6 +164,17 @@ export function SourcesPopover({
   const sources = useSession((st) => st.sources);
   const clear = useSession((st) => st.clear);
   const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Search + sort are popover-local — no store touch. Both reset
+  // implicitly when the popover unmounts (open === false).
+  const [query, setQuery] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+
+  // Clear the query when the popover (re)opens so it doesn't surprise
+  // the user with a stale filter from a previous session.
+  useEffect(() => {
+    if (open) setQuery("");
+  }, [open]);
 
   // Outside click + Escape.
   useEffect(() => {
@@ -111,7 +200,27 @@ export function SourcesPopover({
     };
   }, [open, onClose, anchorId]);
 
+  const trimmed = query.trim().toLowerCase();
+  const filteredSorted = useMemo(() => {
+    const filtered =
+      trimmed.length === 0
+        ? sources
+        : sources.filter((src) => src.name.toLowerCase().includes(trimmed));
+    return sortSources(filtered, sortKey);
+  }, [sources, trimmed, sortKey]);
+
+  const items = useMemo(
+    () => withGroupHeadings(filteredSorted),
+    [filteredSorted],
+  );
+
   if (!open) return null;
+
+  const sortButtons: { key: SortKey; label: string }[] = [
+    { key: "name", label: "Name" },
+    { key: "type", label: "Type" },
+    { key: "duration", label: "Duration" },
+  ];
 
   return (
     <div
@@ -126,13 +235,88 @@ export function SourcesPopover({
         <span className={s.count}>{sources.length}</span>
       </div>
 
+      {/* Search + sort live above the list. We always render them when
+       *  there is at least one source so the controls don't pop in
+       *  after a filter zeroes the list. They stay hidden when no
+       *  sources are loaded at all to avoid a confusing empty UI. */}
+      {sources.length > 0 ? (
+        <div className={s.controls}>
+          <div className={s.searchWrap}>
+            <svg
+              className={s.searchIcon}
+              width="12"
+              height="12"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <circle cx="7" cy="7" r="4.5" />
+              <path d="M10.5 10.5l3 3" />
+            </svg>
+            <input
+              type="text"
+              className={s.searchInput}
+              placeholder="Filter sources"
+              aria-label="Filter sources by name"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              data-testid="sources-popover-search"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+          <div className={s.sortGroup} role="group" aria-label="Sort sources">
+            {sortButtons.map((b) => {
+              const active = sortKey === b.key;
+              return (
+                <button
+                  key={b.key}
+                  type="button"
+                  className={`${s.sortBtn} ${active ? s.sortBtnActive : ""}`}
+                  aria-pressed={active}
+                  onClick={() => setSortKey(b.key)}
+                  data-testid={`sources-popover-sort-${b.key}`}
+                  title={`Sort by ${b.label}`}
+                >
+                  {b.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+
       {sources.length === 0 ? (
         <p className={s.empty}>
           No sources loaded. Drop an .mcap, .mf4, or .mp4 to begin.
         </p>
+      ) : filteredSorted.length === 0 ? (
+        <p className={s.empty} data-testid="sources-popover-filter-empty">
+          No sources match &ldquo;{query}&rdquo;.
+        </p>
       ) : (
         <ul className={s.list}>
-          {sources.map((src) => {
+          {items.map((item) => {
+            if (item.type === "heading") {
+              return (
+                <li
+                  key={`heading-${item.kind}`}
+                  className={s.groupHeading}
+                  role="presentation"
+                  data-testid={`sources-popover-group-${item.kind}`}
+                >
+                  <span className={s.groupHeadingLabel}>
+                    {kindLabel(item.kind)}
+                  </span>
+                  <span className={s.groupHeadingCount}>{item.count}</span>
+                </li>
+              );
+            }
+            const src = item.src;
             const durationNs = src.timeRange.endNs - src.timeRange.startNs;
             const channelCount = src.channels.length;
             return (
@@ -218,9 +402,12 @@ export function SourcesPopover({
           Open Sources panel
         </button>
         {sources.length > 0 ? (
+          // iter3 #1 — demoted to a small secondary-coloured text
+          // button so it doesn't read as equal weight to the primary
+          // "Open Sources panel" link above.
           <button
             type="button"
-            className={s.dangerBtn}
+            className={s.clearBtn}
             onClick={async () => {
               await clear();
               onClose();

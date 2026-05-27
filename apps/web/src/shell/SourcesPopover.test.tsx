@@ -7,7 +7,13 @@
 // `sources` and `clear` from the slice, so seeded state is enough.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 
 (
   globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -15,6 +21,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 import { SourcesPopover } from "./SourcesPopover";
 import { useSession } from "../state/store";
+import type { SourceKind, SourceMeta } from "../state/store";
 
 afterEach(async () => {
   cleanup();
@@ -167,5 +174,184 @@ describe("SourcesPopover", () => {
     fireEvent.click(screen.getByTestId("sources-popover-open-drawer"));
     expect(onOpenDrawer).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // iter3 #1 — search, sort, group, demoted clear-all.
+
+  function seedSources(specs: ReadonlyArray<{
+    id: string;
+    name: string;
+    kind: SourceKind;
+    durationNs: bigint;
+  }>) {
+    const sources: SourceMeta[] = specs.map((sp) => ({
+      id: sp.id,
+      kind: sp.kind,
+      name: sp.name,
+      handle: 0,
+      timeRange: { startNs: 0n, endNs: sp.durationNs },
+      channels: [
+        {
+          id: `${sp.id}/ch`,
+          nativeId: "ch",
+          sourceId: sp.id,
+          name: "ch",
+          kind: "scalar",
+          dtype: null,
+          unit: null,
+          sampleCount: 0,
+          timeRange: { startNs: 0n, endNs: 1n },
+        },
+      ],
+    }));
+    useSession.setState({ sources });
+  }
+
+  it("does not render search or sort controls when no sources are loaded", () => {
+    render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("sources-popover-search")).toBeNull();
+    expect(screen.queryByTestId("sources-popover-sort-name")).toBeNull();
+  });
+
+  it("filters source list by name (case-insensitive)", () => {
+    seedSources([
+      { id: "a", name: "alpha.mcap", kind: "mcap", durationNs: 1_000_000_000n },
+      { id: "b", name: "beta.mcap", kind: "mcap", durationNs: 2_000_000_000n },
+      {
+        id: "c",
+        name: "gamma.mp4",
+        kind: "mp4+sidecar",
+        durationNs: 3_000_000_000n,
+      },
+    ]);
+    render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    const search = screen.getByTestId("sources-popover-search");
+    fireEvent.change(search, { target: { value: "BET" } });
+    expect(screen.getByTestId("sources-popover-row-b")).toBeTruthy();
+    expect(screen.queryByTestId("sources-popover-row-a")).toBeNull();
+    expect(screen.queryByTestId("sources-popover-row-c")).toBeNull();
+  });
+
+  it("shows a filter-empty state when nothing matches the query", () => {
+    seedSources([
+      { id: "a", name: "alpha.mcap", kind: "mcap", durationNs: 1_000_000_000n },
+    ]);
+    render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("sources-popover-search"), {
+      target: { value: "zzz" },
+    });
+    const empty = screen.getByTestId("sources-popover-filter-empty");
+    expect(empty.textContent).toContain("zzz");
+  });
+
+  it("sorts rows by name by default and re-sorts on toggle", () => {
+    seedSources([
+      { id: "z", name: "zeta.mcap", kind: "mcap", durationNs: 1_000_000_000n },
+      { id: "a", name: "alpha.mcap", kind: "mcap", durationNs: 9_000_000_000n },
+      { id: "m", name: "mu.mcap", kind: "mcap", durationNs: 5_000_000_000n },
+    ]);
+    render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    const list = screen.getByRole("dialog");
+    const namesByDom = () =>
+      Array.from(list.querySelectorAll('[data-testid^="sources-popover-row-"]'))
+        .map((el) => within(el as HTMLElement).getByText(/\.mcap$/).textContent)
+        .filter((s): s is string => s !== null);
+    // Default: name asc → alpha, mu, zeta.
+    expect(namesByDom()).toEqual(["alpha.mcap", "mu.mcap", "zeta.mcap"]);
+    // Duration desc → alpha (9s), mu (5s), zeta (1s).
+    fireEvent.click(screen.getByTestId("sources-popover-sort-duration"));
+    expect(namesByDom()).toEqual(["alpha.mcap", "mu.mcap", "zeta.mcap"]);
+  });
+
+  it("inserts group headings only when ≥3 sources of mixed kinds are loaded", () => {
+    // Two sources → no headings.
+    seedTwoSources();
+    const { rerender } = render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("sources-popover-group-mcap")).toBeNull();
+
+    // Three sources, all MCAP → still no headings (single kind).
+    seedSources([
+      { id: "a", name: "a.mcap", kind: "mcap", durationNs: 1n },
+      { id: "b", name: "b.mcap", kind: "mcap", durationNs: 1n },
+      { id: "c", name: "c.mcap", kind: "mcap", durationNs: 1n },
+    ]);
+    rerender(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("sources-popover-group-mcap")).toBeNull();
+
+    // Three sources of two kinds → headings appear.
+    seedSources([
+      { id: "a", name: "a.mcap", kind: "mcap", durationNs: 1n },
+      { id: "b", name: "b.mcap", kind: "mcap", durationNs: 1n },
+      { id: "c", name: "c.mp4", kind: "mp4+sidecar", durationNs: 1n },
+    ]);
+    rerender(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("sources-popover-group-mcap")).toBeTruthy();
+    expect(screen.getByTestId("sources-popover-group-mp4+sidecar")).toBeTruthy();
+  });
+
+  it("renders the demoted clear-all affordance with secondary styling", () => {
+    seedTwoSources();
+    render(
+      <SourcesPopover
+        open
+        anchorId="ax"
+        onClose={() => {}}
+        onOpenDrawer={() => {}}
+      />,
+    );
+    const clearBtn = screen.getByTestId("sources-popover-clear");
+    // Demoted: the destructive `dangerBtn` class is gone; the smaller
+    // `clearBtn` class is what we expect to see in production.
+    expect(clearBtn.className).toMatch(/clearBtn/);
+    expect(clearBtn.className).not.toMatch(/dangerBtn/);
   });
 });
