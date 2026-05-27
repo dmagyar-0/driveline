@@ -282,11 +282,17 @@
   white-space: nowrap;
 }
 
-.scrubRowLabels .scrubDateBadge {
+/* Iter4 (issue #3) — start/end tick anchor labels. Demoted from
+ * primary numbers (iter3 had them at fg-5 / fs-10 alongside a date
+ * stamp in the middle, giving three competing formats) to muted
+ * endpoint markers. The canonical readout is the cursor badge —
+ * these are just so the user knows the boundaries of the session. */
+.scrubEdgeLabel {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
   font-variant-numeric: tabular-nums;
-  color: var(--color-fg-5);
+  color: var(--color-fg-6);
+  opacity: 0.85;
 }
 
 /* Issue #4 — per-segment labels above the track. Each label is
@@ -554,17 +560,45 @@
   transform: translateX(-50%);
   background: var(--color-bg-5);
   border: 1.5px solid var(--color-accent-orange);
-  border-radius: var(--radius-pill);
+  /* Iter4 (issue #3) — the badge can now grow a second line carrying
+   * the YYYY-MM-DD date stamp in absolute mode. A pure `radius-pill`
+   * makes the two-line layout look like a pill-rectangle hybrid; use
+   * `radius-6` so single-line and double-line both look intentional. */
+  border-radius: var(--radius-6);
   padding: 3px var(--sp-4);
   display: inline-flex;
-  align-items: baseline;
-  gap: var(--sp-2);
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
   pointer-events: none;
   white-space: nowrap;
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--color-accent-orange) 18%, transparent),
     0 3px 10px rgba(0, 0, 0, 0.7);
   z-index: 6;
+}
+
+/* The main `current / total` row. Split out from `.playheadBadge`
+ * so the optional date sublabel can sit underneath it without
+ * disturbing the baseline alignment of the time pair. */
+.playheadBadgeMain {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-2);
+}
+
+/* Iter4 (issue #3) — date sublabel inside the cursor badge. Visible
+ * only in absolute mode; absent in relative mode so the bar shows
+ * exactly one canonical time format at a glance. Same width as the
+ * main row (centred) so the badge feels like a unified card. */
+.playheadBadgeDate {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  letter-spacing: var(--tracking-wide);
+  line-height: 1;
+  margin-top: 2px;
 }
 
 .playheadBadge::after {

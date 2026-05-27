@@ -522,11 +522,16 @@ export function Transport() {
       ? formatDuration(globalRange.endNs - globalRange.startNs)
       : formatAbsoluteClock(globalRange.endNs)
     : "--:--";
-  const sessionDate = globalRange
-    ? timeMode === "relative"
-      ? formatAbsolute(globalRange.startNs)
-      : formatDate(globalRange.startNs)
-    : null;
+  // Iter4 (issue #3) — the "2024-01-01" date stamp only appears in
+  // ABSOLUTE mode now, and only in one place (a subtle sub-label
+  // under the playhead badge). In relative mode the date is implied
+  // by the session itself; surfacing it as a third visible format
+  // alongside the canonical cursor readout and the start/end tick
+  // anchors was the iter3 regression the designer flagged.
+  const sessionDate =
+    globalRange && timeMode === "absolute"
+      ? formatDate(globalRange.startNs)
+      : null;
   const ariaValueText = globalRange
     ? timeMode === "relative"
       ? formatRelative(cursorNs, globalRange.startNs)
@@ -720,16 +725,32 @@ export function Transport() {
                 data-testid="transport-playhead-badge"
                 aria-hidden
               >
-                <span className={styles.playheadBadgeTime}>{current}</span>
-                <span className={styles.playheadBadgeSep} aria-hidden>
-                  /
-                </span>
-                <span
-                  className={styles.playheadBadgeTotal}
-                  data-testid="transport-playhead-total"
-                >
-                  {totalLabel}
-                </span>
+                <div className={styles.playheadBadgeMain}>
+                  <span className={styles.playheadBadgeTime}>{current}</span>
+                  <span className={styles.playheadBadgeSep} aria-hidden>
+                    /
+                  </span>
+                  <span
+                    className={styles.playheadBadgeTotal}
+                    data-testid="transport-playhead-total"
+                  >
+                    {totalLabel}
+                  </span>
+                </div>
+                {/* Iter4 (issue #3) — the YYYY-MM-DD date stamp lives
+                 *  inside the cursor badge as a tiny sublabel, but
+                 *  only when the user has opted into absolute mode.
+                 *  In relative mode the date is hidden entirely so
+                 *  the bar carries exactly one canonical time format
+                 *  at a glance. */}
+                {sessionDate && (
+                  <div
+                    className={styles.playheadBadgeDate}
+                    data-testid="transport-playhead-date"
+                  >
+                    {sessionDate}
+                  </div>
+                )}
               </div>
               <div
                 className={
@@ -751,16 +772,14 @@ export function Transport() {
             )}
           </div>
         </div>
+        {/* Iter4 (issue #3) — start/end tick anchors. Demoted from a
+         *  three-way row (which used to carry the date stamp in the
+         *  middle and conflict with the canonical cursor readout) to a
+         *  two-way pair of muted endpoint anchors. The middle slot is
+         *  now reserved for the sr-only segment-count signal that
+         *  Playwright/AT consumers need. */}
         <div className={styles.scrubRowLabels} aria-hidden>
-          <span>{startLabel}</span>
-          {/* Iter3 (issue #6) — the faint "N segments" centre text is
-           *  dropped from the visible chrome: the labelled segment row
-           *  above the track already conveys segment structure
-           *  unambiguously. The count is still exposed (hidden) for
-           *  Playwright + screen-reader consumers so external tests
-           *  don't lose the signal. In single-source sessions we
-           *  surface the session date so the bottom of the bar always
-           *  has a meaningful middle anchor. */}
+          <span className={styles.scrubEdgeLabel}>{startLabel}</span>
           {sources.length > 1 ? (
             <span
               className={styles.srOnly}
@@ -769,12 +788,10 @@ export function Transport() {
             >
               {sources.length} segments
             </span>
-          ) : sessionDate ? (
-            <span className={styles.scrubDateBadge}>{sessionDate}</span>
           ) : (
             <span />
           )}
-          <span>{endLabel}</span>
+          <span className={styles.scrubEdgeLabel}>{endLabel}</span>
         </div>
       </div>
 
