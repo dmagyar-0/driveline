@@ -348,29 +348,35 @@
   opacity: 0.85;
 }
 
-/* Issue #4 — per-segment labels above the track. Each label is
- * positioned in the same coordinate space as the corresponding band
- * below, so the eye reads a direct visual link. */
+/* Iter5 (issue #2) — segment label row PROMOTED. Iter4 had grey
+ * S1/S2/S3 microcaps that the designer flagged as "barely
+ * distinguishable from the bar itself". Segments are the primary
+ * navigational information on the timeline, so the label row gets:
+ *   • taller height (18 px → fits readable mono numerals + name)
+ *   • stronger contrast labels (fg-2 / fg-1 active, was fg-5)
+ *   • slightly bigger type (fs-11 vs fs-10) and case-preserving
+ *     so the source name actually reads. */
 .segmentLabelRow {
   position: relative;
   width: 100%;
-  height: 14px;
-  margin-bottom: -2px;
+  height: 18px;
+  margin-bottom: 0;
 }
 
 .segmentLabel {
   position: absolute;
   top: 0;
-  height: 14px;
+  height: 18px;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: var(--sp-2);
   font-family: var(--font-sans);
-  font-size: var(--fs-10);
+  font-size: var(--fs-11);
   font-weight: var(--fw-medium);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--color-fg-5);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--color-fg-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -389,6 +395,49 @@
 
 .segmentLabelActive {
   color: var(--color-fg-1);
+}
+
+/* Iter5 (issue #2) — the S-index pill. A small high-contrast chip
+ * sitting at the leading edge of each segment label. Reads as a
+ * distinct identifier even when the segment name is truncated. */
+.segmentIndex {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 14px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-5);
+  border: 1px solid var(--color-border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-2);
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.segmentLabelActive .segmentIndex {
+  background: color-mix(in srgb, var(--color-accent-blue) 28%, var(--color-bg-5));
+  border-color: color-mix(in srgb, var(--color-accent-blue) 60%, transparent);
+  color: var(--color-fg-1);
+}
+
+/* The human-readable source name shown next to the S-pill when the
+ * segment band is wide enough; uses sans + tabular so file names like
+ * `drive_2.mcap` align cleanly across rows. Truncates with the label
+ * container's overflow:hidden. */
+.segmentName {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-regular);
+  color: inherit;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 
 /* Issue #1 — the track is the heartbeat. 24 px visible (32 px hit
@@ -484,10 +533,20 @@
   opacity: 0.1;
 }
 
-/* Issue #4 — segment bands. Alternating low-opacity fills paint the
- * structure of a multi-source session directly onto the track. The
- * "active" band (containing the cursor) gets a stronger tint so the
- * user can see "you are in segment 2" at a glance. */
+/* Iter5 (issue #2) — segment bands PROMOTED to primary navigational
+ * information. Iter4 used 4 %/8 % white-on-dark which the reviewer
+ * called "5 % luminance steps" — adjacent bands were indistinguishable
+ * unless you squinted, so a multi-segment session looked like a single
+ * dark track.
+ *
+ * New scheme:
+ *   • even bands stay at the strip's base tone (transparent so the
+ *     trackStrip's #0e0f12 shows through)
+ *   • odd bands lift to a clearly lighter neutral (close to bg-4) so
+ *     adjacent bands have ~3× the previous luminance step
+ *   • active band gets a slightly stronger accent tint so the user
+ *     reads "you are in segment 2" at a glance, but it doesn't fight
+ *     the cursor (which is now the single brightest element). */
 .segmentBands {
   position: absolute;
   inset: 0;
@@ -505,24 +564,30 @@
 }
 
 .segmentBandEven {
-  background: rgba(255, 255, 255, 0.04);
+  background: transparent;
 }
 
 .segmentBandOdd {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.07);
 }
 
 .segmentBandActive {
-  background: color-mix(in srgb, var(--color-accent-blue) 16%, transparent);
+  background: color-mix(in srgb, var(--color-accent-blue) 12%, rgba(255, 255, 255, 0.05));
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--color-accent-blue) 35%, transparent);
 }
 
-/* Boundary ticks remain — they form crisp vertical divisions between
- * adjacent bands so the band/band transition is unambiguous even when
- * two bands have similar opacity. */
+/* Iter5 (issue #2) — boundary ticks PROMOTED. Iter4 had a 1 px
+ * hairline at low opacity that the designer flagged as "barely
+ * visible". Segment boundaries are the second-strongest cue on the
+ * timeline (after the playhead), so the tick is now a clear 2 px
+ * full-track-height divider with stronger contrast. Z-index sits
+ * above bands and the played fill so the boundary always reads
+ * even where the fill crosses it. */
 .segmentTicks {
   position: absolute;
-  top: -4px;
-  bottom: -4px;
+  top: 0;
+  bottom: 0;
   left: 0;
   right: 0;
   pointer-events: none;
@@ -540,15 +605,20 @@
  * `.segmentLabel` row above the track (already `pointer-events:
  * auto; cursor: help;` since iter3) and by the `.segmentBand` fill
  * underneath the track. Both render the same multi-line title now
- * (iter4 issue #6 in Transport.tsx). */
+ * (iter4 issue #6 in Transport.tsx).
+ *
+ * Iter5 (issue #2): width 1 → 2 px, opacity 0.55 → 0.85, colour
+ * lifted to fg-2 so the boundary contrasts strongly with both the
+ * dark track (#0e0f12) and the played fill (~15 % accent). */
 .segmentTick {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 1px;
-  background: var(--color-fg-3);
-  opacity: 0.55;
-  transform: translateX(-0.5px);
+  width: 2px;
+  background: var(--color-fg-2);
+  opacity: 0.85;
+  transform: translateX(-1px);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
 }
 
 /* Spinner shown near the cursor while a seek waits on a cold sample fetch.

@@ -493,9 +493,15 @@ export function Transport() {
   // Sources already carry `timeRange` so we don't invent a new
   // ingest path. Ordering by start so adjacent bands alternate
   // visually (even/odd index → two opacity classes).
+  //
+  // Iter5 (issue #2) — also carry the source `name` so the label
+  // row can render "S2 · drive_2.mcap" inline when the band is wide
+  // enough. The S-index is the load-bearing identifier; the name is
+  // promoted to a visible label (not just a tooltip).
   type SegmentEntry = {
     key: string;
     label: string;
+    name: string;
     leftPct: number;
     widthPct: number;
     title: string;
@@ -532,6 +538,7 @@ export function Transport() {
       entries.push({
         key: `seg:${src.id}:${i}`,
         label: `S${i + 1}`,
+        name: src.name,
         leftPct: left,
         widthPct: width,
         title:
@@ -613,7 +620,14 @@ export function Transport() {
 
       {/* Per-segment label row sits above the track so the band ↔ label
        *  relationship is obvious. Suppressed when there's only one
-       *  source. */}
+       *  source.
+       *
+       *  Iter5 (issue #2) — labels promoted to primary navigational
+       *  information: each entry now renders a high-contrast S-pill
+       *  next to the source filename so segments are identifiable
+       *  even in a narrow window. The S-pill is the load-bearing
+       *  identifier; the name is auxiliary and truncates via the
+       *  container's overflow:hidden when the band is too narrow. */}
       {segmentEntries.length > 0 && (
         <div
           className={styles.segmentLabelRow}
@@ -634,7 +648,8 @@ export function Transport() {
               }}
               title={seg.title}
             >
-              {seg.label}
+              <span className={styles.segmentIndex}>{seg.label}</span>
+              <span className={styles.segmentName}>{seg.name}</span>
             </span>
           ))}
         </div>
