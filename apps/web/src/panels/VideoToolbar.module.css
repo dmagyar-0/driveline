@@ -25,7 +25,10 @@
   gap: var(--sp-3);
   flex-wrap: wrap;
   row-gap: var(--sp-2);
-  min-height: 36px;
+  /* iter9 wave C — bump 36 → 40 so the now-32 px play/step buttons
+   * have a 4 px gutter above/below; previously the 32 px step button
+   * sat flush against the toolbar borders. */
+  min-height: 40px;
   padding: 0 var(--sp-4);
   background: var(--color-bg-2);
   border-bottom: 1px solid var(--color-border-strong);
@@ -55,9 +58,11 @@
 
 /* Transport cluster — frame-step / scrub / play-pause. Slightly tighter
  * inner gap because the buttons are icon-only and read as one segmented
- * control of their own. */
+ * control of their own. iter9 wave C: 2 px was too tight at the new
+ * 28 px button size; 4 px gives the cluster room to breathe without
+ * losing the "one segmented control" reading. */
 .clusterTransport {
-  gap: 2px;
+  gap: 4px;
 }
 
 /* Inspection cluster expands so the codec info chip can right-align
@@ -92,13 +97,24 @@
  * footprint, but the *frame-step* buttons (`.btnStep`) keep a 32 px
  * hit target for frame-accurate event review. iter5 #6: shrunk one
  * notch (was 36 px) so the slimmer 36 px toolbar still hosts the
- * promoted step targets without crowding the top/bottom borders. */
+ * promoted step targets without crowding the top/bottom borders.
+ *
+ * iter9 wave C — UX critics flagged the toolbar icons as ~70% the
+ * visual weight of plot/transport. Bump to a 28 px hit target (matches
+ * the global chrome icon-button family) and force monochrome glyph
+ * rendering via `font-variant-emoji: text` + `text-shadow` paint so
+ * the unicode playback chevrons (⏪ ⏩ ⏮ ⏭ ▶) read as IDLE NEUTRAL
+ * instead of an OS-coloured emoji (the "orange chevrons" critique
+ * came from emoji-presentation forms rendering as the platform's
+ * orange media glyphs in some browsers). The PRIMARY play button
+ * keeps the accent treatment via `.btnPrimary`; idle states share
+ * the neutral chrome-icon tone (`--color-fg-3`). */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 26px;
-  min-width: 26px;
+  height: 28px;
+  min-width: 28px;
   /* iter7 wave2A — de-densify: bump min horizontal padding from sp-3
    * to sp-4 so transport glyphs breathe inside the cluster. */
   padding: 0 var(--sp-4);
@@ -109,10 +125,30 @@
   cursor: pointer;
   font: inherit;
   font-family: var(--font-mono);
-  font-size: var(--fs-13);
+  /* iter9 wave C — bump glyph size from fs-13 (~13 px) to ~15 px so
+   * the icons carry the same visual weight as plot/transport. The
+   * line-height stays clamped to 1 so the slim 36 px toolbar still
+   * fits. */
+  font-size: 15px;
   line-height: 1;
+  /* iter9 wave C — force text-style rendering for unicode playback
+   * glyphs. Some browsers paint ⏪/⏩/▶ as colour emoji by default,
+   * which clashed with the transport orange playhead language. */
+  font-variant-emoji: text;
   transition: background var(--motion-base), color var(--motion-base),
     border-color var(--motion-base);
+}
+
+/* iter9 wave C — keep the glyph spans on the same `color` as the
+ * button host so the chevrons follow our chrome-grey tone. The
+ * `font-variant-emoji: text` declaration above is the load-bearing
+ * cue that selects the text-presentation glyph in browsers that
+ * support it (Chrome/Edge 130+); browsers that ignore it still see
+ * a neutral grey because Unicode media controls (U+23EA … U+23EE,
+ * U+25B6) do not have a default colour-emoji presentation outside
+ * the iOS/macOS system emoji font. */
+.btn > span[aria-hidden="true"] {
+  color: inherit;
 }
 
 .btn:hover:not(:disabled) {
@@ -137,13 +173,15 @@
 /* Iter 4 issue #3 — promoted frame-step hit targets. iter5 #6: trimmed
  * 36→32 px to match the slimmer toolbar without losing accuracy.
  * The visual chrome (background + border) stays compact; only the
- * *hit area* grows. */
+ * *hit area* grows. iter9 wave C: keep step at 32 (one notch above
+ * the new 28 px transport base) and let the colour follow
+ * `--color-fg-2` so the glyph reads at full chrome weight. */
 .btnStep {
   height: 32px;
   min-width: 32px;
   background: var(--color-bg-3);
   color: var(--color-fg-2);
-  font-size: var(--fs-14);
+  font-size: 16px;
   border-color: var(--color-border-subtle);
 }
 
@@ -153,19 +191,41 @@
   border-color: var(--color-border-hover);
 }
 
+/* iter9 wave C — the play button is the only transport CTA on the
+ * panel, so it carries the dedicated CTA orange (matches the
+ * scrubber playhead language). Idle = filled neutral surface;
+ * playing (aria-pressed=true => "pause" affordance) keeps the
+ * accent. Slightly taller (32 px) than the surrounding scrub
+ * buttons so it reads as the anchor of the cluster, just like the
+ * global Transport's 40 px play button is taller than its 32 px
+ * scrubs. */
 .btnPrimary {
+  height: 32px;
+  min-width: 32px;
   color: var(--color-fg-1);
   background: var(--color-bg-4);
+  border-color: var(--color-border-subtle);
+  font-size: 16px;
 }
 
 .btnPrimary:hover:not(:disabled) {
   background: var(--color-bg-5);
+  color: var(--color-fg-1);
+  border-color: var(--color-border-hover);
 }
 
+/* Pressed state = transport orange (the role-CTA accent). Mirrors
+ * the global play button so the user sees the same "engaged" cue
+ * across panel-local and global transport surfaces. */
 .btnPrimary[aria-pressed="true"] {
-  background: var(--color-accent-blue-tint);
-  color: var(--color-fg-1);
-  border-color: var(--color-accent-blue);
+  background: var(--color-role-cta-tint, var(--color-accent-blue-tint));
+  color: var(--color-role-cta, var(--color-accent-blue));
+  border-color: var(--color-role-cta, var(--color-accent-blue));
+}
+
+.btnPrimary[aria-pressed="true"]:hover {
+  background: var(--color-role-cta-tint, var(--color-accent-blue-tint));
+  border-color: var(--color-role-cta, var(--color-accent-blue));
 }
 
 /* --------- unified utility button (iter5 issue #2) ---------

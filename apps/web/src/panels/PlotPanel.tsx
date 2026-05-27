@@ -193,16 +193,18 @@ function axisStyle(): {
   //   - unit label:   `--color-fg-5` (iter8 — was `--color-fg-4`; the
   //     unified `--unit-pill-color` puts the qualifier at the muted
   //     rung so the trace itself dominates).
-  //   - grid lines:   `#2f2f2f` ≈ 1.4:1 — visible but unobtrusive,
-  //     replaces the v1 `--color-border-subtle` (#2a2a2a) which sat
-  //     too close to the panel surface to register at a glance.
+  //   - grid lines:   `rgba(255,255,255,0.08)` ≈ Foxglove-tier alpha,
+  //     a near-invisible scaffold over `--color-bg-3` (iter9 agent B —
+  //     was `#2f2f2f` solid, ~1.4:1, which read as too prominent under
+  //     the iter8 critic; load-bearing for value-reading but should
+  //     never compete with the data).
   //   - tick marks: same as grid.
   const fallback = {
     fg: "#bbbbbb",
     tickFg: "#969ba4",
     labelFg: "#969ba4",
-    grid: "#2f2f2f",
-    ticks: "#2f2f2f",
+    grid: "rgba(255, 255, 255, 0.08)",
+    ticks: "rgba(255, 255, 255, 0.08)",
     tickFont: "10px system-ui, sans-serif",
     labelFont: "500 11px system-ui, sans-serif",
     labelFontSizePx: 11,
@@ -264,6 +266,30 @@ function axisStyle(): {
 // Above this many chips we collapse into "N channels" with a popover.
 // Picked so the chip row never exceeds two rows at typical panel widths.
 const CHIP_COLLAPSE_THRESHOLD = 6;
+
+// iter9 (agent B) — plot overdraw remedy. High-rate channels (100 Hz IMU,
+// wheel speeds at ~60 Hz) overplot at full opacity into a haze cloud that
+// muddies neighbouring lower-rate traces (the iter8 critic flagged grey
+// IMU_Accel_X smothering speed). We render uPlot strokes at 0.78 alpha so
+// each trace contributes a softer layer; the chip swatch and cursor-gutter
+// value swatch keep the full-opacity palette colour so the colour key is
+// still bold where it counts.
+//
+// Option A — single global alpha. Trade-off acknowledged: a sparse 10 Hz
+// trace dims slightly too, but it has far fewer overdrawn pixels so its
+// effective on-screen density actually balances out better against a
+// noisy 100 Hz neighbour.
+const PLOT_STROKE_ALPHA = 0.78;
+
+function strokeColorWithAlpha(hex: string, alpha: number): string {
+  // Accept `#rrggbb`; fall back to the raw value if anything looks off so
+  // we never silently disappear a trace.
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return hex;
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
@@ -757,13 +783,17 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // a single-axis plot keeps the neutral grid (tinting one side
     // doesn't differentiate anything in that case).
     const tintedGrid = (hex: string): string => {
-      // Convert `#rrggbb` → `rgba(r,g,b,0.12)`. Defensive: if the input
+      // Convert `#rrggbb` → `rgba(r,g,b,0.10)`. Defensive: if the input
       // isn't a 6-digit hex, fall back to the default grid colour.
+      // iter9 agent B — was 0.18; the new neutral grid sits at alpha
+      // 0.08, so tinted gridlines drop in lockstep to 0.10 so the L/R
+      // associative cue is still slightly more present than the
+      // neutral grid but no longer overpowers the trace.
       if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return grid;
       const r = parseInt(hex.slice(1, 3), 16);
       const g = parseInt(hex.slice(3, 5), 16);
       const b = parseInt(hex.slice(5, 7), 16);
-      return `rgba(${r}, ${g}, ${b}, 0.18)`;
+      return `rgba(${r}, ${g}, ${b}, 0.10)`;
     };
     // Default mode: `mergeSeries` emits `null` at every union timestamp
     // where *this* series has no sample. With two same-rate signals on
@@ -897,9 +927,13 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         // plot with fewer than DASH_THRESHOLD traces.
         ...boundChannels.map((c, i) => {
           const dash = dashForIndex(i, boundChannels.length);
+          // iter9 (agent B) — render strokes with PLOT_STROKE_ALPHA so
+          // high-density traces stop overplotting as opaque haze. Chip
+          // swatches stay at full opacity (see ChannelChip) — the key
+          // colour reads sharp, the canvas reads light.
           const opts: uPlot.Series = {
             label: c.name,
-            stroke: colorFor(c.id),
+            stroke: strokeColorWithAlpha(colorFor(c.id), PLOT_STROKE_ALPHA),
             width: 1.25,
             spanGaps,
             scale: scaleByChannelId.get(c.id) ?? "y",
