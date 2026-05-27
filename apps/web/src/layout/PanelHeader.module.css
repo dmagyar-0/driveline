@@ -5,10 +5,12 @@
  * surface). The icon and name area use `cursor: grab` to advertise
  * that. The actions cluster reverts to `cursor: pointer` per-button.
  *
- * Buttons are 24×24 hit targets with 14px glyphs — the accessibility
- * floor for icon-only chrome. Larger than the 22-px previous size,
- * still snug enough that the strip doesn't bloat. Hover surfaces a
- * subtle background fill so the buttons read as graspable. */
+ * Buttons are 28×28 hit targets (driven by `--icon-hit-target`) with
+ * 14 px glyphs — iter8 lifted from 24 px after the calibrated critic
+ * flagged the close × as "looks small". The glyph viewbox is unchanged
+ * so only the click area grows; the strip still reads compact and the
+ * cluster sits flush with FlexLayout's 30-ish-px tabset height. Hover
+ * surfaces a subtle background fill so the buttons read as graspable. */
 .header {
   /* Per-kind accent colour — set inline on the wrapper. */
   --panel-accent: var(--color-border-hover);
@@ -278,8 +280,15 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  /* iter8 · 28-px floor (was 24 px). The calibrated critic flagged
+   * the close × as too small to land cleanly on a trackpad; bumping
+   * to `--icon-hit-target` (28 px) clears the ergonomic floor without
+   * bloating the strip. min-width/height also defend against any
+   * future SVG-shrink CSS from collapsing the click area. */
+  width: var(--icon-hit-target);
+  height: var(--icon-hit-target);
+  min-width: var(--icon-hit-target);
+  min-height: var(--icon-hit-target);
   border: 0;
   background: transparent;
   /* Iter5 · resting icon contrast.

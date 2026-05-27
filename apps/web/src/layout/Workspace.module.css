@@ -213,10 +213,13 @@
   background: var(--color-role-active-tint);
 }
 
-/* Iter7 wave2 · splitter resize affordance (calibrated-critic finding:
- * "the panel divider between Video and Plot is a thin grey hairline
- * with no resize affordance shown" — and the top-3-fixes ask for "a
- * 2 px accent underline plus a visible drag handle").
+/* Iter7 wave2 → iter8 · splitter resize affordance.
+ *
+ * Calibrated-critic findings, cumulative:
+ *   wave2  "the panel divider between Video and Plot is a thin grey
+ *           hairline with no resize affordance shown"
+ *   iter8  "splitters are still invisible until hover — the vertical
+ *           splitter between panes is a 1 px line with no hover ridge"
  *
  * FlexLayout owns the splitter dimensions: `splitterSize: 4` in
  * `defaultLayout.ts` sets the visible body width, and `splitterExtra`
@@ -227,15 +230,19 @@
  *   1. extend the perceived hit area to ≥6 px via a `::before`
  *      pseudo-overlay (pointer events on a pseudo are dispatched to
  *      the host element, so FlexLayout's drag handlers keep working);
- *   2. paint a visible centred ridge on hover so the user reads "you
- *      can grab this", and
- *   3. light the drag state in active-blue (already wired through
+ *   2. paint a persistent 1-px ridge at rest in `--color-border-subtle`
+ *      so the dockable boundary is always discoverable (iter8);
+ *   3. lift the ridge to 3 px in `--color-splitter-hover` on hover so
+ *      the user reads "you can grab this" (iter8 widened from 2 px);
+ *   4. light the drag state in active-blue (already wired through
  *      `--color-splitter-drag` on the layout root above; the floating
- *      `.flexlayout__splitter_drag` clone uses that var).
+ *      `.flexlayout__splitter_drag` clone uses that var) and tint the
+ *      source body 3 px wide in the same colour for symmetry.
  *
- * Idle stays subdued (`--color-splitter` → `--color-border-subtle`)
- * so a static workspace doesn't look fussy; hover + drag carry the
- * affordance. */
+ * The idle ridge is intentionally subtle (`--color-border-subtle`
+ * against `--bg-chrome`) — visible enough that the dockable workspace
+ * reads as intentional, dim enough that a static screenshot doesn't
+ * look fussy. */
 .flexContainer :global(.flexlayout__splitter) {
   position: relative;
   /* The base splitter still draws its hairline via FlexLayout's
@@ -268,35 +275,67 @@
   pointer-events: auto;
 }
 
-/* Hover ridge — a 2-px centred strip in the splitter-hover token, so
- * the divider visibly "lights up" as a graspable affordance without
- * pre-emptively shouting "active" (which is reserved for the drag
- * state). The `_vert` splitter sits between columns (vertical line,
- * grows in y); its ridge runs along its full height with a 2-px
- * width centred on the 4-px splitter body. `_horz` is the row
- * separator and gets the mirrored treatment. */
+/* iter8 · persistent at-rest ridge.
+ *
+ * A 1-px ridge in `--color-border-subtle`, centred on the 4-px splitter
+ * body, paints whether or not the user is hovering. Without this, the
+ * critic noted that the splitter "is a 1 px line with no hover ridge
+ * in this static" — the dockable boundary disappears in screenshots
+ * and during keyboard-only use. The ridge transitions to the hover
+ * thickness/colour smoothly so the affordance reads as one continuous
+ * surface, not a flash.
+ *
+ * `::after` paints the ridge for both vert + horz; the `_vert`/`_horz`
+ * specific rules below set the band geometry. */
+.flexContainer :global(.flexlayout__splitter_vert)::after,
+.flexContainer :global(.flexlayout__splitter_horz)::after {
+  content: "";
+  position: absolute;
+  background: var(--color-border-subtle);
+  border-radius: 1px;
+  pointer-events: none;
+  transition:
+    background-color var(--motion-fast),
+    width var(--motion-fast),
+    height var(--motion-fast),
+    left var(--motion-fast),
+    top var(--motion-fast);
+}
+.flexContainer :global(.flexlayout__splitter_vert)::after {
+  /* 1-px vertical band centred on the 4-px splitter body. */
+  top: 0;
+  bottom: 0;
+  left: 1.5px;
+  width: 1px;
+}
+.flexContainer :global(.flexlayout__splitter_horz)::after {
+  /* 1-px horizontal band centred on the 4-px splitter body. */
+  left: 0;
+  right: 0;
+  top: 1.5px;
+  height: 1px;
+}
+
+/* Hover ridge — 3 px in the splitter-hover token. iter8 widened from
+ * 2 px after the critic asked for "a 3 px on hover, 1 px at rest"
+ * progression so the splitter visibly "thickens" under the cursor.
+ * The ridge stays centred on the 4-px splitter body; with a 3-px band
+ * it sits flush left/right or top/bottom by 0.5 px, which the rounded
+ * radius hides cleanly. */
 @media (hover: hover) {
   .flexContainer :global(.flexlayout__splitter_vert):hover::after,
   .flexContainer :global(.flexlayout__splitter_horz):hover::after {
-    content: "";
-    position: absolute;
     background: var(--color-splitter-hover);
-    border-radius: 1px;
-    pointer-events: none;
   }
   .flexContainer :global(.flexlayout__splitter_vert):hover::after {
-    /* 2-px vertical band centred on the 4-px splitter body. */
-    top: 0;
-    bottom: 0;
-    left: 1px;
-    width: 2px;
+    /* 3-px vertical band centred on the 4-px splitter body. */
+    left: 0.5px;
+    width: 3px;
   }
   .flexContainer :global(.flexlayout__splitter_horz):hover::after {
-    /* 2-px horizontal band centred on the 4-px splitter body. */
-    left: 0;
-    right: 0;
-    top: 1px;
-    height: 2px;
+    /* 3-px horizontal band centred on the 4-px splitter body. */
+    top: 0.5px;
+    height: 3px;
   }
 }
 

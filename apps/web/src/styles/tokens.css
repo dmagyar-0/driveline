@@ -352,6 +352,14 @@
    * min-height: var(--touch-target-min);` on any icon-only button. */
   --touch-target-min: 32px;
   --touch-target-comfortable: 36px; /* rail buttons already use this */
+  /* iter8 · `--icon-hit-target: 28px` — a focused floor for dense
+   * panel-header icon buttons (close, gear, maximize). The calibrated
+   * critic asked for ≥28 px hit areas without bloating the tab strip,
+   * so this sits below `--touch-target-min` (32 px) which remains the
+   * default for free-standing chrome (Transport help/mode chip etc.).
+   * Use this token only inside dense action clusters where every pixel
+   * of strip height matters; reach for `--touch-target-min` otherwise. */
+  --icon-hit-target: 28px;
 
   /* ---------- Focus ring ----------
    *
