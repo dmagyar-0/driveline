@@ -94,6 +94,52 @@
   cursor: grabbing;
 }
 
+/* Iter3 · subordinate inactive tabs.
+ *
+ * The iter2 review called out that every tab in a tabset looked the
+ * same — same opacity, same colour, same underline weight — so an
+ * unselected tab read like a different *kind* of panel rather than a
+ * dormant peer. Drop unselected tabs' opacity (icon + label both) and
+ * suppress the kind-colour underline; the selected tab keeps full
+ * opacity and the accent band. Hovering an unselected tab restores
+ * full opacity so the affordance to switch is discoverable.
+ *
+ * The underline lives on the inner `PanelHeader`'s `::after` (see
+ * `PanelHeader.module.css`); these rules target the FlexLayout-owned
+ * `tab_button` wrapper so the dimming applies to both the kind glyph
+ * and the action cluster uniformly without PanelHeader having to know
+ * its own selection state. */
+.flexContainer :global(.flexlayout__tab_button) {
+  transition:
+    opacity var(--motion-fast),
+    background-color var(--motion-fast);
+}
+.flexContainer :global(.flexlayout__tab_button--unselected) {
+  /* 0.6 lands inside the 0.55–0.65 band the iter2 audit asked for —
+   * loud enough to read, quiet enough to mark the tab as dormant. */
+  opacity: 0.6;
+  cursor: pointer;
+}
+.flexContainer :global(.flexlayout__tab_button--unselected:hover) {
+  /* Bright back to "almost full" on hover so the affordance to
+   * switch is obvious; not 1.0 so the user still feels the tab is
+   * not yet the active one. */
+  opacity: 0.95;
+}
+.flexContainer :global(.flexlayout__tab_button--selected) {
+  opacity: 1;
+}
+/* The 2-px kind-accent underline lives on the inner `PanelHeader`'s
+ * `::after`. Its default opacity is 0 (unselected, dormant). Light
+ * it at 0.4 when this tab is the active one in its tabset. The
+ * `.focused` class on PanelHeader bumps to 1.0 for the globally
+ * selected panel — both cases coexist because `.focused` has higher
+ * specificity inside its own module. */
+.flexContainer
+  :global(.flexlayout__tab_button--selected [data-panel-id])::after {
+  opacity: 0.4;
+}
+
 /* FlexLayout's tabset action cluster lives at the strip's right edge
  * (maximize / restore). Bump its hit area + hover affordance to match
  * `PanelHeader`'s buttons. */

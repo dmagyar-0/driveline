@@ -49,9 +49,12 @@
   --panel-accent: #f472b6; /* pink */
 }
 
-/* The 2-px accent band sits under the tab text. It reads as a quiet
- * identity marker, not a Christmas tree — kept at 40% opacity so it
- * doesn't compete with the plot series accents inside the panel. */
+/* The 2-px accent band sits under the tab text. Default opacity 0 so
+ * unselected tabs have no underline (iter3 review: inactive tabs need
+ * to read as subordinate). The active-in-tabset state lights it at
+ * 0.4, and the globally focused panel pushes it to full 1.0. Both
+ * are driven from Workspace's module CSS so PanelHeader doesn't need
+ * to know about the FlexLayout selection class. */
 .header::after {
   content: "";
   position: absolute;
@@ -60,13 +63,19 @@
   bottom: -1px;
   height: 2px;
   background: var(--panel-accent);
-  opacity: 0.4;
+  opacity: 0;
   border-radius: 1px;
   pointer-events: none;
+  transition: opacity var(--motion-fast);
 }
 
+/* `!important` so the per-panel "globally focused" state wins over
+ * the parent-level `--selected` rule defined in Workspace.module.css
+ * (same specificity but the cascade winner depends on import order;
+ * the iter3 review wants the focused panel to read as the brightest
+ * member of the workspace, full stop). */
 .header.focused::after {
-  opacity: 1;
+  opacity: 1 !important;
 }
 
 .kindIcon {
