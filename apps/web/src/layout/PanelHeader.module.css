@@ -141,7 +141,20 @@
   /* Avoid native double-click text selection — we use double-click
    * as our maximize/rename gesture. */
   user-select: none;
-  transition: max-width var(--motion-fast);
+  /* Iter5 · inactive title contrast.
+   *
+   * Previously the only "inactive" cue was a 0.6 opacity multiplier
+   * on the parent tab_button, which crushed effective contrast to
+   * ~3:1 (fails AA 4.5:1). We now drive inactive vs active via
+   * explicit fg tokens: `--color-fg-3` (#c8ccd2) reads at ~10:1
+   * against `--color-bg-2`, well above AA. Active state lifts to
+   * `--color-fg-1` so the brighter title alone reads as "this one
+   * is the active tab".
+   */
+  color: var(--color-fg-3);
+  transition:
+    max-width var(--motion-fast),
+    color var(--motion-fast);
 }
 
 /* Iter3 · hover-expand long titles. CSS only — no measurement loop,
