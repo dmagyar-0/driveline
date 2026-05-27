@@ -195,6 +195,24 @@ describe("VideoToolbar pure helpers", () => {
     expect(__test.formatFps(null)).toBe("— fps");
   });
 
+  it("codecFamily: humanises common codec strings (iter5 #1)", () => {
+    // iter5 issue #1 — toolbar truncated "avc1.640033" mid-token; the
+    // chip now shows the codec family. Pin the mappings so a fixture
+    // change in the sample-data corpus doesn't silently regress the
+    // info chip label.
+    expect(__test.codecFamily("avc1.640033")).toBe("H.264");
+    expect(__test.codecFamily("avc1.42E01E")).toBe("H.264");
+    expect(__test.codecFamily("hev1.1.6.L93.B0")).toBe("H.265");
+    expect(__test.codecFamily("hvc1.1.6.L93.B0")).toBe("H.265");
+    expect(__test.codecFamily("vp09.00.10.08")).toBe("VP9");
+    expect(__test.codecFamily("av01.0.04M.08")).toBe("AV1");
+    // Unknown prefix returns null so the caller can fall back to the
+    // raw token rather than mislabel it.
+    expect(__test.codecFamily("xyz1.99")).toBeNull();
+    expect(__test.codecFamily(null)).toBeNull();
+    expect(__test.codecFamily("")).toBeNull();
+  });
+
   it("formatFps: reads 'paused' when transport is paused (iter4 #1)", () => {
     // The chip text itself replaces the "0.0 fps" string with
     // "paused" so the user has *two* cues that the idle state is
@@ -365,11 +383,12 @@ describe("VideoToolbar component", () => {
     );
   });
 
-  it("resolution renders inline inside the health badge when provided", () => {
-    // Iter 4 issue #6 — the three previously-equal chips (codec, fps,
-    // resolution) collapse into the health badge as subordinate
-    // text. The badge's textContent therefore carries the dimensions
-    // rather than a separate `video-resolution` testid.
+  it("resolution renders inline inside the info chip when provided", () => {
+    // iter5 issue #1 — the codec/fps/resolution strip used to sit
+    // inside the health badge as subordinate text, which made the
+    // badge tooltip have to cover both decode-status words AND the
+    // decode-info breakdown. The info chip is now its own surface;
+    // the resolution lives there.
     render(
       <VideoToolbar
         panelId="vp"
@@ -379,11 +398,11 @@ describe("VideoToolbar component", () => {
         onFitModeChange={() => undefined}
       />,
     );
-    const badge = screen.getByTestId("video-health-badge");
-    expect(badge.textContent ?? "").toContain("1280×720");
+    const info = screen.getByTestId("video-info-chip");
+    expect(info.textContent ?? "").toContain("1280×720");
   });
 
-  it("resolution dimensions absent from the badge before the first frame", () => {
+  it("resolution dimensions absent from the info chip before the first frame", () => {
     // The dimensions only render once a real frame has been decoded.
     render(
       <VideoToolbar
@@ -394,8 +413,68 @@ describe("VideoToolbar component", () => {
         onFitModeChange={() => undefined}
       />,
     );
-    const badge = screen.getByTestId("video-health-badge");
-    expect(badge.textContent ?? "").not.toMatch(/\d+×\d+/);
+    const info = screen.getByTestId("video-info-chip");
+    expect(info.textContent ?? "").not.toMatch(/\d+×\d+/);
+  });
+
+  it("info chip is the surface for codec/resolution (issue #1)", () => {
+    // iter5 issue #1 — the audit caught the toolbar truncating
+    // "avc1.640033" mid-token. The codec/fps/resolution trio collapsed
+    // into a single chip whose tooltip carries the full breakdown.
+    //
+    // We can't easily drive the rAF poll under jsdom, but we can
+    // assert the chip's *structure* directly: the resolution shows up
+    // in the visible label, and the tooltip wires through the
+    // `infoTooltip` we build from local state. Codec text gets
+    // verified via the family-classifier helper unit-test below.
+    render(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={null}
+        resolution={{ width: 3840, height: 2160 }}
+        fitMode="fit"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    const info = screen.getByTestId("video-info-chip");
+    expect(info.textContent ?? "").toContain("3840×2160");
+    // The chip's accessible label includes "Decode info" so a screen
+    // reader can announce the surface even with no codec sample yet.
+    expect(info.getAttribute("aria-label") ?? "").toMatch(/decode info/i);
+    // Before any HUD snapshot is observed, the codec slot reads as
+    // "—" (placeholder), NOT a truncated raw token.
+    expect(info.textContent ?? "").toContain("—");
+    expect(info.textContent ?? "").not.toContain("avc1");
+  });
+
+  it("cropped badge appears only in FILL mode (issue #4)", () => {
+    // iter5 issue #4 — FILL mode crops content via `object-fit:
+    // cover`. The user needs an obvious cue that they're not seeing
+    // the entire source frame.
+    const { rerender } = render(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={null}
+        resolution={null}
+        fitMode="fit"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    expect(screen.queryByTestId("video-cropped-badge")).toBeNull();
+    rerender(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={null}
+        resolution={null}
+        fitMode="fill"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    const badge = screen.getByTestId("video-cropped-badge");
+    expect(badge).toBeTruthy();
+    // Tooltip explains the remedy.
+    expect(badge.getAttribute("title") ?? "").toMatch(/clipped|crop/i);
+    expect(badge.getAttribute("title") ?? "").toMatch(/FIT/);
   });
 
   it("health badge starts in 'paused' tone before any FPS sample on a paused transport", () => {
@@ -403,6 +482,11 @@ describe("VideoToolbar component", () => {
     // `beforeEach` sets `playing: false`), so the badge must report
     // "paused" and NOT "unknown" / "bad". This is the entire point of
     // decoupling tone from FPS.
+    //
+    // iter5 #1: the "paused" word moved into the dot's tooltip
+    // (`aria-label` / `title`) — the visible toolbar text now lives
+    // in the info chip. Assert the tone via data-tone (which drives
+    // the dot colour) and the readable status via aria-label.
     render(
       <VideoToolbar
         panelId="vp"
@@ -414,7 +498,7 @@ describe("VideoToolbar component", () => {
     );
     const badge = screen.getByTestId("video-health-badge");
     expect(badge.getAttribute("data-tone")).toBe("paused");
-    expect(badge.textContent ?? "").toContain("paused");
+    expect(badge.getAttribute("aria-label") ?? "").toContain("paused");
   });
 
   it("frame-step buttons advertise their keyboard shortcut in the tooltip", () => {

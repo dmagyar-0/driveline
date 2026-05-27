@@ -2,17 +2,27 @@
  * frame. Density beats prettiness here; the toolbar shares its visual
  * weight with the PanelHeader above it.
  *
- * Iter 4: bumped to 40 px so the promoted frame-step buttons (36 px
- * hit targets, issue #3) sit inside it with a proper margin instead of
- * crowding the top/bottom borders. The increase is one density step,
- * not a full row — the toolbar is still chrome, not a hero. */
+ * iter5 (issues #1, #2, #4, #6):
+ *  - Toolbar trims from 40 px to 36 px so it stops eating the panel
+ *    surface. The frame-step buttons keep their 32 px hit targets but
+ *    sit visually inside the toolbar via overflow margin.
+ *  - All utility buttons (HUD, Change, Cropped) share `.utilBtn`. Same
+ *    height (24 px), same border, same radius, same hover treatment.
+ *    The FIT/FILL segmented control is the only segmented widget and
+ *    its segments match `.utilBtn` height so the row reads as one
+ *    family.
+ *  - Codec/fps/resolution moved into a dedicated `.infoChip` (compact
+ *    + tooltipped) so the previous inline strip can no longer truncate
+ *    mid-token.
+ *  - `.sep` thin visual divider between logical groups (transport |
+ *    fit/fill + crop | hud + change | info + health). */
 
 .toolbar {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  height: 40px;
-  padding: 0 var(--sp-5);
+  height: 36px;
+  padding: 0 var(--sp-4);
   background: var(--color-bg-2);
   border-bottom: 1px solid var(--color-border-strong);
   /* Toolbar lives *inside* the frame, so it shouldn't inherit the
@@ -36,19 +46,34 @@
   flex: 1 1 auto;
 }
 
-/* Generic toolbar button. Square-ish, monospaced glyph for the
+/* iter5 issue #2 — visual divider between logical groups. 1 px tall
+ * line, dimmer than the toolbar border, lets the eye chunk the row
+ * into [playback] | [fit/fill] | [hud/change] | [info/health]
+ * without forcing extra padding. */
+.sep {
+  flex: 0 0 auto;
+  align-self: center;
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-subtle);
+  margin: 0 var(--sp-2);
+}
+
+/* Generic *transport* button. Square-ish, monospaced glyph for the
  * transport row so the playback symbols share a baseline regardless
  * of font fallbacks.
  *
  * Iter 4 issue #3 — scrub + play-pause stay at the original 28 px
- * footprint, but the *frame-step* buttons (`.btnStep`) are promoted
- * to 36 px square hit targets for frame-accurate event review. */
+ * footprint, but the *frame-step* buttons (`.btnStep`) keep a 32 px
+ * hit target for frame-accurate event review. iter5 #6: shrunk one
+ * notch (was 36 px) so the slimmer 36 px toolbar still hosts the
+ * promoted step targets without crowding the top/bottom borders. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 28px;
-  min-width: 28px;
+  height: 26px;
+  min-width: 26px;
   padding: 0 var(--sp-3);
   background: transparent;
   color: var(--color-fg-3);
@@ -82,16 +107,16 @@
   cursor: not-allowed;
 }
 
-/* Iter 4 issue #3 — promoted frame-step hit targets. 36 px square,
- * subtle background so the cluster reads as "these are the frame
- * controls" even when not hovered. The visual chrome (background +
- * border) stays compact; only the *hit area* grows. */
+/* Iter 4 issue #3 — promoted frame-step hit targets. iter5 #6: trimmed
+ * 36→32 px to match the slimmer toolbar without losing accuracy.
+ * The visual chrome (background + border) stays compact; only the
+ * *hit area* grows. */
 .btnStep {
-  height: 36px;
-  min-width: 36px;
+  height: 32px;
+  min-width: 32px;
   background: var(--color-bg-3);
   color: var(--color-fg-2);
-  font-size: var(--fs-15);
+  font-size: var(--fs-14);
   border-color: var(--color-border-subtle);
 }
 
@@ -116,18 +141,147 @@
   border-color: var(--color-accent-blue);
 }
 
-/* --------- decode-health badge --------- */
+/* --------- unified utility button (iter5 issue #2) ---------
+ *
+ * HUD toggle, Change-channel pill, and the Cropped badge all share
+ * this base class so the toolbar reads as one family. Outlined pill,
+ * 24 px tall, sans-serif uppercase label. Hover/focus borrow from the
+ * transport `.btn` family for consistency but the visual chrome is
+ * its own treatment — they're not transport controls.
+ *
+ * Active state (`.utilBtnActive`) is reserved for stateful toggles
+ * like HUD. The cropped badge uses `.utilBtnWarn` (orange tint) since
+ * it's a status surface not a control. */
+.utilBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 24px;
+  padding: 0 var(--sp-5);
+  background: transparent;
+  color: var(--color-fg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  line-height: 1;
+  transition: background var(--motion-base), color var(--motion-base),
+    border-color var(--motion-base);
+}
 
-/* Iter 4 issue #6 — the badge is now visually subordinate: smaller
- * type, no border by default, no background fill. The dot remains the
- * primary affordance. Decode info (fps + resolution + codec) folds
- * into the badge as muted text rather than three equal-weight chips. */
+.utilBtn:hover:not(:disabled) {
+  background: var(--color-bg-4);
+  color: var(--color-fg-1);
+  border-color: var(--color-border-hover);
+}
+
+.utilBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.utilBtn:active:not(:disabled) {
+  background: var(--color-bg-5);
+}
+
+.utilBtnActive {
+  background: rgba(249, 115, 22, 0.18);
+  border-color: var(--color-accent-orange);
+  color: var(--color-fg-1);
+}
+
+.utilBtnActive:hover {
+  background: rgba(249, 115, 22, 0.26);
+  border-color: var(--color-accent-orange);
+}
+
+/* iter5 issue #4 — "Cropped" status chip. Same `.utilBtn` skeleton so
+ * the toolbar stays visually consistent, but tinted with the orange
+ * accent (matches the rest of the app's "attention without alarm"
+ * surface) and carries a small dot so it reads as a status rather
+ * than as a button (which it isn't — clicking it does nothing). */
+.utilBtnWarn {
+  cursor: help;
+  color: var(--color-accent-orange);
+  border-color: var(--color-accent-orange);
+  background: rgba(249, 115, 22, 0.1);
+}
+
+.utilBtnWarn:hover {
+  background: rgba(249, 115, 22, 0.18);
+  color: var(--color-fg-1);
+  border-color: var(--color-accent-orange);
+}
+
+.cropDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-accent-orange);
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.25);
+}
+
+/* --------- compact decode-info chip (iter5 issue #1) ---------
+ *
+ * Replaces the iter4 inline strip that crammed codec, fps, and
+ * resolution into the health badge and truncated the codec string
+ * mid-token. The chip itself shows the codec family (e.g. "H.264")
+ * and the resolution; the verbose breakdown is in the tooltip. */
+.infoChip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 24px;
+  padding: 0 var(--sp-4);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--color-fg-4);
+  cursor: help;
+  transition: background var(--motion-base), border-color var(--motion-base),
+    color var(--motion-base);
+}
+
+.infoChip:hover {
+  background: var(--color-bg-4);
+  border-color: var(--color-border-hover);
+  color: var(--color-fg-2);
+}
+
+.infoCodec {
+  color: var(--color-fg-3);
+  font-weight: var(--fw-medium);
+}
+
+.infoSep {
+  color: var(--color-fg-6);
+  opacity: 0.6;
+}
+
+.infoRes {
+  color: var(--color-fg-4);
+}
+
+/* --------- decode-health badge ---------
+ *
+ * The badge is now a *dot* on the toolbar; the verbose info lives
+ * in `.infoChip` above. Dot tone still encodes paused/buffering/
+ * ok/warn/bad — the dot is the at-a-glance affordance. */
 .badge {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-3);
-  height: 26px;
-  padding: 0 var(--sp-3) 0 var(--sp-2);
+  height: 24px;
+  padding: 0 var(--sp-3);
   border: 1px solid transparent;
   border-radius: var(--radius-pill);
   background: transparent;
@@ -147,42 +301,12 @@
 }
 
 .dot {
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
   background: var(--color-fg-6);
   flex: 0 0 auto;
   box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
-}
-
-.decodeInfo {
-  display: inline-flex;
-  align-items: baseline;
-  gap: var(--sp-2);
-}
-
-.sep {
-  color: var(--color-fg-6);
-  opacity: 0.6;
-}
-
-.codec {
-  text-transform: lowercase;
-  color: var(--color-fg-5);
-  /* Long codec strings ("avc1.640033") would otherwise drag the chip
-   * wider than the segmented control beside it. Allow the codec part
-   * to truncate; the full string is in the badge tooltip. */
-  max-width: 10ch;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.fps {
-  color: var(--color-fg-3);
-}
-
-.resInline {
-  color: var(--color-fg-5);
 }
 
 .drops {
@@ -262,15 +386,16 @@
 
 /* --------- segmented FIT/FILL control (iter 4 issue #2) ---------
  *
- * Two pill-shaped segments inside a single bordered shell. The active
- * segment has a filled background + accent border; the inactive
- * segment is transparent. Both labels are always visible so users can
- * read the current mode without clicking. `aria-pressed` on each
- * segment carries the state for AT. */
+ * The only segmented widget on the toolbar. Two pill-shaped segments
+ * inside a single bordered shell. The active segment has a filled
+ * background + accent border; the inactive segment is transparent.
+ * iter5 #2: height matches `.utilBtn` (24 px) so the row reads as
+ * one family. Both labels are always visible so users can read the
+ * current mode without clicking. */
 .segmented {
   display: inline-flex;
   align-items: stretch;
-  height: 26px;
+  height: 24px;
   padding: 2px;
   background: var(--color-bg-3);
   border: 1px solid var(--color-border-subtle);
@@ -282,7 +407,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 36px;
+  min-width: 32px;
   padding: 0 var(--sp-5);
   background: transparent;
   color: var(--color-fg-4);
@@ -312,42 +437,4 @@
   background: var(--color-bg-5);
   color: var(--color-fg-1);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-}
-
-/* Iter 4 issue #4 — HUD button. Lives in the toolbar now (used to be
- * absolute-positioned on top of the letterbox). Pressed state uses
- * the orange accent so a user with the HUD open at a glance knows
- * which control owns it. */
-.btnHud {
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  font-weight: var(--fw-semibold);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  padding: 0 var(--sp-4);
-}
-
-.btnHud[aria-pressed="true"] {
-  background: rgba(249, 115, 22, 0.18);
-  border-color: var(--color-accent-orange);
-  color: var(--color-fg-1);
-}
-
-/* Iter 4 issue #4 — "Change" channel pill. Subtle by default; primary
- * affordance is the picker that replaces the panel content when no
- * channel is bound, so this control just needs to be discoverable
- * without competing for attention. */
-.btnGhost {
-  font-family: var(--font-sans);
-  font-size: var(--fs-11);
-  font-weight: var(--fw-medium);
-  color: var(--color-fg-4);
-  padding: 0 var(--sp-4);
-  border-color: var(--color-border-subtle);
-}
-
-.btnGhost:hover:not(:disabled) {
-  color: var(--color-fg-1);
-  background: var(--color-bg-4);
-  border-color: var(--color-border-hover);
 }

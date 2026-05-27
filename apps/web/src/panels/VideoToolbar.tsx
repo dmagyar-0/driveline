@@ -7,11 +7,12 @@
 //     global Transport actions (`setCursor`, `play`, `pause`).
 //   • a fit/fill toggle for the canvas object-fit mode (persisted per
 //     panelId via localStorage — no store-shape change required).
-//   • a decode-health badge (smoothed FPS, dropped frames since last
-//     seek, codec string, dot tinted by health) plus a resolution
-//     readout. Numbers come from the per-frame snapshot the rAF blit
-//     loop writes into `window.__drivelineVideoHud`, plus a per-panel
-//     sample of `frameIndex` over a 1 s window to derive FPS.
+//   • a compact info chip (codec · fps · resolution) with a verbose
+//     tooltip; replaces the iter4 inline strip that wrapped or truncated
+//     the codec string ("avc1.640…") in narrow panels.
+//   • a "cropped" badge that surfaces only when fit mode is `fill`, so
+//     users have an obvious cue that pixels at the panel edge are
+//     clipped.
 //
 // Why a separate component:
 //   • keeps VideoPanel.tsx focused on the decode/blit hot path.
@@ -24,6 +25,17 @@
 // already exposed via the existing HUD snapshot or via the source's
 // `mp4Cache.index.ptsNs` array. Sidecar PTS drives both frame stepping
 // and the "expected fps" target the health-badge dot uses.
+//
+// iter5 polish (issues #1, #2, #4, #6):
+//   • All utility buttons share a single base class (`.utilBtn`) so the
+//     HUD toggle / Change channel / Cropped chip read as one family
+//     instead of "three engineers shipped three solutions to one row".
+//   • Codec/fps/resolution collapse into a single `.infoChip` with a
+//     tooltip carrying the full breakdown (no more truncated tokens).
+//   • Toolbar slimmed to 36 px so it doesn't eat the panel surface.
+//   • Visual separators (`.sep`) bracket logical groups so the toolbar
+//     reads left-to-right: [transport] | [fit/fill] | [HUD] [Change]
+//     | [info chip] [cropped] [health dot].
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
@@ -76,6 +88,21 @@ interface FpsSample {
  * because the tail of a sidecar can contain a single oversized gap
  * (e.g. dropped key-frame at EOF) which would skew the target.
  */
+/**
+ * iter5 issue #1 — humanise a codec token (e.g. `avc1.640033`) into
+ * its family name. Returns null when we don't recognise the prefix
+ * so callers can fall back to the raw token. Pure function, exported
+ * via the `__test` seam so the unit test can pin the mappings.
+ */
+function codecFamily(raw: string | null): string | null {
+  if (!raw) return null;
+  if (raw.startsWith("avc1")) return "H.264";
+  if (raw.startsWith("hev1") || raw.startsWith("hvc1")) return "H.265";
+  if (raw.startsWith("vp09")) return "VP9";
+  if (raw.startsWith("av01")) return "AV1";
+  return null;
+}
+
 function expectedFpsFromSidecar(ptsNs: BigInt64Array | null): number {
   if (!ptsNs || ptsNs.length < 2) return 30;
   // Sample up to the first 200 intervals — enough to be representative,
@@ -448,14 +475,34 @@ export function VideoToolbar({
     paused: "paused",
     buffering: "buffering after seek",
   };
-  const tooltipParts: string[] = [statusWord[tone], codecLabel, fpsLabel];
-  if (drops > 0) {
-    tooltipParts.push(`${drops} drop${drops === 1 ? "" : "s"}`);
-  }
+  // iter5 issue #1 — humanise the codec string for the tooltip. The
+  // raw `avc1.640033` token is informative for a debug-y user but
+  // reads as gibberish to most. Prefix with the family name when we
+  // can recognise it; if we can't, we just surface the raw token.
+  const family = codecFamily(codec);
+  const codecTooltipPart = family ? `${family} · ${codecLabel}` : codecLabel;
+  // Tooltip surfaces everything in the order the audit asked for:
+  //   "H.264 · avc1.640033 · 3840×2160 · 33 fps"
+  const tooltipParts: string[] = [];
+  if (codec) tooltipParts.push(codecTooltipPart);
   if (resolution) {
     tooltipParts.push(`${resolution.width}×${resolution.height}`);
   }
-  const badgeTooltip = tooltipParts.join(" · ");
+  tooltipParts.push(fpsLabel);
+  if (drops > 0) {
+    tooltipParts.push(`${drops} drop${drops === 1 ? "" : "s"}`);
+  }
+  const infoTooltip = tooltipParts.join(" · ");
+  // Health-dot tooltip is a separate, terser line — we keep the dot
+  // adjacent to the info chip but tooltipped separately so the user
+  // can hover either side independently. Mostly the dot is the
+  // at-a-glance affordance; the info chip is the on-demand detail.
+  const healthTooltip = `${statusWord[tone]} · ${fpsLabel}`;
+  // The chip text itself stays short: prefer the codec family if we
+  // recognised it (H.264 / VP9 / …), otherwise fall back to the raw
+  // token but only show its prefix so it never truncates mid-token in
+  // the toolbar. The full string lives in the tooltip above.
+  const codecShort = family ?? (codec ? codec.split(".")[0] : "—");
 
   const playLabel = playing ? "Pause" : "Play";
 
@@ -540,59 +587,11 @@ export function VideoToolbar({
         </button>
       </div>
 
-      <div className={styles.spacer} aria-hidden="true" />
+      <div className={styles.sep} role="separator" aria-hidden="true" />
 
-      {/* Iter 4 issue #1+6 — health dot is now the *only* always-on
-       *  affordance; the FPS/codec/resolution readouts are grouped into
-       *  a single subordinate "decode info" pill that only carries
-       *  weight on hover (tooltip) or when a drop count > 0 visually
-       *  promotes the chip to a warning. Keeps the toolbar legible at a
-       *  glance without losing the diagnostic surface. */}
-      <div
-        className={`${styles.badge} ${styles[`badge_${tone}`]}`}
-        title={badgeTooltip}
-        data-testid="video-health-badge"
-        data-tone={tone}
-        role="status"
-        aria-label={`Decode health: ${badgeTooltip}`}
-      >
-        <span className={styles.dot} aria-hidden="true" />
-        <span className={styles.decodeInfo} aria-hidden="true">
-          <span className={styles.fps}>{fpsLabel}</span>
-          {resolution && (
-            <>
-              <span className={styles.sep} aria-hidden="true">
-                ·
-              </span>
-              <span className={styles.resInline}>
-                {resolution.width}×{resolution.height}
-              </span>
-            </>
-          )}
-          {codec && (
-            <>
-              <span className={styles.sep} aria-hidden="true">
-                ·
-              </span>
-              <span className={styles.codec}>{codec}</span>
-            </>
-          )}
-        </span>
-        {drops > 0 && (
-          <span
-            className={styles.drops}
-            title={`${drops} dropped frames since last seek`}
-          >
-            {drops} drop{drops === 1 ? "" : "s"}
-          </span>
-        )}
-      </div>
-
-      {/* Iter 4 issue #2 — FIT/FILL as a 2-state segmented control.
-       *  Both options are always visible; the active segment has a
-       *  filled background, the inactive segment is outline-only. Each
-       *  segment carries its own `aria-pressed` so AT users can tell
-       *  the current mode without inferring from the tooltip. */}
+      {/* iter5 issue #2 — FIT/FILL stays as the *only* segmented
+       *  widget on the toolbar. Its height now matches the utility
+       *  buttons (24 px) so the group reads as one chrome row. */}
       <div
         className={styles.segmented}
         role="group"
@@ -631,15 +630,39 @@ export function VideoToolbar({
         </button>
       </div>
 
-      {/* Iter 4 issue #4 — HUD toggle lives in the toolbar now so it
-       *  doesn't overlap the letterbox bars when the panel aspect
-       *  doesn't match the source's. The visual style stays distinct
-       *  from the FIT/FILL segments (smaller, monospaced) so it reads
-       *  as a diagnostic toggle, not a primary mode. */}
+      {/* iter5 issue #4 — Cropped chip. Only paints when FILL is
+       *  active so the user has an unmistakable cue that pixels are
+       *  being clipped at the panel edges. Tooltip explains the
+       *  remedy. Same `.utilBtn` family as HUD / Change so the row
+       *  stays visually consistent (issue #2). */}
+      {fitMode === "fill" && (
+        <span
+          className={`${styles.utilBtn} ${styles.utilBtnWarn}`}
+          role="status"
+          aria-label="Some pixels are clipped — switch to FIT to see the entire frame."
+          title="Some pixels are clipped — switch to FIT to see the entire frame."
+          data-testid="video-cropped-badge"
+        >
+          <span className={styles.cropDot} aria-hidden="true" />
+          Cropped
+        </span>
+      )}
+
+      <div className={styles.sep} role="separator" aria-hidden="true" />
+
+      {/* iter5 issue #2 — HUD + Change adopt the shared `.utilBtn`
+       *  base class. Same height, same border treatment, same hover
+       *  behaviour as each other and as the cropped chip. The HUD
+       *  active state still uses the orange accent tint so a user
+       *  with the HUD open can see at a glance which control owns
+       *  it, but the metrics (height, border-radius, padding,
+       *  typography) are now uniform across the cluster. */}
       {onHudToggle && (
         <button
           type="button"
-          className={`${styles.btn} ${styles.btnHud}`}
+          className={`${styles.utilBtn} ${
+            hudOn ? styles.utilBtnActive : ""
+          }`}
           onClick={onHudToggle}
           aria-pressed={hudOn ?? false}
           aria-label={hudOn ? "Hide diagnostics HUD" : "Show diagnostics HUD"}
@@ -649,18 +672,10 @@ export function VideoToolbar({
           HUD
         </button>
       )}
-
-      {/* Iter 4 issue #4 — clearing the binding moves out of the
-       *  frame too. Hover-reveal on a label that you can't see is
-       *  also bad UX (the iter3 audit didn't flag this directly but
-       *  the same letterbox argument applies — it was painted over
-       *  black bars). The toolbar carries it as a small text link
-       *  styled as a button so it stays discoverable but doesn't
-       *  fight the transport row for attention. */}
       {onClearBinding && (
         <button
           type="button"
-          className={`${styles.btn} ${styles.btnGhost}`}
+          className={styles.utilBtn}
           onClick={onClearBinding}
           aria-label="Change channel — clear current video binding"
           title="Pick a different video channel"
@@ -669,6 +684,58 @@ export function VideoToolbar({
           Change
         </button>
       )}
+
+      <div className={styles.spacer} aria-hidden="true" />
+
+      {/* iter5 issue #1 — compact info chip. The codec/fps/resolution
+       *  trio used to crowd the toolbar and truncate mid-token
+       *  ("avc1.640…") on narrow panels. They now collapse into a
+       *  single chip showing the codec family (e.g. "H.264") plus the
+       *  resolution; the full breakdown lives in the tooltip. */}
+      <span
+        className={styles.infoChip}
+        title={infoTooltip || "Decode info"}
+        data-testid="video-info-chip"
+        role="status"
+        aria-label={`Decode info: ${infoTooltip || "initialising"}`}
+      >
+        <span className={styles.infoCodec}>{codecShort}</span>
+        {resolution && (
+          <>
+            <span className={styles.infoSep} aria-hidden="true">
+              ·
+            </span>
+            <span className={styles.infoRes}>
+              {resolution.width}×{resolution.height}
+            </span>
+          </>
+        )}
+      </span>
+
+      {/* iter5 issue #1+2 — the health affordance is now reduced to a
+       *  single dot. Tone semantics survive intact (paused/buffering/
+       *  ok/warn/bad), but the dot sits beside the info chip instead
+       *  of inside it, so the rich tooltip on the chip never has to
+       *  fight the status word from the dot. The dot has its own
+       *  short tooltip ("decode healthy · 30 fps"). */}
+      <span
+        className={`${styles.badge} ${styles[`badge_${tone}`]}`}
+        title={healthTooltip}
+        data-testid="video-health-badge"
+        data-tone={tone}
+        role="status"
+        aria-label={`Decode health: ${healthTooltip}`}
+      >
+        <span className={styles.dot} aria-hidden="true" />
+        {drops > 0 && (
+          <span
+            className={styles.drops}
+            title={`${drops} dropped frames since last seek`}
+          >
+            {drops} drop{drops === 1 ? "" : "s"}
+          </span>
+        )}
+      </span>
     </div>
   );
 }
@@ -680,4 +747,5 @@ export const __test = {
   expectedFpsFromSidecar,
   healthTone,
   formatFps,
+  codecFamily,
 };
