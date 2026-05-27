@@ -749,6 +749,34 @@
   border-top: 5px solid var(--color-accent-orange);
 }
 
+/* Iter5 (issue #3) — leader line from the bottom of the cursor badge
+ * down to the playhead dot. Anchors the floating badge to its
+ * timeline position so two badges (cursor + hover) near each other
+ * are never ambiguous about which dot belongs to which readout.
+ * Uses the badge's accent colour and slips behind the chevron so the
+ * line + chevron + thumb read as one continuous element. The line
+ * starts at the chevron tip (10 px below badge top = badge height +
+ * chevron 5 px) and runs to the strip's vertical centre (where the
+ * thumb sits). */
+.playheadBadge::before {
+  content: "";
+  position: absolute;
+  /* Place 1 px above the chevron tip so the line visually overlaps
+   * the chevron without leaving a gap. */
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  /* 8 px badge→strip gap + half the 24 px strip (= 12 px) to land on
+   * the thumb centre. Match the badge's accent shade. */
+  height: 16px;
+  background: var(--color-accent-orange);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+  pointer-events: none;
+  border-radius: 1px;
+  z-index: -1;
+}
+
 .playheadBadgeTime {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
