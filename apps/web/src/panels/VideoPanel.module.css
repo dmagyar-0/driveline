@@ -77,43 +77,22 @@
  * `console.log` dump (pts / frame / decoded / decode / blit / dropped
  * / codec, all in mono and left-aligned).
  *
- * Now: a 2-column grid (label · value) with a subtle title, panel
- * chrome that matches the rest of the app (--bg-chrome surface,
- * subtle border, subtle shadow), and values right-aligned in
- * tabular-nums so the right edge of numbers stays visually quiet.
- * The whole thing sits at lower visual weight than the iter5 HUD —
- * smaller padding, smaller width, lighter border — so it doesn't
- * dominate the video frame.
- *
- * iter9 wave C — both UX critics scored the HUD as "information-dense
- * but visually mushy": label/value pairs didn't share a strict column
- * boundary because each row was its own `1fr auto` grid. Flattened to
- * a single `max-content 1fr` grid spanning the whole popover so PTS,
- * Frame, Decoded, Decode queue, Blit queue, Dropped, and Codec all
- * align under one common label-column edge. Each `.hudRow` now uses
- * `display: contents` so its label and value participate in the
- * parent grid directly while the row element survives as a
- * style/`[hidden]`/`data-warn` hook. */
+ * A single `max-content 1fr` grid spans the whole popover so every
+ * label/value pair aligns on one shared column boundary; each
+ * `.hudRow` is `display: contents` so the row element survives as a
+ * `[hidden]` / `data-warn` hook without breaking the grid. Values
+ * right-align in tabular-nums so digits across rows stack cleanly. */
 .hud {
   position: absolute;
   top: var(--sp-4);
   right: var(--sp-4);
   z-index: 2;
-  /* Snug width keeps the panel compact; min-width prevents the
-   * shorter values (e.g. "0") from collapsing the grid. iter9 wave C
-   * trimmed min-width 13.5rem → 12.5rem because the strict column
-   * grid packs tighter than the iter6 nested grids. */
   min-width: 12.5rem;
   max-width: 16rem;
   display: grid;
-  /* Two columns: labels take their max-content width (so all labels
-   * align under one boundary), values flex to fill the rest and
-   * right-align. */
   grid-template-columns: max-content 1fr;
   column-gap: var(--sp-5);
   row-gap: 2px;
-  /* iter9 wave C — trim padding ~20% (sp-4/sp-5 → sp-3/sp-4) so the
-   * popover doesn't feel bloated around the seven-row grid. */
   padding: var(--sp-3) var(--sp-4);
   background: rgba(14, 15, 18, 0.82);
   color: var(--color-fg-3);
@@ -127,9 +106,6 @@
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
 }
 
-/* Title spans both columns. iter9 wave C: tightened the
- * separator block (padding/margin) along with the popover padding so
- * the title sits closer to the first data row. */
 .hudTitle {
   grid-column: 1 / -1;
   font-size: var(--fs-xs);
@@ -142,12 +118,6 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-/* iter9 wave C — the row element exists only as a hook for
- * `[hidden]` and `data-warn` attributes; its children
- * (.hudLabel, .hudValue) participate in the parent .hud grid
- * directly via `display: contents`. This is what gives us the
- * single label-column / value-column alignment across every row,
- * which the previous nested `1fr auto` rows couldn't achieve. */
 .hudRow {
   display: contents;
 }
@@ -170,9 +140,6 @@
   font-family: var(--font-mono);
   color: var(--color-fg-2);
   font-weight: var(--fw-medium);
-  /* Tabular numerals (also set on .hud) so digits across rows align
-   * vertically — critical for scanning Frame "1234 / 5678" against
-   * the Decoded "#1234" row. */
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;

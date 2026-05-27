@@ -138,62 +138,15 @@
    * any out-of-tree CSS keep working. New code should use the role
    * tokens.
    *
-   * --------------------------------------------------------------
-   * iter9 · Accent role-split, documented.
-   * --------------------------------------------------------------
-   * Two independent design critics on iter8 both flagged that orange
-   * (#f97316) and blue (#4d8bff) were popping at similar saturation,
-   * so the eye couldn't decide which accent was primary. The roles
-   * were already correct on paper; the VALUES weren't subordinating
-   * blue to orange. This block is the single source of truth so the
-   * next critic pass doesn't have to re-derive the intent.
-   *
-   *   ORANGE FAMILY = action / temporal / CTA.
-   *     Surfaces: playhead (transport, scrubber, plot cursor line),
-   *               primary play button, "Try sample data" hero CTA,
-   *               segment chip on the scrubber, time-cursor badge.
-   *     Tokens:   --color-role-cta, --color-role-cta-hover,
-   *               --color-role-cursor, --color-accent-orange (alias).
-   *     Reads as: PRIMARY. Always wins the eye. Highest saturation
-   *               in the chrome.
-   *
-   *   BLUE FAMILY = selection / focus / state.
-   *     Surfaces: focused-panel underline, focused-panel ring, active
-   *               rail icon, active drawer row, source-active row,
-   *               keyboard focus ring, HUD toggle "this is on",
-   *               scrubber fill behind the segment.
-   *     Tokens:   --color-role-active, --color-role-focus,
-   *               --color-accent-blue (legacy alias for active),
-   *               --color-active-blue (iter7 alias for active).
-   *     Reads as: SUBORDINATE. Clearly visible — every state cue
-   *               passes WCAG AA on chrome and panel backgrounds —
-   *               but desaturated enough that orange always reads as
-   *               the louder accent.
-   *
-   *   Hierarchy rule: in any frame that contains both an orange
-   *   surface and a blue surface, the orange surface must read as
-   *   the louder cue. The iter9 retune moves blue from
-   *   #4d8bff / #6aa8ff (HSL ~221° 100% 65%) to #6e9ad1 / #7ba3dd
-   *   (HSL ~211° 50% 62%) — same hue family, ~50% less chroma. The
-   *   surfaces, semantics, and token NAMES stay identical; only the
-   *   VALUES move.
-   *
-   *   Contrast on the new blues:
-   *     #6e9ad1 vs bg-3 (#0e0f12) → 6.58:1  (AA large + small text)
-   *     #6e9ad1 vs bg-2 (#1c1f24) → 5.67:1  (AA all sizes)
-   *     #6e9ad1 vs bg-6 (#353a44) → 3.92:1  (AA large + UI)
-   *     #7ba3dd vs bg-3            → 7.42:1
-   *     #7ba3dd vs bg-2            → 6.39:1
-   *     #7ba3dd vs bg-6            → 4.42:1
-   *
-   *   If you're tempted to make blue louder (e.g. rebrand, dark-mode
-   *   tune, a11y request), promote orange in the same step so the
-   *   ratio stays. Don't break the hierarchy. */
+   * Blue family is held at ~50% chroma below orange so any frame
+   * containing both reads orange (action/temporal) as primary and
+   * blue (selection/focus/state) as subordinate. Keep that ratio
+   * if either side is ever retuned. */
   --color-accent-orange: #f97316; /* legacy alias — equals --color-role-cta */
-  --color-accent-blue: #6e9ad1; /* iter9: desaturated from #4d8bff so blue reads as selection signal, not competing accent */
+  --color-accent-blue: #6e9ad1; /* selection / focus, desaturated vs orange CTA */
   --color-accent-blue-tint: rgba(110, 154, 209, 0.08);
 
-  /* Role-based accent tokens (iter6, retuned iter9) ------------- */
+  /* Role-based accent tokens ------------------------------------ */
   --color-role-cta: #f97316; /* PRIMARY CTA — play button, "Try sample data" */
   --color-role-cta-hover: #fb923c;
   --color-role-cta-tint: rgba(249, 115, 22, 0.12);
@@ -202,11 +155,11 @@
   --color-role-cursor: #f97316; /* PLAYHEAD — same hue, role-specific */
   --color-role-cursor-tint: rgba(249, 115, 22, 0.18);
 
-  --color-role-active: #6e9ad1; /* iter9: desaturated "you are here" — rail-active, source-active, focused panel. Lower chroma so the eye reads orange CTA/playhead as primary */
+  --color-role-active: #6e9ad1; /* "you are here" — rail-active, source-active, focused panel */
   --color-role-active-tint: rgba(110, 154, 209, 0.12);
   --color-role-active-tint-strong: rgba(110, 154, 209, 0.22);
 
-  --color-role-focus: #7ba3dd; /* iter9: desaturated keyboard focus ring — slightly hotter than --active for separation, still clearly subordinate to orange */
+  --color-role-focus: #7ba3dd; /* keyboard focus ring — slightly hotter than --active for separation */
   --color-role-focus-tint: rgba(123, 163, 221, 0.18);
 
   --color-role-brand: var(--color-fg-2); /* brand wordmark + logo arrow — neutral */
@@ -241,11 +194,10 @@
    *   amber #f2b33d  — warm gold, distinctly NOT orange (#f97316). At
    *                    L* ~76 it reads as "caution" without competing
    *                    with the playhead.
-   *   blue  #6e9ad1  — matches the iter6+iter9 active role so the
-   *                    language "this is on" is one hue across rail,
-   *                    drawer rows, splitter drag, HUD toggle. iter9
-   *                    desaturated this from #4d8bff so blue stays
-   *                    subordinate to the orange CTA family.
+   *   blue  #6e9ad1  — matches the iter6 active role so the language
+   *                    "this is on" is one hue across rail, drawer
+   *                    rows, splitter drag, HUD toggle. Held below
+   *                    orange's chroma so the CTA family stays loud.
    *   neutral fg-2   — off-white (#e6e8ec), so the wordmark recedes
    *                    behind the playhead and CTAs.
    *
@@ -456,12 +408,11 @@
    * need to override when the inherited treatment clashes with their
    * own border/background (e.g. inset rings on rail items).
    *
-   * Contrast (iter9, after the role-split retune): --color-role-focus
-   * #7ba3dd against bg-2 (#1c1f24) is 6.4:1; against bg-3 (#0e0f12)
-   * is 7.4:1; against bg-6 (#353a44) is 4.4:1 — all clear AA. The
-   * ring is the same hue family as --color-role-active so a focused
-   * rail item shows BOTH the ring AND the active blue bar without
-   * colour clash, while still subordinating to orange CTAs. */
+   * Contrast: --color-role-focus #7ba3dd against bg-2 (#1c1f24) is
+   * 6.4:1; against bg-3 (#0e0f12) is 7.4:1; against bg-6 (#353a44)
+   * is 4.4:1 — all clear AA. The ring is the same hue family as
+   * --color-role-active so a focused rail item shows BOTH the ring
+   * AND the active blue bar without colour clash. */
   --focus-ring: 2px solid var(--color-role-focus);
   --focus-offset: 2px;
 
