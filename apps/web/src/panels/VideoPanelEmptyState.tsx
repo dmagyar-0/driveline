@@ -124,12 +124,15 @@ export function VideoPanelEmptyState({
       </div>
 
       <h2 className={styles.headline}>
-        {headline ?? "Video panel"}
+        {headline ?? "Drop a recording"}
       </h2>
+      {/* Iter 4 issue #5 — the previous two-sentence description was
+       *  too talky for a drop-zone. Headline now names the action
+       *  ("Drop a recording"), the sub-line names accepted formats in
+       *  one beat, and the privacy-claim that used to lead the
+       *  paragraph drops to a smaller footnote below the CTA. */}
       <p className={styles.description}>
-        {description ??
-          "Drop a recording on this window to bind a video channel. " +
-            "Everything decodes locally in your browser — no uploads."}
+        {description ?? "MP4 with sidecar, or an MCAP with H.264 video."}
       </p>
 
       <ul className={styles.formats} aria-label="Supported formats">
@@ -156,11 +159,14 @@ export function VideoPanelEmptyState({
             <>Try sample data</>
           )}
         </button>
-        <p className={styles.ctaHint}>
-          Loads <code>short.mcap</code> + <code>short.mp4</code> from
-          the bundled fixtures (~32 MB total).
-        </p>
       </div>
+
+      {/* Privacy footnote — deliberately small + de-emphasised so it
+       *  doesn't fight the CTA for attention. Same load-target hint
+       *  that used to be the ctaHint now folds in here too. */}
+      <p className={styles.footnote}>
+        Decoded locally in your browser. No uploads.
+      </p>
 
       {error !== null && (
         <p className={styles.error} role="alert">
