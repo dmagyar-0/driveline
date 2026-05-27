@@ -101,43 +101,30 @@
   background: var(--color-bg-5);
 }
 
-/* Issue #3 — secondary "Total" readout. Muted on purpose — the
- * primary current-time readout is the playhead badge above the track. */
-.totalBlock {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  min-width: 0;
-  padding-left: var(--sp-3);
-  border-left: 1px solid var(--color-border-subtle);
-}
-
-.totalLabel {
-  font-family: var(--font-sans);
-  font-size: var(--fs-10);
-  font-weight: var(--fw-medium);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  color: var(--color-fg-5);
-  line-height: 1;
-}
-
-.totalValue {
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-13);
-  font-weight: var(--fw-medium);
-  color: var(--color-fg-3);
-  line-height: 1.1;
-  white-space: nowrap;
-}
-
-/* Speed select column. Labelled so the field reads on its own. */
-.fieldGroup {
+/* Iter3 (issue #4) — speed gets its own labelled pill on the right
+ * edge. Visually heavier than the meta-cluster (mode + ?), because
+ * speed is the higher-frequency setting. */
+.speedPill {
   display: flex;
   flex-direction: column;
   gap: 3px;
+  padding: 4px var(--sp-3) 4px var(--sp-4);
+  border-radius: var(--radius-4);
+  background: color-mix(in srgb, var(--color-bg-3) 60%, transparent);
+  border: 1px solid var(--color-border-subtle);
+}
+
+/* Iter3 (issue #4) — meta cluster for the lower-frequency controls
+ * (REL/ABS + `?`). Separated from the speed pill by the row's flex
+ * gap so users no longer read the three controls as a single awkward
+ * group. */
+.metaCluster {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 0 var(--sp-3);
+  border-right: 1px solid var(--color-border-subtle);
+  align-self: stretch;
 }
 
 .fieldLabel {
@@ -329,8 +316,17 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  pointer-events: none;
+  /* Iter3 (issue #5) — segment labels need to receive hover so the
+   *  native title tooltip ("Segment N (from <file>, starts at <time>)")
+   *  actually surfaces. The track below still handles pointer events
+   *  because the label row is positioned above the track, not inside. */
+  pointer-events: auto;
+  cursor: help;
   padding: 0 var(--sp-2);
+}
+
+.segmentLabel:hover {
+  color: var(--color-fg-2);
 }
 
 .segmentLabelActive {
@@ -501,24 +497,28 @@
   z-index: 5;
 }
 
-/* Full-height vertical line through the track. Inset slightly past
- * the strip top/bottom so it visually breaks out of the bar (reads as
- * a playhead, not a divider). */
+/* Iter3 (issue #7) — full-height vertical line through the track. The
+ * line is the primary "where I am" cue; the handle is the affordance
+ * for dragging. Thicken to 3 px (was 2 px) so it stays visible against
+ * the dark fill gradient even at the busiest spots; deepen the dark
+ * underlay so it never disappears against light segment bands. */
 .playheadLine {
   position: absolute;
   top: -4px;
   bottom: -4px;
   left: 50%;
-  width: 2px;
+  width: 3px;
   background: var(--color-accent-orange);
-  transform: translateX(-1px);
+  transform: translateX(-1.5px);
   pointer-events: none;
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
 }
 
-/* Issue #3 — time badge above the playhead handle. This is the
- * primary current-time readout. Mono digits, tabular numerals so
- * the badge doesn't reflow while scrubbing. */
+/* Iter3 (issues #1 + #3) — current-time badge above the playhead.
+ * Single canonical format + total, rendered inline as `current / total`
+ * so the pair reads as one unit. Mono digits, tabular numerals so the
+ * badge doesn't reflow while scrubbing. Tighter horizontal padding
+ * than before so the badge feels deliberate, not a label. */
 .playheadBadge {
   position: absolute;
   left: 50%;
@@ -529,9 +529,8 @@
   border-radius: var(--radius-4);
   padding: 3px var(--sp-4);
   display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
+  align-items: baseline;
+  gap: var(--sp-2);
   pointer-events: none;
   white-space: nowrap;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
@@ -539,7 +538,9 @@
 }
 
 .playheadBadge::after {
-  /* Little arrow tab pointing down at the handle. */
+  /* Iter3 (issue #7) — DAW-style chevron pointing down at the handle.
+   * The triangle's base aligns with the badge's bottom edge so the
+   * notch reads as a continuation of the orange border, not a tab. */
   content: "";
   position: absolute;
   top: 100%;
@@ -561,24 +562,41 @@
   line-height: 1;
 }
 
-.playheadBadgeSub {
+/* Iter3 (issue #3) — separator + total share the same font size as
+ * the current readout so the eye reads `current / total` as a single
+ * pair. The total uses a muted colour so it doesn't compete with the
+ * primary number. */
+.playheadBadgeSep {
   font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--fs-10);
+  font-size: var(--fs-13);
   color: var(--color-fg-5);
   line-height: 1;
 }
 
+.playheadBadgeTotal {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-13);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-4);
+  line-height: 1;
+}
+
+/* Iter3 (issue #7) — the cursor handle is a tight DAW-style triangle
+ * (chevron) pointing down at the line + a smaller round nub at the
+ * line. We shrink the circle from 14px to 9px so it doesn't dominate;
+ * the triangle below the badge already carries the "where I am"
+ * weight. The orange border drops to 1.5px to match. */
 .thumb {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 14px;
-  height: 14px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: var(--color-fg-1);
-  border: 2px solid var(--color-accent-orange);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+  background: var(--color-accent-orange);
+  border: 1.5px solid var(--color-fg-1);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
   transform: translate(-50%, -50%);
   pointer-events: none;
   transition:
@@ -588,8 +606,8 @@
 
 .track:hover .thumb,
 .track:active .thumb {
-  width: 16px;
-  height: 16px;
+  width: 11px;
+  height: 11px;
 }
 
 /* Issue #2 — subtle ring while we wait on a video decode. */
@@ -598,36 +616,76 @@
   outline-offset: 2px;
 }
 
-/* Issue #2 — hover preview line + tooltip. Renders only while the
- * pointer is over the track and the user is NOT actively dragging. */
+/* Iter3 (issue #2) — hover preview line. Renders only while the
+ * pointer is over the track and the user is NOT actively dragging.
+ * The line is dashed + lower opacity so it visually subordinates to
+ * the solid orange playhead line; the user can always tell which
+ * one is the "real" cursor. */
 .hoverLine {
   position: absolute;
   top: 0;
   bottom: 0;
   width: 1px;
-  background: var(--color-fg-3);
-  opacity: 0.55;
+  background: linear-gradient(
+    to bottom,
+    var(--color-fg-4) 0,
+    var(--color-fg-4) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+  background-size: 1px 6px;
+  opacity: 0.7;
   transform: translateX(-0.5px);
   pointer-events: none;
   z-index: 4;
 }
 
+/* Iter3 (issue #2) — hover tooltip is the "where my mouse is" chip,
+ * deliberately distinct from the cursor badge ("where I am"):
+ *   - no orange border (uses a soft neutral instead)
+ *   - lighter elevation (flatter shadow, smaller chip)
+ *   - dashed/subtle border so it visually reads as a hint, not an
+ *     anchor
+ *   - the line below is a 1px dashed neutral, not the solid orange
+ *     of the playhead
+ * The user can instantly tell which marker is the active cursor. */
 .hoverTooltip {
   position: absolute;
   bottom: calc(100% + 4px);
   transform: translateX(-50%);
-  background: var(--color-bg-6);
-  border: 1px solid var(--color-border-strong);
+  background: rgba(20, 22, 26, 0.95);
+  border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-3);
-  padding: 2px var(--sp-3);
+  padding: 3px var(--sp-3);
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-11);
-  color: var(--color-fg-1);
+  color: var(--color-fg-2);
   white-space: nowrap;
   pointer-events: none;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
   z-index: 7;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.hoverTooltipPrimary {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-11);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-2);
+  line-height: 1.1;
+}
+
+.hoverTooltipSub {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--fs-10);
+  color: var(--color-fg-5);
+  line-height: 1;
 }
 
 /* Issue #2 — decode-waiting dot in the play-button group. */
@@ -651,6 +709,21 @@
   50% {
     opacity: 1;
   }
+}
+
+/* Iter3 (issue #6) — visually-hidden segment-count slot. Kept in the
+ * DOM for Playwright + accessibility tools, but the segment label row
+ * above the track is now the visible signal. */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .disabled {

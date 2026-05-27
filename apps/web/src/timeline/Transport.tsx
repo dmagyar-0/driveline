@@ -37,6 +37,8 @@ import {
   formatAbsoluteClock,
   formatDate,
   formatDuration,
+  formatPlayheadPrimary,
+  formatPlayheadSecondary,
   formatRelative,
 } from "./formatTime";
 import { BookmarkMarkers } from "./BookmarkMarkers";
@@ -182,14 +184,22 @@ export function Transport() {
   const rafId = useRef<number | null>(null);
 
   // Issue #2 — hover tooltip state. `hoverPct` drives the floating
-  // ghost line (and the tooltip's `left`); `hoverLabel` is the
-  // formatted time the user is previewing. Stored in state so the
-  // tooltip re-renders, but updates land at most once per rAF via a
-  // shared scheduler so the hot path stays within budget.
+  // ghost line (and the tooltip's `left`); `hoverPrimary`/`hoverSub`
+  // carry the formatted preview time. Iter3: the hover tooltip now
+  // also surfaces the *other* convention as a sub-line, so the cursor
+  // badge can be slimmed down to a single number (issue #1) while the
+  // hovering user still gets both. Stored in state so the tooltip
+  // re-renders, but updates land at most once per rAF via a shared
+  // scheduler so the hot path stays within budget.
   const [hoverPct, setHoverPct] = useState<number | null>(null);
-  const [hoverLabel, setHoverLabel] = useState<string>("");
+  const [hoverPrimary, setHoverPrimary] = useState<string>("");
+  const [hoverSub, setHoverSub] = useState<string>("");
   const hoverRafId = useRef<number | null>(null);
-  const pendingHover = useRef<{ pct: number; label: string } | null>(null);
+  const pendingHover = useRef<{
+    pct: number;
+    primary: string;
+    sub: string;
+  } | null>(null);
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
@@ -221,14 +231,15 @@ export function Transport() {
   const flushHover = () => {
     if (pendingHover.current !== null) {
       setHoverPct(pendingHover.current.pct);
-      setHoverLabel(pendingHover.current.label);
+      setHoverPrimary(pendingHover.current.primary);
+      setHoverSub(pendingHover.current.sub);
       pendingHover.current = null;
     }
     hoverRafId.current = null;
   };
 
-  const scheduleHover = (pct: number, label: string) => {
-    pendingHover.current = { pct, label };
+  const scheduleHover = (pct: number, primary: string, sub: string) => {
+    pendingHover.current = { pct, primary, sub };
     if (hoverRafId.current === null) {
       hoverRafId.current = requestAnimationFrame(flushHover);
     }
@@ -242,13 +253,19 @@ export function Transport() {
     return (e.clientX - rect.left) / rect.width;
   };
 
-  // Formatter shared by readout + hover tooltip — single source of
-  // truth so they always agree on the convention.
-  const formatNs = (ns: bigint): string => {
-    if (!globalRange) return "--:--.---";
-    return timeMode === "relative"
-      ? formatRelative(ns, globalRange.startNs)
-      : formatAbsoluteClock(ns);
+  // Formatter pair shared by hover tooltip — single source of truth
+  // for the canonical playhead format AND the alternate convention
+  // shown below it in the tooltip. The cursor badge uses the same
+  // primary formatter so badge and tooltip never disagree on the
+  // canonical readout (issue #1).
+  const formatHoverPair = (
+    ns: bigint,
+  ): { primary: string; sub: string } => {
+    if (!globalRange) return { primary: "--:--.---", sub: "" };
+    return {
+      primary: formatPlayheadPrimary(ns, globalRange.startNs, timeMode),
+      sub: formatPlayheadSecondary(ns, globalRange.startNs, timeMode),
+    };
   };
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -273,7 +290,8 @@ export function Transport() {
     }
     const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
     const ns = nsFromRatio(clamped, globalRange);
-    scheduleHover(clamped * 100, formatNs(ns));
+    const pair = formatHoverPair(ns);
+    scheduleHover(clamped * 100, pair.primary, pair.sub);
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -293,7 +311,8 @@ export function Transport() {
     const ratio = ratioFromEvent(e);
     const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
     const ns = nsFromRatio(clamped, globalRange);
-    scheduleHover(clamped * 100, formatNs(ns));
+    const pair = formatHoverPair(ns);
+    scheduleHover(clamped * 100, pair.primary, pair.sub);
   };
 
   const onPointerLeave = () => {
@@ -303,7 +322,8 @@ export function Transport() {
       pendingHover.current = null;
     }
     setHoverPct(null);
-    setHoverLabel("");
+    setHoverPrimary("");
+    setHoverSub("");
   };
 
   // Cancel any in-flight rAF on unmount.
@@ -442,15 +462,19 @@ export function Transport() {
       const left = percentOf(src.timeRange.startNs, globalRange);
       const right = percentOf(src.timeRange.endNs, globalRange);
       const width = Math.max(0, right - left);
+      // Iter3 (issue #5) — explicit "Segment N (from <file>, starts
+      // at <time>)" tooltip so users know the dimension a tick
+      // represents without having to read the data model. We also
+      // include the end so range queries are obvious.
       entries.push({
         key: `seg:${src.id}:${i}`,
         label: `S${i + 1}`,
         leftPct: left,
         widthPct: width,
         title:
-          `Segment ${i + 1} · ${src.name} · ` +
-          `${formatRelative(src.timeRange.startNs, globalRange.startNs)} → ` +
-          `${formatRelative(src.timeRange.endNs, globalRange.startNs)}`,
+          `Segment ${i + 1} (from ${src.name}, starts at ` +
+          `${formatRelative(src.timeRange.startNs, globalRange.startNs)}, ` +
+          `ends at ${formatRelative(src.timeRange.endNs, globalRange.startNs)})`,
       });
     }
     return entries;
@@ -473,27 +497,21 @@ export function Transport() {
   }, [segmentEntries, cursorNs, globalRange]);
 
   const span = globalRange ? globalRange.endNs - globalRange.startNs : 0n;
-  // In absolute mode "TOTAL" reads as the session's wall-clock end
-  // time; in relative mode it's the elapsed duration.
+  // Iter3 (issue #1) — single canonical format for the playhead badge.
+  // No more two-line stacked readout; the hover tooltip carries the
+  // alternate convention when the user wants it.
+  const current = globalRange
+    ? formatPlayheadPrimary(cursorNs, globalRange.startNs, timeMode)
+    : "--:--.---";
+  // Iter3 (issue #3) — total promoted to a `current / total` pair next
+  // to the playhead badge. In relative mode it's the session duration;
+  // in absolute mode it's the wall-clock end of the session, formatted
+  // with the same precision as `current` so the pair lines up.
   const totalLabel = !globalRange
     ? "--:--.---"
     : timeMode === "relative"
       ? formatDuration(span)
-      : formatAbsoluteClock(globalRange.endNs);
-  const current = globalRange
-    ? timeMode === "relative"
-      ? formatRelative(cursorNs, globalRange.startNs)
-      : formatAbsoluteClock(cursorNs)
-    : "--:--.---";
-  // Compact subtext for the playhead badge — wall clock when in
-  // relative mode, date when in absolute mode. Same intent as the
-  // previous `readoutSubLabel` (let users locate the cursor in the
-  // *other* convention without flipping the mode toggle).
-  const playheadSub = globalRange
-    ? timeMode === "relative"
-      ? formatAbsoluteClock(cursorNs)
-      : formatDate(cursorNs)
-    : null;
+      : formatPlayheadPrimary(globalRange.endNs, globalRange.startNs, "absolute");
   const startLabel = globalRange
     ? timeMode === "relative"
       ? formatRelative(globalRange.startNs, globalRange.startNs)
@@ -651,7 +669,10 @@ export function Transport() {
 
             {/* Hover ghost line + tooltip — appears whenever the user
              *  is hovering somewhere on the track that isn't the
-             *  current playhead position. */}
+             *  current playhead position. Iter3 (issue #2): visually
+             *  distinct from the cursor badge. Neutral border (no
+             *  orange), softer shadow, no down-arrow tab. The cursor
+             *  badge is "where I am"; this is "where my mouse is". */}
             {hoverPct !== null && (
               <>
                 <div
@@ -666,7 +687,12 @@ export function Transport() {
                   data-testid="transport-hover-tooltip"
                   role="tooltip"
                 >
-                  {hoverLabel}
+                  <span className={styles.hoverTooltipPrimary}>
+                    {hoverPrimary}
+                  </span>
+                  {hoverSub && (
+                    <span className={styles.hoverTooltipSub}>{hoverSub}</span>
+                  )}
                 </div>
               </>
             )}
@@ -681,19 +707,29 @@ export function Transport() {
               data-testid="transport-playhead"
             >
               <div className={styles.playheadLine} aria-hidden />
-              {/* Issue #3 — time badge above the handle. This is the
-               *  primary current-time readout for the app; the
-               *  secondary "TOTAL" below the controls is intentionally
-               *  smaller. */}
+              {/* Iter3 (issues #1 + #3) — single canonical format for
+               *  the current time, paired with the total session length
+               *  as `current / total`. The total uses a muted weight
+               *  but matches the current's font size so the pair
+               *  reads as one unit. The alternate convention (wall
+               *  clock vs duration) is intentionally NOT rendered
+               *  here — hovering anywhere on the track shows it in
+               *  the neutral hover tooltip. */}
               <div
                 className={styles.playheadBadge}
                 data-testid="transport-playhead-badge"
                 aria-hidden
               >
                 <span className={styles.playheadBadgeTime}>{current}</span>
-                {playheadSub && (
-                  <span className={styles.playheadBadgeSub}>{playheadSub}</span>
-                )}
+                <span className={styles.playheadBadgeSep} aria-hidden>
+                  /
+                </span>
+                <span
+                  className={styles.playheadBadgeTotal}
+                  data-testid="transport-playhead-total"
+                >
+                  {totalLabel}
+                </span>
               </div>
               <div
                 className={
@@ -717,10 +753,19 @@ export function Transport() {
         </div>
         <div className={styles.scrubRowLabels} aria-hidden>
           <span>{startLabel}</span>
+          {/* Iter3 (issue #6) — the faint "N segments" centre text is
+           *  dropped from the visible chrome: the labelled segment row
+           *  above the track already conveys segment structure
+           *  unambiguously. The count is still exposed (hidden) for
+           *  Playwright + screen-reader consumers so external tests
+           *  don't lose the signal. In single-source sessions we
+           *  surface the session date so the bottom of the bar always
+           *  has a meaningful middle anchor. */}
           {sources.length > 1 ? (
             <span
-              className={styles.scrubDateBadge}
+              className={styles.srOnly}
               data-testid="transport-segment-count"
+              data-segment-count={sources.length}
             >
               {sources.length} segments
             </span>
@@ -733,9 +778,11 @@ export function Transport() {
         </div>
       </div>
 
-      {/* Controls row — play group + secondary total + speed + mode +
-       *  shortcuts help. The big current-time readout is intentionally
-       *  NOT duplicated here (issue #3); it lives in the playhead badge. */}
+      {/* Controls row — play group on the left, speed pill on the
+       *  right, with the mode toggle and `?` button kept visually
+       *  apart from speed by a dedicated meta-cluster (issue #4).
+       *  The big current-time readout is intentionally NOT duplicated
+       *  here (issue #1+#3); it lives in the playhead badge. */}
       <div className={styles.row}>
         <div className={styles.transportGroup}>
           <div className={styles.btnGroup}>
@@ -788,27 +835,66 @@ export function Transport() {
               />
             )}
           </div>
-
-          {/* Issue #3 — secondary "TOTAL" readout. Smaller, muted, and
-           *  unambiguous. The current time lives in the playhead badge. */}
-          <div
-            className={styles.totalBlock}
-            data-testid="transport-readout-block"
-          >
-            <span className={styles.totalLabel}>Total</span>
-            <span className={styles.totalValue} data-testid="transport-readout">
-              {totalLabel}
-            </span>
-          </div>
         </div>
 
         <div className={styles.rowGrow} />
 
-        {/* Issue #5 — speed remains a labelled select; mode is demoted
-         *  to a compact icon-chip. The label sits above the speed
-         *  select rather than as floating microcaps so it's
-         *  discoverable. */}
-        <div className={styles.fieldGroup}>
+        {/* Iter3 (issue #4) — speed becomes its own labelled pill on the
+         *  far right; REL/ABS and `?` move into a separate "meta"
+         *  cluster with a divider so the three controls no longer
+         *  look like a single, awkward group. The meta cluster sits
+         *  to the LEFT of speed because speed is the higher-frequency
+         *  setting (used during scrubbing). */}
+        <div
+          className={styles.metaCluster}
+          data-testid="transport-meta-cluster"
+        >
+          <button
+            type="button"
+            className={
+              timeMode === "absolute"
+                ? `${styles.modeChip} ${styles.modeChipActive}`
+                : styles.modeChip
+            }
+            data-testid="transport-mode-toggle"
+            data-time-mode={timeMode}
+            aria-pressed={timeMode === "absolute"}
+            aria-label={
+              timeMode === "relative"
+                ? "Relative time mode (elapsed since start). Click to switch to wall-clock."
+                : "Wall-clock time mode (absolute). Click to switch to relative."
+            }
+            onClick={toggleTimeMode}
+            disabled={disabled}
+            title={
+              timeMode === "relative"
+                ? "Relative time mode — readout shows elapsed since session start (00:12.345). Click for wall-clock."
+                : "Wall-clock time mode — readout shows time of day (06:08:42.123). Click for relative."
+            }
+          >
+            {timeMode === "relative" ? "REL" : "ABS"}
+          </button>
+
+          {/* Issue #4 — `?` keeps its shortcut role but visually
+           *  separates from REL/ABS via the cluster gap + its own
+           *  circular shape. */}
+          <button
+            type="button"
+            className={styles.helpBtn}
+            data-testid="transport-shortcuts-toggle"
+            aria-label="Show keyboard shortcuts"
+            aria-expanded={shortcutsOpen}
+            title="Keyboard shortcuts (?)"
+            onClick={() => setShortcutsOpen((open) => !open)}
+          >
+            ?
+          </button>
+        </div>
+
+        {/* Iter3 (issue #4) — speed pill in its own labelled column on
+         *  the far right. The label sits above the select rather than
+         *  as floating microcaps so it's discoverable. */}
+        <div className={styles.speedPill}>
           <label className={styles.fieldLabel} htmlFor="transport-speed">
             Speed
           </label>
@@ -829,50 +915,6 @@ export function Transport() {
             ))}
           </select>
         </div>
-
-        {/* Issue #5 — mode is demoted to a single icon-chip toggle.
-         *  Clicking flips between relative and absolute; the visible
-         *  label and `aria-pressed` reflect the *current* mode so the
-         *  chip is meaningful on its own (no separate two-state
-         *  segmented control). */}
-        <button
-          type="button"
-          className={
-            timeMode === "absolute"
-              ? `${styles.modeChip} ${styles.modeChipActive}`
-              : styles.modeChip
-          }
-          data-testid="transport-mode-toggle"
-          data-time-mode={timeMode}
-          aria-pressed={timeMode === "absolute"}
-          aria-label={
-            timeMode === "relative"
-              ? "Time display: relative. Click for wall clock."
-              : "Time display: wall clock. Click for relative."
-          }
-          onClick={toggleTimeMode}
-          disabled={disabled}
-          title={
-            timeMode === "relative"
-              ? "Showing relative time (00:12.345). Click for wall clock."
-              : "Showing wall-clock time (06:08:42). Click for relative."
-          }
-        >
-          {timeMode === "relative" ? "REL" : "ABS"}
-        </button>
-
-        {/* Issue #6 — `?` opens the keyboard-shortcuts help overlay. */}
-        <button
-          type="button"
-          className={styles.helpBtn}
-          data-testid="transport-shortcuts-toggle"
-          aria-label="Show keyboard shortcuts"
-          aria-expanded={shortcutsOpen}
-          title="Keyboard shortcuts (?)"
-          onClick={() => setShortcutsOpen((open) => !open)}
-        >
-          ?
-        </button>
       </div>
     </div>
   );

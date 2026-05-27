@@ -398,7 +398,9 @@ describe("Transport", () => {
   // Iteration 2 (issue #2) — hover tooltip appears on pointer-enter and
   // disappears on pointer-leave; in production we throttle the
   // intermediate updates to rAF, and the test polyfill above runs rAF
-  // synchronously so we can read the resulting label.
+  // synchronously so we can read the resulting label. Iter3 added the
+  // alternate-convention sub-line, so we assert containment, not
+  // strict equality.
   it("hover tooltip appears on track enter and disappears on leave", () => {
     const { getByTestId } = render(<Transport />);
     const track = getByTestId("scrubber");
@@ -411,7 +413,7 @@ describe("Transport", () => {
     );
     expect(tip).not.toBeNull();
     // Mid-range of [1e9, 11e9] is 6e9 = 5 s elapsed → "00:05.000".
-    expect(tip?.textContent).toBe("00:05.000");
+    expect(tip?.textContent).toContain("00:05.000");
 
     act(() => {
       fireEvent.pointerLeave(track, { pointerId: 1 });
@@ -421,16 +423,61 @@ describe("Transport", () => {
     ).toBeNull();
   });
 
-  // Iteration 2 (issue #3) — the playhead badge owns the current-time
-  // readout and the "Total" block in the controls row owns the
-  // secondary total. There must NOT be two copies of the current time.
-  it("current time lives in the playhead badge; total in the controls row", () => {
+  // Iteration 3 (issues #1 + #3) — the playhead badge now owns BOTH
+  // the current time AND the session total, rendered as `current /
+  // total`. The redundant second number stacked on the badge (iter2)
+  // is gone; the controls row no longer carries a duplicate total.
+  it("playhead badge shows `current / total` and the controls row carries no duplicate", () => {
     useSession.setState({ cursorNs: 6_000_000_000n });
-    const { getByTestId } = render(<Transport />);
+    const { getByTestId, queryByTestId } = render(<Transport />);
     const badge = getByTestId("transport-playhead-badge");
     expect(badge.textContent).toContain("00:05.000");
-    // The secondary readout shows only the total / duration.
-    const total = getByTestId("transport-readout");
+    // Total is right of the cursor time inside the same badge.
+    const total = getByTestId("transport-playhead-total");
     expect(total.textContent).toBe("00:10.000");
+    // The old secondary "Total" block in the controls row is gone.
+    expect(queryByTestId("transport-readout-block")).toBeNull();
+    expect(queryByTestId("transport-readout")).toBeNull();
+    // The badge no longer carries the alternate-convention sub-line;
+    // hovering the track is where users surface that now.
+    expect(badge.querySelector("[class*='playheadBadgeSub']")).toBeNull();
+  });
+
+  // Iteration 3 (issue #2) — the hover tooltip is visually distinct
+  // from the cursor badge AND now carries the *other* time
+  // convention as a sub-line so the cursor badge can be slimmed
+  // down to a single canonical number.
+  it("hover tooltip carries both conventions; cursor badge stays single-line", () => {
+    useSession.setState({ cursorNs: 6_000_000_000n });
+    const { getByTestId } = render(<Transport />);
+    const track = getByTestId("scrubber");
+
+    act(() => {
+      fireEvent.pointerEnter(track, { pointerId: 1, clientX: 500 });
+    });
+
+    const tip = document.querySelector(
+      "[data-testid='transport-hover-tooltip']",
+    );
+    expect(tip).not.toBeNull();
+    // Primary line uses the canonical relative format (iter3 issue #1).
+    expect(tip?.textContent).toContain("00:05.000");
+    // Sub-line carries the wall-clock format so the user sees both
+    // conventions in one read.
+    expect(tip?.querySelectorAll("span").length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Iteration 3 (issue #4) — REL/ABS and `?` live in their own meta
+  // cluster, separated from the speed pill by a divider so the three
+  // controls no longer cluster awkwardly.
+  it("meta cluster groups mode toggle + shortcuts; speed lives in its own pill", () => {
+    const { getByTestId } = render(<Transport />);
+    const meta = getByTestId("transport-meta-cluster");
+    expect(meta).toBeTruthy();
+    // Mode toggle and shortcuts button are children of the meta
+    // cluster, not of the speed column.
+    expect(meta.contains(getByTestId("transport-mode-toggle"))).toBe(true);
+    expect(meta.contains(getByTestId("transport-shortcuts-toggle"))).toBe(true);
+    expect(meta.contains(getByTestId("transport-speed"))).toBe(false);
   });
 });

@@ -6,6 +6,8 @@ import {
   formatAbsolute,
   formatAbsoluteClock,
   formatDate,
+  formatPlayheadPrimary,
+  formatPlayheadSecondary,
   uPlotAxisValues,
 } from "./formatTime";
 
@@ -122,6 +124,37 @@ describe("formatDate", () => {
   it("renders YYYY-MM-DD only", () => {
     const ms = Date.UTC(2018, 6, 27, 6, 4, 0, 0);
     expect(formatDate(BigInt(ms) * 1_000_000n)).toBe("2018-07-27");
+  });
+});
+
+describe("formatPlayheadPrimary / Secondary (iter3 issue #1)", () => {
+  const start = BigInt(Date.UTC(2021, 0, 2, 6, 8, 0, 0)) * 1_000_000n;
+  const cursor = start + 12_345_000_000n; // 12.345 s past start
+
+  it("relative mode picks MM:SS.mmm under one hour", () => {
+    expect(formatPlayheadPrimary(cursor, start, "relative")).toBe("00:12.345");
+  });
+
+  it("relative mode promotes to HH:MM:SS.mmm at and past one hour", () => {
+    const farCursor = start + 3_600_000_000_000n + 5_000_000_000n;
+    expect(formatPlayheadPrimary(farCursor, start, "relative")).toBe(
+      "01:00:05.000",
+    );
+  });
+
+  it("absolute mode emits HH:MM:SS.mmm wall clock", () => {
+    expect(formatPlayheadPrimary(cursor, start, "absolute")).toBe(
+      "06:08:12.345",
+    );
+  });
+
+  it("secondary flips conventions", () => {
+    expect(formatPlayheadSecondary(cursor, start, "relative")).toBe(
+      "06:08:12.345",
+    );
+    expect(formatPlayheadSecondary(cursor, start, "absolute")).toBe(
+      "00:12.345",
+    );
   });
 });
 

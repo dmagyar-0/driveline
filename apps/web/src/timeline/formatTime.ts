@@ -84,6 +84,49 @@ export function formatDate(ns: bigint): string {
   );
 }
 
+/** Iteration 3 (issue #1) — canonical playhead format.
+ *
+ * The transport bar previously stacked TWO readouts on the playhead
+ * (e.g. `00:03.999` over `00:00:03`), which the designer flagged as
+ * redundant. Pick ONE canonical format and rely on the hover tooltip
+ * to surface the alternate convention.
+ *
+ * Rule:
+ *   - relative mode: always `formatDuration` (HH:MM:SS.mmm ≥1h, else MM:SS.mmm).
+ *   - absolute mode: always wall-clock with millis (HH:MM:SS.mmm).
+ *
+ * Both branches now include the millis so the readout never drops
+ * precision mid-scrub — a major usability win when comparing two
+ * playheads or matching a video frame.
+ */
+export function formatPlayheadPrimary(
+  ns: bigint,
+  startNs: bigint,
+  mode: "relative" | "absolute",
+): string {
+  if (mode === "relative") return formatRelative(ns, startNs);
+  // Wall-clock with millis (24h). Mirrors formatAbsolute but no date.
+  const totalMs = ns / 1_000_000n;
+  const d = new Date(Number(totalMs));
+  return (
+    `${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:` +
+    `${pad2(d.getUTCSeconds())}.${pad3(d.getUTCMilliseconds())}`
+  );
+}
+
+/** The *other* convention from `formatPlayheadPrimary`, used by the
+ *  hover tooltip's sub-line so a hovering user can still read time in
+ *  whichever frame they aren't currently anchored on. */
+export function formatPlayheadSecondary(
+  ns: bigint,
+  startNs: bigint,
+  mode: "relative" | "absolute",
+): string {
+  return mode === "relative"
+    ? formatPlayheadPrimary(ns, startNs, "absolute")
+    : formatPlayheadPrimary(ns, startNs, "relative");
+}
+
 export type TimeMode = "relative" | "absolute";
 
 /**
