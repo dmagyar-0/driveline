@@ -112,8 +112,16 @@
  * the parent-level `--selected` rule defined in Workspace.module.css
  * (same specificity but the cascade winner depends on import order;
  * the iter3 review wants the focused panel to read as the brightest
- * member of the workspace, full stop). */
+ * member of the workspace, full stop).
+ *
+ * Iter7 wave2 · the focused panel's underline switches to the
+ * dedicated active-blue token so the "you are here" cue is a single,
+ * unambiguous colour regardless of panel kind. The per-kind accent
+ * still surfaces on hover and on selected-but-unfocused tabs, but
+ * the actively focused panel reads as blue across the workspace —
+ * matching the calibrated-critic ask for a real active state. */
 .header.focused::after {
+  background: var(--color-active-blue) !important;
   opacity: 1 !important;
 }
 

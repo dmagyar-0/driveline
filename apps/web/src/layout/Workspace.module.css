@@ -136,6 +136,24 @@
   opacity: 0.4;
 }
 
+/* Iter7 wave2 · active-tabset underline (calibrated-critic finding:
+ * "tab strip lacks an active-state colour"). When the tabset itself
+ * is the focused one (FlexLayout adds `.flexlayout__tabset-selected`
+ * on the tabset wrapper, kept in sync with the store), the selected
+ * tab's accent strip switches from the muted per-kind tint to a full
+ * `--color-active-blue` band at opacity 1. This gives a single,
+ * unambiguous "your attention is here" signal that's identical for
+ * every panel kind, in addition to the per-kind underline cue. */
+.flexContainer
+  :global(
+    .flexlayout__tabset-selected
+      .flexlayout__tab_button--selected
+      [data-panel-id]
+  )::after {
+  background: var(--color-active-blue);
+  opacity: 1;
+}
+
 /* FlexLayout's tabset action cluster lives at the strip's right edge
  * (maximize / restore). Bump its hit area + hover affordance to match
  * `PanelHeader`'s buttons. */
@@ -193,4 +211,108 @@
   outline: var(--focus-ring);
   outline-offset: -1px;
   background: var(--color-role-active-tint);
+}
+
+/* Iter7 wave2 · splitter resize affordance (calibrated-critic finding:
+ * "the panel divider between Video and Plot is a thin grey hairline
+ * with no resize affordance shown" — and the top-3-fixes ask for "a
+ * 2 px accent underline plus a visible drag handle").
+ *
+ * FlexLayout owns the splitter dimensions: `splitterSize: 4` in
+ * `defaultLayout.ts` sets the visible body width, and `splitterExtra`
+ * (currently 0) would have added transparent hit padding via a
+ * separate `.flexlayout__splitter_extra` div. We can't widen the
+ * physical hit area from CSS alone, but we can:
+ *
+ *   1. extend the perceived hit area to ≥6 px via a `::before`
+ *      pseudo-overlay (pointer events on a pseudo are dispatched to
+ *      the host element, so FlexLayout's drag handlers keep working);
+ *   2. paint a visible centred ridge on hover so the user reads "you
+ *      can grab this", and
+ *   3. light the drag state in active-blue (already wired through
+ *      `--color-splitter-drag` on the layout root above; the floating
+ *      `.flexlayout__splitter_drag` clone uses that var).
+ *
+ * Idle stays subdued (`--color-splitter` → `--color-border-subtle`)
+ * so a static workspace doesn't look fussy; hover + drag carry the
+ * affordance. */
+.flexContainer :global(.flexlayout__splitter) {
+  position: relative;
+  /* The base splitter still draws its hairline via FlexLayout's
+   * `--color-splitter` var; we only paint the hover ridge here, so
+   * the resting state stays unchanged for non-pointer environments. */
+  transition: background-color var(--motion-fast);
+}
+
+/* Extend the perceived hit area without changing FlexLayout's layout
+ * box. The `::before` extends 2 px on each cross-axis side, giving
+ * an effective 8-px target (≥6 px). pointer-events bubble to the
+ * host splitter so the drag still initiates from FlexLayout's own
+ * pointerdown listener. */
+.flexContainer :global(.flexlayout__splitter_vert)::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -2px;
+  right: -2px;
+  pointer-events: auto;
+}
+.flexContainer :global(.flexlayout__splitter_horz)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -2px;
+  bottom: -2px;
+  pointer-events: auto;
+}
+
+/* Hover ridge — a 2-px centred strip in the splitter-hover token, so
+ * the divider visibly "lights up" as a graspable affordance without
+ * pre-emptively shouting "active" (which is reserved for the drag
+ * state). The `_vert` splitter sits between columns (vertical line,
+ * grows in y); its ridge runs along its full height with a 2-px
+ * width centred on the 4-px splitter body. `_horz` is the row
+ * separator and gets the mirrored treatment. */
+@media (hover: hover) {
+  .flexContainer :global(.flexlayout__splitter_vert):hover::after,
+  .flexContainer :global(.flexlayout__splitter_horz):hover::after {
+    content: "";
+    position: absolute;
+    background: var(--color-splitter-hover);
+    border-radius: 1px;
+    pointer-events: none;
+  }
+  .flexContainer :global(.flexlayout__splitter_vert):hover::after {
+    /* 2-px vertical band centred on the 4-px splitter body. */
+    top: 0;
+    bottom: 0;
+    left: 1px;
+    width: 2px;
+  }
+  .flexContainer :global(.flexlayout__splitter_horz):hover::after {
+    /* 2-px horizontal band centred on the 4-px splitter body. */
+    left: 0;
+    right: 0;
+    top: 1px;
+    height: 2px;
+  }
+}
+
+/* While dragging, FlexLayout removes the original splitter from the
+ * flow and renders a floating `.flexlayout__splitter_drag` clone at
+ * the cursor. The clone reads `--color-splitter-drag` (set to
+ * `--color-role-active` on the layout root above) so the live drag
+ * already lights up blue. Belt-and-braces: also tint the original
+ * splitter body during the drag so the source position stays
+ * legible. */
+.flexContainer :global(.flexlayout__splitter_drag) {
+  background-color: var(--color-active-blue);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flexContainer :global(.flexlayout__splitter) {
+    transition: none;
+  }
 }
