@@ -99,54 +99,37 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
     );
   }
 
-  // No bound channel and no candidates yet — render the rich empty
-  // state with the "Try sample data" CTA. This is most users' first
-  // impression of the panel, so it gets the full treatment.
-  if (candidates.length === 0) {
-    return (
-      <div
-        className={styles.emptyWrap}
-        data-testid={`video-panel-${panelId}-empty`}
-      >
-        <VideoPanelEmptyState />
-      </div>
-    );
-  }
+  // iter5 issue #5 — single unified empty state. Whether or not
+  // candidates already exist, the user sees the same layout:
+  //   1. Drop zone (primary)
+  //   2. Try sample data (secondary text link)
+  //   3. Picker list (tertiary, rendered only when candidates > 0)
+  //
+  // The previous two-design split ("rich" vs "compact + picker") was
+  // the audit finding the iter5 brief calls out: two empty states for
+  // the same panel state. The container now passes candidates +
+  // onPick down and lets the empty state render them inline.
+  //
+  // The "channel no longer available" branch still uses the compact
+  // variant so the explainer copy fits in a tighter space; the rest
+  // of the structure (drop zone, sample link, picker) stays the same.
+  const headline = bindingId ? "Channel no longer available" : undefined;
+  const description = bindingId
+    ? "The previously bound channel isn't in the current session. Drop a new recording or pick another channel below."
+    : undefined;
 
-  // Candidates exist; the user just needs to pick one. Render a
-  // compact empty-state explainer above the picker so we keep the
-  // visual identity but lean on the picker as the primary affordance.
   return (
     <div
       className={styles.emptyWrap}
       data-testid={`video-panel-${panelId}-empty`}
     >
       <VideoPanelEmptyState
-        variant="compact"
-        headline={
-          bindingId ? "Channel no longer available" : "Pick a video channel"
-        }
-        description={
-          bindingId
-            ? "The previously bound channel isn't in the current session. Choose another one below."
-            : "Select one of the loaded video tracks to start decoding."
-        }
+        variant={bindingId ? "compact" : "primary"}
+        headline={headline}
+        description={description}
+        candidates={candidates}
+        onPick={(channelId) => setVideoBinding(panelId, channelId)}
       />
-      <ul className={styles.list}>
-        {candidates.map(({ source, channel }) => (
-          <li key={channel.id}>
-            <button
-              type="button"
-              className={styles.choice}
-              onClick={() => setVideoBinding(panelId, channel.id)}
-              data-testid={`video-pick-${channel.id}`}
-            >
-              <span className={styles.choiceSource}>{source.name}</span>
-              <span className={styles.choiceName}>{channel.name}</span>
-            </button>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }

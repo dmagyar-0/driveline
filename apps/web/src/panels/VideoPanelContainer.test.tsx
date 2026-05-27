@@ -18,7 +18,7 @@
 // own dedicated assertions (and a smoke run via Playwright).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -39,11 +39,30 @@ vi.mock("./VideoPanel", () => ({
 vi.mock("./VideoPanelEmptyState", () => ({
   VideoPanelEmptyState: (props: Record<string, unknown>) => {
     lastEmptyStateProps.current = props;
+    const candidates = props.candidates as
+      | { channel: { id: string }; source: { name: string } }[]
+      | undefined;
     return (
       <div
         data-testid="mock-video-empty-state"
         data-variant={(props.variant as string | undefined) ?? "primary"}
-      />
+        data-candidate-count={candidates?.length ?? 0}
+      >
+        {/* Mirror the picker rows the real empty state renders so the
+         *  container test can still assert `video-pick-${channelId}`
+         *  remains reachable through the unified surface. */}
+        {candidates?.map((c) => (
+          <button
+            key={c.channel.id}
+            data-testid={`video-pick-${c.channel.id}`}
+            onClick={() =>
+              (props.onPick as (id: string) => void)?.(c.channel.id)
+            }
+          >
+            {c.source.name}
+          </button>
+        ))}
+      </div>
     );
   },
 }));
@@ -52,11 +71,6 @@ vi.mock("./VideoPanelContainer.module.css", () => ({
   default: {
     wrap: "wrap",
     emptyWrap: "emptyWrap",
-    clearBtn: "clearBtn",
-    list: "list",
-    choice: "choice",
-    choiceSource: "choiceSource",
-    choiceName: "choiceName",
   },
 }));
 
@@ -134,29 +148,31 @@ describe("VideoPanelContainer", () => {
     expect(props.panelId).toBe("video-1");
   });
 
-  it("renders the picker plus a compact empty state when candidates exist but none is bound", () => {
-    // Sanity guard: when there's no binding (but channels are
-    // loaded), the container shouldn't render the mocked VideoPanel
-    // at all. The compact empty-state variant explains the next step
-    // while the picker provides the actual affordance.
+  it("forwards candidates into the unified empty state when channels are loaded but unbound", () => {
+    // iter5 issue #5 — there used to be two diverging empty-state
+    // designs (compact-with-picker vs rich-no-picker). The container
+    // now passes candidates directly into a single empty-state
+    // component, which renders the picker rows as its tertiary
+    // affordance. Variant stays `primary` whenever no binding is set,
+    // so the drop zone reads the same on every cold open.
     useSession.setState({ videoBindings: { "video-1": null } });
     render(<VideoPanelContainer panelId="video-1" />);
     expect(screen.queryByTestId("mock-video-panel")).toBeNull();
     expect(screen.getByTestId("video-panel-video-1-empty")).toBeTruthy();
-    // Picker channel button is rendered.
-    expect(screen.getByTestId(`video-pick-${QUALIFIED_ID}`)).toBeTruthy();
-    // Empty state is in the "compact" variant when a picker is also
-    // shown — issue #22 redesign: the rich variant is reserved for the
-    // first-impression "no candidates yet" case so the CTA doesn't
-    // compete with the picker.
     const empty = screen.getByTestId("mock-video-empty-state");
-    expect(empty.getAttribute("data-variant")).toBe("compact");
+    // Same `primary` variant whether candidates exist or not — the
+    // unified empty state owns the inner layout.
+    expect(empty.getAttribute("data-variant")).toBe("primary");
+    expect(empty.getAttribute("data-candidate-count")).toBe("1");
+    // Picker channel button still surfaces through the unified empty
+    // state (mocked) so the regression test from PR #79 holds.
+    expect(screen.getByTestId(`video-pick-${QUALIFIED_ID}`)).toBeTruthy();
   });
 
-  it("renders the rich (primary) empty state when no video candidates are loaded", () => {
-    // Issue #22 — the "no sources at all" case is most users' first
-    // impression. Container must surface the rich empty state with
-    // the Try-sample-data CTA, not a wall of plain text.
+  it("renders the primary empty state when no video candidates are loaded", () => {
+    // First-impression case. The empty state still gets the primary
+    // variant so the drop zone, sample link, and footnote are all
+    // present.
     useSession.setState({
       sources: [],
       channels: [],
@@ -167,9 +183,44 @@ describe("VideoPanelContainer", () => {
     expect(screen.queryByTestId("mock-video-panel")).toBeNull();
     const empty = screen.getByTestId("mock-video-empty-state");
     expect(empty).toBeTruthy();
-    // Primary variant gets the icon, headline, formats, CTA — see
-    // VideoPanelEmptyState.module.css `.compact` override list for the
-    // delta.
     expect(empty.getAttribute("data-variant")).toBe("primary");
+    expect(empty.getAttribute("data-candidate-count")).toBe("0");
+  });
+
+  it("uses the compact variant when a stale binding points at a missing channel", () => {
+    // iter5 issue #5 — the "channel no longer available" branch keeps
+    // its tighter (`compact`) variant so the explainer copy fits
+    // when the panel is small. The unified structure still applies
+    // (drop zone + sample + picker), just at compact spacing.
+    useSession.setState({
+      sources: [SOURCE],
+      channels: SOURCE.channels,
+      globalRange: SOURCE.timeRange,
+      // Binding points at a channel id that does NOT exist in the
+      // current session, mimicking a layout reload after the source
+      // list changed.
+      videoBindings: { "video-1": "stale-channel" },
+    });
+    render(<VideoPanelContainer panelId="video-1" />);
+    const empty = screen.getByTestId("mock-video-empty-state");
+    expect(empty.getAttribute("data-variant")).toBe("compact");
+    // The picker is still available (candidate is the *real* channel
+    // in the source) so the user can rebind in one click.
+    expect(screen.getByTestId(`video-pick-${QUALIFIED_ID}`)).toBeTruthy();
+  });
+
+  it("picker click invokes setVideoBinding through the unified empty state", () => {
+    // iter5 issue #5 — exercise the onPick → setVideoBinding wiring.
+    // The container now passes a thin `onPick` callback to the empty
+    // state instead of rendering the buttons inline.
+    useSession.setState({ videoBindings: { "video-1": null } });
+    render(<VideoPanelContainer panelId="video-1" />);
+    expect(useSession.getState().videoBindings["video-1"]).toBeNull();
+    act(() => {
+      screen.getByTestId(`video-pick-${QUALIFIED_ID}`).click();
+    });
+    expect(useSession.getState().videoBindings["video-1"]).toBe(
+      QUALIFIED_ID,
+    );
   });
 });
