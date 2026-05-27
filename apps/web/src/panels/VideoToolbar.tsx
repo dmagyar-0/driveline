@@ -36,6 +36,18 @@
 //   • Visual separators (`.sep`) bracket logical groups so the toolbar
 //     reads left-to-right: [transport] | [fit/fill] | [HUD] [Change]
 //     | [info chip] [cropped] [health dot].
+//
+// iter7 wave2A — the UX critic scored the video panel 62/100, lowest
+// of six surfaces, calling the toolbar "nine clustered controls
+// without grouping or separators". This pass collapses the row into
+// three explicit clusters with subtle 1 px dividers between them:
+//   1. transport mini-controls
+//   2. fit controls (FIT/FILL toggle + the transient Cropped chip)
+//   3. inspection / source (HUD toggle, Change-source, codec info chip,
+//      health dot)
+// Each cluster is its own flex group so narrow widths wrap by cluster
+// rather than mid-group. The HUD-active state continues to use the
+// wave1 active-blue tokens.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
@@ -517,11 +529,13 @@ export function VideoToolbar({
       role="toolbar"
       aria-label="Video panel controls"
     >
-      {/* Iter 4 issue #3 — frame-step buttons promoted to 36 px hit
-       *  targets and grouped explicitly with the play-pause cluster.
-       *  Tooltips include the keyboard shortcut so users discover the
-       *  bindings without opening the shortcuts overlay. */}
-      <div className={styles.transport}>
+      {/* iter7 wave2A — cluster 1: transport mini-controls. Frame-step
+       *  (32 px hit target) + 1 s scrub + play-pause, tightly grouped
+       *  because they read as a single segmented affordance. */}
+      <div
+        className={`${styles.cluster} ${styles.clusterTransport}`}
+        data-testid="video-toolbar-cluster-transport"
+      >
         <button
           type="button"
           className={`${styles.btn} ${styles.btnStep}`}
@@ -587,155 +601,153 @@ export function VideoToolbar({
         </button>
       </div>
 
-      <div className={styles.sep} role="separator" aria-hidden="true" />
+      <div className={styles.divider} role="separator" aria-hidden="true" />
 
-      {/* iter5 issue #2 — FIT/FILL stays as the *only* segmented
-       *  widget on the toolbar. Its height now matches the utility
-       *  buttons (24 px) so the group reads as one chrome row. */}
+      {/* iter7 wave2A — cluster 2: fit controls. FIT/FILL toggle plus
+       *  the transient Cropped chip that only appears in FILL mode —
+       *  the chip is conceptually a side-effect of FILL, so it lives
+       *  in the same cluster rather than orphaned to inspection. */}
       <div
-        className={styles.segmented}
-        role="group"
-        aria-label="Video sizing mode"
-        data-testid="video-fit-segmented"
+        className={styles.cluster}
+        data-testid="video-toolbar-cluster-fit"
       >
-        <button
-          type="button"
-          className={`${styles.segBtn} ${
-            fitMode === "fit" ? styles.segBtnActive : ""
-          }`}
-          aria-pressed={fitMode === "fit"}
-          aria-label="Fit: preserve aspect ratio with letterbox"
-          title="Fit — preserve aspect ratio"
-          data-testid="video-fit-segment-fit"
-          onClick={() => {
-            if (fitMode !== "fit") onFitModeChange("fit");
-          }}
+        <div
+          className={styles.segmented}
+          role="group"
+          aria-label="Video sizing mode"
+          data-testid="video-fit-segmented"
         >
-          Fit
-        </button>
-        <button
-          type="button"
-          className={`${styles.segBtn} ${
-            fitMode === "fill" ? styles.segBtnActive : ""
-          }`}
-          aria-pressed={fitMode === "fill"}
-          aria-label="Fill: crop to fill panel"
-          title="Fill — crop to remove letterbox"
-          data-testid="video-fit-segment-fill"
-          onClick={() => {
-            if (fitMode !== "fill") onFitModeChange("fill");
-          }}
-        >
-          Fill
-        </button>
-      </div>
-
-      {/* iter5 issue #4 — Cropped chip. Only paints when FILL is
-       *  active so the user has an unmistakable cue that pixels are
-       *  being clipped at the panel edges. Tooltip explains the
-       *  remedy. Same `.utilBtn` family as HUD / Change so the row
-       *  stays visually consistent (issue #2). */}
-      {fitMode === "fill" && (
-        <span
-          className={`${styles.utilBtn} ${styles.utilBtnWarn}`}
-          role="status"
-          aria-label="Some pixels are clipped — switch to FIT to see the entire frame."
-          title="Some pixels are clipped — switch to FIT to see the entire frame."
-          data-testid="video-cropped-badge"
-        >
-          <span className={styles.cropDot} aria-hidden="true" />
-          Cropped
-        </span>
-      )}
-
-      <div className={styles.sep} role="separator" aria-hidden="true" />
-
-      {/* iter5 issue #2 — HUD + Change adopt the shared `.utilBtn`
-       *  base class. Same height, same border treatment, same hover
-       *  behaviour as each other and as the cropped chip. The HUD
-       *  active state still uses the orange accent tint so a user
-       *  with the HUD open can see at a glance which control owns
-       *  it, but the metrics (height, border-radius, padding,
-       *  typography) are now uniform across the cluster. */}
-      {onHudToggle && (
-        <button
-          type="button"
-          className={`${styles.utilBtn} ${
-            hudOn ? styles.utilBtnActive : ""
-          }`}
-          onClick={onHudToggle}
-          aria-pressed={hudOn ?? false}
-          aria-label={hudOn ? "Hide diagnostics HUD" : "Show diagnostics HUD"}
-          title="Toggle decode HUD (H)"
-          data-testid="video-hud-toggle"
-        >
-          HUD
-        </button>
-      )}
-      {onClearBinding && (
-        <button
-          type="button"
-          className={styles.utilBtn}
-          onClick={onClearBinding}
-          aria-label="Change channel — clear current video binding"
-          title="Pick a different video channel"
-          data-testid="video-clear-binding"
-        >
-          Change
-        </button>
-      )}
-
-      <div className={styles.spacer} aria-hidden="true" />
-
-      {/* iter5 issue #1 — compact info chip. The codec/fps/resolution
-       *  trio used to crowd the toolbar and truncate mid-token
-       *  ("avc1.640…") on narrow panels. They now collapse into a
-       *  single chip showing the codec family (e.g. "H.264") plus the
-       *  resolution; the full breakdown lives in the tooltip. */}
-      <span
-        className={styles.infoChip}
-        title={infoTooltip || "Decode info"}
-        data-testid="video-info-chip"
-        role="status"
-        aria-label={`Decode info: ${infoTooltip || "initialising"}`}
-      >
-        <span className={styles.infoCodec}>{codecShort}</span>
-        {resolution && (
-          <>
-            <span className={styles.infoSep} aria-hidden="true">
-              ·
-            </span>
-            <span className={styles.infoRes}>
-              {resolution.width}×{resolution.height}
-            </span>
-          </>
-        )}
-      </span>
-
-      {/* iter5 issue #1+2 — the health affordance is now reduced to a
-       *  single dot. Tone semantics survive intact (paused/buffering/
-       *  ok/warn/bad), but the dot sits beside the info chip instead
-       *  of inside it, so the rich tooltip on the chip never has to
-       *  fight the status word from the dot. The dot has its own
-       *  short tooltip ("decode healthy · 30 fps"). */}
-      <span
-        className={`${styles.badge} ${styles[`badge_${tone}`]}`}
-        title={healthTooltip}
-        data-testid="video-health-badge"
-        data-tone={tone}
-        role="status"
-        aria-label={`Decode health: ${healthTooltip}`}
-      >
-        <span className={styles.dot} aria-hidden="true" />
-        {drops > 0 && (
-          <span
-            className={styles.drops}
-            title={`${drops} dropped frames since last seek`}
+          <button
+            type="button"
+            className={`${styles.segBtn} ${
+              fitMode === "fit" ? styles.segBtnActive : ""
+            }`}
+            aria-pressed={fitMode === "fit"}
+            aria-label="Fit: preserve aspect ratio with letterbox"
+            title="Fit — preserve aspect ratio"
+            data-testid="video-fit-segment-fit"
+            onClick={() => {
+              if (fitMode !== "fit") onFitModeChange("fit");
+            }}
           >
-            {drops} drop{drops === 1 ? "" : "s"}
+            Fit
+          </button>
+          <button
+            type="button"
+            className={`${styles.segBtn} ${
+              fitMode === "fill" ? styles.segBtnActive : ""
+            }`}
+            aria-pressed={fitMode === "fill"}
+            aria-label="Fill: crop to fill panel"
+            title="Fill — crop to remove letterbox"
+            data-testid="video-fit-segment-fill"
+            onClick={() => {
+              if (fitMode !== "fill") onFitModeChange("fill");
+            }}
+          >
+            Fill
+          </button>
+        </div>
+
+        {fitMode === "fill" && (
+          <span
+            className={`${styles.utilBtn} ${styles.utilBtnWarn}`}
+            role="status"
+            aria-label="Some pixels are clipped — switch to FIT to see the entire frame."
+            title="Some pixels are clipped — switch to FIT to see the entire frame."
+            data-testid="video-cropped-badge"
+          >
+            <span className={styles.cropDot} aria-hidden="true" />
+            Cropped
           </span>
         )}
-      </span>
+      </div>
+
+      <div className={styles.divider} role="separator" aria-hidden="true" />
+
+      {/* iter7 wave2A — cluster 3: inspection / source. HUD toggle,
+       *  Change-source pill, codec info chip, and the decode-health
+       *  dot. The cluster expands to fill the row so the codec chip
+       *  + health dot right-align via margin-left:auto on .infoChip. */}
+      <div
+        className={`${styles.cluster} ${styles.clusterInspection}`}
+        data-testid="video-toolbar-cluster-inspection"
+      >
+        {onHudToggle && (
+          <button
+            type="button"
+            className={`${styles.utilBtn} ${
+              hudOn ? styles.utilBtnActive : ""
+            }`}
+            onClick={onHudToggle}
+            aria-pressed={hudOn ?? false}
+            aria-label={
+              hudOn ? "Hide diagnostics HUD" : "Show diagnostics HUD"
+            }
+            title="Toggle decode HUD (H)"
+            data-testid="video-hud-toggle"
+          >
+            HUD
+          </button>
+        )}
+        {onClearBinding && (
+          <button
+            type="button"
+            className={styles.utilBtn}
+            onClick={onClearBinding}
+            aria-label="Change channel — clear current video binding"
+            title="Pick a different video channel"
+            data-testid="video-clear-binding"
+          >
+            Change
+          </button>
+        )}
+
+        {/* Codec info chip is right-aligned within the cluster via
+         *  margin-left:auto (.infoChipRight). Tooltip carries the
+         *  verbose breakdown. */}
+        <span
+          className={`${styles.infoChip} ${styles.infoChipRight}`}
+          title={infoTooltip || "Decode info"}
+          data-testid="video-info-chip"
+          role="status"
+          aria-label={`Decode info: ${infoTooltip || "initialising"}`}
+        >
+          <span className={styles.infoCodec}>{codecShort}</span>
+          {resolution && (
+            <>
+              <span className={styles.infoSep} aria-hidden="true">
+                ·
+              </span>
+              <span className={styles.infoRes}>
+                {resolution.width}×{resolution.height}
+              </span>
+            </>
+          )}
+        </span>
+
+        {/* Decode-health dot — sits beside the info chip so the rich
+         *  tooltip on the chip never fights the status word from the
+         *  dot. */}
+        <span
+          className={`${styles.badge} ${styles[`badge_${tone}`]}`}
+          title={healthTooltip}
+          data-testid="video-health-badge"
+          data-tone={tone}
+          role="status"
+          aria-label={`Decode health: ${healthTooltip}`}
+        >
+          <span className={styles.dot} aria-hidden="true" />
+          {drops > 0 && (
+            <span
+              className={styles.drops}
+              title={`${drops} dropped frames since last seek`}
+            >
+              {drops} drop{drops === 1 ? "" : "s"}
+            </span>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

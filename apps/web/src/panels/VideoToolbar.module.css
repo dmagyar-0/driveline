@@ -2,26 +2,30 @@
  * frame. Density beats prettiness here; the toolbar shares its visual
  * weight with the PanelHeader above it.
  *
+ * iter7 wave2A — UX critic flagged the toolbar as "nine clustered
+ * controls without grouping or separators". Restructured into three
+ * visually distinct clusters separated by 1 px dividers:
+ *   1. .clusterTransport  (frame-step / scrub / play-pause)
+ *   2. .clusterFit        (FIT/FILL segmented + transient Cropped chip)
+ *   3. .clusterInspection (HUD + Change + codec info chip + health dot)
+ * Each cluster is its own flex group with a consistent inner gap
+ * (var(--sp-3)) and wraps as a unit at narrow widths. The inspection
+ * cluster takes flex: 1 so the codec info chip stays right-aligned
+ * via margin-left:auto on the chip itself.
+ *
  * iter5 (issues #1, #2, #4, #6):
- *  - Toolbar trims from 40 px to 36 px so it stops eating the panel
- *    surface. The frame-step buttons keep their 32 px hit targets but
- *    sit visually inside the toolbar via overflow margin.
- *  - All utility buttons (HUD, Change, Cropped) share `.utilBtn`. Same
- *    height (24 px), same border, same radius, same hover treatment.
- *    The FIT/FILL segmented control is the only segmented widget and
- *    its segments match `.utilBtn` height so the row reads as one
- *    family.
- *  - Codec/fps/resolution moved into a dedicated `.infoChip` (compact
- *    + tooltipped) so the previous inline strip can no longer truncate
- *    mid-token.
- *  - `.sep` thin visual divider between logical groups (transport |
- *    fit/fill + crop | hud + change | info + health). */
+ *  - Toolbar height 36 px so it doesn't eat the panel surface. The
+ *    frame-step buttons keep their 32 px hit targets via overflow.
+ *  - All utility buttons (HUD, Change, Cropped) share `.utilBtn`.
+ *  - Codec/fps/resolution live in `.infoChip`. */
 
 .toolbar {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  height: 36px;
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+  min-height: 36px;
   padding: 0 var(--sp-4);
   background: var(--color-bg-2);
   border-bottom: 1px solid var(--color-border-strong);
@@ -36,25 +40,46 @@
   user-select: none;
 }
 
-.transport {
+/* --------- clusters (iter7 wave2A) ---------
+ *
+ * Each logical group is its own flex row. `flex-wrap: nowrap` keeps a
+ * cluster intact when the toolbar is narrow — clusters drop to a new
+ * line as whole units instead of breaking mid-cluster. */
+.cluster {
   display: flex;
   align-items: center;
+  gap: var(--sp-3);
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
+}
+
+/* Transport cluster — frame-step / scrub / play-pause. Slightly tighter
+ * inner gap because the buttons are icon-only and read as one segmented
+ * control of their own. */
+.clusterTransport {
   gap: 2px;
 }
 
-.spacer {
+/* Inspection cluster expands so the codec info chip can right-align
+ * via margin-left:auto. When the toolbar wraps, the cluster reflows to
+ * the next row but still grows to fill it, keeping the chip rightmost. */
+.clusterInspection {
   flex: 1 1 auto;
+  min-width: 0;
 }
 
-/* iter5 issue #2 — visual divider between logical groups. 1 px tall
- * line, dimmer than the toolbar border, lets the eye chunk the row
- * into [playback] | [fit/fill] | [hud/change] | [info/health]
- * without forcing extra padding. */
-.sep {
+/* iter7 wave2A — vertical divider between clusters. 1 px wide, ~16 px
+ * tall, centred vertically. Uses --color-border-subtle so it reads as
+ * a soft separator rather than a hard column rule. Hidden when the
+ * cluster has wrapped onto its own line via the wrap-aware media
+ * query below would be ideal, but since flex-wrap doesn't give us a
+ * hook, we live with the divider sitting at the row break — visually
+ * acceptable and still better than the iter5 no-grouping state. */
+.divider {
   flex: 0 0 auto;
   align-self: center;
   width: 1px;
-  height: 18px;
+  height: 16px;
   background: var(--color-border-subtle);
   margin: 0 var(--sp-2);
 }
@@ -74,7 +99,9 @@
   justify-content: center;
   height: 26px;
   min-width: 26px;
-  padding: 0 var(--sp-3);
+  /* iter7 wave2A — de-densify: bump min horizontal padding from sp-3
+   * to sp-4 so transport glyphs breathe inside the cluster. */
+  padding: 0 var(--sp-4);
   background: transparent;
   color: var(--color-fg-3);
   border: 1px solid transparent;
@@ -258,6 +285,13 @@
   background: var(--color-bg-4);
   border-color: var(--color-border-hover);
   color: var(--color-fg-2);
+}
+
+/* iter7 wave2A — codec info chip stays right-aligned within the
+ * inspection cluster. The cluster itself is `flex: 1`, so an auto
+ * left margin pushes the chip + health dot to the trailing edge. */
+.infoChipRight {
+  margin-left: auto;
 }
 
 .infoCodec {
