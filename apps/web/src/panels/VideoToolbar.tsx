@@ -144,25 +144,65 @@ export function saveFitMode(panelId: string, mode: FitMode): void {
   }
 }
 
-type HealthTone = "ok" | "warn" | "bad" | "unknown";
+// Iter 4 issue #1 — health tones are now decoupled from playback state.
+//   - "paused": video is intentionally paused; FPS=0 is expected and the
+//     dot reads neutral grey, never red.
+//   - "buffering": a seek/scrub just landed and the decoder hasn't yet
+//     produced the matching frame. Amber, transient.
+//   - "ok"/"warn"/"bad": live decode health *while playing* — matches
+//     against the sidecar's target FPS so a healthy 30 fps stream isn't
+//     flagged as bad when the user expected 60 fps.
+//   - "unknown": pre-first-frame.
+type HealthTone =
+  | "ok"
+  | "warn"
+  | "bad"
+  | "unknown"
+  | "paused"
+  | "buffering";
 
-function healthTone(
-  fps: number | null,
-  droppedRecent: boolean,
-  targetFps: number,
-): HealthTone {
-  if (fps === null) return "unknown";
-  if (fps < targetFps * 0.5) return "bad";
-  if (droppedRecent || fps < targetFps * 0.9) return "warn";
+/** Inputs that determine the health tone. Grouped into a single argument
+ *  so future signals (decoder error, etc.) can be added without churning
+ *  every call site. */
+interface HealthInput {
+  /** Smoothed FPS over the last second, or null if no sample yet. */
+  fps: number | null;
+  /** Whether the panel observed a drop in the last sample window. */
+  droppedRecent: boolean;
+  /** Frame interval the source advertises — derived from sidecar PTS. */
+  targetFps: number;
+  /** Transport play/pause flag. When false, FPS=0 is the *expected*
+   *  steady state and must not turn the dot red. */
+  playing: boolean;
+  /** ms since the most recent user seek (Number.POSITIVE_INFINITY if no
+   *  seek has happened in the panel's lifetime). During the buffering
+   *  window the dot is amber regardless of FPS. */
+  msSinceSeek: number;
+}
+
+const BUFFERING_WINDOW_MS = 400;
+
+function healthTone(input: HealthInput): HealthTone {
+  // Order matters: paused beats buffering beats unknown beats live-fps.
+  // A paused panel mid-seek should still read "paused" rather than amber
+  // — the user can see they're not playing, the buffering tint is noise.
+  if (!input.playing) return "paused";
+  if (input.msSinceSeek < BUFFERING_WINDOW_MS) return "buffering";
+  if (input.fps === null) return "unknown";
+  if (input.fps < input.targetFps * 0.5) return "bad";
+  if (input.droppedRecent || input.fps < input.targetFps * 0.9) return "warn";
   return "ok";
 }
 
 /**
  * Format a smoothed FPS as a short string. We use 0 decimals at 30+ fps
  * (whole numbers read cleaner in a tiny chip) and 1 decimal below that
- * so the difference between 24 and 25 fps is visible.
+ * so the difference between 24 and 25 fps is visible. When the transport
+ * is paused, FPS is meaningless — return "paused" so the chip doesn't
+ * read "0.0 fps" as if the stream had stalled (iter 4 issue #1).
  */
-function formatFps(fps: number | null): string {
+function formatFps(fps: number | null, playing = true): string {
+  if (!playing) return "paused";
   if (fps === null) return "— fps";
   if (fps >= 30) return `${Math.round(fps)} fps`;
   return `${fps.toFixed(1)} fps`;
@@ -208,6 +248,14 @@ export function VideoToolbar({
     setDrops(0);
   }, [panelId, ptsNs]);
 
+  // Iter 4 issue #1 — buffering window. We stamp `lastSeekMsRef` on
+  // every seek-epoch bump; the health-tone resolver flips to "buffering"
+  // for BUFFERING_WINDOW_MS so the dot reads amber while the decoder is
+  // catching up after a scrub, then returns to green/yellow/red based on
+  // live FPS. A ref keeps the tick loop allocation-free; React state
+  // would force a 60 Hz re-render here.
+  const lastSeekMsRef = useRef<number>(Number.NEGATIVE_INFINITY);
+
   // Subscribe to seekEpoch so a user scrub resets the drops baseline.
   useEffect(() => {
     const unsub = useSession.subscribe((state, prev) => {
@@ -220,6 +268,7 @@ export function VideoToolbar({
       dropBaselineRef.current = snap?.dropped ?? 0;
       setDrops(0);
       historyRef.current = [];
+      lastSeekMsRef.current = performance.now();
     });
     return () => unsub();
   }, []);
@@ -318,17 +367,76 @@ export function VideoToolbar({
 
   const canFrameStep = ptsNs !== null && ptsNs.length > 0;
 
-  // Recent-drops flag: any drop counter > 0 in the current window. The
-  // tone derivation pairs this with the FPS check so a brief glitch
-  // tints the dot yellow even if FPS is otherwise nominal.
-  const tone = healthTone(fps, drops > 0, expectedFps);
+  // Iter 4 issue #3 — frame-step keyboard shortcuts. `,` / `.` mirror
+  // the standard YouTube/VLC convention for frame-accurate review and
+  // — crucially — don't collide with the global Transport bindings
+  // (which already own ←/→/J/L for 1 s steps). The handler attaches
+  // to `window` rather than the panel wrapper so the user doesn't have
+  // to chase focus into the canvas after each scrub. Mirrors the
+  // Transport's input-guard convention (skip when typing).
+  useEffect(() => {
+    if (!canFrameStep) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (
+          tag === "INPUT" ||
+          tag === "TEXTAREA" ||
+          tag === "SELECT" ||
+          target.isContentEditable
+        ) {
+          return;
+        }
+      }
+      if (e.key === ",") {
+        e.preventDefault();
+        onFrameBack();
+      } else if (e.key === ".") {
+        e.preventDefault();
+        onFrameForward();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // `onFrameBack`/`onFrameForward` read fresh state from the store
+    // each invocation, so re-binding only on `canFrameStep` changes is
+    // safe and avoids re-attaching on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canFrameStep]);
+
+  // Iter 4 issue #1 — recompute the tone from the *current* signals,
+  // not from FPS alone. `playing` short-circuits to a neutral grey dot
+  // so a deliberate pause never trips the red "stalled stream" reading.
+  // The buffering window is driven from `lastSeekMsRef` (stamped on
+  // every seek-epoch bump above).
+  const msSinceSeek = performance.now() - lastSeekMsRef.current;
+  const tone = healthTone({
+    fps,
+    droppedRecent: drops > 0,
+    targetFps: expectedFps,
+    playing,
+    msSinceSeek,
+  });
   const codecLabel = codec ?? "—";
-  const fpsLabel = formatFps(fps);
-  const tooltipParts = [
-    codecLabel,
-    fpsLabel,
-    `${drops} drop${drops === 1 ? "" : "s"}`,
-  ];
+  const fpsLabel = formatFps(fps, playing);
+  // Tooltip carries the verbose breakdown; the chip itself stays slim.
+  // We surface decode-status words ("paused", "buffering") so the
+  // tooltip explains *why* the dot is grey/amber when the chip text
+  // ("paused") would otherwise look like the only state cue.
+  const statusWord: Record<HealthTone, string> = {
+    ok: "decode healthy",
+    warn: "decode degraded",
+    bad: "decode failing",
+    unknown: "decode initialising",
+    paused: "paused",
+    buffering: "buffering after seek",
+  };
+  const tooltipParts: string[] = [statusWord[tone], codecLabel, fpsLabel];
+  if (drops > 0) {
+    tooltipParts.push(`${drops} drop${drops === 1 ? "" : "s"}`);
+  }
   if (resolution) {
     tooltipParts.push(`${resolution.width}×${resolution.height}`);
   }
@@ -347,21 +455,25 @@ export function VideoToolbar({
       role="toolbar"
       aria-label="Video panel controls"
     >
+      {/* Iter 4 issue #3 — frame-step buttons promoted to 36 px hit
+       *  targets and grouped explicitly with the play-pause cluster.
+       *  Tooltips include the keyboard shortcut so users discover the
+       *  bindings without opening the shortcuts overlay. */}
       <div className={styles.transport}>
         <button
           type="button"
-          className={styles.btn}
+          className={`${styles.btn} ${styles.btnStep}`}
           onClick={onFrameBack}
           disabled={!canFrameStep}
           aria-label="Step back one frame"
+          aria-keyshortcuts=","
           title={
             canFrameStep
-              ? "Step back one frame"
+              ? "Frame back (,)"
               : "Frame stepping requires an mp4 sidecar"
           }
           data-testid="video-frame-back"
         >
-          {/* ⏮ — visually distinct via stacked bar + triangle */}
           <span aria-hidden="true">{"⏮"}</span>
         </button>
         <button
@@ -369,7 +481,7 @@ export function VideoToolbar({
           className={styles.btn}
           onClick={onScrubBack}
           aria-label="Scrub back one second"
-          title="Scrub back 1 s"
+          title="Step back 1 s (Shift+,)"
           data-testid="video-scrub-back"
         >
           <span aria-hidden="true">{"⏪"}</span>
@@ -380,7 +492,7 @@ export function VideoToolbar({
           onClick={onPlayPause}
           aria-label={playLabel}
           aria-pressed={playing}
-          title={playLabel}
+          title={playing ? "Pause (Space)" : "Play (Space)"}
           data-testid="video-play-pause"
         >
           <span aria-hidden="true">{playing ? "⏸" : "▶"}</span>
@@ -390,20 +502,21 @@ export function VideoToolbar({
           className={styles.btn}
           onClick={onScrubForward}
           aria-label="Scrub forward one second"
-          title="Scrub forward 1 s"
+          title="Step forward 1 s (Shift+.)"
           data-testid="video-scrub-forward"
         >
           <span aria-hidden="true">{"⏩"}</span>
         </button>
         <button
           type="button"
-          className={styles.btn}
+          className={`${styles.btn} ${styles.btnStep}`}
           onClick={onFrameForward}
           disabled={!canFrameStep}
           aria-label="Step forward one frame"
+          aria-keyshortcuts="."
           title={
             canFrameStep
-              ? "Step forward one frame"
+              ? "Frame forward (.)"
               : "Frame stepping requires an mp4 sidecar"
           }
           data-testid="video-frame-forward"
@@ -414,9 +527,12 @@ export function VideoToolbar({
 
       <div className={styles.spacer} aria-hidden="true" />
 
-      {/* Decode-health badge. Tooltip carries the full string; the
-       *  visible chip is just dot + fps + drops so the toolbar stays
-       *  slim. */}
+      {/* Iter 4 issue #1+6 — health dot is now the *only* always-on
+       *  affordance; the FPS/codec/resolution readouts are grouped into
+       *  a single subordinate "decode info" pill that only carries
+       *  weight on hover (tooltip) or when a drop count > 0 visually
+       *  promotes the chip to a warning. Keeps the toolbar legible at a
+       *  glance without losing the diagnostic surface. */}
       <div
         className={`${styles.badge} ${styles[`badge_${tone}`]}`}
         title={badgeTooltip}
@@ -426,51 +542,79 @@ export function VideoToolbar({
         aria-label={`Decode health: ${badgeTooltip}`}
       >
         <span className={styles.dot} aria-hidden="true" />
-        <span className={styles.codec}>{codecLabel}</span>
-        <span className={styles.fps}>{fpsLabel}</span>
+        <span className={styles.decodeInfo} aria-hidden="true">
+          <span className={styles.fps}>{fpsLabel}</span>
+          {resolution && (
+            <>
+              <span className={styles.sep} aria-hidden="true">
+                ·
+              </span>
+              <span className={styles.resInline}>
+                {resolution.width}×{resolution.height}
+              </span>
+            </>
+          )}
+          {codec && (
+            <>
+              <span className={styles.sep} aria-hidden="true">
+                ·
+              </span>
+              <span className={styles.codec}>{codec}</span>
+            </>
+          )}
+        </span>
         {drops > 0 && (
-          <span className={styles.drops} title={`${drops} dropped frames since last seek`}>
+          <span
+            className={styles.drops}
+            title={`${drops} dropped frames since last seek`}
+          >
             {drops} drop{drops === 1 ? "" : "s"}
           </span>
         )}
       </div>
 
-      {/* Resolution readout — separate chip so the badge stays focused
-       *  on health. Hidden until the first frame so it doesn't flash
-       *  "—×—" on mount. */}
-      {resolution && (
-        <div
-          className={styles.resolution}
-          data-testid="video-resolution"
-          title={`Source resolution ${resolution.width} × ${resolution.height}`}
-        >
-          {resolution.width}×{resolution.height}
-        </div>
-      )}
-
-      <button
-        type="button"
-        className={styles.btn}
-        onClick={() =>
-          onFitModeChange(fitMode === "fit" ? "fill" : "fit")
-        }
-        aria-label={
-          fitMode === "fit"
-            ? "Switch to fill (crop to remove letterbox)"
-            : "Switch to fit (preserve aspect ratio)"
-        }
-        aria-pressed={fitMode === "fill"}
-        title={
-          fitMode === "fit"
-            ? "Fit — preserve aspect ratio"
-            : "Fill — crop to remove letterbox"
-        }
-        data-testid="video-fit-toggle"
+      {/* Iter 4 issue #2 — FIT/FILL as a 2-state segmented control.
+       *  Both options are always visible; the active segment has a
+       *  filled background, the inactive segment is outline-only. Each
+       *  segment carries its own `aria-pressed` so AT users can tell
+       *  the current mode without inferring from the tooltip. */}
+      <div
+        className={styles.segmented}
+        role="group"
+        aria-label="Video sizing mode"
+        data-testid="video-fit-segmented"
       >
-        <span className={styles.fitLabel}>
-          {fitMode === "fit" ? "Fit" : "Fill"}
-        </span>
-      </button>
+        <button
+          type="button"
+          className={`${styles.segBtn} ${
+            fitMode === "fit" ? styles.segBtnActive : ""
+          }`}
+          aria-pressed={fitMode === "fit"}
+          aria-label="Fit: preserve aspect ratio with letterbox"
+          title="Fit — preserve aspect ratio"
+          data-testid="video-fit-segment-fit"
+          onClick={() => {
+            if (fitMode !== "fit") onFitModeChange("fit");
+          }}
+        >
+          Fit
+        </button>
+        <button
+          type="button"
+          className={`${styles.segBtn} ${
+            fitMode === "fill" ? styles.segBtnActive : ""
+          }`}
+          aria-pressed={fitMode === "fill"}
+          aria-label="Fill: crop to fill panel"
+          title="Fill — crop to remove letterbox"
+          data-testid="video-fit-segment-fill"
+          onClick={() => {
+            if (fitMode !== "fill") onFitModeChange("fill");
+          }}
+        >
+          Fill
+        </button>
+      </div>
     </div>
   );
 }

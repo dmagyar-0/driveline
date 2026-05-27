@@ -116,30 +116,91 @@ describe("VideoToolbar pure helpers", () => {
     expect(__test.neighbourPts(pts, 200n, "forward")).toBeNull();
   });
 
-  it("healthTone: bad when fps drops below half the target", () => {
-    expect(__test.healthTone(10, false, 30)).toBe("bad");
+  // Iter 4 issue #1 — `healthTone` now takes a richer input that
+  // includes the play/pause flag and the time since the most recent
+  // seek. Pause beats every other signal so a paused stream NEVER
+  // reads bad/warn (the previous behaviour, which read red on
+  // FPS=0 mid-pause, is what the designer audit caught).
+  const playing = (over: Partial<Parameters<typeof __test.healthTone>[0]>) =>
+    __test.healthTone({
+      fps: 30,
+      droppedRecent: false,
+      targetFps: 30,
+      playing: true,
+      msSinceSeek: 10_000,
+      ...over,
+    });
+
+  it("healthTone: bad when fps drops below half the target while playing", () => {
+    expect(playing({ fps: 10 })).toBe("bad");
   });
 
   it("healthTone: warn when drops occurred even with good fps", () => {
-    expect(__test.healthTone(30, true, 30)).toBe("warn");
+    expect(playing({ droppedRecent: true })).toBe("warn");
   });
 
   it("healthTone: warn when fps below 90% of target", () => {
-    expect(__test.healthTone(25, false, 30)).toBe("warn");
+    expect(playing({ fps: 25 })).toBe("warn");
   });
 
   it("healthTone: ok when fps is at target and no drops", () => {
-    expect(__test.healthTone(30, false, 30)).toBe("ok");
+    expect(playing({})).toBe("ok");
   });
 
   it("healthTone: unknown when fps not yet sampled", () => {
-    expect(__test.healthTone(null, false, 30)).toBe("unknown");
+    expect(playing({ fps: null })).toBe("unknown");
+  });
+
+  it("healthTone: paused short-circuits — does NOT turn red on fps=0", () => {
+    // The regression the iter3 audit caught: a paused panel reads
+    // fps=0 (correct), which used to flip the dot to red ("bad
+    // decode"). Pause MUST win over the live-fps thresholds — a
+    // paused stream is intentionally idle, not stalled.
+    expect(
+      __test.healthTone({
+        fps: 0,
+        droppedRecent: false,
+        targetFps: 30,
+        playing: false,
+        msSinceSeek: 50_000,
+      }),
+    ).toBe("paused");
+  });
+
+  it("healthTone: paused even with null fps and recent drops", () => {
+    // Defensive — `playing=false` is the highest-priority short
+    // circuit. No combination of FPS/drops/seek-age should override
+    // a paused transport.
+    expect(
+      __test.healthTone({
+        fps: null,
+        droppedRecent: true,
+        targetFps: 30,
+        playing: false,
+        msSinceSeek: 0,
+      }),
+    ).toBe("paused");
+  });
+
+  it("healthTone: buffering during the post-seek window while playing", () => {
+    // A fresh seek (<400 ms ago) reads amber regardless of FPS so
+    // the user sees "decoder is catching up" rather than a misleading
+    // green/yellow tint based on the pre-seek FPS sample.
+    expect(playing({ msSinceSeek: 50 })).toBe("buffering");
   });
 
   it("formatFps: integer at 30+ fps, one decimal below", () => {
     expect(__test.formatFps(30)).toBe("30 fps");
     expect(__test.formatFps(24.3)).toBe("24.3 fps");
     expect(__test.formatFps(null)).toBe("— fps");
+  });
+
+  it("formatFps: reads 'paused' when transport is paused (iter4 #1)", () => {
+    // The chip text itself replaces the "0.0 fps" string with
+    // "paused" so the user has *two* cues that the idle state is
+    // intentional (chip text + neutral dot), not just the colour.
+    expect(__test.formatFps(0, false)).toBe("paused");
+    expect(__test.formatFps(null, false)).toBe("paused");
   });
 });
 
@@ -253,9 +314,15 @@ describe("VideoToolbar component", () => {
     expect(useSession.getState().playing).toBe(false);
   });
 
-  it("fit/fill toggle calls onFitModeChange with the flipped mode", () => {
+  it("FIT/FILL segmented control: both options visible, active one is aria-pressed", () => {
+    // Iter 4 issue #2 — the single-button toggle was replaced with a
+    // 2-state segmented control. Both segments are always in the DOM
+    // so the user can read the current mode without clicking. The
+    // active segment carries `aria-pressed=true`; the inactive one
+    // carries `aria-pressed=false` (per the WAI-ARIA toolbar pattern
+    // for binary segmented controls).
     const onFitModeChange = vi.fn();
-    render(
+    const { rerender } = render(
       <VideoToolbar
         panelId="vp"
         ptsNs={null}
@@ -264,15 +331,45 @@ describe("VideoToolbar component", () => {
         onFitModeChange={onFitModeChange}
       />,
     );
-    const toggle = screen.getByTestId("video-fit-toggle");
-    expect(toggle.textContent).toContain("Fit");
+    const fitSeg = screen.getByTestId("video-fit-segment-fit");
+    const fillSeg = screen.getByTestId("video-fit-segment-fill");
+    expect(fitSeg.getAttribute("aria-pressed")).toBe("true");
+    expect(fillSeg.getAttribute("aria-pressed")).toBe("false");
+    // Clicking the *active* segment is a no-op (it's already selected)
+    // — this avoids a re-render storm when a user mashes the same
+    // segment they're on.
     act(() => {
-      fireEvent.click(toggle);
+      fireEvent.click(fitSeg);
+    });
+    expect(onFitModeChange).not.toHaveBeenCalled();
+    // Clicking the inactive segment flips to that mode.
+    act(() => {
+      fireEvent.click(fillSeg);
     });
     expect(onFitModeChange).toHaveBeenCalledWith("fill");
+    // Re-render with the new mode and check `aria-pressed` follows.
+    rerender(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={null}
+        resolution={null}
+        fitMode="fill"
+        onFitModeChange={onFitModeChange}
+      />,
+    );
+    expect(screen.getByTestId("video-fit-segment-fit").getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+    expect(screen.getByTestId("video-fit-segment-fill").getAttribute("aria-pressed")).toBe(
+      "true",
+    );
   });
 
-  it("resolution chip renders dimensions when provided", () => {
+  it("resolution renders inline inside the health badge when provided", () => {
+    // Iter 4 issue #6 — the three previously-equal chips (codec, fps,
+    // resolution) collapse into the health badge as subordinate
+    // text. The badge's textContent therefore carries the dimensions
+    // rather than a separate `video-resolution` testid.
     render(
       <VideoToolbar
         panelId="vp"
@@ -282,24 +379,12 @@ describe("VideoToolbar component", () => {
         onFitModeChange={() => undefined}
       />,
     );
-    const res = screen.getByTestId("video-resolution");
-    expect(res.textContent).toBe("1280×720");
+    const badge = screen.getByTestId("video-health-badge");
+    expect(badge.textContent ?? "").toContain("1280×720");
   });
 
-  it("resolution chip hidden until the first frame", () => {
-    render(
-      <VideoToolbar
-        panelId="vp"
-        ptsNs={null}
-        resolution={null}
-        fitMode="fit"
-        onFitModeChange={() => undefined}
-      />,
-    );
-    expect(screen.queryByTestId("video-resolution")).toBeNull();
-  });
-
-  it("health badge starts in 'unknown' tone before any FPS sample", () => {
+  it("resolution dimensions absent from the badge before the first frame", () => {
+    // The dimensions only render once a real frame has been decoded.
     render(
       <VideoToolbar
         panelId="vp"
@@ -310,6 +395,94 @@ describe("VideoToolbar component", () => {
       />,
     );
     const badge = screen.getByTestId("video-health-badge");
-    expect(badge.getAttribute("data-tone")).toBe("unknown");
+    expect(badge.textContent ?? "").not.toMatch(/\d+×\d+/);
+  });
+
+  it("health badge starts in 'paused' tone before any FPS sample on a paused transport", () => {
+    // Iter 4 issue #1 — the initial state is paused (the store's
+    // `beforeEach` sets `playing: false`), so the badge must report
+    // "paused" and NOT "unknown" / "bad". This is the entire point of
+    // decoupling tone from FPS.
+    render(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={null}
+        resolution={null}
+        fitMode="fit"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    const badge = screen.getByTestId("video-health-badge");
+    expect(badge.getAttribute("data-tone")).toBe("paused");
+    expect(badge.textContent ?? "").toContain("paused");
+  });
+
+  it("frame-step buttons advertise their keyboard shortcut in the tooltip", () => {
+    // Iter 4 issue #3 — `,` / `.` are the frame-step bindings. The
+    // tooltip must surface them so users discover the shortcut
+    // without opening the help overlay. `aria-keyshortcuts` mirrors
+    // the binding for AT users.
+    render(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={ptsNs}
+        resolution={null}
+        fitMode="fit"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    const back = screen.getByTestId("video-frame-back");
+    const fwd = screen.getByTestId("video-frame-forward");
+    expect(back.title).toContain(",");
+    expect(fwd.title).toContain(".");
+    expect(back.getAttribute("aria-keyshortcuts")).toBe(",");
+    expect(fwd.getAttribute("aria-keyshortcuts")).toBe(".");
+  });
+
+  it("keyboard ',' / '.' step frames when a sidecar is bound", () => {
+    // Iter 4 issue #3 — exercise the window-level keydown binding so
+    // a refactor that disconnects the listener regresses loudly. We
+    // dispatch on `window` (the toolbar's effect attaches there) and
+    // assert the store cursor moved one PTS in each direction.
+    setRange(0n, 1_000_000_000n, 33_333_333n);
+    render(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={ptsNs}
+        resolution={null}
+        fitMode="fit"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "." }));
+    });
+    expect(useSession.getState().cursorNs).toBe(66_666_666n);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "," }));
+    });
+    expect(useSession.getState().cursorNs).toBe(33_333_333n);
+  });
+
+  it("keyboard frame-step bindings are inert when no sidecar is present", () => {
+    // No ptsNs ⇒ no listener attached at all, so the cursor must be
+    // untouched by the keys (the global Transport handler doesn't
+    // bind `,` / `.`, so this is a real "no-op" check, not a
+    // delegation).
+    setRange(0n, 1_000_000_000n, 500_000_000n);
+    render(
+      <VideoToolbar
+        panelId="vp"
+        ptsNs={null}
+        resolution={null}
+        fitMode="fit"
+        onFitModeChange={() => undefined}
+      />,
+    );
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "." }));
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "," }));
+    });
+    expect(useSession.getState().cursorNs).toBe(500_000_000n);
   });
 });
