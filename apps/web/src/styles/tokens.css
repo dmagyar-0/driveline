@@ -100,27 +100,75 @@
 
   /* ---------- Color: accent (functional) ----------
    *
-   * Legacy `--color-accent-orange` is kept as an alias for back-compat;
-   * new code should reach for the SEMANTIC accents below. The three
-   * jobs orange used to do are now split:
-   *   --accent-primary   → orange     (play button, primary CTAs)
-   *   --accent-cursor    → vivid cyan (time cursor across plots + transport)
-   *   --accent-active    → soft tan   (rail-active item, focused panel
-   *                                    accents that shouldn't compete
-   *                                    with the primary CTA)
+   * iter6 · "Orange on a diet". The audit found orange playing six
+   * unrelated jobs simultaneously (brand mark, playhead, play button,
+   * active panel tab, primary CTA, warning) — so none of them read as
+   * important. The new rule: orange is reserved for exactly TWO roles:
    *
-   * Cursor cyan #22d3ee was chosen to be visibly distinct from the
-   * data palette teal (--plot-7 #14b8a6) and blue (--plot-1 #3b82f6).
-   * Reserved for the cursor; do NOT add it to the data palette. */
-  --color-accent-orange: #f97316; /* legacy alias — prefer --accent-primary */
+   *   --color-role-cta       → primary CTA (the play button, "Try
+   *                            sample data" hero buttons, big actions).
+   *   --color-role-cursor    → the time cursor / playhead (across
+   *                            plots, transport, scrubber).
+   *
+   * Everything else that used to be orange moves to a sibling role:
+   *
+   *   --color-role-active    → blue, for "this is the focused thing"
+   *                            (active rail item, selected sources row,
+   *                            active panel border / ring). Distinct
+   *                            from the playhead so the eye doesn't
+   *                            conflate "I am editing this" with
+   *                            "the time cursor sits here".
+   *   --color-role-focus     → blue (slightly hotter shade), for the
+   *                            keyboard focus ring on every interactive
+   *                            element. Same hue family as --active so
+   *                            the keyboard cue feels at home.
+   *   --color-role-brand     → neutral off-white, for the brand
+   *                            wordmark + logo arrow. The brand mark
+   *                            should not compete with the playhead.
+   *   --color-role-warning   → amber, for buffering / cropped / partial-
+   *                            success states. A genuinely warm hue,
+   *                            but distinguishable from CTA orange.
+   *
+   * Cursor + CTA share the same `#f97316` orange — same hue, different
+   * jobs — but the role tokens let downstream CSS spell intent (e.g. a
+   * rail-active item should NOT become orange if we rebrand later).
+   *
+   * Legacy `--color-accent-orange` is preserved as a value-equal alias
+   * so `cursorOverlay.ts` (which reads it from the CSS custom prop) and
+   * any out-of-tree CSS keep working. New code should use the role
+   * tokens. */
+  --color-accent-orange: #f97316; /* legacy alias — equals --color-role-cta */
   --color-accent-blue: #4d8bff; /* focus ring, scrubber fill, selection (lifted from #2a6df4 for AA) */
   --color-accent-blue-tint: rgba(77, 139, 255, 0.08);
 
-  --accent-primary: #f97316; /* primary CTA — play button, big actions */
-  --accent-primary-hover: #fb923c; /* hover lift */
-  --accent-cursor: #22d3ee; /* time cursor — keep distinct from data palette */
-  --accent-active: #c89060; /* rail-active / focused-non-CTA — desaturated orange */
-  --accent-focus: var(--color-accent-blue); /* focus rings (blue stays the keyboard cue) */
+  /* Role-based accent tokens (iter6) ---------------------------- */
+  --color-role-cta: #f97316; /* PRIMARY CTA — play button, "Try sample data" */
+  --color-role-cta-hover: #fb923c;
+  --color-role-cta-tint: rgba(249, 115, 22, 0.12);
+  --color-role-cta-tint-strong: rgba(249, 115, 22, 0.22);
+
+  --color-role-cursor: #f97316; /* PLAYHEAD — same hue, role-specific */
+  --color-role-cursor-tint: rgba(249, 115, 22, 0.18);
+
+  --color-role-active: #4d8bff; /* "you are here" — rail-active, source-active, focused panel */
+  --color-role-active-tint: rgba(77, 139, 255, 0.12);
+  --color-role-active-tint-strong: rgba(77, 139, 255, 0.22);
+
+  --color-role-focus: #6aa8ff; /* keyboard focus ring — slightly hotter than --active for separation */
+  --color-role-focus-tint: rgba(106, 168, 255, 0.18);
+
+  --color-role-brand: var(--color-fg-2); /* brand wordmark + logo arrow — neutral */
+  --color-role-brand-muted: var(--color-fg-4);
+
+  --color-role-warning: #eab308; /* amber — buffering / cropped / partial */
+  --color-role-warning-tint: rgba(234, 179, 8, 0.14);
+
+  /* Back-compat semantic aliases preserved (iter2 introduced these). */
+  --accent-primary: var(--color-role-cta);
+  --accent-primary-hover: var(--color-role-cta-hover);
+  --accent-cursor: var(--color-role-cursor);
+  --accent-active: var(--color-role-active);
+  --accent-focus: var(--color-role-focus);
 
   /* ---------- Color: status / semantic ---------- */
   --color-error: #b23a00; /* light bg */
@@ -172,7 +220,22 @@
   --fw-medium: 500;
   --fw-semibold: 600;
 
-  /* ---------- Type: scale (rem-based, dense engineer UI) ---------- */
+  /* ---------- Type: scale (rem-based, dense engineer UI) ----------
+   *
+   * iter6 · "five-tier type system". The audit asked for a clear,
+   * named role scale on top of the existing numeric tokens. The
+   * numeric tokens (--fs-10..--fs-28) stay — they're useful when you
+   * really do mean "11 px exactly" — but new code should reach for
+   * the role tokens:
+   *
+   *   --fs-xs   (10 px)  micro labels, source qualifiers
+   *   --fs-sm   (12 px)  chip labels, secondary info
+   *   --fs-md   (14 px)  body text, panel titles
+   *   --fs-lg   (16 px)  primary actions, cursor live values
+   *   --fs-xl   (20 px)  major readouts (cursor badge time)
+   *
+   * Existing components keep their --fs-NN refs (back-compat); panel
+   * headers / topbar / transport / cursor gutter migrate to roles. */
   --fs-10: 0.625rem; /* 10px — micro buttons (transport prev/next, mode pill) */
   --fs-11: 0.6875rem; /* 11px — HUD, smallest meta */
   --fs-12: 0.75rem; /* 12px — chip count, footer hints */
@@ -182,8 +245,16 @@
   --fs-16: 1rem; /* 16px — base */
   --fs-17: 1.0625rem; /* 17px — h2 */
   --fs-18: 1.125rem; /* 18px — H1 (App shell) */
+  --fs-20: 1.25rem; /* 20px — major readouts (cursor badge) */
   --fs-22: 1.375rem;
   --fs-28: 1.75rem;
+
+  /* Role-based type scale (iter6) ------------------------------- */
+  --fs-xs: var(--fs-10); /* 10px — micro labels, source qualifiers */
+  --fs-sm: var(--fs-12); /* 12px — chip labels, secondary info */
+  --fs-md: var(--fs-14); /* 14px — body text, panel titles */
+  --fs-lg: var(--fs-16); /* 16px — primary actions, cursor live values */
+  --fs-xl: var(--fs-20); /* 20px — major readouts (cursor badge time) */
 
   /* ---------- Type: line-height ---------- */
   --lh-tight: 1.15;
@@ -238,11 +309,21 @@
 
   /* ---------- Focus ring ----------
    *
-   * Uses the accent blue + a 2 px solid stroke + a 2 px offset. The
-   * combination (colour + offset gap) is the non-colour cue the
-   * a11y audit asked for: even with no colour perception at all, the
-   * gap between the element and the ring is unmistakable. */
-  --focus-ring: 2px solid var(--accent-focus);
+   * iter6 · the role token (--color-role-focus) is the single source
+   * of truth for the focus hue. A 2 px solid stroke + 2 px offset
+   * yields two cues (colour + halo gap) so users with reduced colour
+   * perception still see a discoverable focus indicator. The global
+   * `*:focus-visible` rule at the bottom of this file applies the
+   * ring to every interactive element by default; components only
+   * need to override when the inherited treatment clashes with their
+   * own border/background (e.g. inset rings on rail items).
+   *
+   * Contrast: --color-role-focus #6aa8ff against bg-2 (#1c1f24) is
+   * 6.4:1; against bg-3 (#0e0f12) is 7.5:1; against bg-6 (#353a44) is
+   * 4.7:1 — all clear AA. The ring is the same hue family as
+   * --color-role-active so a focused rail item shows BOTH the ring
+   * AND the active blue bar without colour clash. */
+  --focus-ring: 2px solid var(--color-role-focus);
   --focus-offset: 2px;
 
   /* ---------- Motion ---------- */
@@ -344,26 +425,49 @@ a:focus-visible {
 }
 
 /* =============================================================
- * a11y · global focus-ring safety net.
+ * a11y · global focus-ring safety net (iter6).
  *
- * Component-level CSS Modules set their own `:focus-visible`
- * styling (see PanelHeader, Rail, Transport, etc.). This base
- * rule ensures any new interactive element that author forgets
- * still surfaces a visible focus indicator — better a too-loud
- * default than a black-on-black mystery focus.
+ * The iter5 audit found 8+ interactive elements with no visible
+ * focus indicator — drag handles, chips, popover toggles, video
+ * toolbar controls, drawer rows. Component-level CSS Modules each
+ * decide whether to roll a custom :focus-visible (see PanelHeader,
+ * Rail, Transport, VideoToolbar) but the wide universal selector
+ * below is the safety net: ANY tabbable element gets a visible
+ * ring by default. Component rules override when they need a
+ * different inset / colour treatment.
  *
- * Component rules override because they are more specific
- * (class + pseudo) than the bare element selector here.
+ * The two `:focus-visible` blocks below are intentionally separate:
+ *   1. The element / role / tabindex selector covers semantic
+ *      interactive elements (every `<button>`, `<a>` with href,
+ *      `<input>`, `[role="slider"]`, anything with `tabindex >= 0`).
+ *   2. The `[draggable]` rule catches the FlexLayout splitters and
+ *      tabset drag handles, which are <div> elements that React
+ *      hooks up as focusable but don't carry a role or tabindex
+ *      attribute we can target directly.
  * ============================================================= */
 
 button:focus-visible,
+a:focus-visible,
 [role="button"]:focus-visible,
 [role="slider"]:focus-visible,
 [role="tab"]:focus-visible,
+[role="checkbox"]:focus-visible,
+[role="menuitem"]:focus-visible,
+[role="option"]:focus-visible,
+[role="switch"]:focus-visible,
+[tabindex]:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
-summary:focus-visible {
+summary:focus-visible,
+details:focus-visible,
+label:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+  border-radius: var(--radius-3);
+}
+
+[draggable="true"]:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
 }
