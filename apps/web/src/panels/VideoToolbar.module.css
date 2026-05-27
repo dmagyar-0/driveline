@@ -1,0 +1,185 @@
+/* VideoToolbar — slim control strip mounted at the top of the video
+ * frame. Density beats prettiness here; the toolbar shares its visual
+ * weight with the PanelHeader above it, so we keep it to ≤32 px tall
+ * (rule from the brief). */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 32px;
+  padding: 0 var(--sp-4);
+  background: var(--color-bg-2);
+  border-bottom: 1px solid var(--color-border-strong);
+  /* Toolbar lives *inside* the frame, so it shouldn't inherit the
+   * inner shadow's curve. Square it off and let the canvas-region take
+   * the rounded corners below. */
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  font-family: var(--font-sans);
+  font-size: var(--fs-12);
+  color: var(--color-fg-3);
+  user-select: none;
+}
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+/* Generic toolbar button. Square-ish, monospaced glyph for the
+ * transport row so the playback symbols share a baseline regardless
+ * of font fallbacks. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  min-width: 28px;
+  padding: 0 var(--sp-3);
+  background: transparent;
+  color: var(--color-fg-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-3);
+  cursor: pointer;
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  line-height: 1;
+  transition: background var(--motion-base), color var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--color-bg-4);
+  color: var(--color-fg-1);
+}
+
+.btn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--color-bg-5);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btnPrimary {
+  color: var(--color-fg-1);
+  background: var(--color-bg-4);
+}
+
+.btnPrimary:hover:not(:disabled) {
+  background: var(--color-bg-5);
+}
+
+.btnPrimary[aria-pressed="true"] {
+  background: var(--color-accent-blue-tint);
+  color: var(--color-fg-1);
+  border-color: var(--color-accent-blue);
+}
+
+.fitLabel {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+/* --------- decode-health badge --------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  height: 22px;
+  padding: 0 var(--sp-3) 0 var(--sp-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--color-fg-3);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-fg-6);
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25);
+}
+
+.codec {
+  text-transform: lowercase;
+  color: var(--color-fg-4);
+}
+
+.fps {
+  color: var(--color-fg-2);
+}
+
+.drops {
+  color: var(--color-error-dark);
+  border-left: 1px solid var(--color-border-strong);
+  padding-left: var(--sp-3);
+}
+
+.badge_ok .dot {
+  /* Emerald from the plot palette; reserved for "healthy" since plot
+   * series can't paint over this chrome row, so colour reuse is
+   * legible. */
+  background: var(--plot-3);
+}
+
+.badge_warn .dot {
+  background: var(--plot-6); /* yellow */
+}
+
+.badge_warn {
+  border-color: rgba(234, 179, 8, 0.5);
+}
+
+.badge_bad .dot {
+  background: var(--color-error-dark);
+}
+
+.badge_bad {
+  border-color: var(--color-error-dark);
+  color: var(--color-error-dark);
+}
+
+.badge_unknown .dot {
+  background: var(--color-fg-6);
+}
+
+/* --------- resolution chip --------- */
+
+.resolution {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-3);
+  color: var(--color-fg-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}

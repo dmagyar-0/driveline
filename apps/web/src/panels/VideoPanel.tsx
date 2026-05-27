@@ -26,6 +26,12 @@ import {
   type PanelReadiness,
   type ReadyState,
 } from "./videoReadiness";
+import {
+  VideoToolbar,
+  loadFitMode,
+  saveFitMode,
+  type FitMode,
+} from "./VideoToolbar";
 import styles from "./VideoPanel.module.css";
 
 // Issue #2 — readiness predicate constants. The panel reports "ready"
@@ -62,6 +68,14 @@ interface VideoPanelProps {
   /** FlexLayout panel id — keys per-panel UI state in the store
    *  (HUD overlay bit, future per-panel toggles). */
   panelId: string;
+  /**
+   * Per-frame PTS table for this source's video track. Currently only
+   * mp4+sidecar sources expose one (resolved by VideoPanelContainer
+   * from `mp4Cache.index.ptsNs`). The toolbar uses it to drive frame
+   * stepping and to derive the expected FPS for the health badge;
+   * `null` for MCAP sources hides the frame-step buttons.
+   */
+  sidecarPtsNs?: BigInt64Array | null;
 }
 
 interface QueueEntry {
@@ -104,6 +118,7 @@ export function VideoPanel({
   sourceHandle,
   channelId,
   panelId,
+  sidecarPtsNs = null,
 }: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const queueRef = useRef<QueueEntry[]>([]);
@@ -162,6 +177,25 @@ export function VideoPanel({
   // dedicated readiness subscriber below mirrors the registry into
   // local state once per state transition, which is rare.
   const [readyState, setReadyState] = useState<ReadyState>("absent");
+
+  // Iter 3 — fit/fill toggle (per-panel preference, persisted in
+  // localStorage so it survives a reload without dragging a new field
+  // into the Zustand store shape). The toolbar owns the UI; we own the
+  // CSS class application on the canvas.
+  const [fitMode, setFitMode] = useState<FitMode>(() => loadFitMode(panelId));
+  const onFitModeChange = (mode: FitMode) => {
+    setFitMode(mode);
+    saveFitMode(panelId, mode);
+  };
+
+  // Iter 3 — resolution readout. Sourced from the first decoded frame's
+  // `displayWidth`/`displayHeight`. The rAF blit loop also writes the
+  // canvas backing-store dimensions on the first frame, so this is the
+  // same number — exposed through state so the toolbar can render it.
+  const [resolution, setResolution] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
 
   // `lastSeekTargetRef` starts null and is set to the initial `open()`
   // target once the worker has accepted it. The debounced cursor effect
@@ -236,6 +270,13 @@ export function VideoPanel({
         canvas.width = frame.displayWidth;
         canvas.height = frame.displayHeight;
         sizedRef.current = true;
+        // Iter 3 — surface the source dimensions to the toolbar. One
+        // setState per panel lifetime (sizedRef gates this), so no
+        // hot-path React churn.
+        setResolution({
+          width: frame.displayWidth,
+          height: frame.displayHeight,
+        });
       }
       // The decoder produces frames in PTS order, often far faster than
       // real-time on a 4K stream with HW acceleration. A naïve
@@ -580,6 +621,8 @@ export function VideoPanel({
       lastReadyMsRef.current = 0;
       lastFrameArrivedMsRef.current = 0;
       clearPanelReadiness(panelId);
+      sizedRef.current = false;
+      setResolution(null);
       window.__drivelineVideoHud = undefined;
       const dc = videoDecodeRef.current;
       const w = videoDecodeWorkerRef.current;
@@ -718,8 +761,26 @@ export function VideoPanel({
   // exactly once per transition, so this re-render is rare.
   const firstFrameReady = readyState === "ready" || readyState === "stalled";
 
+  // Iter 3 — toolbar visibility. The toolbar only makes sense when a
+  // decoder is wired (i.e. always, since the container only renders
+  // VideoPanel when a binding resolves). We render it unconditionally
+  // here so the control row stays put while a seek/decode-restart is
+  // in flight; the empty-state path is the container's responsibility.
+
+  const canvasClassName =
+    fitMode === "fill"
+      ? `${styles.canvas} ${styles.canvasFill}`
+      : styles.canvas;
+
   return (
     <div className={styles.panel} tabIndex={0} onKeyDown={onKeyDown}>
+      <VideoToolbar
+        panelId={panelId}
+        ptsNs={sidecarPtsNs}
+        resolution={resolution}
+        fitMode={fitMode}
+        onFitModeChange={onFitModeChange}
+      />
       {/* Issue #18 — explicit video frame. The inner wrapper carries
        *  the border/shadow so the dashcam region is visually distinct
        *  from the surrounding chrome even on a fully-black night
@@ -729,7 +790,7 @@ export function VideoPanel({
         <canvas
           ref={canvasRef}
           data-testid="video-panel-canvas"
-          className={styles.canvas}
+          className={canvasClassName}
         />
         {/* Issue #20 — timestamp burn-in. Bottom-left so it doesn't
          *  fight the HUD pill (top-right) or the stalled badge

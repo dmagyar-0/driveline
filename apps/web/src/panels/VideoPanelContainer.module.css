@@ -12,7 +12,11 @@
 
 .clearBtn {
   position: absolute;
-  top: var(--sp-5);
+  /* Iter 3 — pushed below the per-panel toolbar (32 px) + panel
+   * padding (--sp-4) + a hair so the pill doesn't collide with the
+   * toolbar's bottom border. The button is hover-revealed, so the
+   * extra vertical offset isn't visible in the default state. */
+  top: calc(32px + var(--sp-4) + var(--sp-3));
   left: var(--sp-5);
   z-index: 3;
   background: rgba(0, 0, 0, 0.6);

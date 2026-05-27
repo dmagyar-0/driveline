@@ -68,6 +68,15 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
   const candidates = useMemo(() => videoChannels(sources), [sources]);
 
   if (resolved) {
+    // Iter 3 — surface the sidecar's per-frame PTS table to the panel
+    // so the toolbar can drive frame stepping + derive expected FPS
+    // for the decode-health badge. Only mp4+sidecar sources expose
+    // one; MCAP sources stay null and the toolbar falls back gracefully
+    // (frame buttons disabled, target FPS = 30).
+    const sidecarPtsNs =
+      resolved.source.kind === "mp4+sidecar"
+        ? resolved.source.mp4Cache?.index.ptsNs ?? null
+        : null;
     // Keyed by the binding id so switching channel tears down + remounts
     // the worker wiring.
     return (
@@ -78,6 +87,7 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
           sourceHandle={resolved.source.handle}
           channelId={resolved.channel.nativeId}
           panelId={panelId}
+          sidecarPtsNs={sidecarPtsNs}
         />
         <button
           type="button"

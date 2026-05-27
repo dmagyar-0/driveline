@@ -5,19 +5,32 @@
   background: var(--color-bg-1);
   padding: var(--sp-4);
   box-sizing: border-box;
+  /* Iter 3 — the toolbar lives above the frame, so the panel is now a
+   * column flexbox. Gap is tight (no token) so the toolbar visually
+   * unifies with the frame border below it instead of floating. */
   display: flex;
+  flex-direction: column;
 }
 
 /* Issue #18 — explicit video frame. A 1px inner border plus a subtle
  * inset highlight separates the dashcam region from the surrounding
  * dark chrome. The frame is just the wrapper; we never modify the
- * decoded pixels. */
+ * decoded pixels.
+ *
+ * Iter 3 — the toolbar wraps the same border above. The frame keeps a
+ * single rounded shell; the toolbar squares its bottom edge so the
+ * pair reads as one chrome unit. */
 .frame {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  background: var(--color-bg-0);
+  /* Iter 3 — letterbox aesthetic. Previously --color-bg-0 (pure
+   * black) made the bars indistinguishable from a night dashcam
+   * frame but visually fought the surrounding panel chrome
+   * (--color-bg-1). Aligning with --color-bg-1 makes the bars read
+   * as panel chrome, not as part of the video. */
+  background: var(--color-bg-1);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-4);
   box-shadow:
@@ -31,8 +44,15 @@
   height: 100%;
   display: block;
   /* Preserve the source aspect ratio when the panel is resized; the
-   * frame background (--color-bg-0) shows through as letterbox bars. */
+   * frame background shows through as letterbox bars. */
   object-fit: contain;
+}
+
+/* Iter 3 — fill mode. Crops to fill the panel; loses any pixels that
+ * fall outside the frame. The user has explicitly opted in (toolbar
+ * toggle), so the lossy crop is acceptable. */
+.canvasFill {
+  object-fit: cover;
 }
 
 /* Issue #19 — HUD pill. Reads against arbitrary video pixels, so the
