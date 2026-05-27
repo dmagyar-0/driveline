@@ -203,6 +203,23 @@
   margin-left: var(--sp-3);
 }
 
+/* Iter5 · destructive-action divider.
+ *
+ * Audit point: "the × close panel sits one pixel from □ maximise.
+ * Misclick risk is high; closing a panel is destructive and shouldn't
+ * be adjacent to a benign control." The divider is a 1-px hairline +
+ * symmetric padding so the close button reads as its own action zone
+ * without disrupting the inline-flex cluster. Aria-hidden because it's
+ * purely visual; the close button still has its own aria-label. */
+.actionDivider {
+  display: inline-block;
+  width: 1px;
+  height: 14px;
+  background: var(--color-border-strong);
+  margin: 0 var(--sp-2);
+  flex: 0 0 auto;
+}
+
 .actionBtn {
   display: inline-flex;
   align-items: center;

@@ -59,16 +59,17 @@ describe("PanelHeader", () => {
         isFocused={false}
       />,
     );
-    for (const testId of [
-      "tab-rename",
-      "tab-settings",
-      "tab-maximize",
-      "tab-close",
-    ]) {
+    // Iter5 · the pencil ("tab-rename") was dropped — rename is now a
+    // subset of panel settings (double-click title to invoke), so the
+    // cluster shrinks to settings / maximize / close + a destructive-
+    // action divider before close.
+    for (const testId of ["tab-settings", "tab-maximize", "tab-close"]) {
       const btn = screen.getByTestId(testId);
       expect(btn.getAttribute("title")).toBeTruthy();
       expect(btn.getAttribute("aria-label")).toBeTruthy();
     }
+    // The pencil is gone for good.
+    expect(screen.queryByTestId("tab-rename")).toBeNull();
   });
 
   it("close button dispatches DELETE_TAB on the panel id", () => {
@@ -159,6 +160,9 @@ describe("PanelHeader", () => {
   });
 
   it("rename: Enter commits the new name via RENAME_TAB", () => {
+    // Iter5 · the pencil is gone; rename is invoked by double-clicking
+    // the title while the panel is focused (the gesture path is the
+    // only remaining entry point and is asserted here).
     const { model, actions } = makeStubModel();
     render(
       <PanelHeader
@@ -170,7 +174,7 @@ describe("PanelHeader", () => {
         isFocused
       />,
     );
-    fireEvent.click(screen.getByTestId("tab-rename"));
+    fireEvent.doubleClick(screen.getByTestId("tab-name"));
     const input = screen.getByTestId("tab-rename-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "New name" } });
     fireEvent.keyDown(input, { key: "Enter" });
@@ -192,7 +196,7 @@ describe("PanelHeader", () => {
         isFocused
       />,
     );
-    fireEvent.click(screen.getByTestId("tab-rename"));
+    fireEvent.doubleClick(screen.getByTestId("tab-name"));
     const input = screen.getByTestId("tab-rename-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "scrap" } });
     fireEvent.keyDown(input, { key: "Escape" });
@@ -214,7 +218,7 @@ describe("PanelHeader", () => {
         isFocused
       />,
     );
-    fireEvent.click(screen.getByTestId("tab-rename"));
+    fireEvent.doubleClick(screen.getByTestId("tab-name"));
     const input = screen.getByTestId("tab-rename-input") as HTMLInputElement;
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.keyDown(input, { key: "Enter" });

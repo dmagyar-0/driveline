@@ -137,11 +137,6 @@ export function PanelHeader({
     [panelId],
   );
 
-  const onRenameStart = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    setRenaming(true);
-  }, []);
-
   // A single click anywhere in the header (other than a button) marks
   // this panel as the focused one — same write `panelFactory.tsx` does
   // on pointerdown in the body. Tab strip pointerdown still flows
@@ -225,23 +220,17 @@ export function PanelHeader({
         </span>
       )}
       <span className={styles.actions}>
-        <button
-          type="button"
-          className={styles.actionBtn}
-          aria-label="Rename panel"
-          title="Rename panel (double-click title)"
-          data-testid="tab-rename"
-          onPointerDown={stopPointer}
-          onClick={onRenameStart}
-          tabIndex={renaming ? -1 : 0}
-        >
-          <RenameIcon />
-        </button>
+        {/* Iter5 · the pencil ("rename") was dropped per the audit
+         *  note "edit vs settings is a UX false dichotomy" — rename is
+         *  a subset of panel settings, and a single double-click on
+         *  the focused title already opens inline rename. The four-
+         *  icon cluster is now: settings, maximize, (divider), close.
+         */}
         <button
           type="button"
           className={styles.actionBtn}
           aria-label="Panel settings"
-          title="Panel settings"
+          title="Panel settings (double-click title to rename)"
           data-testid="tab-settings"
           onPointerDown={stopPointer}
           onClick={onSettings}
@@ -261,6 +250,10 @@ export function PanelHeader({
         >
           {isMaximized ? <RestoreIcon /> : <MaximizeIcon />}
         </button>
+        {/* Iter5 · destructive-action separator (see Issue 5). Gives the
+         *  close button a clear visual + spatial gap from maximize so
+         *  the misclick risk the audit flagged is gone. */}
+        <span className={styles.actionDivider} aria-hidden="true" />
         <button
           type="button"
           className={`${styles.actionBtn} ${styles.actionBtnClose}`}
@@ -389,21 +382,3 @@ function CloseIcon(): React.ReactElement {
   );
 }
 
-function RenameIcon(): React.ReactElement {
-  return (
-    <svg
-      width="14"
-      height="14"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M3 11.5l7.5-7.5 2 2-7.5 7.5H3z" />
-      <path d="M9.5 5l2 2" />
-    </svg>
-  );
-}
