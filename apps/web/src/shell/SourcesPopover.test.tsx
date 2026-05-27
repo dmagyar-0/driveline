@@ -8,6 +8,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -305,11 +306,13 @@ describe("SourcesPopover", () => {
     expect(screen.queryByTestId("sources-popover-group-mcap")).toBeNull();
 
     // Three sources, all MCAP → still no headings (single kind).
-    seedSources([
-      { id: "a", name: "a.mcap", kind: "mcap", durationNs: 1n },
-      { id: "b", name: "b.mcap", kind: "mcap", durationNs: 1n },
-      { id: "c", name: "c.mcap", kind: "mcap", durationNs: 1n },
-    ]);
+    act(() => {
+      seedSources([
+        { id: "a", name: "a.mcap", kind: "mcap", durationNs: 1n },
+        { id: "b", name: "b.mcap", kind: "mcap", durationNs: 1n },
+        { id: "c", name: "c.mcap", kind: "mcap", durationNs: 1n },
+      ]);
+    });
     rerender(
       <SourcesPopover
         open
@@ -321,11 +324,13 @@ describe("SourcesPopover", () => {
     expect(screen.queryByTestId("sources-popover-group-mcap")).toBeNull();
 
     // Three sources of two kinds → headings appear.
-    seedSources([
-      { id: "a", name: "a.mcap", kind: "mcap", durationNs: 1n },
-      { id: "b", name: "b.mcap", kind: "mcap", durationNs: 1n },
-      { id: "c", name: "c.mp4", kind: "mp4+sidecar", durationNs: 1n },
-    ]);
+    act(() => {
+      seedSources([
+        { id: "a", name: "a.mcap", kind: "mcap", durationNs: 1n },
+        { id: "b", name: "b.mcap", kind: "mcap", durationNs: 1n },
+        { id: "c", name: "c.mp4", kind: "mp4+sidecar", durationNs: 1n },
+      ]);
+    });
     rerender(
       <SourcesPopover
         open

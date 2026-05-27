@@ -2,16 +2,21 @@
  *
  * Layout:
  *
- *   [brand]            (auto)          [status zone]   [help cluster]
+ *   [brand]            (auto)          [status zone] | [help cluster]
  *
  * The brand zone has no interactive treatment so it doesn't suggest
- * navigation. The status zone uses three discrete chips with proper
- * typographic hierarchy instead of dot-separated microscopic text.
+ * navigation. The status zone uses a unified pill shape for both the
+ * sources chip and the status chip so they read as one cluster.
+ *
  * iter2 #1: the "v0.1" version string is no longer in the brand zone.
- * iter2 #3: the cursor block uses an inline clock glyph + humane value
- * (no debug-style "CURSOR" microcap).
  * iter2 #5: a "?" icon button (rightmost) opens the keyboard-shortcuts
- * overlay.
+ *           overlay.
+ *
+ * iter3 #2:
+ *   - The topbar cursor readout is gone (the transport bar owns it).
+ *   - The status chip auto-hides after ready-idle (`.statusHidden`).
+ *   - A vertical divider separates the status zone from the help
+ *     cluster (`.help` already has `border-left`; pulled inward).
  */
 
 .bar {
@@ -60,29 +65,6 @@
   display: flex;
   align-items: center;
   gap: var(--sp-5);
-}
-
-/* Cursor readout — humanised. Clock glyph + monospace digits, no
- * uppercase "CURSOR" microcap. The block is non-interactive. */
-.cursor {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: 0 var(--sp-3);
-  height: 24px;
-  border-radius: var(--radius-3);
-  color: var(--color-fg-3);
-}
-
-.cursorIcon {
-  color: var(--color-fg-5);
-  flex: 0 0 12px;
-}
-
-.cursorValue {
-  font-size: var(--fs-13);
-  color: var(--color-fg-2);
-  font-variant-numeric: tabular-nums;
 }
 
 /* Generic chip used for the "N sources" trigger. */
@@ -175,6 +157,17 @@
 
 .statusBusy .statusWord {
   color: var(--color-fg-2);
+}
+
+/* iter3 #2 — the ready chip fades out 5 s after the system settles.
+ * Fading `opacity` (not `display`) preserves layout so the help
+ * cluster doesn't jump. We also drop the chip from the focus order
+ * once hidden so keyboard nav skips a stale region. */
+.statusHidden {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+  transition: opacity var(--motion-base);
 }
 
 .srOnly {
