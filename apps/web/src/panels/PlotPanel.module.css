@@ -28,19 +28,18 @@
 
 .chips {
   display: flex;
-  flex-wrap: wrap;
+  /* Iter4 alignment item #5 — single-row chip strip with explicit
+   * overflow handling. Iter3 wrapped chips and capped the row at 48 px
+   * with `overflow-y: auto`; rows past the second silently disappeared
+   * with no affordance. We now keep one row only, hide overflow, and
+   * surface a `+N more` pill via `<ChipOverflow />` that opens a
+   * popover with the chips that didn't fit. */
+  flex-wrap: nowrap;
   gap: var(--sp-2);
   flex: 1;
   min-width: 0;
-  /* Two-row cap. With the chip line-height ≈ 22px the row settles
-   * around 48px; anything beyond two rows is reachable by scrolling
-   * the panel itself (the user already has a popover for picking). */
-  max-height: 48px;
-  overflow-y: auto;
-  /* Hide scrollbar visually but keep keyboard scroll. The chip set is
-   * a low-information surface; a scrollbar would be louder than the
-   * chips themselves. */
-  scrollbar-width: thin;
+  overflow: hidden;
+  align-items: center;
 }
 
 /* Compact chip: source ribbon · swatch · short label · unit · optional
@@ -199,6 +198,60 @@
 .collapseBtn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
+}
+
+/* Iter4 alignment item #5 — chip overflow pill + popover. The pill
+ * sits at the end of the chip row when overflow is detected; clicking
+ * it opens a small popover listing the chips that didn't fit. */
+.chipOverflowWrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.chipOverflowPill {
+  background: var(--color-bg-2);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  padding: 2px var(--sp-4);
+  font-size: var(--fs-11);
+  cursor: pointer;
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+.chipOverflowPill:hover {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+}
+
+.chipOverflowPill:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.chipOverflowPopover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  max-height: 320px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  /* Same width budget as the in-row chips so the popover never feels
+   * like a second redesign — just an off-screen seat for the same
+   * pills. */
+  min-width: 14rem;
 }
 
 /* Mixed-units warning chip (issue #3). Same chip shape as a channel

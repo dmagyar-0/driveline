@@ -42,6 +42,7 @@ import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import { ChannelChip } from "./ChannelChip";
+import { ChipOverflow } from "./ChipOverflow";
 import {
   CursorReadout,
   formatReadoutValue,
@@ -201,6 +202,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // is the default at the threshold; the user can pin it open.
   const [chipsCollapsed, setChipsCollapsed] = useState(true);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
+  // Iter4 alignment item #5 — overflow popover open state. The pill
+  // toggles it; outside clicks (handled in ChipOverflow) close it.
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  // Number of chips that currently fit on a single chip row. Measured
+  // off the rendered DOM after each layout pass via ResizeObserver.
+  // `boundChannels.length` is the upper bound — if nothing overflows
+  // we show every chip and the overflow pill renders nothing.
+  const [visibleChipCount, setVisibleChipCount] = useState(0);
+  const chipsRef = useRef<HTMLDivElement | null>(null);
 
   const channels = useMemo(() => channelMap(sources), [sources]);
   const boundChannels = useMemo(
@@ -230,6 +240,68 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     [boundChannels],
   );
   const hasMixedUnits = axisGroups.length >= 3;
+
+  // Iter4 alignment item #5 — count how many chips fit in one row of
+  // `.chips` before the overflow pill takes over. The measurement
+  // happens in two passes per layout change to avoid circular
+  // dependency (hiding chips shrinks them, which then "fits" more):
+  //   1. unhide every chip by temporarily clearing `display: none`;
+  //   2. read each chip's right edge against the container's right
+  //      edge, reserving ~80 px at the end for the `+N more` pill.
+  // React then re-renders with the new `visibleChipCount` and hides
+  // the overflowed chips via the `hidden` prop on `ChannelChip`.
+  const CHIP_OVERFLOW_RESERVE_PX = 80;
+  useEffect(() => {
+    const measure = (): void => {
+      const el = chipsRef.current;
+      if (!el) return;
+      const chips = Array.from(
+        el.querySelectorAll<HTMLElement>("[data-chip='1']"),
+      );
+      const total = boundChannels.length;
+      if (chips.length === 0) {
+        setVisibleChipCount(total);
+        return;
+      }
+      // Unhide every chip for the duration of the measurement so
+      // `getBoundingClientRect` returns a meaningful rect for chips
+      // currently flagged as overflow. Restore original inline display
+      // after we've read all rects.
+      const originals: { el: HTMLElement; display: string }[] = [];
+      for (const c of chips) {
+        if (c.style.display === "none") {
+          originals.push({ el: c, display: c.style.display });
+          c.style.display = "";
+        }
+      }
+      const containerRect = el.getBoundingClientRect();
+      const containerRight = containerRect.right;
+      // First: does everything fit without the pill?
+      const lastRight = chips[chips.length - 1].getBoundingClientRect().right;
+      const allFit = lastRight <= containerRight;
+      let next = total;
+      if (!allFit) {
+        const budget = containerRight - CHIP_OVERFLOW_RESERVE_PX;
+        let visible = 0;
+        for (const chip of chips) {
+          const chipRect = chip.getBoundingClientRect();
+          if (visible === 0 || chipRect.right <= budget) visible += 1;
+          else break;
+        }
+        next = Math.max(1, visible);
+      }
+      // Restore prior visibility so the React render isn't fighting
+      // our DOM mutations.
+      for (const { el: c, display } of originals) c.style.display = display;
+      setVisibleChipCount((prev) => (prev === next ? prev : next));
+    };
+    measure();
+    const el = chipsRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [boundChannels]);
 
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user
@@ -937,15 +1009,40 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           </button>
         )}
         {showChipsExpanded && (
-          <div className={styles.chips} data-testid="plot-chips">
-            {boundChannels.map((c) => (
-              <ChannelChip
-                key={c.id}
-                channel={c}
-                sourceBadge={badges.get(c.id) ?? ""}
-                onRemove={onRemove}
-              />
-            ))}
+          <div
+            ref={chipsRef}
+            className={styles.chips}
+            data-testid="plot-chips"
+          >
+            {/* Iter4 alignment item #5 — render every chip; the
+                measurement effect populates `visibleChipCount` and the
+                overflowed ones are hidden via a style attribute rather
+                than skipped so React keeps the DOM stable for
+                ResizeObserver bookkeeping. */}
+            {boundChannels.map((c, i) => {
+              const hidden =
+                visibleChipCount > 0 && i >= visibleChipCount;
+              return (
+                <ChannelChip
+                  key={c.id}
+                  channel={c}
+                  sourceBadge={badges.get(c.id) ?? ""}
+                  onRemove={onRemove}
+                  hidden={hidden}
+                />
+              );
+            })}
+            {visibleChipCount > 0 &&
+              visibleChipCount < boundChannels.length && (
+                <ChipOverflow
+                  hiddenChannels={boundChannels.slice(visibleChipCount)}
+                  badges={badges}
+                  open={overflowOpen}
+                  onToggle={() => setOverflowOpen((v) => !v)}
+                  onClose={() => setOverflowOpen(false)}
+                  onRemove={onRemove}
+                />
+              )}
           </div>
         )}
         {hasMixedUnits && (

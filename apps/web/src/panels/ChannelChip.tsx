@@ -24,9 +24,20 @@ interface Props {
   /** Empty string disables the badge; non-empty renders the short stem. */
   sourceBadge: string;
   onRemove: (id: string) => void;
+  /** Iter4 alignment item #5 — when the chip overflow detector pushes
+   *  this chip out of the visible row, mark it hidden so the wrapping
+   *  `<ChipOverflow />` can list it in the popover instead. The DOM
+   *  element stays in place so ResizeObserver-driven measurements
+   *  remain consistent. */
+  hidden?: boolean;
 }
 
-export function ChannelChip({ channel, sourceBadge, onRemove }: Props) {
+export function ChannelChip({
+  channel,
+  sourceBadge,
+  onRemove,
+  hidden,
+}: Props) {
   const full = fullChannelLabel(channel);
   const short = shortChannelLabel(channel);
   // Iter3 issue #2 — the chip splits into a leading source-coloured
@@ -40,6 +51,9 @@ export function ChannelChip({ channel, sourceBadge, onRemove }: Props) {
     <span
       className={styles.chip}
       data-testid={`chip-${channel.id}`}
+      data-chip="1"
+      data-overflow-hidden={hidden ? "1" : "0"}
+      style={hidden ? { display: "none" } : undefined}
       title={sourceBadge ? `${full}  ·  ${sourceBadge}` : full}
     >
       <span
