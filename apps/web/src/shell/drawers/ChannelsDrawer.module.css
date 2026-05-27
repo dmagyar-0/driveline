@@ -1,9 +1,6 @@
-/* Inner content for the Channels drawer. The 220px wrapper, scroll
- * behaviour, padding and gap come from `Drawer.module.css:.drawer`,
- * which this drawer's <aside> reuses.
- *
- * Row / active / swatch primitives `composes:` from `_row.module.css`
- * (Phase 5a). The `[aria-disabled="true"]` overlay stays local because
+/* Inner content for the Channels drawer; the 220 px wrapper comes from
+ * `Drawer.module.css:.drawer`. Row primitives compose from
+ * `_row.module.css`; the `[aria-disabled]` overlay stays local because
  * it depends on attribute selectors on `.row` itself. */
 
 .pill {

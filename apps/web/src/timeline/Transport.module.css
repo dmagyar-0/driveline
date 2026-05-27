@@ -1,28 +1,4 @@
-/* Phase 9 → iteration 2 · Transport bar styles.
- *
- * Dark-theme bar styled against `apps/web/src/styles/tokens.css`.
- * Iteration 2 swaps the "thin track pinned to the top" layout for an
- * integrated scrub track that is the dominant element. The transport
- * controls sit under the track without a dark gap; play, total, speed,
- * mode chip and shortcuts toggle line up flush against the bottom edge.
- *
- * Layout (top → bottom):
- *   .bar
- *     .segmentLabelRow   – per-segment "S1 · S2" labels (multi-source only)
- *     .scrubRow
- *       .track           – the 32 px hit target
- *         .trackStrip    – 24 px visible bar; everything inside is absolute
- *           .segmentBands
- *           .bufferedSegments
- *           .segmentTicks
- *           .trackFill
- *           BookmarkMarkers
- *           .hoverLine + .hoverTooltip
- *           .playheadGroup (line + badge + thumb)
- *           .fetchSpinner
- *       .scrubRowLabels  – start / date / end (under the track)
- *     .row               – play group + total + speed + mode + help
- */
+/* Transport bar styles. Dark-theme bar styled against tokens.css. */
 
 .bar {
   display: flex;
@@ -36,18 +12,11 @@
   font-size: var(--fs-12);
   color: var(--color-fg-3);
   padding: var(--sp-4) var(--sp-6) var(--sp-4);
-  /* iter8 · scrub row + playback row read as one composite control.
-   * The gap is gone; vertical rhythm is supplied by the .row's top
-   * hairline (below) so the eye binds the two sections together. */
   gap: var(--sp-2);
   /* Anchors the absolutely-positioned shortcuts overlay. */
   position: sticky;
 }
 
-/* iter8 · the playback row sits BELOW the scrub track on the same
- * chrome surface. A 1 px top hairline + a hair of padding-top are the
- * only visual separation between the two — so the eye reads one
- * transport bar, not two stacked toolbars. */
 .row {
   display: flex;
   align-items: center;
@@ -57,18 +26,14 @@
   margin-top: var(--sp-2);
 }
 
-/* DEPRECATED iter3 wrapper — kept for any consumer still referencing
- * `.transportGroup` directly. New layout uses `.transportCluster`. */
+/* DEPRECATED — kept as a class hook for any external consumer; new
+ * layout uses `.transportCluster`. */
 .transportGroup {
   display: flex;
   align-items: center;
   gap: var(--sp-5);
 }
 
-/* Iter4 (issue #4) — the primary playback cluster. Groups the play
- * buttons + speed pill into a single visually-cohesive unit so the
- * user reads "this is how I drive playback" in one glance, rather
- * than scanning between the bottom-left and bottom-right corners. */
 .transportCluster {
   display: flex;
   align-items: center;
@@ -81,12 +46,9 @@
   align-items: center;
 }
 
-/* Iter4 (issue #4) — vertical hairline between the play buttons and
- * the speed pill inside the primary cluster. Same visual language
- * as the iter3 right-edge divider but here it BINDS two related
- * controls instead of separating them — the cluster reads as one
- * unit because the divider is shorter than the buttons (12 px vs
- * 32 px) so it's a subordinating mark, not a wall. */
+/* Vertical hairline binding play buttons + speed pill inside the
+ * cluster. Shorter than the 32 px buttons so it reads as a
+ * subordinating mark, not a wall. */
 .clusterDivider {
   display: inline-block;
   width: 1px;
@@ -130,9 +92,7 @@
 }
 
 .play {
-  /* iter6 · the play button is one of only two surfaces where orange
-   * lives (the other is the cursor). Retag from the legacy alias to
-   * --color-role-cta so the intent is explicit. */
+  /* Play button + cursor are the only two orange surfaces in the app. */
   width: 40px;
   height: 40px;
   font-size: var(--fs-14);
@@ -140,17 +100,6 @@
   background: var(--color-bg-5);
 }
 
-/* Iter4 (issue #4) — speed pill, now sitting inline next to the
- * play buttons. Was a flex-column with a label above; now
- * horizontal so it fits the row height of the play group (32 px)
- * without bumping the bar's vertical footprint. Still a labelled
- * control so the meaning isn't carried by glyph alone.
- *
- * iter8 · drop the dedicated card chrome (was bg-3 + border-subtle).
- * Sharing the chrome surface with the rest of the transport bar lets
- * the playback cluster read as ONE composite control instead of a
- * tray of separate pills. The inner <select> keeps its own button
- * border so the actionable element remains identifiable. */
 .speedPill {
   display: inline-flex;
   flex-direction: row;
@@ -162,24 +111,14 @@
   border: none;
 }
 
-/* DEPRECATED iter3 wrapper — iter4 keeps the class hook so the
- * existing data-testid + class-name regressions don't trip, but
- * visually the cluster now collapses to a quiet right-corner group
- * (see `.utilityCluster` below). The iter3 border-right is gone:
- * REL/ABS + `?` are now utility settings, not a peer of the play
- * group. */
+/* DEPRECATED — class hook kept so existing testids/class selectors
+ * keep working; new layout uses `.utilityCluster`. */
 .metaCluster {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
 }
 
-/* Iter4 (issue #5) — utility cluster: REL/ABS + `?` demoted to a
- * quiet right-corner group, visually subordinate to the playback
- * cluster on the left. Smaller gap, no padding ring, no divider
- * outline. The two controls keep their existing per-control styles
- * (`.modeChip`, `.helpBtn`) but those are sized below to match the
- * new "utility" weight. */
 .utilityCluster {
   display: flex;
   align-items: center;
@@ -196,9 +135,6 @@
   letter-spacing: var(--tracking-wide);
   color: var(--color-fg-5);
   line-height: 1;
-  /* Iter4 (issue #4) — when inline next to the select, the label
-   * needs a stable vertical centre so it doesn't drop a baseline
-   * below the select's text. */
   display: inline-flex;
   align-items: center;
 }
@@ -236,10 +172,6 @@
   cursor: not-allowed;
 }
 
-/* Iter4 (issue #5) — mode chip. Demoted to a 20-px utility pill,
- * visually subordinate to the 32-px play buttons + speed pill in
- * the primary cluster. Quieter background (transparent rest) so it
- * only "fills in" when the user has it active, not by default. */
 .modeChip {
   appearance: none;
   background: transparent;
@@ -283,10 +215,6 @@
   box-shadow: 0 0 0 1px var(--color-accent-blue) inset;
 }
 
-/* Iter4 (issue #5) — `?` help button. Demoted to 20 px to match the
- * mode chip (20 px), so the utility cluster reads as one quiet
- * group, well below the play group's 32–40 px weight. Quieter
- * background (transparent rest) so the icon doesn't shout. */
 .helpBtn {
   appearance: none;
   background: transparent;
@@ -353,21 +281,16 @@
   white-space: nowrap;
 }
 
-/* Iter5 (issue #5) — centre slot of the under-track label row.
- * Hosts the REL/ABS toggle (visible) + sr-only segment-count
- * (Playwright/AT consumers). Centred so the toggle stays equidistant
- * to the start and end time labels it governs. */
+/* Centre slot of the under-track label row. Hosts the REL/ABS toggle
+ * + sr-only segment-count for Playwright/AT consumers. */
 .scrubCenter {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
 }
 
-/* Iter4 (issue #3) — start/end tick anchor labels. Demoted from
- * primary numbers (iter3 had them at fg-5 / fs-10 alongside a date
- * stamp in the middle, giving three competing formats) to muted
- * endpoint markers. The canonical readout is the cursor badge —
- * these are just so the user knows the boundaries of the session. */
+/* Muted start/end endpoint markers — the canonical readout is the
+ * cursor badge. */
 .scrubEdgeLabel {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
@@ -376,14 +299,6 @@
   opacity: 0.85;
 }
 
-/* Iter5 (issue #2) — segment label row PROMOTED. Iter4 had grey
- * S1/S2/S3 microcaps that the designer flagged as "barely
- * distinguishable from the bar itself". Segments are the primary
- * navigational information on the timeline, so the label row gets:
- *   • taller height (18 px → fits readable mono numerals + name)
- *   • stronger contrast labels (fg-2 / fg-1 active, was fg-5)
- *   • slightly bigger type (fs-11 vs fs-10) and case-preserving
- *     so the source name actually reads. */
 .segmentLabelRow {
   position: relative;
   width: 100%;
@@ -408,10 +323,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  /* Iter3 (issue #5) — segment labels need to receive hover so the
-   *  native title tooltip ("Segment N (from <file>, starts at <time>)")
-   *  actually surfaces. The track below still handles pointer events
-   *  because the label row is positioned above the track, not inside. */
+  /* Receive hover so the native title tooltip surfaces. The track
+   * below still handles pointer events; this row is positioned above
+   * it, not inside. */
   pointer-events: auto;
   cursor: help;
   padding: 0 var(--sp-2);
@@ -425,9 +339,8 @@
   color: var(--color-fg-1);
 }
 
-/* Iter5 (issue #2) — the S-index pill. A small high-contrast chip
- * sitting at the leading edge of each segment label. Reads as a
- * distinct identifier even when the segment name is truncated. */
+/* High-contrast S-index chip at the leading edge of each segment
+ * label — readable even when the segment name is truncated. */
 .segmentIndex {
   display: inline-flex;
   align-items: center;
@@ -453,10 +366,8 @@
   color: var(--color-fg-1);
 }
 
-/* The human-readable source name shown next to the S-pill when the
- * segment band is wide enough; uses sans + tabular so file names like
- * `drive_2.mcap` align cleanly across rows. Truncates with the label
- * container's overflow:hidden. */
+/* Human-readable source name next to the S-pill; truncates with the
+ * label container's overflow:hidden. */
 .segmentName {
   font-family: var(--font-sans);
   font-size: var(--fs-11);
@@ -468,8 +379,7 @@
   min-width: 0;
 }
 
-/* Issue #1 — the track is the heartbeat. 24 px visible (32 px hit
- * target) so it feels deliberate, not vestigial. */
+/* 24 px visible track with a 32 px hit target. */
 .track {
   position: relative;
   flex: 1;
@@ -491,16 +401,9 @@
   border-radius: var(--radius-3);
 }
 
-/* iter8 (lane affordance) — track background lifted ABOVE the chrome
- * surface so the scrub lane reads as "this is interactive" at a
- * glance instead of fading into the bar. Iter4 used `--color-bg-3`
- * (#0e0f12), DARKER than the chrome (`--bg-chrome` = #1c1f24); the
- * UX critic flagged that as nearly the same value as the panel
- * background. Now we use `--color-bg-4` (#24272d) — one step
- * lighter than chrome — so the lane sits on the same elevation as
- * the buttons in the playback cluster: clearly tappable, clearly
- * the heartbeat of the bar. The `--color-border-strong` outline
- * doubles as a shape cue at narrow zoom. */
+/* Track background sits one elevation step ABOVE the chrome surface
+ * (bg-4 vs bg-chrome) so the scrub lane reads as interactive at a
+ * glance. */
 .trackStrip {
   position: relative;
   width: 100%;
@@ -514,37 +417,23 @@
     border-color var(--motion-fast);
 }
 
-/* On hover lift the lane another step (bg-5) so the interactive
- * affordance stays unambiguous; the border tightens to the hover
- * token. We never approach the trackFill tint, which keeps the
- * played/unplayed boundary readable. */
+/* On hover lift the lane another step; never approach the trackFill
+ * tint so the played/unplayed boundary stays readable. */
 .track:hover .trackStrip {
   background: var(--color-bg-5);
   border-color: var(--color-border-hover);
 }
 
-/* Iter5 (issue #1) — toned-down played region. Iter4 used a solid,
- * fully-opaque accent blue gradient that turned the timeline into a
- * progress bar and fought the cursor + segment markers for visual
- * weight. The reviewer asked for "thin tinted overlay, not a wall of
- * colour": played ≠ important, played is *context*.
- *
- * Solution:
- *   • Drop the saturated solid + inset highlight in favour of a flat
- *     low-opacity accent tint (~15 %) painted directly onto the strip.
- *   • A 1 px brighter accent edge on the right side marks the
- *     played/unplayed boundary so the user can still parse "how much
- *     have I watched" at a glance without the colour wall.
- *   • Z-order remains below the playhead group and segment ticks; the
- *     played fill is now visual context, not the dominant element. */
+/* Played region. Low-opacity tint + a brighter 1 px right edge marks
+ * the played/unplayed boundary without dominating the cursor or
+ * segment markers. Z-order stays below the playhead group and
+ * segment ticks. */
 .trackFill {
   position: absolute;
   left: 0;
   top: 0;
   height: 100%;
   background: color-mix(in srgb, var(--color-accent-blue) 15%, transparent);
-  /* iter8 · match the new strip rounding so the played fill clips to
-   * the lane's left edge cleanly. */
   border-radius: var(--radius-3) 0 0 var(--radius-3);
   pointer-events: none;
   z-index: 1;
@@ -554,8 +443,8 @@
     color-mix(in srgb, var(--color-accent-blue) 55%, transparent);
 }
 
-/* Buffered range overlay — sits above the segment bands but below
- * the fill, so the user can see what's already in cache. */
+/* Buffered range overlay — above the segment bands, below the fill,
+ * so the user can see what's already in cache. */
 .bufferedSegments {
   position: absolute;
   inset: 0;
@@ -573,20 +462,6 @@
   opacity: 0.1;
 }
 
-/* Iter5 (issue #2) — segment bands PROMOTED to primary navigational
- * information. Iter4 used 4 %/8 % white-on-dark which the reviewer
- * called "5 % luminance steps" — adjacent bands were indistinguishable
- * unless you squinted, so a multi-segment session looked like a single
- * dark track.
- *
- * New scheme:
- *   • even bands stay at the strip's base tone (transparent so the
- *     trackStrip's #0e0f12 shows through)
- *   • odd bands lift to a clearly lighter neutral (close to bg-4) so
- *     adjacent bands have ~3× the previous luminance step
- *   • active band gets a slightly stronger accent tint so the user
- *     reads "you are in segment 2" at a glance, but it doesn't fight
- *     the cursor (which is now the single brightest element). */
 .segmentBands {
   position: absolute;
   inset: 0;
@@ -617,13 +492,8 @@
     color-mix(in srgb, var(--color-accent-blue) 35%, transparent);
 }
 
-/* Iter5 (issue #2) — boundary ticks PROMOTED. Iter4 had a 1 px
- * hairline at low opacity that the designer flagged as "barely
- * visible". Segment boundaries are the second-strongest cue on the
- * timeline (after the playhead), so the tick is now a clear 2 px
- * full-track-height divider with stronger contrast. Z-index sits
- * above bands and the played fill so the boundary always reads
- * even where the fill crosses it. */
+/* Z-index above bands and played fill so the boundary tick always
+ * reads even where the fill crosses it. */
 .segmentTicks {
   position: absolute;
   top: 0;
@@ -634,24 +504,11 @@
   z-index: 3;
 }
 
-/* Iter4 (issue #6) — segment boundary tick. We deliberately keep
- * `pointer-events: none` (inherited from `.segmentTicks`) so the
- * tick does NOT swallow scrub gestures — making the tick clickable
- * would create a 13 px dead zone every time the user tries to
- * scrub across a segment boundary, which is the WORST place to be
- * un-scrubbable.
- *
- * Hover discoverability for segment metadata is handled by the
- * `.segmentLabel` row above the track (already `pointer-events:
- * auto; cursor: help;` since iter3) and by the `.segmentBand` fill
- * underneath the track. Both render the same multi-line title now
- * (iter4 issue #6 in Transport.tsx).
- *
- * iter8 (segment dividers) — paint the boundary with the canonical
- * `--color-border-strong` divider token rather than an opacity-faded
- * fg-2. The new lane background (`--color-bg-4`) makes a fg-white
- * tick over-shout; the border-strong token reads as "a real
- * divider" at the same 2 px weight without trying to be a label. */
+/* Deliberately keep `pointer-events: none` (inherited from
+ * `.segmentTicks`) so the tick does NOT swallow scrub gestures —
+ * a clickable tick would create a dead zone where users most need
+ * to scrub. Hover discoverability for segment metadata is handled
+ * by `.segmentLabel` (cursor:help) and `.segmentBand`. */
 .segmentTick {
   position: absolute;
   top: 0;
@@ -662,12 +519,7 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
-/* Spinner shown near the cursor while a seek waits on a cold sample fetch.
- * CSS-only rotation; positioned absolutely against `.trackStrip`.
- *
- * iter6 · the spinner annotates the cursor's pending state, so it uses
- * --color-role-cursor (the orange playhead hue) — same role, same
- * colour. */
+/* Spinner shown near the cursor while a seek waits on a cold sample fetch. */
 .fetchSpinner {
   position: absolute;
   top: 50%;
@@ -689,9 +541,9 @@
   }
 }
 
-/* Issue #2 — full-height playhead line + handle + time badge.
- * Group sits at the cursor's percent offset; translateX(-50%) keeps
- * the line/handle/badge co-located. */
+/* Full-height playhead line + handle + time badge. Group sits at the
+ * cursor's percent offset; translateX(-50%) keeps the children
+ * co-located. */
 .playheadGroup {
   position: absolute;
   top: 0;
@@ -701,37 +553,23 @@
   z-index: 5;
 }
 
-/* Iter3 (issue #7) — full-height vertical line through the track. The
- * line is the primary "where I am" cue; the handle is the affordance
- * for dragging. Thicken to 3 px (was 2 px) so it stays visible against
- * the dark fill gradient even at the busiest spots; deepen the dark
- * underlay so it never disappears against light segment bands. */
+/* Full-height vertical line — the primary "where I am" cue. The dark
+ * underlay shadow keeps it visible against light segment bands. */
 .playheadLine {
   position: absolute;
   top: -4px;
   bottom: -4px;
   left: 50%;
   width: 3px;
-  /* iter6 · use the cursor role token. Same hex as before, but the
-   * role name spells "this is the playhead" not "this is some accent". */
   background: var(--color-role-cursor);
   transform: translateX(-1.5px);
   pointer-events: none;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
 }
 
-/* Iter4 (issue #2) — current-time badge above the playhead. Designer
- * called the iter3 badge and the hover tooltip "indistinguishable
- * dark pills with mono text". Heavier accent treatment here so a
- * single glance reads "where I am":
- *   • thicker (1.5 px) accent-orange border + a brand-toned glow ring
- *   • fully opaque chrome surface (no transparency)
- *   • semibold readout (carries through into .playheadBadgeTime)
- *   • pill radius (matches the segment chip / mode chip language)
- *
- * The hover tooltip flips every one of these flags — see .hoverTooltip
- * below. Pair tested side-by-side at the same X to confirm visual
- * separation. */
+/* Current-time badge above the playhead. Heavier accent treatment
+ * than `.hoverTooltip` (orange border + glow, opaque fill, pill
+ * radius) so the two never get confused at a glance. */
 .playheadBadge {
   position: absolute;
   left: 50%;
@@ -739,10 +577,8 @@
   transform: translateX(-50%);
   background: var(--color-bg-5);
   border: 1.5px solid var(--color-role-cursor);
-  /* Iter4 (issue #3) — the badge can now grow a second line carrying
-   * the YYYY-MM-DD date stamp in absolute mode. A pure `radius-pill`
-   * makes the two-line layout look like a pill-rectangle hybrid; use
-   * `radius-6` so single-line and double-line both look intentional. */
+  /* radius-6 (not pill) so the single-line and the absolute-mode
+   * two-line layout (with date sublabel) both look intentional. */
   border-radius: var(--radius-6);
   padding: 3px var(--sp-4);
   display: inline-flex;
@@ -766,10 +602,8 @@
   gap: var(--sp-2);
 }
 
-/* Iter4 (issue #3) — date sublabel inside the cursor badge. Visible
- * only in absolute mode; absent in relative mode so the bar shows
- * exactly one canonical time format at a glance. Same width as the
- * main row (centred) so the badge feels like a unified card. */
+/* Date sublabel inside the cursor badge — rendered only in absolute
+ * mode (see Transport.tsx). */
 .playheadBadgeDate {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
@@ -781,9 +615,7 @@
 }
 
 .playheadBadge::after {
-  /* Iter3 (issue #7) — DAW-style chevron pointing down at the handle.
-   * The triangle's base aligns with the badge's bottom edge so the
-   * notch reads as a continuation of the orange border, not a tab. */
+  /* DAW-style chevron pointing down at the handle. */
   content: "";
   position: absolute;
   top: 100%;
@@ -796,26 +628,17 @@
   border-top: 5px solid var(--color-role-cursor);
 }
 
-/* Iter5 (issue #3) — leader line from the bottom of the cursor badge
- * down to the playhead dot. Anchors the floating badge to its
- * timeline position so two badges (cursor + hover) near each other
- * are never ambiguous about which dot belongs to which readout.
- * Uses the badge's accent colour and slips behind the chevron so the
- * line + chevron + thumb read as one continuous element. The line
- * starts at the chevron tip (10 px below badge top = badge height +
- * chevron 5 px) and runs to the strip's vertical centre (where the
- * thumb sits). */
+/* Leader line connecting the badge chevron to the playhead thumb so
+ * two badges near each other (cursor + hover) are never ambiguous
+ * about which dot belongs to which readout. Height = 8 px badge→strip
+ * gap + 12 px (half the 24 px strip) to land on the thumb centre. */
 .playheadBadge::before {
   content: "";
   position: absolute;
-  /* Place 1 px above the chevron tip so the line visually overlaps
-   * the chevron without leaving a gap. */
   top: calc(100% + 4px);
   left: 50%;
   transform: translateX(-50%);
   width: 2px;
-  /* 8 px badge→strip gap + half the 24 px strip (= 12 px) to land on
-   * the thumb centre. Match the badge's accent shade. */
   height: 16px;
   background: var(--color-role-cursor);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
@@ -825,11 +648,9 @@
 }
 
 .playheadBadgeTime {
-  /* iter6 · the cursor live time is the single most-read number in
-   * the app — promote it to the `lg` rung (16 px) so it reads at a
-   * glance from across the screen. The total stays on `md` (14 px)
-   * so the `current / total` pair still reads as a unit but the
-   * current value dominates. */
+  /* Cursor live time is the most-read number — `lg` rung dominates
+   * the `current / total` pair. Total sits on `md` so the pair reads
+   * as a unit while the current value leads. */
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-lg);
@@ -838,10 +659,6 @@
   line-height: 1;
 }
 
-/* Iter3 (issue #3) — separator + total share the readout rung so the
- * eye reads `current / total` as a single pair. The total uses a muted
- * colour so it doesn't compete with the primary number; the separator
- * stays the smaller `md` rung so the eye lands on the current value. */
 .playheadBadgeSep {
   font-family: var(--font-mono);
   font-size: var(--fs-md);
@@ -858,11 +675,8 @@
   line-height: 1;
 }
 
-/* Iter3 (issue #7) — the cursor handle is a tight DAW-style triangle
- * (chevron) pointing down at the line + a smaller round nub at the
- * line. We shrink the circle from 14px to 9px so it doesn't dominate;
- * the triangle below the badge already carries the "where I am"
- * weight. The orange border drops to 1.5px to match. */
+/* Small round nub on the line — the chevron under the badge carries
+ * the "where I am" weight, so the thumb stays subordinate. */
 .thumb {
   position: absolute;
   top: 50%;
@@ -886,19 +700,14 @@
   height: 11px;
 }
 
-/* Issue #2 — subtle ring while we wait on a video decode. The ring is
- * a cursor-state cue (not a focus indicator) so it uses the cursor
- * role token. */
+/* Ring while waiting on a video decode — cursor-state cue, not focus. */
 .thumbWaiting {
   outline: 2px solid var(--color-role-cursor);
   outline-offset: 2px;
 }
 
-/* Iter3 (issue #2) — hover preview line. Renders only while the
- * pointer is over the track and the user is NOT actively dragging.
- * The line is dashed + lower opacity so it visually subordinates to
- * the solid orange playhead line; the user can always tell which
- * one is the "real" cursor. */
+/* Hover preview line. Dashed + lower opacity so it visually
+ * subordinates to the solid orange playhead line. */
 .hoverLine {
   position: absolute;
   top: 0;
@@ -918,21 +727,10 @@
   z-index: 4;
 }
 
-/* Iter4 (issue #2) — hover tooltip = "where my mouse is" chip,
- * deliberately the *anti-shape* of the cursor badge so the user can
- * tell at a glance which is which WITHOUT reading the numbers:
- *
- *   cursor badge (above)      hover chip (here)
- *   • pill radius             • SQUARE corners (1 px radius)
- *   • orange brand border     • neutral grey border, OUTLINE-ONLY
- *   • opaque chrome fill      • transparent panel-dark fill (95 %)
- *   • semibold readout        • REGULAR weight, slightly smaller
- *   • glow halo + drop shadow • flat, single hairline shadow
- *   • chevron pointing down   • no chevron / tab
- *
- * Two orthogonal axes of separation (shape AND fill weight) so even
- * a quick glance reads them apart. The accompanying hover line is
- * dashed neutral; the playhead line is solid orange. */
+/* Hover "where my mouse is" chip — deliberately the anti-shape of
+ * the cursor badge: square corners, neutral border, regular weight,
+ * no chevron. Two orthogonal axes (shape + fill weight) keep the
+ * two readouts distinguishable at a glance. */
 .hoverTooltip {
   position: absolute;
   bottom: calc(100% + 4px);
@@ -955,7 +753,7 @@
   gap: 1px;
   /* Slight surface tint so the chip stays readable when it overlaps
    * the bright trackFill — but kept low enough that it never reads
-   * as "filled" like the cursor badge does. */
+   * as "filled" like the cursor badge. */
   backdrop-filter: blur(2px);
   background-color: rgba(14, 15, 18, 0.6);
 }
@@ -969,8 +767,7 @@
   line-height: 1.1;
 }
 
-/* Issue #2 — decode-waiting dot in the play-button group. Cursor-state
- * cue, uses the cursor role token. */
+/* Decode-waiting dot in the play-button group. */
 .decodeWaitingDot {
   display: inline-block;
   width: 10px;
@@ -993,9 +790,7 @@
   }
 }
 
-/* Iter3 (issue #6) — visually-hidden segment-count slot. Kept in the
- * DOM for Playwright + accessibility tools, but the segment label row
- * above the track is now the visible signal. */
+/* Visually-hidden — kept in the DOM for Playwright + AT consumers. */
 .srOnly {
   position: absolute;
   width: 1px;
@@ -1014,10 +809,8 @@
   cursor: not-allowed;
 }
 
-/* a11y · honour `prefers-reduced-motion`. Pulsing/spinning indicators
- * are status affordances — when motion is disabled, drop the animation
- * but keep the colour so the dot is still discoverable. Track / thumb
- * size transitions are pure UX delight; cut them too. */
+/* a11y · honour `prefers-reduced-motion`. Drop the animation but keep
+ * the colour so the status dot stays discoverable. */
 @media (prefers-reduced-motion: reduce) {
   .btnT,
   .modeChip,

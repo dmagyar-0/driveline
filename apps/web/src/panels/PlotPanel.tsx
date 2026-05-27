@@ -1,4 +1,4 @@
-// T4.2 · PlotPanel — multi-series plot with channel picker.
+// PlotPanel — multi-series plot with channel picker.
 //
 // Up to 8 scalar channels bound via a popover tree (`ChannelPicker`).
 // Colour per channel is deterministic (`palette.colorFor`). Data for
@@ -7,29 +7,13 @@
 // uPlot can render them as aligned series. The cursor overlay lives on
 // a separate canvas so cursor ticks never rebuild the plot.
 //
-// Bindings live in the Zustand store keyed by `panelId` (T6.2) so they
-// round-trip through FlexLayout serialisation and `localStorage`.
-// Several plot panels can coexist, each with its own independent set of
-// channels (per the manual checklist in docs/09-verification-plan.md:131).
+// Bindings live in the Zustand store keyed by `panelId` so they round-trip
+// through FlexLayout serialisation and `localStorage`. Several plot panels
+// can coexist, each with its own independent set of channels.
 //
-// UX overhaul (issues #1–#8):
-//   1. Chips compact: short label + unit + optional source badge; full
-//      path lives in the tooltip; chip row never grows past 2 rows.
-//   2. Source badge appears when the bound short-labels collide so users
-//      can disambiguate four `speed` chips coming from four files.
-//   3. Y-axes group by unit. With ≥2 unit-groups we render left + right
-//      axes (uPlot scales `y` and `y2`); with ≥3, extra groups still get
-//      their own scale and we surface a `Mixed units` warning chip.
-//   4. Cursor-value legend strip under the plot, updated in the same
-//      effect that publishes the sync snapshot (no extra hot-path work).
-//   5. The add-channel button reads `Add channel · n / N max`.
-//   6. Calmer palette (`palette.ts`).
-//   7. Chip swatch is `colorFor(channel.id)` — same string used for the
-//      uPlot stroke; the two cannot drift.
-//   8. Axis grid + label colours read from `--color-fg-3` / a dedicated
-//      `--color-plot-grid` for legibility on the dark surface.
-//
-// Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle.
+// Y-axes group by unit. With ≥2 unit-groups we render left + right axes
+// (uPlot scales `y` and `y2`); with ≥3, extra groups still get their own
+// scale and we surface a `Mixed units` warning chip.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import uPlot from "uplot";
@@ -142,21 +126,14 @@ function channelMap(sources: SourceMeta[]): Map<string, Channel> {
 // uPlot's defaults paint axis labels/ticks/grid in black, which is
 // invisible on the dark panel background. Resolve the relevant tokens
 // from `tokens.css` once and cache — the design system has no runtime
-// theme switch at v1, so re-reading on every plot rebuild (one per
-// binding-set change) is wasted `getComputedStyle` work. Mirrors
-// `cursorStrokeColor` in cursorOverlay.
+// theme switch at v1, so re-reading on every plot rebuild is wasted
+// `getComputedStyle` work. Mirrors `cursorStrokeColor` in cursorOverlay.
 //
-// iter7 wave2 — axis typography is now token-driven:
-//   - `tickFont` uses `--fs-xs` (10px) at `--color-fg-5` with tabular
-//     numerics so digit columns don't jitter across ticks.
-//   - `labelFont` (the unit caption) used to be `--fs-sm` (12px) /
-//     weight 600 at `--color-fg-4`.
-//
-// iter8 — the chip row, gutter, and axis unit label all read the same
-// `--unit-pill-*` tokens from tokens.css. The axis is canvas-drawn so
-// we synthesise the CSS font string from `--unit-pill-size` and
-// `--unit-pill-weight`; colour comes from `--unit-pill-color`. That
-// way "M/S" reads identically on the chip pill, gutter, and axis.
+// The chip row, gutter, and axis unit label all read the same
+// `--unit-pill-*` tokens. The axis is canvas-drawn, so we synthesise
+// the CSS font string from `--unit-pill-size` and `--unit-pill-weight`
+// and colour from `--unit-pill-color` — "M/S" reads identically on
+// chip pill, gutter, and axis.
 let axisStyleCache: {
   fg: string;
   tickFg: string;
@@ -190,9 +167,8 @@ function axisStyle(): {
   if (axisStyleCache !== null) return axisStyleCache;
   // Tuned for legibility on `--color-bg-3` (#0e0f12):
   //   - tick numbers: `--color-fg-5` (#969ba4) ≈ 6.6:1.
-  //   - unit label:   `--color-fg-5` (iter8 — was `--color-fg-4`; the
-  //     unified `--unit-pill-color` puts the qualifier at the muted
-  //     rung so the trace itself dominates).
+  //   - unit label:   `--color-fg-5` so the qualifier sits at the muted
+  //     rung and the trace itself dominates.
   //   - grid lines:   `rgba(255,255,255,0.08)` — a near-invisible
   //     scaffold over `--color-bg-3`. Load-bearing for value-reading
   //     but kept light so it never competes with the data.
@@ -216,8 +192,8 @@ function axisStyle(): {
   const cs = getComputedStyle(document.documentElement);
   const fg = cs.getPropertyValue("--color-fg-3").trim();
   const tickFg = cs.getPropertyValue("--color-fg-5").trim();
-  // iter8 — axis unit label adopts the unified `--unit-pill-*` tokens
-  // so it reads identically to the chip + gutter unit pill. Colour
+  // Axis unit label adopts the unified `--unit-pill-*` tokens so it
+  // reads identically to the chip + gutter unit pill. Colour
   // resolves through the chain `--unit-pill-color -> --color-fg-5`.
   const unitColor = cs.getPropertyValue("--unit-pill-color").trim();
   const labelFg = unitColor || cs.getPropertyValue("--color-fg-5").trim();
@@ -332,24 +308,23 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return m;
   }, [boundChannels, sources]);
 
-  // Group by unit for multi-axis rendering (issue #3). Calculated once
-  // per binding-set change; downstream consumers (uPlot opts builder,
-  // axis warning chip) read this.
+  // Group by unit for multi-axis rendering. Calculated once per
+  // binding-set change; the uPlot opts builder and axis warning chip
+  // read this.
   const axisGroups: AxisGroup[] = useMemo(
     () => groupByUnit(boundChannels),
     [boundChannels],
   );
   const hasMixedUnits = axisGroups.length >= 3;
 
-  // Iter4 alignment item #5 — count how many chips fit in one row of
-  // `.chips` before the overflow pill takes over. The measurement
-  // happens in two passes per layout change to avoid circular
+  // Count how many chips fit in one row of `.chips` before the overflow
+  // pill takes over. Two passes per layout change to avoid the circular
   // dependency (hiding chips shrinks them, which then "fits" more):
   //   1. unhide every chip by temporarily clearing `display: none`;
-  //   2. read each chip's right edge against the container's right
-  //      edge, reserving ~80 px at the end for the `+N more` pill.
-  // React then re-renders with the new `visibleChipCount` and hides
-  // the overflowed chips via the `hidden` prop on `ChannelChip`.
+  //   2. read each chip's right edge against the container's right edge,
+  //      reserving ~80 px for the `+N more` pill.
+  // React then re-renders with the new `visibleChipCount` and hides the
+  // overflowed chips via the `hidden` prop on `ChannelChip`.
   const CHIP_OVERFLOW_RESERVE_PX = 80;
   useEffect(() => {
     const measure = (): void => {
@@ -445,17 +420,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     [],
   );
 
-  // Iter3 issue #1 — cursor gutter entries. Replaces the iter2 floating
-  // tooltip; the gutter never overlaps the data, so we no longer need
-  // the tooltip pixel-X state or the panel-width flip decision. Both
-  // are computed in the same hot-path effect as `readoutEntries`.
+  // Cursor gutter entries — the gutter never overlaps the data so
+  // there's no tooltip-X / panel-width-flip state. Computed in the
+  // same hot-path effect as `readoutEntries`.
   const [gutterEntries, setGutterEntries] = useState<CursorGutterEntry[]>([]);
 
-  // Iter2 issue #4 — segment-band geometry. We rebuild bands when
-  // `sources` change (a new file is dropped or one is closed); the
-  // band's pixel rect comes from the plot's bbox tracked in the cursor
-  // overlay effect. Decoupling these means scrubbing the cursor doesn't
-  // recompute band geometry on every tick.
+  // Segment-band geometry — rebuilt when `sources` change. Pixel rect
+  // comes from the plot's bbox tracked in the cursor overlay effect, so
+  // scrubbing the cursor doesn't recompute band geometry on every tick.
   const [bbox, setBbox] = useState<{
     leftPx: number;
     topPx: number;
@@ -530,12 +502,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     });
     setReadoutEntries(entries);
 
-    // Iter3 issue #1 — gutter entries carry the raw numeric value so
-    // the gutter can format it with the unit-aware fixed-decimal
-    // helper (issue #3). The readout strip below the plot continues to
-    // use `formatReadoutValue` for backwards compatibility with the
-    // T6.3 spec — both surfaces show the same number to the same
-    // precision the user expects from their unit.
+    // Gutter entries carry the raw numeric value so the gutter can
+    // format it with the unit-aware fixed-decimal helper. The readout
+    // strip below the plot still uses `formatReadoutValue` — both
+    // surfaces show the same number to the same precision.
     const gutter: CursorGutterEntry[] = boundChannels.map((c) => {
       const s = byIdx.get(c.id) ?? null;
       return {
@@ -618,7 +588,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return m;
   }, [axisGroups]);
 
-  // Iter5 issue #2 — per-channel L/R axis indicator for chips and the
+  // Per-channel L/R axis indicator for chips and the
   // CursorGutter. Only meaningful when there are exactly 2 unit groups
   // (the dual-axis case); single-axis plots get an empty map so the
   // badge doesn't render, and ≥3 groups also stay empty because the
@@ -633,9 +603,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     return m;
   }, [axisGroups]);
 
-  // Iter5 issue #2 — tint colour for the L/R badge, lifted from
-  // `axisGroups[i].axisColor` so the chip badge and the axis tick
-  // numbers always agree.
+  // Tint for the L/R badge — lifted from `axisGroups[i].axisColor` so
+  // the chip badge and the axis tick numbers always agree.
   const axisTintByChannelId = useMemo<Map<string, string>>(() => {
     const m = new Map<string, string>();
     if (axisGroups.length !== 2) return m;
@@ -661,27 +630,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       labelFontWeight,
       labelTrackingEm,
     } = axisStyle();
-    // Iter2 issue #3 — when a y-axis is tinted (its group has a
-    // homogeneous palette colour) we use that tint for the axis label,
-    // ticks, and a slightly stronger grid colour so the user can tell
-    // at a glance which trace owns which side. The bottom x-axis stays
-    // neutral; tinting it would suggest the time axis belongs to one
-    // series. Pass `tint` only for tinted Y axes.
+    // When a y-axis is tinted (its group has a homogeneous palette
+    // colour) we use that tint for the axis label, ticks, and a
+    // slightly stronger grid colour so the user can tell at a glance
+    // which trace owns which side. The bottom x-axis stays neutral;
+    // tinting it would suggest the time axis belongs to one series.
     //
-    // Iter3 issue #4 — for Y axes we install a custom `values`
-    // formatter that prints uniform decimals across the tick ladder.
-    // uPlot's default trims trailing zeros which produces ladders like
-    // `33, 33.4, 33.6, 33.8` — the lone `33` reads as missing a decimal.
+    // Y axes install a custom `values` formatter that prints uniform
+    // decimals across the tick ladder. uPlot's default trims trailing
+    // zeros which produces ladders like `33, 33.4, 33.6, 33.8` — the
+    // lone `33` reads as missing a decimal.
     //
-    // Iter3 issue #5 — when there are two y-axis groups, the left and
-    // right gridlines are tinted to match their owning axis. Tints are
-    // dialled way down (alpha ~0.12) so the canvas stays readable —
-    // the goal is "which group does this gridline belong to", not
-    // "shout the axis colour".
+    // With two y-axis groups, the left and right gridlines are tinted
+    // to match their owning axis. Tints are dialled way down (alpha
+    // ~0.12) so the canvas stays readable.
     //
-    // Iter3 issue #6 — the bottom (time) axis uses a strict 24h
-    // `HH:MM:SS` formatter; uPlot's default mixes `6:08am` and 24h
-    // depending on the tick magnitude.
+    // The bottom (time) axis uses a strict 24h `HH:MM:SS` formatter;
+    // uPlot's default mixes `6:08am` and 24h depending on tick
+    // magnitude.
     const mkAxis = (
       side: 0 | 1 | 2 | 3,
       scale: string,
@@ -689,12 +655,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       tint?: string,
       gridTint?: string,
     ): uPlot.Axis => {
-      // iter7 wave2 — `stroke` is uPlot's single colour for both tick
-      // values and the axis label (uPlot uses it as `fillStyle` for
-      // both text runs). Use `labelFg` (≙ --color-fg-4) so the unit
-      // caption hits 9.3:1 contrast; the typographic hierarchy is
-      // carried by the font sizes (10 vs 12 px bold) below. Tinted
-      // axes still override the colour entirely so the L/R cue reads.
+      // `stroke` is uPlot's single colour for both tick values and the
+      // axis label (uPlot uses it as `fillStyle` for both text runs).
+      // The typographic hierarchy is carried by the font sizes (10 vs
+      // 12 px bold). Tinted axes override entirely so the L/R cue reads.
       const stroke = tint ?? labelFg;
       const tickStroke = tint ?? ticks;
       const isTimeAxis = scale === "x";
@@ -721,12 +685,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // Force 24h on the time axis; otherwise the Y-axis formatter so
       // the tick ladder reads cleanly even when the range zooms in.
       if (isTimeAxis) {
-        // Iter5 issue #3 — replace uPlot's auto-picker (which prefers
-        // 2–3 widely-spaced labels) with an explicit major/minor
-        // ladder. `timeAxisTicks` returns every tick position in
-        // seconds; the `values` formatter labels majors with the 24h
-        // time and emits `""` for minors so uPlot still draws the
-        // minor tick marks via `axis.ticks` without text labels.
+        // Replace uPlot's auto-picker (which prefers 2–3 widely-spaced
+        // labels) with an explicit major/minor ladder. `timeAxisTicks`
+        // returns every tick position in seconds; the `values`
+        // formatter labels majors with the 24h time and emits `""` for
+        // minors so uPlot still draws the minor tick marks via
+        // `axis.ticks` without text labels.
         let lastTicks: { all: number[]; majors: Set<number> } = {
           all: [],
           majors: new Set(),
@@ -741,22 +705,17 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
               ? formatAxisTime24h(s)
               : "",
           );
-        // Iter4 regression #1 — uPlot's default `space` (50 px) is
-        // narrower than an `HH:MM:SS` label at the panel's chosen font
-        // (`06:04:30` measures ~58–62 px). With the iter5 major/minor
-        // ladder we only label the majors, so the *labelled* spacing
-        // is 10s majors × pixels-per-second — but uPlot uses `space`
-        // as a global minimum for adjacent ticks. Drop `space` to 30
-        // so minor ticks (which now share the axis) aren't filtered
-        // out as "too close together"; the unlabelled minors stay
-        // visible and the labelled majors keep their breathing gap
-        // because they're spaced 5× wider.
+        // uPlot's default `space` (50 px) is narrower than an `HH:MM:SS`
+        // label (~58–62 px). With the major/minor ladder we only label
+        // majors, but uPlot uses `space` as a global minimum for adjacent
+        // ticks. Drop to 30 so the unlabelled minors aren't filtered out
+        // as "too close together"; labelled majors keep their breathing
+        // gap because they're spaced 5× wider.
         axisOpts.space = 30;
         axisOpts.gap = 6;
-        // Iter5 issue #3 — minor ticks should read as a subtler
-        // texture than the major labels. Override the per-tick `size`
-        // so all ticks share a 4 px stub (uPlot doesn't expose a per-
-        // tick size, so this is the best we can do without a hook).
+        // uPlot doesn't expose a per-tick size, so all ticks share a 4 px
+        // stub — best we can do without a hook to differentiate minor-
+        // tick texture from major.
         axisOpts.ticks = { stroke: tickStroke, size: 4 };
       } else {
         axisOpts.values = makeAxisValueFormatter() as uPlot.Axis.Values;
@@ -764,11 +723,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       return axisOpts;
     };
 
-    // Per-side gridline tint (iter3 issue #5). Use the group's
-    // `axisColor` at low opacity so the gridlines associate without
-    // overpowering the canvas. We only tint when there are ≥2 groups;
-    // a single-axis plot keeps the neutral grid (tinting one side
-    // doesn't differentiate anything in that case).
+    // Per-side gridline tint — use the group's `axisColor` at low
+    // opacity so gridlines associate without overpowering the canvas.
+    // Only tint with ≥2 groups; a single-axis plot keeps the neutral
+    // grid (tinting one side doesn't differentiate anything).
     const tintedGrid = (hex: string): string => {
       // Convert `#rrggbb` → `rgba(r,g,b,0.10)`. Sits one step above
       // the neutral grid (alpha 0.08) so the L/R associative cue is
@@ -809,31 +767,31 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // series, adding noise instead of signal. Pass `undefined` to
       // mkAxis so single-axis plots retain the neutral fg colour.
       const tint = axisGroups.length >= 2 ? g.axisColor : undefined;
-      // Iter3 issue #5 — gridline tint per side. Only applied when
-      // there are two visible Y axes (left + right); otherwise we'd
-      // tint both lines the same colour, which doesn't differentiate.
+      // Gridline tint per side — only applied with two visible Y axes;
+      // otherwise we'd tint both lines the same colour, which doesn't
+      // differentiate anything.
       const gridTint =
         axisGroups.length >= 2 && tint ? tintedGrid(tint) : undefined;
       if (i === 0) {
         const axis = mkAxis(3, g.scaleKey, axisLabel(g), tint, gridTint);
-        // Iter4 alignment item #3 — compute the primary's tick ladder
-        // ourselves (via `niceTicks`) instead of letting uPlot pick. We
-        // need it deterministic so the secondary axis can borrow the
-        // exact same pixel rows; uPlot's `incrs` heuristic is opaque
-        // from outside, so we mirror its behaviour with `niceTicks`
-        // (1·10^n, 2·10^n, 5·10^n) and own the result on both sides.
+        // Compute the primary's tick ladder ourselves (via `niceTicks`)
+        // instead of letting uPlot pick — we need it deterministic so
+        // the secondary axis can borrow the exact same pixel rows.
+        // uPlot's `incrs` heuristic is opaque from outside, so we
+        // mirror its behaviour with `niceTicks` (1·10^n, 2·10^n,
+        // 5·10^n) and own the result on both sides.
         if (axisGroups.length >= 2) {
           axis.splits = (_self, _axisIdx, scaleMin, scaleMax) =>
             niceTicks(scaleMin, scaleMax, 6);
         }
         axesOpts.push(axis);
       } else if (i === 1) {
-        // Iter4 alignment item #4 — both Y-axis labels should read
-        // bottom-to-top (engineering convention). uPlot has no API
-        // for overriding the right axis's label rotation (it draws
-        // +90°, i.e. top-to-bottom). Pass an empty label so uPlot
-        // still allocates label space via `labelSize`, then redraw
-        // it ourselves counterclockwise in the `drawAxes` hook below.
+        // Both Y-axis labels should read bottom-to-top (engineering
+        // convention). uPlot has no API for overriding the right
+        // axis's label rotation (it draws +90°, i.e. top-to-bottom).
+        // Pass an empty label so uPlot still allocates label space via
+        // `labelSize`, then redraw it ourselves counterclockwise in
+        // the `drawAxes` hook below.
         const axis = mkAxis(1, g.scaleKey, "", tint, gridTint);
         axis.labelSize = 28;
         // Borrow the primary's pixel rows for the secondary so dual-
@@ -880,13 +838,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // Iter4 alignment item #4 — counter-clockwise label for the right
     // Y axis. uPlot rotates the right-axis label +90° (top-to-bottom);
     // engineering convention is bottom-to-top on both axes. We hide
-    // uPlot's label (the `mkAxis(1, …, "", …)` call above) and paint
-    // our own here, sharing the axis tint so it still associates with
-    // its trace.
-    //
-    // iter7 wave2 — match the left-axis treatment: uppercase the unit
-    // string and use the same `labelFont` (12 px bold) so left and
-    // right captions read as the same role.
+    // uPlot's label and paint our own here, sharing the axis tint so
+    // it still associates with its trace. Uppercased unit string and
+    // the same `labelFont` as the left axis so both captions read as
+    // the same role.
     const secondaryGroup = axisGroups.length >= 2 ? axisGroups[1] : null;
     const secondaryLabelRaw = secondaryGroup ? axisLabel(secondaryGroup) : "";
     const secondaryLabelText =
@@ -904,11 +859,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       scales,
       series: [
         {},
-        // Iter5 issue #7 — at ≥4 traces, cycle dash patterns alongside
-        // the colour palette so two same-colour series (palette wraps
-        // at 8) and colourblind users can disambiguate by pattern. The
-        // `dashForIndex(i, count)` helper returns `[]` (solid) for any
-        // plot with fewer than DASH_THRESHOLD traces.
+        // At ≥4 traces, cycle dash patterns alongside the colour palette
+        // so two same-colour series (palette wraps at 8) and colourblind
+        // users can disambiguate by pattern. `dashForIndex(i, count)`
+        // returns `[]` (solid) below DASH_THRESHOLD.
         ...boundChannels.map((c, i) => {
           const dash = dashForIndex(i, boundChannels.length);
           const opts: uPlot.Series = {
@@ -946,10 +900,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                 ctx.translate(cx, cy);
                 ctx.rotate(-Math.PI / 2);
                 ctx.fillStyle = secondaryLabelTint;
-                // iter8 — match left-axis `labelFont` derived from the
-                // unified `--unit-pill-*` tokens so the right-axis caption
-                // reads identically to the chip pill, the gutter unit, and
-                // the left-axis caption. `letterSpacing` is set when
+                // Match the left-axis `labelFont` (derived from the
+                // unified `--unit-pill-*` tokens) so the right-axis
+                // caption reads identically to chip pill / gutter unit
+                // / left-axis caption. `letterSpacing` is set when
                 // supported so the uppercase caption tracks the token.
                 ctx.font = `${labelFontWeight} ${labelFontSizePx * dpr}px system-ui, sans-serif`;
                 if ("letterSpacing" in ctx) {
@@ -1128,11 +1082,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       const endOff = s.timeRange.endNs - originNs;
       const leftFrac = Number(startOff) / Number(spanNs);
       const widthFrac = Number(endOff - startOff) / Number(spanNs);
-      // Iter3 issue #7 — segment tooltips were "S1" with an
-      // unexplained one-line title. Reword as a multi-line hover so
-      // the user gets the name, the 24h start time, and the duration
-      // (relative ms-precise stamp for the start; HH:MM:SS for the
-      // span). Browsers render `title` line breaks as separators.
+      // Multi-line hover so the user gets the name, 24h start time,
+      // and duration (relative ms-precise stamp for the start;
+      // HH:MM:SS for the span). Browsers render `title` line breaks
+      // as separators.
       const startRel = formatSegmentTime(s.timeRange.startNs, originNs);
       const endRel = formatSegmentTime(s.timeRange.endNs, originNs);
       const startWall = formatRelativeTime24h(s.timeRange.startNs, originNs);
@@ -1160,9 +1113,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     }
   }, [sources, globalRange]);
 
-  // Iter3 issue #6 — gutter time header. Always 24h `HH:MM:SS`, never
-  // 12h. Relative to the session origin so segment correlations are
-  // obvious (a 1.5-hour mark inside seg #2 reads as `01:30:00`).
+  // Gutter time header — always 24h `HH:MM:SS`, relative to the session
+  // origin so segment correlations are obvious (a 1.5-hour mark inside
+  // seg #2 reads as `01:30:00`).
   const gutterTimeLabel = useMemo(() => {
     if (!globalRange) return null;
     return formatRelativeTime24h(cursorNs, globalRange.startNs);
@@ -1196,10 +1149,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     removePlotChannel(panelId, id);
   };
 
-  // Collapse rule (issue #1): when many channels are bound, the chip
-  // row becomes a single "N channels" pill that expands on click.
-  // Disabled when at-or-below the threshold so a 3-chip panel is never
-  // hidden behind a click.
+  // Collapse rule: when many channels are bound, the chip row becomes
+  // a single "N channels" pill that expands on click. Disabled when
+  // at-or-below the threshold so a 3-chip panel is never hidden
+  // behind a click.
   const collapseEligible = boundChannelIds.length >= CHIP_COLLAPSE_THRESHOLD;
   const showChipsExpanded = !collapseEligible || !chipsCollapsed;
 
@@ -1207,11 +1160,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     <section className={styles.panel} data-testid="plot-panel">
       <div className={styles.controls}>
         {collapseEligible && (
-          // Issue #6 — the standalone `"N channels"` count duplicated
-          // what the Add-channel button's `n / N max` badge already
-          // says. The collapse pill now just toggles visibility; the
-          // Add-channel button stays the single source of truth for
-          // the binding count.
+          // The collapse pill only toggles visibility; the Add-channel
+          // button's `n / N max` badge is the single source of truth
+          // for the binding count.
           <button
             type="button"
             className={styles.collapseBtn}
@@ -1228,11 +1179,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
             className={styles.chips}
             data-testid="plot-chips"
           >
-            {/* Iter4 alignment item #5 — render every chip; the
-                measurement effect populates `visibleChipCount` and the
-                overflowed ones are hidden via a style attribute rather
-                than skipped so React keeps the DOM stable for
-                ResizeObserver bookkeeping. */}
+            {/* Render every chip; the measurement effect populates
+                `visibleChipCount` and overflowed ones are hidden via
+                style rather than unmounted so React keeps the DOM
+                stable for ResizeObserver bookkeeping. */}
             {boundChannels.map((c, i) => {
               const hidden =
                 visibleChipCount > 0 && i >= visibleChipCount;
@@ -1303,16 +1253,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         />
       )}
       <div className={styles.plotArea}>
-        {/* Iter3 issue #1 — `.plotCanvasWrap` is the resize target the
-            ResizeObserver tracks; the gutter beside it is fixed-width
-            so the plot canvas owns the remaining flex space. The plot
-            no longer reflows when cursor values change. */}
+        {/* `.plotCanvasWrap` is the ResizeObserver target; the gutter
+            beside it is fixed-width so the canvas owns the remaining
+            flex space. */}
         <div ref={containerRef} className={styles.plotCanvasWrap}>
           <div ref={plotMountRef} className={styles.plotMount} />
-          {/* Iter2 issue #4 — segment bands sit between the canvas and
-              the cursor overlay so the cursor line stays visible over the
-              band tint. Rendered only when geometry is known + ≥2
-              sources. */}
+          {/* Segment bands sit between the canvas and the cursor overlay
+              so the cursor line stays visible over the band tint.
+              Rendered only when geometry is known + ≥2 sources. */}
           {bbox &&
             boundChannels.length > 0 &&
             segmentBandsList.length > 1 && (
@@ -1325,12 +1273,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
               />
             )}
           <canvas ref={overlayRef} className={styles.overlay} />
-          {/* Iter5 issue #4 — in-chart title + timestamp range footer.
-              Subtle overlays anchored to the plot canvas corners so a
-              screenshot reads as `<title> · Δ 30 s` (top-left) and
-              `06:04:00 → 06:04:30` (bottom-right). Both are rendered
-              only when there is geometry and bound channels, otherwise
-              they'd sit on an empty canvas reading as decoration. */}
+          {/* In-chart title + timestamp range footer — anchored to the
+              canvas corners so a screenshot reads as `<title> · Δ 30 s`
+              (top-left) and `06:04:00 → 06:04:30` (bottom-right). */}
           {boundChannels.length > 0 && globalRange && (
             <>
               <div
@@ -1358,12 +1303,6 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                 {formatTime24h(globalRange.startNs)} →{" "}
                 {formatTime24h(globalRange.endNs)}
               </div>
-              {/* iter7 wave2 — the floating in-chart "Mixed units" pill
-                  has been retired. The toolbar `.warningChip` rendered
-                  above (in `.controls`) is the single surface for that
-                  warning; the on-canvas duplicate was occluding data in
-                  the upper-right quadrant and reading as the same chip
-                  twice in screenshots. */}
             </>
           )}
           {boundChannels.length === 0 && (
@@ -1374,10 +1313,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
             </div>
           )}
         </div>
-        {/* Iter3 issue #1 — right-side cursor-value gutter. Replaces
-            the iter2 floating tooltip. The gutter is rendered only
-            when there is at least one bound channel so the empty
-            state has the full panel width. */}
+        {/* Right-side cursor-value gutter — only rendered when there
+            is at least one bound channel so the empty state has the
+            full panel width. */}
         {boundChannels.length > 0 && (
           <CursorGutter timeLabel={gutterTimeLabel} entries={gutterEntries} />
         )}

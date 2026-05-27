@@ -1,19 +1,8 @@
-// Phase 4 · Layout drawer.
-//
-// Replaces the inline `layout` stub in `Drawer.tsx`. Two sections:
-//
-//   - Saved layouts: rows from the new `namedLayouts` slice. Click =
-//     restore. The active row (matching `activeNamedLayoutId`) gets the
-//     orange-bordered `.rowActive` style; the `live` meta pill fires
-//     when the saved layoutJson stringifies to the same value as the
-//     current layoutJson.
-//   - Add panel: replaces the legacy `Workspace.tsx` toolbar (`+ Video
-//     panel`, `+ Plot panel`, `Reset layout`) and previews the four
-//     Phase-6 kinds as disabled rows.
-//
-// Reads from the store via discrete single-key selectors so the drawer
-// only re-renders when the relevant fields change. The save-as inline
-// input is local `useState` (no store coupling).
+// Layout drawer · two sections:
+//   - Saved layouts: rows from the `namedLayouts` slice. Click = restore.
+//     The `live` meta pill fires when the saved layoutJson stringifies
+//     to the same value as the current layoutJson.
+//   - Add panel: mints a new panel of the chosen kind.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
@@ -25,19 +14,13 @@ const HEADING_SAVED_ID = "drawer-layout-saved-h";
 const HEADING_ADD_ID = "drawer-layout-add-h";
 
 interface Props {
-  /** Mints a new video panel. Forwarded from `App.tsx` via `Shell` →
-   *  `Drawer` because the FlexLayout `WorkspaceHandle` lives in
-   *  `App.tsx`'s ref and the drawer can't reach it directly. */
+  /** Forwarded from App via Shell → Drawer because the FlexLayout
+   *  `WorkspaceHandle` lives on App's ref. */
   addVideoPanel: () => void;
-  /** Mints a new plot panel. Same indirection as `addVideoPanel`. */
   addPlotPanel: () => void;
-  /** Phase 6 · mints a 3D scene panel. */
   addScenePanel: () => void;
-  /** Phase 6 · mints a map panel. */
   addMapPanel: () => void;
-  /** Phase 6 · mints a table panel. */
   addTablePanel: () => void;
-  /** Phase 6 · mints an enum strip panel. */
   addEnumPanel: () => void;
   /** Resets the FlexLayout model to the default split. */
   resetLayout: () => void;

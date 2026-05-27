@@ -1,22 +1,9 @@
-// Iter4 alignment item #5 — chip overflow affordance.
+// Chip overflow affordance — a `+N more` pill that opens a popover
+// listing chips that didn't fit on screen. Only *hidden* chips move
+// into the popover; the visible chip set stays as-is.
 //
-// Iter3 capped the `.chips` row at 48 px (≈2 rows) with `overflow-y:
-// auto`, so additional chips silently disappeared below the visible
-// frame — the audit's "bottom row clips with no +N more affordance"
-// finding. This component renders a compact pill that opens a popover
-// listing the chips that didn't fit on screen. The visible chip set
-// stays as-is; only the *hidden* chips move into the popover so the
-// user can see, scan, and remove them on demand.
-//
-// Layout shape:
-//   - the pill (`+N more`) sits at the end of the chip row, same
-//     vertical alignment as the chips themselves;
-//   - clicking the pill toggles a popover anchored below it;
-//   - the popover renders a vertical list of the hidden chips so they
-//     can be scanned end-to-end without a horizontal scrollbar.
-//
-// Closes on outside click and on Escape. The parent owns the open
-// state so the popover can be torn down when the chip list changes
+// Closes on outside click and Escape. The parent owns the open state
+// so the popover can be torn down when the chip list changes
 // (e.g. the user removed a chip via the popover).
 
 import { useEffect, useRef } from "react";
@@ -31,16 +18,16 @@ export interface ChipOverflowProps {
   onToggle: () => void;
   onClose: () => void;
   onRemove: (id: string) => void;
-  /** Iter5 issue #7 — start index of the *first* hidden channel in
-   *  the parent's bound-channel list, plus the total count. Together
-   *  they let each popover chip render its dash pattern consistent
-   *  with the in-row chips. */
+  /** Start index of the *first* hidden channel in the parent's
+   *  bound-channel list, plus the total count — together they let
+   *  each popover chip render its dash pattern consistent with the
+   *  in-row chips. */
   hiddenStartIndex?: number;
   totalSeriesCount?: number;
-  /** Iter5 issue #2 — per-channel L/R axis indicator for dual-axis
-   *  plots. Optional; chips render without the badge when omitted. */
+  /** Per-channel L/R axis indicator for dual-axis plots. Optional;
+   *  chips render without the badge when omitted. */
   axisSides?: Map<string, "" | "L" | "R">;
-  /** Iter5 issue #2 — tint colour per channel for the L/R badge. */
+  /** Tint colour per channel for the L/R badge. */
   axisTints?: Map<string, string>;
 }
 

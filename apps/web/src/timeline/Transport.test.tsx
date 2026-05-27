@@ -1,22 +1,8 @@
 // @vitest-environment jsdom
 //
-// T6.3 · Transport integration test.
-//
-// Mounts the real `<Transport />` under jsdom and exercises the three
-// behaviours that aren't already covered by the rAF-level
-// `playback.test.ts` or by the end-to-end `transport.spec.ts`:
-//
-//   - keyboard shortcuts (Space / Home / End) drive the store through
-//     the window-level listener in `Transport.tsx:106-139`;
-//   - clicking the play/pause button + changing the speed select
-//     routes through the store's `play()` / `pause()` / `setSpeed()`
-//     actions;
-//   - a scrubber pointer-down on the track schedules a cursor commit
-//     (flushed on the next rAF).
-//
-// The unit-level complement to `apps/e2e/tests/transport.spec.ts` —
-// that one exercises the browser's real pointer capture and CSS
-// layout, this one exercises the React event wiring.
+// Transport integration test. Mounts `<Transport />` under jsdom and
+// exercises React event wiring. The browser-side pointer capture +
+// CSS layout is covered by `apps/e2e/tests/transport.spec.ts`.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
@@ -30,8 +16,7 @@ import { useSession } from "../state/store";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 function seedSession(): void {
-  // Seed a 10 s session so Home/End land on distinct values and the
-  // cursor ratio math is exercisable.
+  // 10 s session so Home/End land on distinct values.
   useSession.setState({
     sources: [],
     channels: [],
@@ -190,9 +175,8 @@ describe("Transport", () => {
   });
 
   it("mode chip toggles store.timeMode between relative and absolute", () => {
-    // Iteration 2 (issue #5) — the relative/absolute toggle is demoted
-    // to a single chip that flips state. The chip's visible label and
-    // `aria-pressed` reflect the *current* mode; clicking flips.
+    // The chip's visible label and `aria-pressed` reflect the current
+    // mode; clicking flips.
     const { getByTestId } = render(<Transport />);
     const chip = getByTestId("transport-mode-toggle") as HTMLButtonElement;
     expect(useSession.getState().timeMode).toBe("relative");
@@ -239,10 +223,8 @@ describe("Transport", () => {
     expect(getByTestId("transport-segment-count").textContent).toBe(
       "2 segments",
     );
-    // Iteration 2 (issue #4) — the leading boundary tick is
-    // suppressed so it doesn't collide with the track's left
-    // border-radius. With 2 sources we render 1 boundary; with N
-    // sources we render N-1.
+    // Leading boundary tick is suppressed so it doesn't collide with
+    // the track's left border-radius. N sources → N-1 ticks.
     const ticks = document.querySelectorAll(
       "[data-testid='transport-segments'] span",
     );
@@ -259,8 +241,8 @@ describe("Transport", () => {
       "[data-testid='transport-segment-labels'] > span",
     );
     expect(labels.length).toBe(2);
-    // Iter5 (issue #2) — labels are now structured (S-pill + name)
-    // not bare text. The pill carries the index identifier.
+    // Labels are structured (S-pill + name); the pill carries the
+    // index identifier.
     expect(labels[0].textContent).toContain("S1");
     expect(labels[0].textContent).toContain("a.mcap");
     expect(labels[1].textContent).toContain("S2");
@@ -331,9 +313,7 @@ describe("Transport", () => {
     expect(values).toEqual([0.25, 0.5, 1, 2, 4]);
   });
 
-  // Iteration 2 — VLC-style J/K/L keys (issue #6). K = play/pause,
-  // J = step back 1 s, L = step forward 1 s. These complement the
-  // arrow-key + Space bindings rather than replacing them.
+  // VLC-style J/K/L keys complement the arrow-key + Space bindings.
   it("K toggles play, J/L step ±1 s (VLC-style)", () => {
     render(<Transport />);
     expect(useSession.getState().playing).toBe(false);
@@ -360,7 +340,6 @@ describe("Transport", () => {
     expect(useSession.getState().cursorNs).toBe(1_000_000_000n);
   });
 
-  // Iteration 2 (issue #6) — `?` toggles the shortcuts overlay.
   it("`?` toggles the shortcuts overlay", () => {
     render(<Transport />);
     expect(
@@ -384,7 +363,6 @@ describe("Transport", () => {
     ).toBeNull();
   });
 
-  // Iteration 2 (issue #6) — clicking the `?` button opens the overlay.
   it("? button opens and the close button hides the shortcuts overlay", () => {
     const { getByTestId } = render(<Transport />);
 
@@ -401,12 +379,8 @@ describe("Transport", () => {
     ).toBeNull();
   });
 
-  // Iteration 2 (issue #2) — hover tooltip appears on pointer-enter and
-  // disappears on pointer-leave; in production we throttle the
-  // intermediate updates to rAF, and the test polyfill above runs rAF
-  // synchronously so we can read the resulting label. Iter3 added the
-  // alternate-convention sub-line, so we assert containment, not
-  // strict equality.
+  // rAF is stubbed synchronously above so we can read the resulting
+  // label without waiting; we assert containment, not strict equality.
   it("hover tooltip appears on track enter and disappears on leave", () => {
     const { getByTestId } = render(<Transport />);
     const track = getByTestId("scrubber");
@@ -429,10 +403,8 @@ describe("Transport", () => {
     ).toBeNull();
   });
 
-  // Iteration 3 (issues #1 + #3) — the playhead badge now owns BOTH
-  // the current time AND the session total, rendered as `current /
-  // total`. The redundant second number stacked on the badge (iter2)
-  // is gone; the controls row no longer carries a duplicate total.
+  // Playhead badge owns both the current time and total, rendered as
+  // `current / total`; the controls row carries no duplicate.
   it("playhead badge shows `current / total` and the controls row carries no duplicate", () => {
     useSession.setState({ cursorNs: 6_000_000_000n });
     const { getByTestId, queryByTestId } = render(<Transport />);
@@ -449,11 +421,9 @@ describe("Transport", () => {
     expect(badge.querySelector("[class*='playheadBadgeSub']")).toBeNull();
   });
 
-  // Iteration 5 (issue #4) — the hover tooltip is now a single-line
-  // scout: just the time. Sub-line and inline segment-name (iter3/4)
-  // are gone; the cursor badge owns the rich readout. The hover chip
-  // only shows boundary labels when the pointer is near a segment
-  // tick (separate test below).
+  // Hover tooltip is a single-line scout — just the time, or a
+  // boundary label when the pointer is near a segment tick (covered
+  // by the separate test below).
   it("hover tooltip is a single-line time scout", () => {
     useSession.setState({ cursorNs: 6_000_000_000n });
     const { getByTestId } = render(<Transport />);
@@ -467,17 +437,13 @@ describe("Transport", () => {
       "[data-testid='transport-hover-tooltip']",
     );
     expect(tip).not.toBeNull();
-    // Only the canonical relative format (iter3 issue #1) — no
-    // wall-clock alt convention sub-line in iter5.
+    // Only the canonical relative format; no alt-convention sub-line.
     expect(tip?.textContent).toBe("00:05.000");
     expect(tip?.querySelectorAll("span").length).toBe(1);
   });
 
-  // Iteration 5 (issue #5) — REL/ABS toggle was previously 1300 px
-  // away from the time labels it formats. It now lives in the
-  // scrubRowLabels row right between the start/end edge labels, next
-  // to the very numbers it controls (proximity fix). The right-side
-  // utility cluster now carries only `?`.
+  // REL/ABS toggle lives in the scrubRowLabels row between the
+  // start/end labels (proximity); the utility cluster carries only `?`.
   it("REL/ABS toggle sits between start/end labels; meta cluster keeps `?`", () => {
     const { getByTestId } = render(<Transport />);
     const meta = getByTestId("transport-meta-cluster");
@@ -488,7 +454,7 @@ describe("Transport", () => {
     expect(meta.contains(modeToggle)).toBe(false);
     // `?` still lives in the utility cluster on the right.
     expect(meta.contains(getByTestId("transport-shortcuts-toggle"))).toBe(true);
-    // Speed pill is in the primary transport cluster (iter4 #4).
+    // Speed pill is in the primary transport cluster.
     expect(meta.contains(getByTestId("transport-speed"))).toBe(false);
     // The toggle is also explicitly NOT inside the playback cluster
     // — its new home is the under-track label row.
@@ -497,9 +463,8 @@ describe("Transport", () => {
     ).toBe(false);
   });
 
-  // Iteration 4 (issue #4) — play group + speed pill are siblings
-  // inside the same primary cluster so the user reads "this is how
-  // I drive playback" in one glance.
+  // Play group + speed pill are siblings inside the same primary
+  // cluster.
   it("playback buttons and speed pill share the primary transport cluster", () => {
     const { getByTestId } = render(<Transport />);
     const cluster = getByTestId("transport-cluster");
@@ -515,10 +480,8 @@ describe("Transport", () => {
     );
   });
 
-  // Iteration 4 (issue #3) — date stamp sublabel inside the cursor
-  // badge only renders when timeMode is "absolute". In "relative"
-  // mode the badge is a single-line readout so the transport bar
-  // never shows competing time formats simultaneously.
+  // Date sublabel inside the cursor badge renders only in absolute
+  // mode, so the bar never shows competing time formats at once.
   it("date sublabel appears only in absolute mode", () => {
     const { queryByTestId, getByTestId } = render(<Transport />);
     expect(queryByTestId("transport-playhead-date")).toBeNull();
@@ -538,12 +501,9 @@ describe("Transport", () => {
     expect(queryByTestId("transport-playhead-date")).toBeNull();
   });
 
-  // Iteration 5 (issue #4) — hover chip is terse. The iter3/4
-  // inline segment-name line is gone; instead, hovering NEAR a
-  // segment boundary (within ~0.4 % of track width) flips the chip
-  // to "Segment N start" / "Segment N end" so the boundary ticks
-  // are self-explanatory. Anywhere else (deep inside a segment),
-  // it's just the time.
+  // Hovering within ~0.4 % of a segment boundary flips the chip to
+  // "Segment N start" / "Segment N end" so the boundary ticks are
+  // self-explanatory; deep inside a segment it's just the time.
   it("hover chip shows boundary labels near segment ticks", () => {
     useSession.setState({
       sources: [
@@ -606,8 +566,7 @@ describe("Transport", () => {
     expect(tipTime?.textContent).toBe("00:01.000");
   });
 
-  // Iteration 5 (issue #4) — single-source sessions never trigger
-  // boundary snapping; the chip always shows the time.
+  // Single-source sessions never trigger boundary snapping.
   it("hover chip always shows time in single-source sessions", () => {
     const { getByTestId } = render(<Transport />);
     const track = getByTestId("scrubber");

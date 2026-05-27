@@ -1,16 +1,7 @@
-/* Phase 7+ · Per-panel tab chrome.
- *
- * Layout: [kind icon] [name | input] [actions cluster]
- * The whole row is draggable (FlexLayout owns the surrounding tab
- * surface). The icon and name area use `cursor: grab` to advertise
- * that. The actions cluster reverts to `cursor: pointer` per-button.
- *
- * Buttons are 28×28 hit targets (driven by `--icon-hit-target`) with
- * 14 px glyphs — iter8 lifted from 24 px after the calibrated critic
- * flagged the close × as "looks small". The glyph viewbox is unchanged
- * so only the click area grows; the strip still reads compact and the
- * cluster sits flush with FlexLayout's 30-ish-px tabset height. Hover
- * surfaces a subtle background fill so the buttons read as graspable. */
+/* Per-panel tab chrome. Layout: [kind icon] [name|input] [actions cluster].
+ * The whole row is draggable (FlexLayout owns the surrounding tab surface).
+ * Action buttons stop pointerdown locally so per-button clicks don't seed
+ * a tab drag. */
 .header {
   /* Per-kind accent colour — set inline on the wrapper. */
   --panel-accent: var(--color-border-hover);
@@ -19,20 +10,11 @@
   display: inline-flex;
   align-items: center;
   gap: var(--sp-4);
-  /* iter6 · panel header label sits on the `md` rung. */
   font-size: var(--fs-md);
   color: inherit;
-  /* Iter5 · the left-edge accent inset on the focused panel needs a
-   * non-zero left padding so the 2-px stripe doesn't kiss the kind
-   * icon. The header is the entire drag surface; padding bumps the
-   * content right without changing the FlexLayout tab button box. */
+  /* Left padding clears the focused-state 2-px accent inset (::before). */
   padding: 0 var(--sp-2) 0 var(--sp-3);
-  /* Tab strip is the drag surface; advertise it. */
   cursor: grab;
-  /* Iter5 · focused state paints a subtle accent wash under the
-   * header so active vs inactive isn't a 1-px underline alone. The
-   * default is transparent; .focused promotes it (see below). The
-   * transition kept short so tab-switching reads as immediate. */
   background-color: transparent;
   transition: background-color var(--motion-fast);
 }
@@ -41,14 +23,8 @@
   cursor: grabbing;
 }
 
-/* Iter5 · the unmistakable "this is the active panel" cue cluster.
- *
- * Three coordinated affordances replace the previous lone 2-px
- * underline: (1) a 2-px accent left-edge inset, (2) a 4 % accent
- * background wash, (3) full-opacity title text (see `.focused .name`).
- * The inset uses the per-kind `--panel-accent` colour so the cue is
- * tied to the panel's identity, not generic blue. Inactive tabs have
- * no left inset, no wash, and a dimmer (but ≥4.5:1) title colour. */
+/* Focused-panel cue: left-edge accent inset (::before), 8 % wash, and a
+ * brighter title (see `.focused .name`). */
 .header.focused {
   background-color: color-mix(
     in srgb,
@@ -70,7 +46,7 @@
 }
 
 /* Per-panel-kind accent tokens — chrome only, kept distinct from the
- * plot palette (--plot-1..8). Subtle, dark-mode tuned. */
+ * plot palette (--plot-1..8). */
 .header[data-panel-kind="video"] {
   --panel-accent: #38bdf8; /* sky */
 }
@@ -90,12 +66,9 @@
   --panel-accent: #f472b6; /* pink */
 }
 
-/* The 2-px accent band sits under the tab text. Default opacity 0 so
- * unselected tabs have no underline (iter3 review: inactive tabs need
- * to read as subordinate). The active-in-tabset state lights it at
- * 0.4, and the globally focused panel pushes it to full 1.0. Both
- * are driven from Workspace's module CSS so PanelHeader doesn't need
- * to know about the FlexLayout selection class. */
+/* 2-px accent underline. Opacity 0 by default; the active-in-tabset
+ * state lights it (Workspace.module.css drives that off the FlexLayout
+ * selection class); `.focused` overrides to active-blue full opacity below. */
 .header::after {
   content: "";
   position: absolute;
@@ -110,35 +83,16 @@
   transition: opacity var(--motion-fast);
 }
 
-/* `!important` so the per-panel "globally focused" state wins over
- * the parent-level `--selected` rule defined in Workspace.module.css
- * (same specificity but the cascade winner depends on import order;
- * the iter3 review wants the focused panel to read as the brightest
- * member of the workspace, full stop).
- *
- * Iter7 wave2 · the focused panel's underline switches to the
- * dedicated active-blue token so the "you are here" cue is a single,
- * unambiguous colour regardless of panel kind. The per-kind accent
- * still surfaces on hover and on selected-but-unfocused tabs, but
- * the actively focused panel reads as blue across the workspace —
- * matching the calibrated-critic ask for a real active state. */
+/* `!important` so the globally-focused panel wins over the
+ * parent-level `--selected` rule in Workspace.module.css (same
+ * specificity, cascade order otherwise wins by import order). */
 .header.focused::after {
   background: var(--color-active-blue) !important;
   opacity: 1 !important;
 }
 
-/* Iter5 · drag affordance.
- *
- * Six-dot handle painted at the very left of the header. The whole
- * header already advertises `cursor: grab`, but the audit (and the
- * skill's "no mystery-meat" rule) wants an explicit glyph so users
- * don't have to discover the drag by hover.
- *
- * Colour starts at fg-5 so the handle reads as subordinate to the
- * kind icon + title; on header hover it brightens to fg-3 to signal
- * "I'm the thing you'd grab right now". Resting fg-5 (#969ba4) still
- * clears 4.5:1 vs bg-2, so the handle never disappears below AA.
- */
+/* Six-dot drag handle painted on the left of the header. Visual cue
+ * only — FlexLayout owns the drag from the surrounding tab button. */
 .dragHandle {
   display: inline-flex;
   align-items: center;
@@ -147,7 +101,6 @@
   height: 14px;
   color: var(--color-fg-5);
   flex: 0 0 auto;
-  /* Inherit grab so the handle reads as the drag target on hover. */
   cursor: inherit;
   transition: color var(--motion-fast);
 }
@@ -172,39 +125,22 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* 20ch covers "Speeds (MCAP + MF4)" comfortably; longer titles
-   * truncate but expand on hover (see `.name:hover` below). The
-   * native `title` attribute also surfaces the full string for
-   * screen readers + keyboard users. */
+  /* 20ch covers most titles; longer truncate but expand on hover (see
+   * `.name:hover`). The native `title` attribute surfaces the full
+   * string for screen readers + keyboard users. */
   max-width: 20ch;
-  /* Inherit grab so the title participates in the drag affordance. */
   cursor: inherit;
-  /* Avoid native double-click text selection — we use double-click
-   * as our maximize/rename gesture. */
+  /* Double-click is our maximize/rename gesture — suppress native
+   * double-click text selection. */
   user-select: none;
-  /* Iter5 · inactive title contrast.
-   *
-   * Previously the only "inactive" cue was a 0.6 opacity multiplier
-   * on the parent tab_button, which crushed effective contrast to
-   * ~3:1 (fails AA 4.5:1). We now drive inactive vs active via
-   * explicit fg tokens: `--color-fg-3` (#c8ccd2) reads at ~10:1
-   * against `--color-bg-2`, well above AA. Active state lifts to
-   * `--color-fg-1` so the brighter title alone reads as "this one
-   * is the active tab".
-   */
   color: var(--color-fg-3);
   transition:
     max-width var(--motion-fast),
     color var(--motion-fast);
 }
 
-/* Iter3 · hover-expand long titles. CSS only — no measurement loop,
- * no JS. The header is `inline-flex`, so growing the name pushes
- * the action cluster right; the tabset takes the new size on the
- * next paint without reflow drama. The cap of 40ch keeps insanely
- * long names from pushing other tabs off-strip. Hover over the
- * input would conflict with rename's own selection gesture, so we
- * only expand the read-only `.name` span. */
+/* Hover-expand long titles. Only the read-only `.name` span; hovering
+ * the input would conflict with rename's own selection gesture. */
 .name:hover {
   max-width: 40ch;
 }
@@ -228,16 +164,13 @@
   border-radius: var(--radius-3);
   padding: 1px var(--sp-3);
   width: 18ch;
-  /* iter6 · this input is for renaming a panel inline; suppress the
-   * default browser outline only when focus came from pointing/typing
-   * (`:focus`). Keyboard focus (`:focus-visible`) below keeps the ring. */
+  /* Suppress default outline on pointer/typing focus only; keyboard
+   * focus (`:focus-visible` below) restores the ring. */
   outline: none;
   cursor: text;
 }
 
 .nameInput:focus-visible {
-  /* iter6 · explicit keyboard focus ring so the inline-rename input
-   * still announces itself to keyboard users. */
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
   border-color: var(--color-role-active);
@@ -255,18 +188,10 @@
   margin-left: var(--sp-3);
 }
 
-/* Iter5 · destructive-action divider.
- *
- * Audit point: "the × close panel sits one pixel from □ maximise.
- * Misclick risk is high; closing a panel is destructive and shouldn't
- * be adjacent to a benign control." The divider is a 1-px hairline +
- * symmetric padding so the close button reads as its own action zone
- * without disrupting the inline-flex cluster. Aria-hidden because it's
- * purely visual; the close button still has its own aria-label.
- *
- * The margin is `--sp-3` (8px) — combined with the cluster's `--sp-1`
- * gap that puts the close button ~16px away from maximize, well past
- * the Fitts'-law misclick threshold for 24-px hit targets. */
+/* Hairline divider gives the destructive close button a visual gap
+ * from maximize. Margin `--sp-3` (8 px) + cluster gap `--sp-1` puts
+ * close ~16 px from maximize, past Fitts'-law misclick threshold for
+ * 24-px hit targets. */
 .actionDivider {
   display: inline-block;
   width: 1px;
@@ -280,28 +205,14 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  /* iter8 · 28-px floor (was 24 px). The calibrated critic flagged
-   * the close × as too small to land cleanly on a trackpad; bumping
-   * to `--icon-hit-target` (28 px) clears the ergonomic floor without
-   * bloating the strip. min-width/height also defend against any
-   * future SVG-shrink CSS from collapsing the click area. */
+  /* min-width/height defend against a future SVG-shrink rule
+   * collapsing the click area below `--icon-hit-target`. */
   width: var(--icon-hit-target);
   height: var(--icon-hit-target);
   min-width: var(--icon-hit-target);
   min-height: var(--icon-hit-target);
   border: 0;
   background: transparent;
-  /* Iter5 · resting icon contrast.
-   *
-   * Iter4 used `--color-fg-4` (#b4b9c1) which on its own clears AA
-   * against bg-2 (~8:1) — but combined with the tab_button opacity
-   * multiplier the audit measured the rendered glyph at ~3:1 (fails
-   * AA). The opacity crush is gone (Workspace.module.css), and we
-   * lift the rest token to `--color-fg-3` so the icons stay well
-   * above the 4.5:1 floor even at the 0.92 unselected nudge. They're
-   * still subordinate to title text (titles read at fg-1 when active,
-   * fg-3 when inactive — same colour as resting icons, but bolder).
-   */
   color: var(--color-fg-3);
   border-radius: var(--radius-3);
   cursor: pointer;
@@ -325,43 +236,27 @@
   outline-offset: var(--focus-offset);
 }
 
-/* The close button gets a danger-tinted hover so it visually
- * distinguishes itself from the rest of the cluster — addresses the
- * "two ×" review point: the panel close is the destructive one,
- * stock FlexLayout's tabset close (still present at the strip's
- * right edge) is the only other ×. Kept as `actionBtnDanger` for
- * backwards compatibility with anything that might still reference
- * it; the close button now uses `actionBtnClose` (same hover, plus
- * a slightly heavier resting tone so it reads as the destructive
- * action at idle, not only on hover). */
+/* Danger-tinted hover for the close button. `actionBtnDanger` kept for
+ * back-compat; close now uses `actionBtnClose` with the brighter idle
+ * tone below. */
 .actionBtnDanger:hover,
 .actionBtnClose:hover {
   background: var(--color-error-bg, rgba(178, 58, 0, 0.18));
   color: var(--color-error-dark);
 }
 
-/* Resting state for the close button: marginally brighter glyph than
- * its peers so the destructive action is the first thing the eye
- * picks up in the cluster (review note: "make the close × visually
- * distinct"). Iter5: now that the other icons rest at fg-3, the close
- * lifts to fg-2 to stay perceptibly brighter at rest. Hover swaps to
- * the danger tint above. */
 .actionBtnClose {
   color: var(--color-fg-2);
 }
 
-/* The maximize button paints a 1-px offset shadow when the tabset
- * is currently maximized so the toggle state is legible even before
- * the user hovers to read the tooltip. */
+/* Maximized-state hint so the toggle is legible before hover. */
 .actionBtn[data-maximized="true"] {
   color: var(--color-fg-1);
   background: var(--color-bg-5);
 }
 
-/* a11y · screen-reader-only sibling that surfaces the panel kind
- * (Video / Plot / Map / …) for AT. The visible glyph is decorative
- * (`aria-hidden`), and the tab name alone doesn't distinguish a
- * "Speeds" video panel from a "Speeds" plot. Standard clip pattern. */
+/* Standard sr-only clip — the visible kind glyph is aria-hidden so AT
+ * gets the kind via this sibling span instead. */
 .srOnly {
   position: absolute;
   width: 1px;
@@ -375,8 +270,6 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  /* The focused-ring underline and the per-button hover swap are both
-   * intentional motion; drop transitions for users who opt out. */
   .header::after,
   .actionBtn,
   .nameInput {

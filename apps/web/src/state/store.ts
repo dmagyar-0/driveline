@@ -1,17 +1,15 @@
-// Zustand store. Scope:
-// - session slice (T2.4): sources, flat channel list, union `globalRange`
-// - transport slice (T3.1): cursorNs, playing, speed
-// - layout + bindings slice (T6.2): FlexLayout JSON model plus per-panel
-//   video/plot channel bindings keyed by panel id
+// Zustand session store. Scope: source/channel session, transport
+// (cursor/playing/speed), FlexLayout JSON + per-panel bindings, named
+// layouts, bookmarks, and UI shell state.
 //
-// The store is worker-aware: it holds the `Remote<DataCoreApi>` proxy and
-// dispatches to the correct `open_*` / `close_*` WASM function based on the
-// bucketed file type. Each live `SourceMeta` carries the wasm slab handle
-// so `clear()` can tear everything down without a separate handle table.
+// The store holds the `Remote<DataCoreApi>` proxy and dispatches to the
+// correct `open_*` / `close_*` WASM function based on the bucketed file
+// type. Each live `SourceMeta` carries the wasm slab handle so `clear()`
+// can tear everything down without a separate handle table.
 //
-// Layout + bindings are hydrated synchronously from `localStorage` at
-// store-create time so the first render already has the saved layout and
-// we avoid a default-then-swap flash.
+// Layout + bindings hydrate synchronously from `localStorage` at
+// store-create time so the first render already has the saved layout —
+// avoids a default-then-swap flash.
 
 import type { Remote } from "comlink";
 import { create } from "zustand";
@@ -57,19 +55,15 @@ export interface TimeRange {
 }
 
 export interface Channel {
-  // Globally unique across the loaded session. Composed via
-  // `qualifiedChannelId(sourceId, nativeId)` so two files that expose
-  // the same wasm-internal channel id — common with MF4, where the
-  // native id is just `{group}/{channel}` — do not collide in the
-  // binding maps or the PlotPanel's `channelMap` lookup table.
-  // The session-level uniqueness invariant relies on `uniqueSourceId`
-  // (defined below in this file) keeping every loaded source's id distinct, which
-  // pairs with the length-prefix encoding in `qualifiedChannelId` to
-  // make `(sourceId, nativeId)` an injective key.
+  // Globally unique across the loaded session — composed via
+  // `qualifiedChannelId(sourceId, nativeId)`. `uniqueSourceId` (below)
+  // keeps source ids distinct, and the length-prefix encoding in
+  // `qualifiedChannelId` makes `(sourceId, nativeId)` an injective key
+  // — so binding maps and `channelMap` never collide across files.
   id: string;
   // Per-source channel id as emitted by the wasm reader (`0/1` for MF4,
-  // the topic string for MCAP, `1/video` for MP4). This is the value
-  // the worker fetch APIs expect; it is *not* unique across sources.
+  // the topic string for MCAP, `1/video` for MP4). The worker fetch
+  // APIs expect this; it is NOT unique across sources.
   nativeId: string;
   sourceId: string;
   name: string;
@@ -111,16 +105,15 @@ export interface OpenResult {
 }
 
 /**
- * Per-plot-panel display settings. Currently a single field; the shape
- * is an object so future settings (axis pinning, log/linear, smoothing)
- * can land without bumping the persistence schema.
+ * Per-plot-panel display settings. Shape is an object so future fields
+ * (axis pinning, log/linear, smoothing) can land without bumping the
+ * persistence schema.
  *
- * `gapThresholdSec === null` preserves the spanGaps:true behavior PR
- * #83 shipped — alignment artifacts span and any real channel-loss
- * gap renders as a horizontal hold. Setting a positive number switches
- * the panel to step-hold mode with explicit gaps for any inter-sample
- * dx exceeding the threshold; see `mergeSeries` for the rendering
- * contract.
+ * `gapThresholdSec === null` keeps `spanGaps: true` — alignment
+ * artifacts span and channel-loss gaps render as a horizontal hold.
+ * A positive number switches the panel to step-hold mode with explicit
+ * gaps for any inter-sample dx exceeding the threshold; see
+ * `mergeSeries` for the rendering contract.
  */
 export interface PlotPanelSettings {
   gapThresholdSec: number | null;
@@ -134,75 +127,56 @@ export interface SessionState {
   sources: SourceMeta[];
   channels: Channel[];
   globalRange: TimeRange | null;
-  // Transport slice (T3.1). Consumed by the scrubber (T3.2) and the rAF
-  // playback loop (T3.3); the invariants — clamp to `globalRange`, bounded
-  // speed, stop at end-of-session — are enforced by the actions below so
-  // that UI code cannot violate them.
+  // Transport. Invariants — clamp to `globalRange`, bounded speed, stop
+  // at end-of-session — are enforced by the actions below so UI code
+  // can't violate them.
   cursorNs: bigint;
   playing: boolean;
   speed: number;
-  // UX overhaul issue #6 — single source of truth for the time
-  // convention shown across the app. The Transport renders the
-  // segmented toggle; PlotPanel reads this slice (via selector) when
-  // building its X-axis values formatter. Default `relative` because
-  // engineer recordings rarely care about absolute wall-clock.
-  // Persisted alongside `activeRailTab` / `railCollapsed` in the
-  // `driveline.ui.v2` shard (back-compat with v1: missing field →
-  // default).
+  // Time convention shown across the app (Transport segmented toggle,
+  // PlotPanel X-axis formatter). Default `relative` because engineer
+  // recordings rarely care about wall-clock. Persisted in the
+  // `driveline.ui.v2` shard (v1 → default).
   timeMode: "relative" | "absolute";
   // Monotonic counter bumped on every user-initiated cursor change
   // (`setCursor`, plus `play()` rewinds and end-of-session jumps).
-  // Playback rAF advances via `advanceCursor` and do **not** bump it.
-  // Consumers that need to react to scrubs — primarily the videoDecode
-  // pipeline, which has to tear down the decoder and reopen at the
-  // seek target — subscribe to this rather than to `cursorNs` so a
-  // 60 Hz playback tick does not look like a seek.
+  // Playback rAF uses `advanceCursor` and does NOT bump it — videoDecode
+  // and other seek-aware consumers subscribe to `seekEpoch` rather than
+  // `cursorNs` so a 60 Hz tick doesn't look like a seek.
   seekEpoch: number;
-  // Layout + bindings slice (T6.2). `layoutJson` is the opaque FlexLayout
-  // model (`Model.toJson()` output); the binding maps are keyed by the
-  // FlexLayout tab id so a closed-and-reopened panel can reclaim its
-  // configuration on reload.
+  // `layoutJson` is the opaque FlexLayout model (`Model.toJson()`
+  // output). Binding maps are keyed by FlexLayout tab id so a
+  // closed-and-reopened panel can reclaim its configuration on reload.
   layoutJson: unknown | null;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
-  // Per-plot-panel display settings (Phase 8). Decoupled from
-  // `plotBindings` because settings outlive the binding set —
-  // a user who changes their bound channels shouldn't lose their
-  // gap-threshold choice. Round-trips through the layout adapter and
-  // named-layout snapshots so reload restores it.
+  // Decoupled from `plotBindings` because settings outlive the binding
+  // set — changing bound channels shouldn't drop the gap-threshold
+  // choice. Round-trips through the layout adapter and named-layout
+  // snapshots.
   plotPanelSettings: Record<string, PlotPanelSettings>;
-  // Per-video-panel HUD overlay bit (Phase 5). Lifted out of
-  // `VideoPanel` local state so the Panel drawer can flip it from outside
-  // the panel. Persisted via the layout adapter (schema v2). Default
-  // `false` for any panelId not present in the map.
+  // Lifted out of `VideoPanel` local state so the Panel drawer can flip
+  // it from outside the panel. Default `false` when absent.
   videoHudOn: Record<string, boolean>;
-  // Phase 6 · per-panel bindings for the four new panel kinds. Each
-  // round-trips through layout persistence (v3) so a reload restores the
-  // full panel set. `clear()` resets all four maps.
   sceneBindings: Record<string, string | null>;
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
-  // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
-  // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
-  // panel-chrome work in Phase 7.
+  // `selectedPanelId` is per-session (not persisted).
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
   selectedPanelId: string | null;
-  // Named-layouts slice (Phase 4). User-saved snapshots of `layoutJson`
-  // plus the binding maps; persists to `driveline.layouts.named.v1` and
-  // outlives a session (untouched by `clear()`). `activeNamedLayoutId`
-  // tracks the orange-bordered "active" row in the Layout drawer; the
-  // drawer also computes a separate `live` pill from a stringified
-  // layoutJson compare.
+  // Named layouts persist to `driveline.layouts.named.v1` and outlive a
+  // session — `clear()` does not reset. `activeNamedLayoutId` tracks
+  // the active row in the Layout drawer; the drawer also computes a
+  // separate `live` pill from a stringified layoutJson compare.
   namedLayouts: NamedLayout[];
   activeNamedLayoutId: string | null;
-  // Bookmarks slice (Phase 8). User-placed time markers; persists to
-  // `driveline.bookmarks.v1` and outlives a session — `clear()` does
-  // not reset, mirroring `namedLayouts`. `ns` is `bigint`; the persist
-  // adapter encodes it as a decimal string. Display-time sorting
-  // happens in the drawer/marker components — storage and slice
-  // preserve insertion order so renames target a stable index.
+  // Bookmarks persist to `driveline.bookmarks.v1` and outlive a session
+  // (same posture as `namedLayouts`). `ns` is `bigint`; the persist
+  // adapter encodes as decimal string. Storage preserves insertion
+  // order so renames target a stable index; display-time sorting
+  // happens in the drawer/marker components.
   bookmarks: Bookmark[];
   /**
    * Errors from the most recent `openFiles` batch. The Sources drawer
@@ -556,17 +530,15 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setLayoutJson(json) {
-      // Any out-of-band layout edit (FlexLayout `onModelChange` after a
-      // user drag, dev hook, reset) breaks the "active named layout"
-      // identity — clear it so the Layout drawer's orange border no
-      // longer points at a layout the user has since diverged from.
+      // Out-of-band edits (drag, dev hook, reset) break the active
+      // named-layout identity — clear it so the Layout drawer's active
+      // row no longer points at a layout the user has diverged from.
       //
-      // SEAM: `restoreNamedLayout` deliberately bypasses this clearing
-      // by writing `{ layoutJson, activeNamedLayoutId }` in one
-      // `set({...})` call, so the ordering inside that action is
-      // load-bearing — do not refactor it to call `setLayoutJson(...)`
-      // followed by `setActiveNamedLayoutId(...)` or the active id will
-      // get clobbered by this line on every restore.
+      // SEAM: `restoreNamedLayout` bypasses this by writing
+      // `{ layoutJson, activeNamedLayoutId }` in one `set({...})` call.
+      // Do not refactor it to call `setLayoutJson(...)` then
+      // `setActiveNamedLayoutId(...)` — this line would clobber the
+      // active id on every restore.
       set({ layoutJson: json, activeNamedLayoutId: null });
     },
 
@@ -626,9 +598,8 @@ export const useSession = create<SessionState>((set, get) => {
     setPlotGapThreshold(panelId, sec) {
       const prev = get().plotPanelSettings;
       const existing = prev[panelId] ?? DEFAULT_PLOT_PANEL_SETTINGS;
-      // Normalise: any non-finite or non-positive value collapses to
-      // null (the "off" state), so the persistence layer doesn't have
-      // to defend against -Infinity / NaN coming from a numeric input.
+      // Non-finite / non-positive values collapse to null so the
+      // persistence layer never sees -Infinity / NaN.
       const normalised: number | null =
         sec !== null && Number.isFinite(sec) && sec > 0 ? sec : null;
       if (existing.gapThresholdSec === normalised) return;
@@ -650,8 +621,8 @@ export const useSession = create<SessionState>((set, get) => {
       const prev = get().mapBindings;
       const cur = prev[panelId] ?? null;
       // Deep-equal short-circuit so re-binding the same lat/lon pair is
-      // a no-op (avoids spurious persistence writes from the drawer's
-      // double-bind path).
+      // a no-op — avoids spurious persistence writes from the drawer's
+      // double-bind path.
       if (
         cur === binding ||
         (cur !== null &&
@@ -755,10 +726,9 @@ export const useSession = create<SessionState>((set, get) => {
     restoreNamedLayout(id) {
       const entry = get().namedLayouts.find((l) => l.id === id);
       if (!entry) return;
-      // Single `set` so the persist adapter writes one snapshot and
-      // FlexLayout's external-rebuild effect sees the restored JSON
-      // alongside the active-id update (no race with the `setLayoutJson`
-      // clearing path).
+      // Single `set` so the persist adapter writes one snapshot and the
+      // FlexLayout external-rebuild effect sees `layoutJson` alongside
+      // the active-id update — no race with `setLayoutJson`'s clear.
       set({
         layoutJson: entry.layoutJson,
         videoBindings: { ...entry.videoBindings },
@@ -886,11 +856,10 @@ export const useSession = create<SessionState>((set, get) => {
       const run = (): Promise<OpenResult> => timed("open", async () => {
         if (!worker) throw new Error("session store: worker not initialised");
         const w = worker;
-        // Issue #33 — surface ingestion as a visible UI state. The empty
-        // state and per-panel surfaces read this to render a
-        // "Decoding… / Indexing…" affordance instead of dropping into a
-        // silent UI on a multi-MB drop. Flip back inside the run so a
-        // worker error still clears the flag.
+        // Empty state and per-panel surfaces read `ingesting` to render
+        // a "Decoding… / Indexing…" affordance — without it a multi-MB
+        // drop looks like a silent UI. Flipped back in the `finally`
+        // below so worker errors still clear the flag.
         set({ ingesting: true });
 
         const buckets = bucketFiles(files);
@@ -943,15 +912,13 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const pair of buckets.mp4Pairs) {
           try {
-            // Only the `ftyp` + `moov` boxes are needed by the WASM
-            // parser — `mdat` (the actual encoded video, often
-            // multi-GB) is never dereferenced during `open_pair`.
-            // Reading the whole mp4 here would allocate a contiguous
-            // gigabytes-sized `Uint8Array` on the main thread before
-            // the lazy sample cache could take over, OOMing tabs on
-            // long recordings. `readMp4HeaderBytes` walks the box
-            // structure via `File.slice()` and returns just the
-            // header, typically a few MB even for 2 GB sources.
+            // Only `ftyp` + `moov` are needed by the WASM parser;
+            // `mdat` (the encoded video, often multi-GB) is never
+            // dereferenced during `open_pair`. Reading the whole mp4
+            // here would allocate a contiguous Uint8Array on the main
+            // thread and OOM long recordings before the lazy sample
+            // cache can take over. `readMp4HeaderBytes` walks the box
+            // structure via `File.slice()` and returns just the header.
             let mp4HeaderBytes: Uint8Array | null = await readMp4HeaderBytes(
               pair.mp4,
             );
@@ -959,8 +926,8 @@ export const useSession = create<SessionState>((set, get) => {
             const handle = await w.openMp4Sidecar(mp4HeaderBytes, tsBytes);
             const summary = await w.mp4SidecarSummary(handle);
             const index: Mp4SidecarIndex = await w.mp4SidecarIndex(handle);
-            // Release transient ingest buffers as soon as WASM has the
-            // index — peak memory during open drops back to steady state.
+            // Drop ingest buffers as soon as WASM has the index — peak
+            // memory falls back to steady state.
             mp4HeaderBytes = null;
             tsBytes = null;
             const id = uniqueSourceId(pair.mp4.name, [
@@ -997,10 +964,9 @@ export const useSession = create<SessionState>((set, get) => {
           const allChannels = allSources.flatMap((s) => s.channels);
           const newRange = mergeGlobalRange(allSources);
           const prevCursor = get().cursorNs;
-          // Seed / reseat the cursor so it is always inside `globalRange`.
-          // On the first successful drop, `cursorNs` is still the 0n
-          // default; on later drops, leave it alone unless it now falls
-          // outside the (possibly widened) union range.
+          // Keep the cursor inside `globalRange`. First successful drop:
+          // `cursorNs` is still the 0n default. Later drops: leave it
+          // alone unless it now falls outside the widened union range.
           const nextCursor =
             newRange &&
             (prevCursor < newRange.startNs || prevCursor > newRange.endNs)
@@ -1021,10 +987,10 @@ export const useSession = create<SessionState>((set, get) => {
       });
 
       const next = pending.then(run, run);
-      // Keep the chain alive even if `run` throws so the next caller still
-      // queues behind it rather than racing. Always clear `ingesting`
-      // when the batch settles (success or failure) so a worker error
-      // can't leave the empty state stuck on the loading affordance.
+      // Catch keeps the chain alive on `run` failure so the next caller
+      // queues behind it instead of racing. `finally` clears
+      // `ingesting` for success+failure so a worker error can't strand
+      // the empty state on the loading affordance.
       pending = next.catch(() => undefined).finally(() => {
         set({ ingesting: false });
       });
@@ -1040,15 +1006,12 @@ export const useSession = create<SessionState>((set, get) => {
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
             else await w.closeMp4Sidecar(s.handle);
-            // Drop the lazy sample cache — releases its `File` ref,
-            // detaches notification subscribers, and frees any cached
-            // sample bytes.
             s.mp4Cache?.dispose();
           } catch (err) {
-            // The slab entry either stays for the lifetime of the worker
-            // or was already freed, so we always continue resetting the
-            // session — but surface the failure so worker panics / dropped
-            // postMessage replies aren't silent.
+            // Always continue tearing down — the slab entry either
+            // stays for the worker's lifetime or was already freed.
+            // Log so worker panics / dropped postMessage replies are
+            // surfaced rather than silent.
             console.warn(
               `[session.clear] close failed for ${s.kind}#${s.handle}`,
               err,
@@ -1056,11 +1019,9 @@ export const useSession = create<SessionState>((set, get) => {
           }
         }
         // Wipe session + transport + per-panel bindings, but keep
-        // `layoutJson`, `namedLayouts`, and `bookmarks` so the user's
-        // dock layout, saved layouts, and bookmarks survive a clear
-        // (T6.2 — layout outlives a session, per
-        // docs/06-ui-and-panels.md:167; bookmarks follow the same
-        // posture per Phase 8).
+        // `layoutJson`, `namedLayouts`, and `bookmarks` so dock layout,
+        // saved layouts, and bookmarks survive a clear — see
+        // docs/06-ui-and-panels.md:167.
         set({
           sources: [],
           channels: [],

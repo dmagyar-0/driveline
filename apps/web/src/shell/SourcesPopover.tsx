@@ -1,48 +1,9 @@
-// UX overhaul (issue #17) · Sources popover.
+// Sources popover · triggered from the topbar's "N sources" chip.
+// Self-contained sources surface: list + add + per-row remove + clear.
+// Closes on outside click, on Escape, or on selecting an action.
 //
-// Triggered from the topbar's "N sources" chip. Renders a compact list
-// of loaded sources with a per-row palette swatch, type icon, name,
-// kind badge, channel count, time range, and a remove affordance — so
-// the user can audit and prune the loaded session without opening the
-// Sources drawer.
-//
-// iter5 #4 + #5 — the popover IS the sources surface from the top bar.
-//
-//   #4 — The previous "Open Sources panel" link implied a second
-//        sources surface elsewhere, so users had two wayfinding paths
-//        for one concern. The rail's `Sources` item is enough; this
-//        popover no longer offers the redirect.
-//   #5 — Promote a `+ Add file` button to the top of the popover so
-//        adding a new source is a primary action from the top bar.
-//        Previously the only ways in were the Sources drawer's load
-//        row and drag-drop on the workspace. The button delegates to
-//        the same `openFiles` store action as those flows, and the
-//        popover closes once the file picker resolves.
-//
-// iter3 #1 — popover scales beyond two sources:
-//   - Text input at the top filters the list by name (case-insensitive
-//     substring match). Filtering preserves the active sort.
-//   - Sort toggle (Name / Type / Duration) — three small pill buttons,
-//     default Name. Sort is local state (no store touch).
-//   - When ≥3 sources are loaded AND the type mix is heterogeneous,
-//     rows are grouped under small subheading rows (MCAP / MF4 / MP4)
-//     within each section, sorted internally by the active sort.
-//   - Filter-empty state: "No sources match \"<query>\"".
-//   - "Clear all" demoted to a small secondary-text affordance — now
-//     it is the only action in the footer.
-//
-// iter2 #4:
-//   - Each row gets a small × button on the right. The store today
-//     only exposes `clear()` (no per-source remove); we surface the
-//     × disabled with a tooltip pointing at the Sources drawer.
-//     TODO: when the store grows a `removeSource(id)` action, wire
-//     this button to it (and drop the `disabled` attribute).
-//   - Each row prints a "N channels" count next to the kind badge.
-//   - The colour swatch already uses `palette.colorFor(src.id)` so it
-//     matches the per-source palette colour the plot panel uses.
-//
-// Closes on outside click, on Escape, on selecting an action, or when
-// the trigger loses the `aria-expanded` toggle.
+// TODO: when the store grows a per-source `removeSource(id)` action,
+// wire the per-row × button (currently rendered `disabled`).
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
@@ -59,9 +20,8 @@ function kindLabel(k: SourceKind): "MCAP" | "MF4" | "MP4" {
   return "MP4";
 }
 
-// Order used both for the "Type" sort and for the order in which type
-// subheadings render when grouping is active. Keeps MCAP/MF4 signal
-// formats above MP4 video sources.
+// Used for the "Type" sort and for subheading order. Signal formats
+// (MCAP/MF4) rank above MP4 video.
 const KIND_ORDER: readonly SourceKind[] = ["mcap", "mf4", "mp4+sidecar"];
 
 interface IconProps {
@@ -102,17 +62,7 @@ export interface SourcesPopoverProps {
   onClose: () => void;
   /** Used to position the popover relative to its trigger. */
   anchorId: string;
-  /**
-   * iter5 #4 — `onOpenDrawer` was the "Open Sources panel" redirect
-   * that implied a second sources surface. It has been removed; the
-   * popover is now the top-bar entry to source management and the
-   * rail's Sources item is the only other path. New callers must
-   * not reintroduce this prop.
-   *
-   * Optional prop kept on the type so callers that still pass the
-   * value while we land the rest of the iter5 work don't break the
-   * type checker. Ignored inside the popover.
-   */
+  /** Removed redirect; ignored. Kept optional so stale callers compile. */
   onOpenDrawer?: () => void;
 }
 
@@ -130,8 +80,7 @@ function sortSources(list: SourceMeta[], key: SortKey): SourceMeta[] {
       return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
   } else {
-    // duration — longest first; users usually scan for the "main"
-    // session, which is the longest source in mixed loads.
+    // duration — longest first (the "main" session in mixed loads).
     copy.sort((a, b) => {
       const ad = a.timeRange.endNs - a.timeRange.startNs;
       const bd = b.timeRange.endNs - b.timeRange.startNs;
@@ -154,19 +103,16 @@ interface Heading {
 }
 type Item = Row | Heading;
 
-/** Turn the filtered/sorted list into the flat render items. Inserts
- *  per-kind subheadings when the list has ≥3 sources AND the type mix
- *  is heterogeneous. With a single kind, headings would be visual
- *  noise so we skip them. */
+/** Inserts per-kind subheadings only when ≥3 sources AND heterogeneous
+ *  kinds — single-kind lists would be visual noise. */
 function withGroupHeadings(list: SourceMeta[]): Item[] {
   if (list.length < 3) return list.map((src) => ({ type: "row", src }) as Row);
   const kinds = new Set(list.map((s) => s.kind));
   if (kinds.size < 2) {
     return list.map((src) => ({ type: "row", src }) as Row);
   }
-  // Bucket per kind, in canonical KIND_ORDER, preserving the within-
-  // bucket order the caller already produced (so the active sort still
-  // works inside each group).
+  // Bucket in canonical KIND_ORDER, preserving within-bucket order so
+  // the active sort still works inside each group.
   const out: Item[] = [];
   for (const kind of KIND_ORDER) {
     const bucket = list.filter((s) => s.kind === kind);
@@ -186,30 +132,22 @@ export function SourcesPopover({
   const clear = useSession((st) => st.clear);
   const openFiles = useSession((st) => st.openFiles);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  // iter5 #5 — hidden `<input type="file" multiple>` driven by the
-  // promoted "+ Add file" button. Same flow as the Sources drawer's
-  // `+ drop / load file…` row: `openFiles` dispatches into the same
-  // store action drag-drop uses, so error surfacing and ingest state
-  // (`lastOpenErrors`, `ingesting`) stay coherent.
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const onAddFileClick = () => fileInputRef.current?.click();
   const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const picked = e.target.files;
-    // Reset before awaiting so picking the same file twice in a row
-    // still fires `onChange`.
+    // Reset before awaiting so picking the same file twice still fires
+    // `onChange`.
     e.target.value = "";
     if (picked && picked.length > 0) {
       await openFiles(Array.from(picked));
     }
   };
 
-  // Search + sort are popover-local — no store touch. Both reset
-  // implicitly when the popover unmounts (open === false).
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("name");
 
-  // Clear the query when the popover (re)opens so it doesn't surprise
-  // the user with a stale filter from a previous session.
+  // Reset the query each time the popover (re)opens.
   useEffect(() => {
     if (open) setQuery("");
   }, [open]);
@@ -273,13 +211,6 @@ export function SourcesPopover({
         <span className={s.count}>{sources.length}</span>
       </div>
 
-      {/* iter5 #5 — primary "+ Add file" action.
-       *
-       * Sits directly under the header so it is the first interactive
-       * element in the popover. Delegates to the hidden file input
-       * which then routes through the standard `openFiles` flow. The
-       * popover stays open while the picker is up so the user can see
-       * the new sources land in the list. */}
       <button
         type="button"
         className={s.addFileBtn}
@@ -318,10 +249,8 @@ export function SourcesPopover({
         tabIndex={-1}
       />
 
-      {/* Search + sort live above the list. We always render them when
-       *  there is at least one source so the controls don't pop in
-       *  after a filter zeroes the list. They stay hidden when no
-       *  sources are loaded at all to avoid a confusing empty UI. */}
+      {/* Controls render whenever any source is loaded so they don't pop
+       *  in after a filter zeroes the list. */}
       {sources.length > 0 ? (
         <div className={s.controls}>
           <div className={s.searchWrap}>
@@ -434,16 +363,10 @@ export function SourcesPopover({
                     </span>
                   </span>
                 </div>
-                {/* iter2 #4 — per-row × placeholder. The store does
-                 *  not (today) expose a per-source unload action;
-                 *  only `clear()` exists. We render the button
-                 *  disabled so the affordance is discoverable and
-                 *  the tooltip points the user at the Sources
-                 *  drawer (which has the same limitation but is the
-                 *  natural home for a future remove action).
-                 *  TODO(driveline#removeSource): swap `disabled` for
-                 *  an `onClick` that calls the store's per-source
-                 *  remove action once it lands. */}
+                {/* TODO(driveline#removeSource): drop `disabled` and
+                 *  wire to a per-source remove action once it lands.
+                 *  Today only `clear()` exists, so the affordance is
+                 *  rendered disabled for discoverability. */}
                 <button
                   type="button"
                   className={s.removeBtn}
@@ -472,10 +395,6 @@ export function SourcesPopover({
         </ul>
       )}
 
-      {/* iter5 #4 — the "Open Sources panel" redirect was removed. The
-       *  popover is self-contained: list / add / remove / clear / close.
-       *  When there are sources to clear, render only the demoted
-       *  destructive affordance — no more dual-link footer. */}
       {sources.length > 0 ? (
         <div className={s.actions}>
           <button

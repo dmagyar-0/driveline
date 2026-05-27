@@ -41,18 +41,9 @@
   color: var(--color-fg-5);
 }
 
-/*
- * FlexLayout renders its own chrome inside `.flexContainer`. Its dark
- * stylesheet is imported globally from Workspace.tsx; a handful of CSS
- * custom properties let us nudge the palette to match the rest of the
- * app (orange cursor accent, slightly darker backgrounds). Only the
- * vars that the installed 0.8.x `dark.css` documents are overridden.
- *
- * Phase 7 · the selected tab uses neutral white-on-grey, NOT orange.
- * The wireframe author rejected orange for selection chrome (see
- * `wireframe-bundle/chats/chat1.md`). Series colour space stays
- * reserved for plot data; chrome stays neutral.
- */
+/* FlexLayout's dark stylesheet ships its own custom properties; override
+ * only the ones the installed 0.8.x `dark.css` documents. Chrome stays
+ * neutral — orange is reserved for the time cursor / playhead. */
 .flexContainer :global(.flexlayout__layout) {
   --color-background: var(--color-bg-1);
   --color-text: var(--color-fg-2);
@@ -62,21 +53,13 @@
   --color-tab-selected-background: var(--color-bg-3);
   --color-splitter: var(--color-border-subtle);
   /* Name collides with our token (--color-splitter-hover); inline the
-   * hex to avoid a self-referential `var()` cycle. Same value as the
-   * driveline token. */
+   * hex to avoid a self-referential `var()` cycle. */
   --color-splitter-hover: #3a3a3a;
-  /* iter6 · splitter drag = "selection in motion" → blue, not CTA orange. */
   --color-splitter-drag: var(--color-role-active);
 }
 
-/* Phase 7+ · tabset border + focused-panel ring.
- *
- * FlexLayout adds `flexlayout__tabset-selected` on the active tabset
- * (kept in sync with store-level `selectedPanelId` by the Workspace
- * effect). Idle tabsets get a subtle hairline; focused gets a blue
- * accent ring so the active panel reads at a glance. The transition
- * is short (var --motion-fast) to feel responsive without flashing
- * on scrub-related re-renders. */
+/* Tabset border + focused-panel ring. The selected tabset class is
+ * kept in sync with store-level `selectedPanelId` by Workspace's effect. */
 .flexContainer :global(.flexlayout__tabset) {
   border: 1px solid var(--color-border-subtle);
   transition: border-color var(--motion-fast);
@@ -95,21 +78,10 @@
   cursor: grabbing;
 }
 
-/* Iter5 · subordinate inactive tabs WITHOUT crushing contrast.
- *
- * Iter3 dimmed unselected tabs with `opacity: 0.6`, which multiplied
- * over every glyph/title and dropped the inactive title to ~35 % L*
- * against bg-2 — well below WCAG AA's 4.5:1 floor (the iter4 audit
- * caught this). The new approach keeps inactive tabs *visually*
- * subordinate via explicit foreground tokens (`PanelHeader.module.css`
- * picks `--color-fg-3` for inactive titles, `--color-fg-1` for active)
- * so the contrast ratio is measurable, not the side-effect of an alpha
- * multiplier.
- *
- * A small opacity nudge (0.92) on the unselected tab still reads as
- * "dormant peer" against the active tab at 1.0 without dropping the
- * label below AA. Hover bumps back to 1.0 so the affordance to switch
- * is discoverable. */
+/* Inactive vs active contrast is driven by explicit fg tokens in
+ * `PanelHeader.module.css`, not by an opacity multiplier (which crushed
+ * contrast below WCAG AA). The 0.92 nudge here is the subordinate-peer
+ * cue without dropping labels below the floor. */
 .flexContainer :global(.flexlayout__tab_button) {
   transition:
     opacity var(--motion-fast),
@@ -126,24 +98,16 @@
   opacity: 1;
 }
 /* The 2-px kind-accent underline lives on the inner `PanelHeader`'s
- * `::after`. Its default opacity is 0 (unselected, dormant). Light
- * it at 0.4 when this tab is the active one in its tabset. The
- * `.focused` class on PanelHeader bumps to 1.0 for the globally
- * selected panel — both cases coexist because `.focused` has higher
- * specificity inside its own module. */
+ * `::after`. Light it at 0.4 when this tab is selected; the `.focused`
+ * rule in PanelHeader.module.css then pushes to full active-blue. */
 .flexContainer
   :global(.flexlayout__tab_button--selected [data-panel-id])::after {
   opacity: 0.4;
 }
 
-/* Iter7 wave2 · active-tabset underline (calibrated-critic finding:
- * "tab strip lacks an active-state colour"). When the tabset itself
- * is the focused one (FlexLayout adds `.flexlayout__tabset-selected`
- * on the tabset wrapper, kept in sync with the store), the selected
- * tab's accent strip switches from the muted per-kind tint to a full
- * `--color-active-blue` band at opacity 1. This gives a single,
- * unambiguous "your attention is here" signal that's identical for
- * every panel kind, in addition to the per-kind underline cue. */
+/* When the tabset itself is focused, the selected tab's underline
+ * switches to a full active-blue band so the "your attention is here"
+ * signal is identical across panel kinds. */
 .flexContainer
   :global(
     .flexlayout__tabset-selected
@@ -169,35 +133,24 @@
   background: var(--color-bg-5);
 }
 
-/* Belt-and-braces: hide FlexLayout's stock trailing-close icon. The
- * model defaults `tabEnableClose: false` (see `defaultLayout.ts`) so
- * fresh layouts never render this, but persisted layout JSON from
- * before the chrome overhaul may still set the attribute on
- * individual tab nodes. `PanelHeader.tsx` owns the close affordance
- * now — keep exactly one × per tab. */
+/* Hide FlexLayout's stock per-tab close — `PanelHeader.tsx` owns that
+ * affordance now. The model defaults `tabEnableClose: false`; this
+ * defends against persisted layout JSON from before the chrome overhaul
+ * that may still set the attribute on individual tab nodes. */
 .flexContainer :global(.flexlayout__tab_button_trailing) {
   display: none !important;
 }
 
-/* And the tabset-level close button (rendered into the tabset toolbar
- * at the strip's right edge — `flexlayout__tab_toolbar_button-close`).
- * Same reasoning: `PanelHeader.tsx` owns close per-panel. The tabset
- * close otherwise sat next to FlexLayout's maximize toolbar button as
- * the second × the design audit flagged. The maximize button itself
- * is also redundant now that every PanelHeader has its own maximize
- * toggle — hide it too so the toolbar collapses cleanly. */
+/* Hide the tabset-level toolbar buttons — each PanelHeader now has its
+ * own close + maximize. */
 .flexContainer :global(.flexlayout__tab_toolbar_button-close),
 .flexContainer :global(.flexlayout__tab_toolbar_button-max),
 .flexContainer :global(.flexlayout__tab_toolbar_button-min) {
   display: none !important;
 }
 
-/* iter6 · a11y focus rings on FlexLayout chrome.
- *
- * FlexLayout renders its splitters + tab buttons as <div>s without
- * role="button". The library does enroll them in the tab order, but
- * the tab order alone isn't a visible focus indicator. Add explicit
- * `:focus-visible` rings so keyboard users can see WHERE they are. */
+/* FlexLayout's splitters + tab buttons are <div>s in the tab order
+ * without role="button"; give them explicit focus rings. */
 .flexContainer :global(.flexlayout__tab_button):focus-visible,
 .flexContainer :global(.flexlayout__tab_toolbar_button):focus-visible {
   outline: var(--focus-ring);
@@ -213,49 +166,20 @@
   background: var(--color-role-active-tint);
 }
 
-/* Iter7 wave2 → iter8 · splitter resize affordance.
- *
- * Calibrated-critic findings, cumulative:
- *   wave2  "the panel divider between Video and Plot is a thin grey
- *           hairline with no resize affordance shown"
- *   iter8  "splitters are still invisible until hover — the vertical
- *           splitter between panes is a 1 px line with no hover ridge"
- *
- * FlexLayout owns the splitter dimensions: `splitterSize: 4` in
- * `defaultLayout.ts` sets the visible body width, and `splitterExtra`
- * (currently 0) would have added transparent hit padding via a
- * separate `.flexlayout__splitter_extra` div. We can't widen the
- * physical hit area from CSS alone, but we can:
- *
- *   1. extend the perceived hit area to ≥6 px via a `::before`
- *      pseudo-overlay (pointer events on a pseudo are dispatched to
- *      the host element, so FlexLayout's drag handlers keep working);
- *   2. paint a persistent 1-px ridge at rest in `--color-border-subtle`
- *      so the dockable boundary is always discoverable (iter8);
- *   3. lift the ridge to 3 px in `--color-splitter-hover` on hover so
- *      the user reads "you can grab this" (iter8 widened from 2 px);
- *   4. light the drag state in active-blue (already wired through
- *      `--color-splitter-drag` on the layout root above; the floating
- *      `.flexlayout__splitter_drag` clone uses that var) and tint the
- *      source body 3 px wide in the same colour for symmetry.
- *
- * The idle ridge is intentionally subtle (`--color-border-subtle`
- * against `--bg-chrome`) — visible enough that the dockable workspace
- * reads as intentional, dim enough that a static screenshot doesn't
- * look fussy. */
+/* Splitter resize affordance. FlexLayout owns dimensions (`splitterSize: 4`
+ * in `defaultLayout.ts`); we extend the perceived hit area via a `::before`
+ * pseudo overlay (pointer events bubble to the host so FlexLayout's drag
+ * handlers keep working) and paint a 1-px idle ridge / 3-px hover ridge
+ * via `::after`. Drag state lights via `--color-splitter-drag` on the
+ * layout root above. */
 .flexContainer :global(.flexlayout__splitter) {
   position: relative;
-  /* The base splitter still draws its hairline via FlexLayout's
-   * `--color-splitter` var; we only paint the hover ridge here, so
-   * the resting state stays unchanged for non-pointer environments. */
   transition: background-color var(--motion-fast);
 }
 
-/* Extend the perceived hit area without changing FlexLayout's layout
- * box. The `::before` extends 2 px on each cross-axis side, giving
- * an effective 8-px target (≥6 px). pointer-events bubble to the
- * host splitter so the drag still initiates from FlexLayout's own
- * pointerdown listener. */
+/* `::before` extends 2 px on each cross-axis side for an ~8-px target
+ * (≥6 px). pointer-events bubble to the host splitter so FlexLayout's
+ * own pointerdown listener still owns the drag. */
 .flexContainer :global(.flexlayout__splitter_vert)::before {
   content: "";
   position: absolute;
@@ -275,18 +199,9 @@
   pointer-events: auto;
 }
 
-/* iter8 · persistent at-rest ridge.
- *
- * A 1-px ridge in `--color-border-subtle`, centred on the 4-px splitter
- * body, paints whether or not the user is hovering. Without this, the
- * critic noted that the splitter "is a 1 px line with no hover ridge
- * in this static" — the dockable boundary disappears in screenshots
- * and during keyboard-only use. The ridge transitions to the hover
- * thickness/colour smoothly so the affordance reads as one continuous
- * surface, not a flash.
- *
- * `::after` paints the ridge for both vert + horz; the `_vert`/`_horz`
- * specific rules below set the band geometry. */
+/* 1-px ridge centred on the 4-px splitter body, painted at rest so the
+ * dockable boundary is discoverable in static screenshots and during
+ * keyboard-only use. Transitions into the 3-px hover ridge below. */
 .flexContainer :global(.flexlayout__splitter_vert)::after,
 .flexContainer :global(.flexlayout__splitter_horz)::after {
   content: "";
@@ -302,50 +217,37 @@
     top var(--motion-fast);
 }
 .flexContainer :global(.flexlayout__splitter_vert)::after {
-  /* 1-px vertical band centred on the 4-px splitter body. */
   top: 0;
   bottom: 0;
   left: 1.5px;
   width: 1px;
 }
 .flexContainer :global(.flexlayout__splitter_horz)::after {
-  /* 1-px horizontal band centred on the 4-px splitter body. */
   left: 0;
   right: 0;
   top: 1.5px;
   height: 1px;
 }
 
-/* Hover ridge — 3 px in the splitter-hover token. iter8 widened from
- * 2 px after the critic asked for "a 3 px on hover, 1 px at rest"
- * progression so the splitter visibly "thickens" under the cursor.
- * The ridge stays centred on the 4-px splitter body; with a 3-px band
- * it sits flush left/right or top/bottom by 0.5 px, which the rounded
- * radius hides cleanly. */
+/* Hover ridge — 3-px band centred on the 4-px splitter body. */
 @media (hover: hover) {
   .flexContainer :global(.flexlayout__splitter_vert):hover::after,
   .flexContainer :global(.flexlayout__splitter_horz):hover::after {
     background: var(--color-splitter-hover);
   }
   .flexContainer :global(.flexlayout__splitter_vert):hover::after {
-    /* 3-px vertical band centred on the 4-px splitter body. */
     left: 0.5px;
     width: 3px;
   }
   .flexContainer :global(.flexlayout__splitter_horz):hover::after {
-    /* 3-px horizontal band centred on the 4-px splitter body. */
     top: 0.5px;
     height: 3px;
   }
 }
 
-/* While dragging, FlexLayout removes the original splitter from the
- * flow and renders a floating `.flexlayout__splitter_drag` clone at
- * the cursor. The clone reads `--color-splitter-drag` (set to
- * `--color-role-active` on the layout root above) so the live drag
- * already lights up blue. Belt-and-braces: also tint the original
- * splitter body during the drag so the source position stays
- * legible. */
+/* Belt-and-braces: also tint the original splitter body during a drag.
+ * FlexLayout's floating `.flexlayout__splitter_drag` clone reads
+ * `--color-splitter-drag` (set on the layout root above). */
 .flexContainer :global(.flexlayout__splitter_drag) {
   background-color: var(--color-active-blue);
 }

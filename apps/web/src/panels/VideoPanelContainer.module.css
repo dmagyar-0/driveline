@@ -10,17 +10,8 @@
   flex: 1;
 }
 
-/* Iter 4 issue #4 — the absolutely-positioned `.clearBtn` pill that
- * used to live here moved into the VideoToolbar so it no longer
- * overlaps the letterbox bars. Its styling lives in
- * `VideoToolbar.module.css :: .btnGhost`. */
-
-/* iter5 #5 — the picker list moved into `VideoPanelEmptyState` so
- * both empty-state cases (no candidates / candidates loaded) share
- * one component. This container module is now a thin layout shell
- * around either VideoPanel or the unified empty state.
- *
- * `.emptyWrap` just centres the empty state inside the FlexLayout
+/* Thin layout shell around either VideoPanel or the unified empty
+ * state. `.emptyWrap` centres the empty state inside the FlexLayout
  * panel; the empty state owns its own scrolling. */
 .emptyWrap {
   width: 100%;

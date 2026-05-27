@@ -1,13 +1,5 @@
-// Phase 2 · Sources drawer.
-//
-// Replaces the inline `sources` stub in `Drawer.tsx`. Reads `sources`
-// and `globalRange` from the store via discrete single-key selectors so
-// the drawer only re-renders when those change. Selection is local
-// `useState`; Phase 3 (Channels drawer) lifts it to the `ui` slice when
-// the channel list needs to filter by selected source.
-//
-// The 220px wrapper styling lives in `Drawer.module.css:.drawer`; this
-// module only owns the inner content.
+// Sources drawer. The 220 px wrapper styling lives in
+// `Drawer.module.css:.drawer`; this module only owns the inner content.
 
 import { useRef, useState } from "react";
 import { useSession } from "../../state/store";

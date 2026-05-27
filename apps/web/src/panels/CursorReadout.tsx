@@ -1,16 +1,11 @@
-// Cursor-value legend strip rendered directly under the plot canvas
-// (UX overhaul issue #4).
+// Cursor-value legend strip rendered directly under the plot canvas —
+// each bound series with its colour swatch and the sample value at
+// `cursorNs`, formatted with the channel unit.
 //
-// The crosshair on its own was decorative: the user could see where the
-// cursor was in time but not what value any of the plotted channels
-// held there. This strip lists each bound series with its colour swatch
-// and the sample value at `cursorNs`, formatted with the channel unit.
-//
-// Hot-path discipline: the parent computes the `entries` array (one
-// binary search per bound channel) inside the same effect that already
-// republishes the sync snapshot. The component itself is pure — given
-// the same `entries` it renders the same DOM, with no per-frame work
-// beyond what React's reconciler does for a list of ≤8 spans.
+// Hot-path discipline: the parent computes `entries` (one binary search
+// per bound channel) inside the same effect that republishes the sync
+// snapshot. This component is pure; given the same `entries` it renders
+// the same DOM.
 
 import { colorFor, colorForSource } from "./palette";
 import styles from "./PlotPanel.module.css";
@@ -24,9 +19,9 @@ export interface CursorReadoutEntry {
   unit: string | null;
   /** Optional source-disambiguation badge — same string the chip shows. */
   sourceBadge: string;
-  /** Iter3 issue #2 — the source id powers the per-source colour
-   *  ribbon. Optional so older call sites that omit it (e.g. legacy
-   *  test fixtures) keep compiling; ribbon renders only when set. */
+  /** Source id powers the per-source colour ribbon. Optional so older
+   *  call sites that omit it keep compiling; ribbon renders only when
+   *  set. */
   sourceId?: string;
 }
 

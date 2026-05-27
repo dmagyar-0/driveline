@@ -1,16 +1,7 @@
-// Phase 8 · Events drawer (bookmarks).
-//
-// Replaces the inline `events` stub in `Drawer.tsx`. Reads the
-// `bookmarks` slice and `globalRange` via discrete single-key
-// selectors; rename state is local `useState`. Sort happens at render
-// only — storage and slice preserve insertion order so a rename
-// targets a stable index.
-//
-// The conditional rendering trap (frontend skill) is avoided: rename
-// is `editingId === b.id ? <Input/> : <Span/>`, never a chained
-// boolean. The add-button is `aria-disabled` + `disabled` when
-// `globalRange === null` because there is no meaningful cursor to
-// bookmark.
+// Events drawer (bookmarks). Sort happens at render only — storage and
+// slice preserve insertion order so a rename targets a stable index.
+// Add-button is `disabled` when `globalRange === null` because there
+// is no meaningful cursor to bookmark.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";

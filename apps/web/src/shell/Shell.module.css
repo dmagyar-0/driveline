@@ -27,9 +27,7 @@
   overflow: hidden;
 }
 
-/* Drag overlay — only visible while a drag is hovering the shell. The
- * <main> root is the drop target (it carries the testid and the dnd
- * handlers). The overlay is purely visual feedback. */
+/* Visual feedback only — the <main> root is the actual drop target. */
 .dragOverlay {
   position: absolute;
   inset: var(--shell-topbar-h) 0 var(--shell-transport-h) 0;
@@ -43,9 +41,8 @@
   z-index: 10;
 }
 
-/* Narrow viewport: drawer overlays the work area instead of pushing it
- * (integration plan §Risks 6). The drawer is `position: absolute` from
- * <700px so the workspace doesn't get squeezed. */
+/* Narrow viewport: drawer overlays the work area instead of pushing
+ * it, so the workspace doesn't get squeezed. */
 @media (max-width: 699px) {
   .work {
     position: relative;

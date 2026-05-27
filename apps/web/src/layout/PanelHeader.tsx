@@ -1,29 +1,10 @@
-// Phase 7+ · Custom tab header injected via FlexLayout's `onRenderTab`.
-//
-// Replaces the previous inline JSX in `Workspace.tsx` so the chrome can
-// own its own behaviour: focus state, inline rename, double-click to
-// maximize, accessible icon-only action buttons, and per-kind identity
-// affordances (icon + 2-px coloured underline).
-//
-// The component is rendered into FlexLayout's tab strip via
-// `renderValues.content`, so it lives *inside* the same draggable surface
-// FlexLayout sets up for the tab — pointerdown on the grip / name area
-// flows through to FlexLayout and initiates a drag. The action cluster
-// stops pointerdown locally so per-button clicks don't seed a tab drag.
-//
-// Iter5 chrome layout (left → right):
-//   [drag-handle] [kind icon] [name / rename input] [settings] [maximize]
-//   [hairline divider] [close]
-//
-// Iter5 changes vs iter4 chrome:
-//   * pencil ("rename") dropped — rename is a subset of settings; the
-//     only entry point is now double-click on the focused title
-//   * six-dot drag handle painted on the left so the drag affordance
-//     is no longer mystery-meat
-//   * hairline divider + extra spacing before the close button
-//   * focused panel paints an accent left-edge inset + 8% wash so the
-//     active panel is unmistakable
-//   * inactive title + icons hit AA 4.5:1 vs bg-2 (no opacity crush)
+// Custom tab header injected via FlexLayout's `onRenderTab`.
+// Layout: [drag-handle] [kind icon] [name/rename input] [settings]
+//         [maximize] [hairline divider] [close]
+// The whole row is rendered into FlexLayout's tab strip, so pointerdown
+// on the grip/name area flows through to FlexLayout and initiates a
+// drag. The action cluster stops pointerdown locally so per-button
+// clicks don't seed a tab drag.
 
 import {
   useCallback,
@@ -51,11 +32,8 @@ interface PanelHeaderProps {
   isFocused: boolean;
   /**
    * Whether the panel's tabset is currently the maximized one. Drives
-   * the maximize/restore-down icon swap and the button's tooltip — the
-   * "mystery square" review point was largely about a single static
-   * icon that gave no hint of the toggle's current state. Optional so
-   * older call sites (and the unit tests) can omit it and get the
-   * default "not maximized" behaviour.
+   * the maximize/restore-down icon swap and the tooltip. Optional so
+   * older call sites and unit tests can omit it.
    */
   isMaximized?: boolean;
 }
@@ -103,19 +81,11 @@ export function PanelHeader({
     setRenaming(false);
   }, [name]);
 
-  // Title double-click toggles maximize unless it landed on the input
-  // (which gets its own double-click → select-word behaviour). Iter5
-  // dropped the pencil button — rename is now invoked exclusively by
-  // double-clicking the title when the panel is focused. When the
-  // panel is *unfocused* the double-click maximises instead. This
-  // gives a single gesture for both cases without a hidden mode
-  // switch.
+  // Title double-click: rename when the panel is already focused
+  // (click-to-focus, double-click-to-rename), maximize otherwise.
   const onTitleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
-      // Prefer rename when the panel is already focused so the gesture
-      // is discoverable: click to focus, double-click to rename. From
-      // an *un*focused tab the more useful action is maximize.
       if (isFocused) {
         setRenaming(true);
       } else if (tabsetId) {
@@ -151,22 +121,16 @@ export function PanelHeader({
     [panelId],
   );
 
-  // A single click anywhere in the header (other than a button) marks
-  // this panel as the focused one — same write `panelFactory.tsx` does
-  // on pointerdown in the body. Tab strip pointerdown still flows
-  // through to FlexLayout so the tab is selected and a drag can start;
-  // this just keeps the store-level selection in lockstep with the
-  // visual focus state. No-op when the panel is already focused so we
-  // don't churn the store on every header re-render.
+  // Pointerdown on the header (other than a button) marks this panel
+  // as focused — same write `panelFactory.tsx` does on body pointerdown.
+  // FlexLayout still receives the event for tab selection / drag start.
   const onHeaderPointerDown = useCallback(() => {
     if (isFocused) return;
     useSession.getState().setSelectedPanelId(panelId);
   }, [isFocused, panelId]);
 
-  // The accent underline only appears for known kinds; unknown panels
-  // (orphans / legacy ids) get a neutral border. Inline style is
-  // appropriate here because the value is a CSS custom property name
-  // — layout-driven, not a theme colour pulled into TS.
+  // Unknown panels (orphans / legacy ids) get the neutral border;
+  // the inline style passes the CSS variable name through to the module.
   const accentStyle: React.CSSProperties | undefined =
     kind !== null
       ? { ["--panel-accent" as never]: panelKindAccentVar(kind) }
@@ -183,18 +147,8 @@ export function PanelHeader({
       style={accentStyle}
       onPointerDown={onHeaderPointerDown}
     >
-      {/* Iter5 · explicit drag affordance.
-       *
-       * Audit point: "no drag handle indicated, even though FlexLayout
-       * panels are drag-rearrangeable; users must discover that by
-       * accident." A six-dot glyph (the universal "drag handle"
-       * idiom) sits at the very left of the header. The whole header
-       * already accepts pointerdown — FlexLayout reads the drag from
-       * the surrounding tab button — so this is a *visual* cue, not a
-       * separate listener. Marked aria-hidden because the action lives
-       * on the tab button itself; the `title` is what hover-discovers
-       * it for sighted mouse users.
-       */}
+      {/* Six-dot drag glyph — visual cue only. The actual drag flows
+       * through the surrounding FlexLayout tab button. */}
       <span
         className={styles.dragHandle}
         aria-hidden="true"
@@ -212,11 +166,9 @@ export function PanelHeader({
           <PanelTypeIcon kind={kind} />
         </span>
       )}
-      {/* a11y: the kind glyph is decorative (aria-hidden), so we
-       *  surface the same identity to screen readers via a visually
-       *  hidden span. Without this, a tab announces only the tab
-       *  name — a screen-reader user can't tell a "Speeds" tab from
-       *  a "Speeds" Video panel. */}
+      {/* The kind glyph is decorative (aria-hidden); surface the kind
+       * to screen readers via this sibling span so a "Speeds" Video
+       * tab is distinguishable from a "Speeds" Plot tab. */}
       {kind !== null && (
         <span className={styles.srOnly}>{kindLabel} panel:</span>
       )}
@@ -254,12 +206,9 @@ export function PanelHeader({
         </span>
       )}
       <span className={styles.actions}>
-        {/* Iter5 · the pencil ("rename") was dropped per the audit
-         *  note "edit vs settings is a UX false dichotomy" — rename is
-         *  a subset of panel settings, and a single double-click on
-         *  the focused title already opens inline rename. The four-
-         *  icon cluster is now: settings, maximize, (divider), close.
-         */}
+        {/* Cluster: settings, maximize, (divider), close. Rename is a
+         * subset of settings — invoked by double-clicking the focused
+         * title rather than a dedicated pencil button. */}
         <button
           type="button"
           className={styles.actionBtn}
@@ -284,11 +233,8 @@ export function PanelHeader({
         >
           {isMaximized ? <RestoreIcon /> : <MaximizeIcon />}
         </button>
-        {/* Iter5 · destructive-action separator (see Issue 5). Gives the
-         *  close button a clear visual + spatial gap from maximize so
-         *  the misclick risk the audit flagged is gone. Marked with a
-         *  data-testid so the layout-test suite can assert it sits
-         *  exactly between the maximize and close buttons. */}
+        {/* Hairline separator keeps the destructive close action a Fitts
+         * threshold away from maximize. */}
         <span
           className={styles.actionDivider}
           aria-hidden="true"
@@ -317,12 +263,6 @@ function stopPointer(e: React.PointerEvent): void {
   e.stopPropagation();
 }
 
-/**
- * Standard gear / cog. The previous "settings" glyph was a sun (a
- * dot surrounded by 8 spokes) that the design audit flagged as
- * ambiguous — could read as theme, brightness, or "settings". A gear
- * is the universal control-panel glyph and disambiguates intent.
- */
 function SettingsIcon(): React.ReactElement {
   return (
     <svg
@@ -336,23 +276,12 @@ function SettingsIcon(): React.ReactElement {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {/* Classic Feather-style cog: a single closed path for the
-       * eight-toothed outline, plus an inner circle for the hub.
-       * 24×24 viewBox so the curves stay crisp at 14 px. The
-       * previous sun (dot + 8 spokes) read as theme/brightness; a
-       * recognisable gear disambiguates the "settings" intent. */}
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   );
 }
 
-/**
- * Classic "maximize" frame: a solid square outline. Distinguishes
- * itself from the close × (two diagonal strokes) and from the restore
- * glyph (two overlapping squares). Tooltip swaps to "Restore" when
- * the tabset is already maximized.
- */
 function MaximizeIcon(): React.ReactElement {
   return (
     <svg
@@ -371,13 +300,7 @@ function MaximizeIcon(): React.ReactElement {
   );
 }
 
-/**
- * Standard "restore down" glyph: the front square sits over a
- * peeked-out back square so the icon visibly differs from maximize.
- * Rendered only when `isMaximized` is true so the user can tell the
- * toggle's current state at a glance — no more "what does the square
- * do?" from the iter2 audit.
- */
+/** Restore-down: peeked-out back square + full front square. */
 function RestoreIcon(): React.ReactElement {
   return (
     <svg
@@ -391,19 +314,12 @@ function RestoreIcon(): React.ReactElement {
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {/* Back square (top-right corner peeking) */}
       <path d="M5.5 4.5V3a.5.5 0 01.5-.5h7a.5.5 0 01.5.5v7a.5.5 0 01-.5.5H12" />
-      {/* Front square (full) */}
       <rect x="2.5" y="5.5" width="9" height="8" rx="0.5" />
     </svg>
   );
 }
 
-/**
- * Close × — heavier stroke and a hair larger viewport scaling via
- * `actionBtnClose` in CSS so it reads as the destructive action
- * even before the danger-tinted hover kicks in.
- */
 function CloseIcon(): React.ReactElement {
   return (
     <svg
@@ -422,12 +338,6 @@ function CloseIcon(): React.ReactElement {
   );
 }
 
-/**
- * Six-dot drag handle — the universal "grab to reorder" idiom. Two
- * columns of three dots so the affordance reads at any tab size. Kept
- * decorative-only: FlexLayout owns the actual drag, this just makes
- * the affordance discoverable without a mystery-meat hover.
- */
 function DragHandleIcon(): React.ReactElement {
   return (
     <svg

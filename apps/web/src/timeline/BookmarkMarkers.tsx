@@ -1,23 +1,15 @@
-// Phase 8 · Bookmark markers overlay for the transport scrubber.
+// Bookmark markers overlay for the transport scrubber.
 //
-// Rendered as a child of `Transport.tsx`'s `.trackStrip`. Owns its own
-// store selectors so Transport stays unaware — re-renders here when
-// `bookmarks` mutates do not dirty the scrubber's pointerdown closures.
-//
-// Marker primitive: a 2px-wide div positioned with `left: <pct>%` plus
-// `transform: translateX(-50%)` only (frontend-skill perf rule — never
-// animate `left`/`width`/colour). The wrapping layer is
-// `pointer-events: none` so the rest of the track keeps its drag
-// gesture; individual markers re-enable `pointer-events: auto`.
+// Owns its own store selectors so Transport stays unaware —
+// re-renders here on `bookmarks` mutations do not dirty the
+// scrubber's pointerdown closures.
 //
 // `pointerdown` on a marker calls `setCursor(b.ns)` and stops
-// propagation so the click does not also seed a scrub gesture against
-// the parent track.
+// propagation so the click does not also seed a scrub gesture
+// against the parent track.
 //
-// Markers are visual-only — keyboard access to bookmarks is provided
-// by the Events drawer (one tab stop per bookmark there). We don't
-// add a parallel keyboard path here because it would (a) duplicate
-// the drawer surface and (b) crowd the timeline tab order.
+// Keyboard access to bookmarks lives in the Events drawer; not
+// duplicated here so the timeline tab order stays tight.
 
 import { useSession } from "../state/store";
 import s from "./BookmarkMarkers.module.css";

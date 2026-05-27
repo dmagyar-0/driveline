@@ -1,14 +1,11 @@
 /* Transport · keyboard shortcuts overlay. Anchored to the transport
- * bar (the parent `.bar` is `position: sticky`, so the backdrop sits
- * over the workspace but only above the bar — matches the iteration-2
- * spec that the help dialog should feel like a transport affordance,
- * not a global modal). */
+ * bar (the parent `.bar` is sticky) so the backdrop sits above the
+ * bar only, not as a global modal. */
 
 .backdrop {
   position: absolute;
   left: 0;
   right: 0;
-  /* Pull up a comfortable distance so the card hovers above the bar */
   bottom: calc(100% + var(--sp-3));
   display: flex;
   justify-content: flex-end;

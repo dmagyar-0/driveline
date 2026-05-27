@@ -1,12 +1,9 @@
-// Transport-bar time formatting. Arithmetic stays in `bigint` until the
-// final ms → components split, so sub-second precision is preserved even
-// for nanosecond inputs beyond `Number.MAX_SAFE_INTEGER`.
+// Transport-bar time formatting. Arithmetic stays in `bigint` until
+// the final ms → components split, so sub-second precision is
+// preserved even for nanosecond inputs beyond `Number.MAX_SAFE_INTEGER`.
 //
-// Issue #6 (UX overhaul) — formatters here are the single source of
-// truth for time in the app. The Transport reads `timeMode` from the
-// store and renders the right helper; PlotPanel reads the same flag
-// and asks for `uPlotAxisValues(timeMode, startNs)` so X-axis ticks
-// match the readout above. There is exactly one knob.
+// This module is the single source of truth for time formatting; both
+// Transport and PlotPanel read the same `timeMode` knob.
 
 function pad2(n: number): string {
   return n.toString().padStart(2, "0");
@@ -84,20 +81,13 @@ export function formatDate(ns: bigint): string {
   );
 }
 
-/** Iteration 3 (issue #1) — canonical playhead format.
+/** Canonical playhead format.
  *
- * The transport bar previously stacked TWO readouts on the playhead
- * (e.g. `00:03.999` over `00:00:03`), which the designer flagged as
- * redundant. Pick ONE canonical format and rely on the hover tooltip
- * to surface the alternate convention.
+ *   relative → `formatDuration` (HH:MM:SS.mmm ≥1h, else MM:SS.mmm)
+ *   absolute → wall-clock with millis (HH:MM:SS.mmm)
  *
- * Rule:
- *   - relative mode: always `formatDuration` (HH:MM:SS.mmm ≥1h, else MM:SS.mmm).
- *   - absolute mode: always wall-clock with millis (HH:MM:SS.mmm).
- *
- * Both branches now include the millis so the readout never drops
- * precision mid-scrub — a major usability win when comparing two
- * playheads or matching a video frame.
+ * Both branches include millis so the readout never drops precision
+ * mid-scrub.
  */
 export function formatPlayheadPrimary(
   ns: bigint,
@@ -131,17 +121,12 @@ export type TimeMode = "relative" | "absolute";
 
 /**
  * Build a uPlot `axis.values` callback that formats X-axis ticks
- * according to `mode`. uPlot passes a Float64Array of tick values in
- * Unix seconds; we convert to bigint ns and dispatch to the matching
- * formatter. `startSec` is only used in `"relative"` mode as the
- * zero-anchor of the session.
+ * according to `mode`. uPlot passes tick values in Unix seconds;
+ * we convert to bigint ns and dispatch to the matching formatter.
+ * `startSec` is the relative-mode zero anchor (ignored in absolute).
  *
  * Shared by every Plot panel so two plots on the same dataset cannot
- * end up showing different conventions (Issue #6 — UX overhaul).
- *
- * Returns a `splits => string[]` callable; uPlot's type signature for
- * `axis.values` is `(self, splits, axisIdx, foundSpace, foundIncr) =>
- * string[]`, but we ignore everything except `splits`.
+ * end up showing different conventions.
  */
 export function uPlotAxisValues(
   mode: TimeMode,
@@ -150,8 +135,6 @@ export function uPlotAxisValues(
   if (mode === "absolute") {
     return (splits) =>
       splits.map((sec) => {
-        // Seconds-since-epoch from the merged session is well within
-        // Number.MAX_SAFE_INTEGER even for 2106; safe to multiply.
         const ns = BigInt(Math.round(sec * 1_000_000_000));
         return formatAbsoluteClock(ns);
       });

@@ -76,11 +76,10 @@ interface VideoPanelProps {
    * `null` for MCAP sources hides the frame-step buttons.
    */
   sidecarPtsNs?: BigInt64Array | null;
-  /** Iter 4 issue #4 — the container forwards its "clear current
-   *  video binding" action so the toolbar can render a Change pill
-   *  in-line (it used to be an absolutely-positioned button painted
-   *  over the letterbox). Optional so a future surface without
-   *  channel-binding semantics can mount VideoPanel directly. */
+  /** Container forwards its "clear current video binding" action so
+   *  the toolbar can render a Change pill in-line. Optional so a
+   *  future surface without channel-binding semantics can mount
+   *  VideoPanel directly. */
   onClearBinding?: () => void;
 }
 
@@ -120,10 +119,10 @@ function formatPts(ptsNs: bigint | null): string {
 }
 
 /**
- * iter5 issue #3 — derive the sidecar frame index from the most recent
- * blitted PTS via a binary search over `ptsNs`. Returns the 1-based
- * index of the largest sample <= ptsNs. Returns null when no sidecar
- * is bound or the table is empty so the HUD can omit the line.
+ * Derive the sidecar frame index from the most recent blitted PTS via
+ * a binary search over `ptsNs`. Returns the 1-based index of the
+ * largest sample <= ptsNs, or null when no sidecar is bound so the HUD
+ * can omit the line.
  */
 export function sidecarFrameIndex(
   ptsNs: BigInt64Array | null,
@@ -165,22 +164,18 @@ export function VideoPanel({
   const videoDecodeRef = useRef<Comlink.Remote<VideoDecodeApi> | null>(null);
   const videoDecodeWorkerRef = useRef<Worker | null>(null);
 
-  // HUD refs. We keep them off React state so metric updates don't churn
-  // the reconciler; the rAF loop writes directly into the HUD DOM.
-  //
-  // iter6 · the HUD is a structured 2-column panel (label · value).
-  // To keep the rAF hot path cheap, each value cell has its own ref;
-  // the loop writes only into the cells whose value changed. The
-  // outer container is `hudDomRef` (kept for testID + the dev hook).
+  // HUD refs — kept off React state so metric updates don't churn the
+  // reconciler. The rAF loop writes directly into the HUD DOM. The HUD
+  // is a 2-column grid; each value cell has its own ref so the loop
+  // only touches cells whose value changed.
   const lastFrameIndexRef = useRef<number>(0);
   const lastDecodeQueueRef = useRef<number>(0);
   const droppedFramesRef = useRef<number>(0);
   const lastBlitPtsRef = useRef<bigint | null>(null);
   const codecRef = useRef<string | null>(null);
 
-  // iter6 · per-cell value refs for the structured HUD. Each writes
-  // its textContent independently so the rAF loop avoids reflowing
-  // the whole grid every tick.
+  // Per-cell value refs — each writes its textContent independently so
+  // the rAF loop avoids reflowing the whole grid every tick.
   const hudPtsRef = useRef<HTMLSpanElement | null>(null);
   const hudFrameRef = useRef<HTMLSpanElement | null>(null);
   const hudFrameRowRef = useRef<HTMLDivElement | null>(null);
@@ -193,35 +188,27 @@ export function VideoPanel({
   const hudDomRef = useRef<HTMLDivElement | null>(null);
   const hudOnRef = useRef<boolean>(false);
   const statsDomRef = useRef<HTMLDivElement | null>(null);
-  // Issue #20 — timestamp burn-in overlay. Driven from the rAF blit
-  // loop so the displayed time tracks the cursor without forcing a
-  // 60 Hz React render on this panel. The DOM is the only place the
-  // formatted string lives. `timeModeRef` mirrors the shared store
-  // slice (Agent B's segmented toggle, issue #6) so the overlay
-  // honours the user's preferred convention without re-rendering on
+  // Timestamp burn-in overlay — driven from the rAF blit loop so the
+  // displayed time tracks the cursor without forcing a 60 Hz React
+  // render. `timeModeRef` mirrors the shared time-mode toggle so the
+  // overlay honours the user's preference without re-rendering on
   // every flip.
   const tsOverlayRef = useRef<HTMLDivElement | null>(null);
   const lastTsTextRef = useRef<string>("");
   const timeModeRef = useRef<"relative" | "absolute">("relative");
-  // iter5 issue #3 — mirror the sidecar PTS table into the rAF hot
-  // path so the HUD can compute "frame N / total" from the last
-  // blitted PTS. Reading via a ref keeps the blit loop allocation-free
-  // and avoids re-rendering on sidecar changes (sidecar identity flips
-  // only on source binding, which already remounts this effect).
+  // Sidecar PTS table mirrored into the rAF hot path so the HUD can
+  // compute "frame N / total" from the last blitted PTS without
+  // re-rendering on sidecar changes.
   const sidecarPtsRef = useRef<BigInt64Array | null>(sidecarPtsNs ?? null);
   sidecarPtsRef.current = sidecarPtsNs ?? null;
 
-  // Issue #2 — readiness bookkeeping. Reused across rAF ticks so the
-  // hot path doesn't allocate per frame. `lastFrameIndexAtWaitStartRef`
-  // records the `frameIndex` at the moment the panel flipped from
-  // "ready" to "waiting"; if it changes before STALLED_TIMEOUT_MS
-  // elapses we restart the wait clock (decoder is alive, just slow).
-  // `waitingSinceMsRef` is the wall clock at which the panel last
-  // transitioned out of "ready"; the rAF loop derives the "have we
-  // been waiting long enough to escalate to stalled" check from this.
-  // `lastFrameArrivedMsRef` is bumped on every decoder frame arrival
-  // (in `port.onmessage`) — drives the "decoder alive" arm of the
-  // readiness predicate.
+  // Readiness bookkeeping reused across rAF ticks so the hot path
+  // doesn't allocate per frame. `lastFrameIndexAtWaitStartRef` records
+  // the `frameIndex` at the moment we flipped from "ready" to "waiting";
+  // if it changes before STALLED_TIMEOUT_MS elapses we restart the wait
+  // clock (decoder is alive, just slow). `lastFrameArrivedMsRef` is
+  // bumped on every decoder frame arrival (in `port.onmessage`) — drives
+  // the "decoder alive" arm of the readiness predicate.
   const readinessScratchRef = useRef<PanelReadiness>({
     state: "absent",
     lastReadyMs: 0,
@@ -233,26 +220,24 @@ export function VideoPanel({
   const lastReadyMsRef = useRef<number>(0);
   const lastFrameArrivedMsRef = useRef<number>(0);
 
-  // Issue #2 — inline stalled badge inside the panel. The rAF loop
-  // doesn't write to React state directly (no per-frame renders); the
-  // dedicated readiness subscriber below mirrors the registry into
-  // local state once per state transition, which is rare.
+  // Inline stalled badge. The rAF loop doesn't write to React state
+  // directly; the readiness subscriber mirrors the registry into local
+  // state once per state transition, which is rare.
   const [readyState, setReadyState] = useState<ReadyState>("absent");
 
-  // Iter 3 — fit/fill toggle (per-panel preference, persisted in
-  // localStorage so it survives a reload without dragging a new field
-  // into the Zustand store shape). The toolbar owns the UI; we own the
-  // CSS class application on the canvas.
+  // Fit/fill toggle — per-panel preference persisted in localStorage so
+  // it survives a reload without dragging a new field into the Zustand
+  // store shape. The toolbar owns the UI; we own the CSS class on the
+  // canvas.
   const [fitMode, setFitMode] = useState<FitMode>(() => loadFitMode(panelId));
   const onFitModeChange = (mode: FitMode) => {
     setFitMode(mode);
     saveFitMode(panelId, mode);
   };
 
-  // Iter 3 — resolution readout. Sourced from the first decoded frame's
-  // `displayWidth`/`displayHeight`. The rAF blit loop also writes the
-  // canvas backing-store dimensions on the first frame, so this is the
-  // same number — exposed through state so the toolbar can render it.
+  // Resolution readout from the first decoded frame's
+  // `displayWidth`/`displayHeight`. Exposed through state so the
+  // toolbar can render it.
   const [resolution, setResolution] = useState<{
     width: number;
     height: number;
@@ -288,10 +273,9 @@ export function VideoPanel({
   // re-read on every frame.
   const startNsRef = useRef<bigint | null>(globalRange?.startNs ?? null);
   startNsRef.current = globalRange?.startNs ?? null;
-  // Mirror the shared time-mode toggle (issue #6, Agent B) into the
-  // rAF hot path. Reading via selector keeps this panel re-rendering
-  // only when the user flips the mode — rare — and the rAF loop picks
-  // up the change on the next tick via the ref.
+  // Mirror the shared time-mode toggle into the rAF hot path. Selector
+  // re-renders the panel only when the mode flips — rare — and the
+  // rAF loop picks up the change on the next tick via the ref.
   const timeMode = useSession((s) => s.timeMode);
   timeModeRef.current = timeMode;
 
@@ -322,18 +306,17 @@ export function VideoPanel({
       const { ptsNs, frame, frameIndex, decodeQueue } = data;
       lastFrameIndexRef.current = frameIndex;
       lastDecodeQueueRef.current = decodeQueue;
-      // Issue #2 — wall clock of the most recent frame arrival.
-      // Drives the "decoder is alive" arm of the readiness predicate
-      // so a healthy 4K stream that briefly outpaces ε is still
-      // reported as ready instead of constantly tripping the gate.
+      // Wall clock of the most recent frame arrival — drives the
+      // "decoder is alive" arm of the readiness predicate so a healthy
+      // 4K stream that briefly outpaces ε is still reported as ready
+      // instead of constantly tripping the gate.
       lastFrameArrivedMsRef.current = performance.now();
       if (!sizedRef.current) {
         canvas.width = frame.displayWidth;
         canvas.height = frame.displayHeight;
         sizedRef.current = true;
-        // Iter 3 — surface the source dimensions to the toolbar. One
-        // setState per panel lifetime (sizedRef gates this), so no
-        // hot-path React churn.
+        // Surface source dimensions to the toolbar. One setState per
+        // panel lifetime (sizedRef gates this).
         setResolution({
           width: frame.displayWidth,
           height: frame.displayHeight,
@@ -497,16 +480,9 @@ export function VideoPanel({
       };
       window.__drivelineVideoHud = snapshot;
       if (hudOnRef.current && hudDomRef.current) {
-        // iter6 · structured HUD. We write per-cell so the rAF loop
-        // doesn't reflow the whole grid every tick. Each value cell
-        // has its own ref; missing cells are tolerated (the JSX may
-        // omit `frame N / total` for MCAP sources without a sidecar).
-        //
-        // The previous implementation wrote a single multi-line
-        // textContent into the HUD div, which forced a layout pass
-        // for every tick AND looked like a `console.log` dump. The
-        // 2-column grid (label · value) handled by CSS now reads as
-        // a real diagnostics panel.
+        // Write per-cell so the rAF loop doesn't reflow the whole grid
+        // every tick; missing cells are tolerated (the JSX may omit
+        // `frame N / total` for MCAP sources without a sidecar).
         const sidecarTotal = sidecarPtsRef.current?.length ?? 0;
         const sidecarIdx = sidecarFrameIndex(
           sidecarPtsRef.current,
@@ -533,9 +509,8 @@ export function VideoPanel({
             `${snapshot.blitQueueLen} / ${MAX_QUEUE}`;
         }
         if (hudDroppedRowRef.current) {
-          // iter6 · only colour the "dropped" row when it's > 0 so a
-          // healthy stream reads as all-neutral and the warning state
-          // pops at a glance.
+          // Only colour the "dropped" row when it's > 0 so a healthy
+          // stream reads all-neutral and the warning state pops.
           hudDroppedRowRef.current.dataset.warn =
             snapshot.dropped > 0 ? "true" : "false";
         }
@@ -546,12 +521,10 @@ export function VideoPanel({
           hudCodecRef.current.textContent = snapshot.codec ?? "—";
         }
       }
-      // Diagnostic stats strip — used to be always-on, which produced
-      // the "drop drag flag g 12/19" junk-text bleed near the bottom
-      // of the dashcam (issue #21). It now only paints when (a) the
-      // user has explicitly opened the HUD, or (b) something has gone
-      // wrong (dropped frames or lag > 2 frames at 30 fps), so a
-      // healthy stream renders no cryptic chrome over the video.
+      // Diagnostic stats strip — only paints when the HUD is open or
+      // something has gone wrong (dropped frames or lag > 2 frames at
+      // 30 fps), so a healthy stream renders no cryptic chrome over
+      // the video.
       const stats = statsDomRef.current;
       if (stats) {
         let lagText = "—";
@@ -580,13 +553,11 @@ export function VideoPanel({
         }
       }
 
-      // Issue #20 — timestamp burn-in. Render the *cursor* time, not the
-      // PTS, so the overlay confirms the cursor↔video sync rather than
-      // restating the decoder's internal clock. The Transport's
-      // relative/absolute toggle (Agent B, issue #6) lives in the
-      // store; we honour it here so both readouts stay in sync.
-      // Falls back gracefully when `globalRange` is unset (no fixture
-      // loaded — overlay shows nothing).
+      // Timestamp burn-in renders the *cursor* time, not the PTS, so
+      // the overlay confirms cursor↔video sync rather than restating
+      // the decoder's internal clock. Honours the Transport's
+      // relative/absolute toggle. Renders nothing when `globalRange` is
+      // unset (no fixture loaded).
       const tsDom = tsOverlayRef.current;
       if (tsDom) {
         const range = startNsRef.current;
@@ -861,11 +832,9 @@ export function VideoPanel({
   // exactly once per transition, so this re-render is rare.
   const firstFrameReady = readyState === "ready" || readyState === "stalled";
 
-  // Iter 3 — toolbar visibility. The toolbar only makes sense when a
-  // decoder is wired (i.e. always, since the container only renders
-  // VideoPanel when a binding resolves). We render it unconditionally
-  // here so the control row stays put while a seek/decode-restart is
-  // in flight; the empty-state path is the container's responsibility.
+  // Toolbar renders unconditionally so the control row stays put
+  // while a seek/decode-restart is in flight; the empty-state path is
+  // the container's responsibility.
 
   const canvasClassName =
     fitMode === "fill"
@@ -884,32 +853,28 @@ export function VideoPanel({
         onHudToggle={toggleHud}
         onClearBinding={onClearBinding}
       />
-      {/* Issue #18 — explicit video frame. The inner wrapper carries
-       *  the border/shadow so the dashcam region is visually distinct
-       *  from the surrounding chrome even on a fully-black night
-       *  frame. We don't touch the canvas pixels; the frame is pure
-       *  chrome around them. */}
+      {/* Inner wrapper carries the border/shadow so the dashcam region
+       *  is visually distinct from the surrounding chrome even on a
+       *  fully-black night frame. The frame is pure chrome around the
+       *  canvas pixels; we never modify them. */}
       <div className={styles.frame}>
         <canvas
           ref={canvasRef}
           data-testid="video-panel-canvas"
           className={canvasClassName}
         />
-        {/* Issue #20 — timestamp burn-in. Bottom-left so it doesn't
-         *  fight the HUD pill (top-right) or the stalled badge
-         *  (centered). Painted from the rAF loop directly to keep
-         *  React out of the hot path. */}
+        {/* Timestamp burn-in — bottom-left so it doesn't fight the
+         *  top-right HUD pill or the centered stalled badge. Painted
+         *  from the rAF loop directly to keep React out of the hot
+         *  path. */}
         <div
           ref={tsOverlayRef}
           data-testid="video-timestamp-overlay"
           className={styles.timestamp}
           aria-hidden="true"
         />
-        {/* Iter 4 issue #4 — the absolutely-positioned HUD toggle
-         *  pill that used to live here moved into the toolbar above.
-         *  The HUD overlay itself still anchors here when toggled on
-         *  (it's a diagnostic readout that wants to sit on top of the
-         *  video frame). */}
+        {/* HUD overlay anchored to the frame when toggled on (a
+         *  diagnostic readout that wants to sit on top of the video). */}
         {hudOn && (
           <div
             ref={hudDomRef}
@@ -918,10 +883,10 @@ export function VideoPanel({
             aria-label="Video decode diagnostics"
             role="group"
           >
-            {/* iter6 · structured 2-column HUD. Labels (left column) sit
-             *  in a muted tone; values (right column) are right-aligned,
-             *  tabular-nums. The rAF loop above writes per-cell so we
-             *  avoid re-rendering React and avoid full-grid reflows. */}
+            {/* Structured 2-column HUD. Labels (left) are muted; values
+             *  (right) are right-aligned tabular-nums. The rAF loop
+             *  writes per-cell so we avoid re-rendering React and
+             *  avoid full-grid reflows. */}
             <div className={styles.hudTitle}>Decode diagnostics</div>
             <div className={styles.hudRow}>
               <span className={styles.hudLabel}>PTS</span>
@@ -971,11 +936,10 @@ export function VideoPanel({
             </div>
           </div>
         )}
-        {/* Stats strip is hidden by default; the rAF loop unhides it
-         *  when the HUD toggle is on OR when something has gone wrong
-         *  (drops/lag). Default `hidden` so the empty element is not
-         *  in the layout flow until needed — that's what was leaking
-         *  the cryptic text across the bottom of the dashcam (#21). */}
+        {/* Stats strip is `hidden` by default; the rAF loop unhides it
+         *  when the HUD is on or when something has gone wrong
+         *  (drops/lag). The default keeps an empty element out of
+         *  layout so it can't leak cryptic text under the dashcam. */}
         <div
           ref={statsDomRef}
           data-testid="video-stats"

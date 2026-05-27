@@ -1,34 +1,22 @@
-// UX overhaul iter2 (issue #1) · About dialog.
-//
-// The "v0.1" version string used to sit in the top bar's brand zone,
-// which made the production chrome look like a debug build. We moved
-// the version into this small About modal. The dialog is opened from
-// the small info button now adjacent to the wordmark (the topbar owns
-// the trigger; this component is purely the modal surface).
-//
-// Plain non-portal dialog so it stays inside the topbar's stacking
-// context. Closes on outside click, Escape, or the explicit close
-// button.
+// About dialog · plain non-portal modal so it stays inside the topbar's
+// stacking context. Closes on outside click, Escape, or close button.
 
 import { useEffect, useRef } from "react";
 import s from "./AboutDialog.module.css";
 
-// Version string. Bumped alongside the package.json version when we
-// cut a release. Kept here (not pulled from package.json) so the
-// bundle doesn't drag in a JSON loader for a single string.
+// Inlined (not read from package.json) to avoid pulling a JSON loader
+// into the bundle for one string. Bump alongside `package.json`.
 export const APP_VERSION = "v0.1";
 
 interface Props {
   onClose: () => void;
-  /** Optional: opens the keyboard-shortcuts overlay when clicked.
-   *  Wired only when the topbar's `?` button is also wired. */
   onOpenShortcuts?: () => void;
 }
 
 export function AboutDialog({ onClose, onOpenShortcuts }: Props) {
   const cardRef = useRef<HTMLDivElement | null>(null);
 
-  // Focus the card on open so Escape and AT anchor inside the dialog.
+  // Focus the card so Escape and AT anchor inside the dialog.
   useEffect(() => {
     cardRef.current?.focus();
   }, []);

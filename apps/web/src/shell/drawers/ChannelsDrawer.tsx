@@ -1,21 +1,13 @@
-// Phase 3 · Channels drawer.
+// Channels drawer.
 //
-// Replaces the inline `channels` stub in `Drawer.tsx`. Reads `channels`,
-// `sources`, `selectedPanelId`, and the binding maps from the store via
-// discrete single-key selectors so a re-render only fires when one of
-// those changes. Search query and per-source collapsed state are local
-// `useState` (no store coupling).
+// Click-binding rules:
+//   - Panel selected + plot kind: append via `addPlotChannel`.
+//   - Panel selected + video kind: set via `setVideoBinding` (single).
+//   - No panel selected: call `ensurePlotPanel()` (provided by App), mark
+//     the new panel selected, then bind.
 //
-// Click-binding rules (from `v1-shell-integration.md` § Phase 3):
-//   - If a panel is selected and it is a plot, append the channel via
-//     `addPlotChannel`.
-//   - If a panel is selected and it is a video, set the binding via
-//     `setVideoBinding` (single-channel).
-//   - If no panel is selected, call `ensurePlotPanel()` (provided by
-//     `App.tsx`) to mint one, mark it selected, then bind.
-//
-// Drag-and-drop and source-scoped filtering are explicitly deferred per
-// the integration plan.
+// Search query and per-source collapsed state are local `useState`.
+// Drag-and-drop and source-scoped filtering are explicitly deferred.
 
 import { useState } from "react";
 import { useSession, type Channel } from "../../state/store";

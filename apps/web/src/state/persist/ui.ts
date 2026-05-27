@@ -1,15 +1,10 @@
-// Phase 1 · UI shell persistence.
+// UI shell persistence. Mirrors `apps/web/src/layout/persist.ts`:
+// schema-versioned JSON in a single localStorage key, fail-closed
+// validation, write-on-change subscriber that skips identical fires.
+// `selectedPanelId` is per-session and is intentionally NOT persisted.
 //
-// Mirrors `apps/web/src/layout/persist.ts` exactly: schema-versioned
-// JSON in a single `localStorage` key, fail-closed validation, write-on-
-// change subscriber that skips identical fires. The `ui` slice covers
-// the rail's drawer state across reloads — `selectedPanelId` is per-
-// session and is intentionally not persisted (Phase 7 owns that
-// decision).
-//
-// v2 (UX overhaul issue #6) — adds `timeMode`. When a v1 payload is
-// loaded we accept it and default `timeMode` to "relative" so existing
-// users don't lose their rail tab choice on first load after the upgrade.
+// v1 payloads are still accepted and default `timeMode` to "relative"
+// so existing users don't lose their rail-tab choice on upgrade.
 
 import type { useSession } from "../store";
 
@@ -60,8 +55,8 @@ function isTimeMode(v: unknown): v is TimeMode {
 
 function validate(raw: unknown): PersistedUi | null {
   if (!isPlainObject(raw)) return null;
-  // Accept both v1 and v2 — back-compat path keeps the rail-tab + collapse
-  // state across the schema bump rather than blowing it away.
+  // Back-compat: accept both v1 and v2 so the schema bump doesn't wipe
+  // the user's rail-tab + collapse state.
   if (raw.version !== 1 && raw.version !== UI_SCHEMA_VERSION) return null;
   const tab = raw.activeRailTab;
   if (tab !== null && !isRailTab(tab)) return null;

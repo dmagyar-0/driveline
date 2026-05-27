@@ -1,18 +1,6 @@
-/* Phase 5 · Shared drawer row primitive.
- *
- * The Sources, Channels, Layout, and Panel drawers all render a list of
- * clickable rows with the same visual chrome: transparent left-border
- * that turns orange when the row is active, hover/focus background,
- * `font: inherit`, etc. The rule-of-three carry-over from Phase 4
- * STATUS.md says: lift this primitive before PanelDrawer becomes the
- * fourth duplicate.
- *
- * `grid-template-columns`, `gap`, and `font-size` deliberately stay in
- * each drawer's local module — Sources and Channels use
- * `8px 1fr auto`, Layout uses `1fr auto`, and the row's swatch is only
- * present where a per-id colour exists. Each drawer's `.row` rule
- * `composes: rowBase from "./_row.module.css";` and overrides those
- * three properties locally. */
+/* Shared drawer row primitive (Sources / Channels / Layout / Panel).
+ * Each drawer's `.row` rule `composes: rowBase from "./_row.module.css"`
+ * and overrides `grid-template-columns` / `gap` / `font-size` locally. */
 
 .rowBase {
   display: grid;
@@ -40,10 +28,8 @@
 }
 
 .rowActive {
-  /* iter6 → iter7 wave1 · "you are here" rows use --color-active-blue
-   * (the dedicated iter7 alias), not the CTA orange. Same cue used by
-   * the rail + the focused FlexLayout tabset so the selection language
-   * is consistent across the shell. */
+  /* "You are here" uses `--color-active-blue` — same cue as the rail
+   * and focused FlexLayout tabsets. Orange is reserved for CTA. */
   background: var(--color-bg-4);
   border-left-color: var(--color-active-blue);
   border-radius: 0 var(--radius-4) var(--radius-4) 0;

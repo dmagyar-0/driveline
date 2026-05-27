@@ -1,15 +1,11 @@
-// T6.2 · FlexLayout workspace shell.
+// FlexLayout workspace shell. Holds the `flexlayout-react` Model, wires
+// user drag-rearrange actions back into `useSession.setLayoutJson` via
+// `onModelChange`, and exposes imperative add/reset methods so callers
+// (top-bar buttons, dev hooks) don't have to know the Model API.
 //
-// Holds the `flexlayout-react` Model, wires user drag-rearrange actions
-// back into `useSession.setLayoutJson` via `onModelChange`, and exposes
-// imperative `addVideoPanel` / `addPlotPanel` / `resetLayout` methods so
-// the top-bar `+` buttons (and dev hooks for future e2e) can add panels
-// without having to know the internal `Model` API.
-//
-// Layout JSON round-trips through the store. The persistence adapter in
-// `./persist.ts` then fans `layoutJson` + `videoBindings` + `plotBindings`
-// out to `localStorage[driveline.layout.v1]`. A mismatched schema or a
-// missing storage bucket falls back to `defaultLayoutModel`.
+// Layout JSON round-trips through the store; `./persist.ts` fans
+// `layoutJson` + binding maps out to `localStorage[driveline.layout.v1]`.
+// A mismatched schema falls back to `defaultLayoutModel`.
 
 import {
   forwardRef,
@@ -91,16 +87,14 @@ export const Workspace = forwardRef<WorkspaceHandle>(
     const layoutJson = useSession((s) => s.layoutJson);
     const setLayoutJson = useSession((s) => s.setLayoutJson);
     const setVideoBinding = useSession((s) => s.setVideoBinding);
-    // Phase 7+ · the focused-panel ring tracks the same store slice the
-    // Panel drawer uses (click-into-body in `panelFactory.tsx`). One
-    // selector — never read the whole store — so a binding change in
-    // another panel doesn't re-render every tab header.
+    // Narrow selector — never read the whole store — so a binding
+    // change in another panel doesn't re-render every tab header.
     const selectedPanelId = useSession((s) => s.selectedPanelId);
 
-    // We keep a single Model instance for the component lifetime. Normal
-    // user actions (drag, close) flow through `doAction` and fire
-    // `onModelChange`. A dev-hook / reset that swaps `layoutJson` wholesale
-    // bumps `reloadKey` so we rebuild the Model from the new JSON.
+    // Single Model instance for the component lifetime. User actions
+    // (drag, close) flow through `doAction` → `onModelChange`. A
+    // wholesale layout swap (dev hook, reset) bumps `reloadKey` so the
+    // Model is rebuilt from the new JSON.
     const [reloadKey, setReloadKey] = useState(0);
     const ignoreNextChangeRef = useRef(false);
     const model = useMemo(
@@ -109,12 +103,11 @@ export const Workspace = forwardRef<WorkspaceHandle>(
       [reloadKey],
     );
 
-    // If the store's `layoutJson` changes out from under us (dev hook,
-    // reset button, another tab) and does not match the JSON we most
-    // recently used to (re)build the Model, rebuild. Depending only on the
-    // stringified layoutJson avoids a render loop: FlexLayout's
-    // `Model.fromJson(X).toJson()` is not an identity, so comparing to the
-    // live model's JSON can re-fire this effect indefinitely.
+    // Out-of-band `layoutJson` writes (dev hook, reset, other tab)
+    // rebuild the Model. We compare against the JSON most recently used
+    // to build it, not against the live Model — FlexLayout's
+    // `Model.fromJson(X).toJson()` is not the identity, so comparing
+    // against `model.toJson()` would re-fire this effect forever.
     const lastBuiltJsonRef = useRef<string>(
       JSON.stringify(layoutJson ?? defaultLayoutModel),
     );
@@ -133,12 +126,11 @@ export const Workspace = forwardRef<WorkspaceHandle>(
           return;
         }
         const json = m.toJson();
-        // Stamp the last-built ref with the exact payload we're about to push
-        // into the store. Otherwise the layoutJson effect sees the round-trip
-        // diff (FlexLayout normalises on tab-select / drag) and rebuilds the
-        // Model — which unmounts every panel and wipes their local React
-        // state (hudOn, scroll offsets, …). The rebuild path is only for
-        // out-of-band writes (dev hook, reset button, another tab).
+        // Stamp the last-built ref so the layoutJson effect sees the
+        // round-trip diff as expected and does NOT rebuild. Without
+        // this stamp, FlexLayout's normalisation on tab-select / drag
+        // would unmount every panel and wipe local React state. The
+        // rebuild path is reserved for out-of-band writes.
         lastBuiltJsonRef.current = JSON.stringify(json);
         setLayoutJson(json);
       },
@@ -150,8 +142,8 @@ export const Workspace = forwardRef<WorkspaceHandle>(
         const active = model.getActiveTabset();
         const targetId = active?.getId() ?? model.getFirstTabSet()?.getId();
         if (!targetId) {
-          // No tabset exists (user closed everything). Drop the tab into a
-          // fresh tabset at the root by docking to CENTER on the root row.
+          // No tabset exists (user closed everything) — dock to CENTER
+          // on the root row so FlexLayout creates a fresh tabset.
           const rootId = model.getRoot().getId();
           model.doAction(
             Actions.addNode(tab, rootId, DockLocation.CENTER, -1, true),
@@ -235,28 +227,21 @@ export const Workspace = forwardRef<WorkspaceHandle>(
       setLayoutJson(null);
     }, [setLayoutJson]);
 
-    // Phase 7+ · Custom tab chrome. Replace FlexLayout's stock tab content
-    // (and its built-in button cluster) with the `PanelHeader` component:
-    // kind icon + name (double-click to rename when focused, otherwise
-    // maximize) + four-icon action cluster (rename, settings, maximize,
-    // close). The cluster is **always** rendered (no hover/selection
-    // predicate) per the frontend skill's "thing disappears when status
-    // changes" trap.
+    // Replace FlexLayout's stock tab content with `PanelHeader`. The
+    // action cluster is always rendered (no hover/selection predicate)
+    // per the frontend skill's "thing disappears when status changes"
+    // anti-pattern.
     const onRenderTab = useCallback(
       (node: TabNode, renderValues: ITabRenderValues) => {
         const panelId = node.getId();
         const kind = panelKindOf(panelId);
         const parent = node.getParent();
         const tabsetId = parent?.getId();
-        // Suppress FlexLayout's stock per-tab button cluster — `PanelHeader`
-        // owns the close button now. The tabset-level close (top-right of
-        // the strip, fired by `enableTabStrip`) stays as FlexLayout drew
-        // it, since it operates on the *tabset*, not a tab.
+        // Suppress FlexLayout's stock per-tab button cluster —
+        // `PanelHeader` owns the close button now.
         renderValues.buttons = [];
-        // The maximize toggle lives on each tab so the user can flip
-        // their own panel without targeting the tabset-level toolbar.
-        // Reading the maximized state from the model lets us swap the
-        // glyph (square → restore-down) and tooltip in sync.
+        // Read the maximized state from the model so PanelHeader can
+        // swap the glyph (square → restore-down) and tooltip in sync.
         const isMaximized =
           tabsetId !== undefined &&
           model.getMaximizedTabset()?.getId() === tabsetId;
@@ -277,21 +262,17 @@ export const Workspace = forwardRef<WorkspaceHandle>(
 
     const onRenderTabSet = useCallback(
       (_node: TabSetNode | BorderNode, _renderValues: ITabSetRenderValues) => {
-        // Single-tab tabsets already match the wireframe — leave the
-        // tabset action cluster (the maximize/restore button on the right
-        // edge) alone for now. Hook reserved for later phases.
+        // Hook reserved for future tabset-level chrome.
       },
       [],
     );
 
-    // Phase 7+ · keep FlexLayout's "active tabset" notion in sync with the
-    // store-level `selectedPanelId` so the tabset gets the focused-ring
-    // styling (`flexlayout__tabset-selected`). The store id is the source
-    // of truth — `panelFactory.tsx` writes it on any pointerdown inside
-    // a panel body, the Panel drawer writes it when picking a panel, and
-    // this effect mirrors it back into FlexLayout. No-op when the model
-    // already reflects the selection, so we don't loop with
-    // `onModelChange`.
+    // Mirror the store's `selectedPanelId` into FlexLayout's "active
+    // tabset" so the tabset picks up `flexlayout__tabset-selected`
+    // styling. The store id is the source of truth — `panelFactory.tsx`
+    // writes it on body pointerdown, the Panel drawer writes it on
+    // pick, this effect mirrors it back. No-op when already in sync so
+    // we don't loop with `onModelChange`.
     useEffect(() => {
       if (selectedPanelId === null) return;
       const node = model.getNodeById(selectedPanelId);
@@ -325,8 +306,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(
       ],
     );
 
-    // If the user has somehow closed every tab (FlexLayout does allow an
-    // empty tabset), show an escape hatch.
+    // FlexLayout allows an empty root — show an escape hatch.
     const rootEmpty = model.getRoot().getChildren().length === 0;
 
     return (

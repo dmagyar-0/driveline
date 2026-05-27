@@ -1,18 +1,12 @@
-/* Empty-state layout (iter5 #5 — unified).
- *
- * Single component for every "no bound channel" state. Structure:
- *   1. .dropZone — primary affordance. Big, dashed-border drop target
- *      that doubles as a click target (opens an OS file picker via a
- *      hidden <input type=file>). Carries the format chips inline so
- *      the user reads "what to drop" without leaving the zone.
+/* Empty-state layout for every "no bound channel" state. Structure:
+ *   1. .dropZone — primary affordance. Dashed drop target that doubles
+ *      as a click target (opens an OS file picker via a hidden
+ *      <input type=file>).
  *   2. .secondaryRow — small text-link CTA ("Try sample data") below
- *      the drop zone. De-emphasised so the user's own data path is
- *      visually primary.
+ *      the drop zone. De-emphasised so the user's data path is primary.
  *   3. .pickerSection — tertiary; only renders when the container
- *      passes candidates. Lets the user bind an already-loaded video
- *      channel to this panel without re-dropping the file.
- *   4. Privacy footnote stays as the small final line.
- */
+ *      passes candidates.
+ *   4. Privacy footnote as the final line. */
 
 .empty {
   width: 100%;
@@ -55,10 +49,9 @@
   max-width: 28rem;
 }
 
-/* iter5 #5 — drop zone. Dashed border, slightly elevated background,
- * stays passive until a drag enters it. Click → hidden file input.
- * The whole zone is the affordance; we don't render a separate
- * "Browse" button so the user has one clear primary path. */
+/* Drop zone — whole zone is the affordance, click goes to the hidden
+ * file input. No separate "Browse" button so the user has one clear
+ * primary path. */
 .dropZone {
   width: min(100%, 36rem);
   display: flex;
@@ -87,8 +80,7 @@
 }
 
 /* When a drag is over the zone, paint with the CTA accent so the
- * user sees an unambiguous "drop here" affordance. iter6 · retagged
- * to --color-role-cta (same hex) to spell intent. */
+ * user sees an unambiguous "drop here" affordance. */
 .dropZoneActive {
   background: var(--color-role-cta-tint);
   border-color: var(--color-role-cta);
@@ -174,9 +166,8 @@
   border: 0;
 }
 
-/* iter5 #5 — secondary CTA row. Sample data is now a small text-link
- * button (not the orange primary) so the user's own data path is
- * visually primary. The drop zone above is the hero. */
+/* Secondary CTA row — "Try sample data" is a small text-link so the
+ * user's own data path stays visually primary. */
 .secondaryRow {
   display: flex;
   flex-direction: column;
@@ -216,10 +207,8 @@
   border-bottom-color: var(--color-fg-5);
 }
 
-/* iter5 #5 — tertiary picker. Used to be the *only* way to bind a
- * channel when one was loaded; now it lives below the drop zone as a
- * secondary path, since the user might want to drop a fresh file even
- * when a session already exists. */
+/* Tertiary picker — lives below the drop zone so the user can drop a
+ * fresh file even when a session already exists. */
 .pickerSection {
   width: min(100%, 36rem);
   display: flex;
@@ -293,8 +282,7 @@
 }
 
 .spinner {
-  /* iter6 · loading spinner uses --color-role-active (blue). Orange
-   * is reserved for the cursor + primary CTA only. */
+  /* Blue spinner — orange is reserved for the cursor + primary CTA. */
   width: 14px;
   height: 14px;
   border: 2px solid rgba(255, 255, 255, 0.2);

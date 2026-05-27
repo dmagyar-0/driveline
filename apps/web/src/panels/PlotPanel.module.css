@@ -28,12 +28,8 @@
 
 .chips {
   display: flex;
-  /* Iter4 alignment item #5 — single-row chip strip with explicit
-   * overflow handling. Iter3 wrapped chips and capped the row at 48 px
-   * with `overflow-y: auto`; rows past the second silently disappeared
-   * with no affordance. We now keep one row only, hide overflow, and
-   * surface a `+N more` pill via `<ChipOverflow />` that opens a
-   * popover with the chips that didn't fit. */
+  /* Single-row chip strip — overflow is surfaced via the `+N more`
+   * `<ChipOverflow />` pill rather than wrapping silently. */
   flex-wrap: nowrap;
   gap: var(--sp-2);
   flex: 1;
@@ -44,15 +40,10 @@
 
 /* Compact chip: source ribbon · swatch · short label · unit · optional
  * badge · remove. The `max-width` budget is tight on purpose so a long
- * topic name cannot push the Add button off-screen. The full path is
- * in `title`.
- *
- * Iter3 issue #2 — the chip now carries a 4 px source-coloured ribbon
- * down its left edge (`.chipRibbon`). The ribbon is rendered before
- * the swatch so the user can pre-attentively bucket chips by source
- * (e.g. all `comma2k19__seg4` chips share a violet leading bar) before
- * resolving the per-channel swatch.
- */
+ * topic name cannot push the Add button off-screen; full path is in
+ * `title`. The 4 px source-coloured ribbon is rendered before the
+ * swatch so the user can pre-attentively bucket chips by source before
+ * resolving the per-channel swatch. */
 .chip {
   display: inline-flex;
   align-items: stretch;
@@ -65,15 +56,9 @@
   font-size: var(--fs-12);
   line-height: 1.4;
   max-width: 16rem;
-  /* Iter4 alignment item #5 — chips never shrink below their content
-   * size. The `+N more` overflow pill is the responsive surface: when
-   * a chip wouldn't fit, the overflow detector hides it and renders
-   * it in the popover instead. Letting the chip shrink would defeat
-   * iter4 #2 (channel name takes priority) by collapsing the label
-   * back to `WheelSpe…` at narrow widths. Pin a hard floor wide
-   * enough for the channel-name min-width plus the badge max-width
-   * plus the chrome (ribbon, swatch, remove, gaps); the chip stays
-   * full-size and pushes its overflowed siblings into the popover. */
+  /* Hard min-width floor: chips never shrink below their content size.
+   * Letting them shrink would collapse the channel label to `WheelSpe…`;
+   * the overflow detector pushes excess chips into the popover instead. */
   min-width: 13rem;
   flex-shrink: 0;
   white-space: nowrap;
@@ -100,10 +85,8 @@
   flex: 1;
 }
 
-/* Iter5 issue #7 — chip swatch is an SVG so it can render the
- * series's dash pattern (solid / dashed / dotted / dash-dot) the same
- * way the line does. The line is centred horizontally in the swatch;
- * any dash array set on the `<line>` paints exactly as uPlot's. */
+/* SVG swatch so it can render the series's dash pattern (solid /
+ * dashed / dotted / dash-dot) the same way uPlot's line does. */
 .chipSwatch {
   width: 0.875rem;
   height: 0.625rem;
@@ -112,11 +95,9 @@
   overflow: visible;
 }
 
-/* Iter5 issue #2 — `L` / `R` axis badge. Sits between the unit and
- * the source badge so it reads as a small qualifier on the chip. The
- * border + text colour use `currentColor` so the parent's inline
- * `color` tint (lifted from the axis group's identity colour)
- * propagates naturally. */
+/* `L` / `R` axis badge. Border + text colour use `currentColor` so the
+ * parent's inline `color` tint (lifted from the axis group's identity
+ * colour) propagates naturally. */
 .chipAxisBadge {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
@@ -135,23 +116,18 @@
   overflow: hidden;
   text-overflow: ellipsis;
   font-weight: var(--fw-medium);
-  /* Iter4 regression #2 — the channel name is the carrying piece of
-   * information; iter3 inverted the priority and let the source badge
-   * (e.g. `comma2k19_seg4`) sit unflinching while the channel name
-   * collapsed to `WheelSpe…`. Pin a generous min-width so the chip
-   * dedicates room to the channel name first; the source badge is now
-   * the truncation candidate (see `.chipBadge`). */
+  /* Channel name carries the information; pin a generous min-width so
+   * the chip dedicates room to it first. The source badge is the
+   * truncation candidate (see `.chipBadge`). */
   flex: 1 1 auto;
   min-width: 6.5rem;
 }
 
-/* iter8 — unified unit-pill micro-typography.
- *
- * `.unitPill` is the shared spec used by the chip row, the cursor gutter,
- * and (via canvas-drawn font strings) the axis label. Three sites previously
- * styled `"m/s"` three different ways; the audit asked for one role. The
- * tokens live in `apps/web/src/styles/tokens.css` (`--unit-pill-*`) so the
- * three surfaces — including the canvas one — read from the same numbers. */
+/* Unified unit-pill micro-typography — shared spec used by the chip row,
+ * the cursor gutter, and (via canvas-drawn font strings) the axis label.
+ * Tokens live in `apps/web/src/styles/tokens.css` (`--unit-pill-*`) so
+ * all three surfaces — including the canvas one — read from the same
+ * numbers. */
 .unitPill {
   font-family: var(--unit-pill-font);
   font-size: var(--unit-pill-size);
@@ -176,15 +152,10 @@
   flex-shrink: 0;
 }
 
-/* Source badge (issue #2). Visually subordinate to the label and
- * dimmed; appears only when the label alone would be ambiguous.
- *
- * Iter4 regression #2 — the badge is now the truncation candidate.
- * Iter3 left the badge `flex-shrink: 0` so a long source stem (e.g.
- * `comma2k19_seg4`) clobbered the channel name. The label carries the
- * meaning, so we shrink the badge first: cap it at ~6 chars and let
- * the rest fall off via ellipsis. The full source name remains in the
- * chip `title` tooltip for hover-read. */
+/* Source badge — visually subordinate to the label. The badge is the
+ * truncation candidate: cap at ~6 chars and let the rest fall off via
+ * ellipsis so the channel label keeps its width. Full source name
+ * remains in the chip `title` tooltip. */
 .chipBadge {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
@@ -231,8 +202,8 @@
   outline-offset: var(--focus-offset);
 }
 
-/* Collapse pill (issue #1) — replaces the chip row when there are too
- * many channels. Reads "N channels" / "Hide". */
+/* Collapse pill — replaces the chip row when there are too many
+ * channels. Reads "N channels" / "Hide". */
 .collapseBtn {
   background: var(--color-bg-2);
   color: var(--color-fg-2);
@@ -255,9 +226,9 @@
   outline-offset: var(--focus-offset);
 }
 
-/* Iter4 alignment item #5 — chip overflow pill + popover. The pill
- * sits at the end of the chip row when overflow is detected; clicking
- * it opens a small popover listing the chips that didn't fit. */
+/* Chip overflow pill + popover — sits at the end of the chip row when
+ * overflow is detected; clicking it opens a popover listing the chips
+ * that didn't fit. */
 .chipOverflowWrap {
   position: relative;
   flex-shrink: 0;
@@ -275,8 +246,7 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
-  /* Iter4 alignment item #5 — keep the pill prominent so it reads as
-   * the surface affordance ("there are more chips than fit"). A
+  /* Pill stays prominent so it reads as the surface affordance; a
    * subdued background would let it sink into the chip row. */
   flex-shrink: 0;
 }
@@ -313,15 +283,10 @@
   min-width: 14rem;
 }
 
-/* Mixed-units warning chip (issue #3). Same chip shape as a channel
- * chip but no swatch — communicates "this is meta, not a series".
- *
- * iter7 wave1 · this used a literal #f1c453 (Goldenrod) that pre-dated
- * the design token system. Move to the dedicated --color-warn-amber*
- * tokens so the chip shares semantics with the Cropped badge and the
- * buffering dot. The hex drift is intentional: every warning surface
- * now reads as the same amber, leaving CTA orange free for the play
- * button + playhead. */
+/* Mixed-units warning chip — same chip shape as a channel chip but no
+ * swatch, so it reads as "meta, not a series". Shares
+ * --color-warn-amber with the Cropped badge and buffering dot;
+ * CTA orange stays reserved for the play button + playhead. */
 .warningChip {
   display: inline-flex;
   align-items: center;
@@ -377,15 +342,10 @@
   border-radius: var(--radius-2);
 }
 
-/* Iter3 issue #1 — `.plotArea` now hosts two children side by side:
- * the plot canvas on the left, the cursor gutter on the right. The
- * gutter is a fixed-width column; the plot canvas claims the remainder
- * via `flex: 1`. The overlay canvas (`.overlay`) and segment bands
- * stack on top of `.plotMount`, so they continue to track the actual
- * canvas geometry (not the gutter).
- *
- * The gutter never overlaps the traces — iter2's floating tooltip
- * routinely occluded 25–30 % of the upper-right quadrant. */
+/* `.plotArea` hosts two children side by side: plot canvas on the left,
+ * cursor gutter on the right. The overlay (`.overlay`) and segment
+ * bands stack on top of `.plotMount` so they track the actual canvas
+ * geometry, not the gutter — the gutter must never overlap the traces. */
 .plotArea {
   position: relative;
   width: 100%;
@@ -414,25 +374,10 @@
   pointer-events: none;
 }
 
-/* Iter5 issue #4 — in-chart title overlay. Sits in the upper-left
- * corner of the plot canvas so a screenshot reads as
- * `<panel name> · Δ 30 s`. Subtle by design — low opacity, monospaced
- * — so it doesn't distract during interaction but makes a screenshot
- * self-explanatory.
- *
- * iter8 — promoted to a proper chip/tag. Pre-iter8 it was free-floating
- * mono text on a near-transparent scrim; the critic flagged the
- * typography as "unbranded mono". Now it reads as a small solid tag:
- *   - solid `--color-bg-4` chip surface (one tonal step above the
- *     panel body so the tag pops without competing with the trace),
- *   - subtle border so it doesn't bleed into a light region of the
- *     canvas (an unbordered chip on the IMU_Accel white series
- *     vanished in iter7 wave2 screenshots),
- *   - `--radius-3` so it shares the same chip shape vocabulary as the
- *     count badge on the Add-channel button,
- *   - mono retained for the Δ-time digits (these read as a numeric
- *     instrument) but bumped to `--fw-medium` so it reads as a
- *     deliberate label not a console echo. */
+/* In-chart title tag in the upper-left so a screenshot reads as
+ * `<panel name> · Δ 30 s`. Solid surface + border because an unbordered
+ * chip vanishes when the canvas underneath has a light region (e.g.
+ * IMU_Accel white series). */
 .inChartTitle {
   position: absolute;
   top: 4px;
@@ -464,8 +409,8 @@
   color: var(--color-fg-4);
 }
 
-/* Iter5 issue #4 — bottom-right timestamp footer. Shows the visible
- * range absolute timestamps so a screenshot tells the user *when*. */
+/* Bottom-right timestamp footer — shows the visible range absolute
+ * timestamps so a screenshot tells the user *when*. */
 .inChartTimestampFooter {
   position: absolute;
   bottom: 4px;
@@ -481,11 +426,6 @@
   z-index: 2;
 }
 
-/* iter7 wave2 — the floating `.inChartMixedUnits` pill was removed.
- * The toolbar `.warningChip` is the single surface for the Mixed Units
- * warning; the on-canvas duplicate occluded data and read as the same
- * chip twice on screenshots. */
-
 .empty {
   position: absolute;
   inset: 0;
@@ -499,8 +439,8 @@
   font-size: var(--fs-14);
 }
 
-/* Cursor-value readout strip (issue #4). One row of compact pills,
- * one per bound series, value formatted by `formatReadoutValue`. */
+/* Cursor-value readout strip — one row of compact pills, one per
+ * bound series, value formatted by `formatReadoutValue`. */
 .cursorReadout {
   display: flex;
   flex-wrap: wrap;
@@ -525,8 +465,8 @@
 }
 
 .readoutRibbon {
-  /* Iter3 issue #2 — per-source ribbon. Slim vertical bar so the row
-   * stays compact while the colour is impossible to miss. */
+  /* Per-source ribbon — slim vertical bar so the row stays compact
+   * while the colour is impossible to miss. */
   width: 3px;
   height: 14px;
   border-radius: 1px;
@@ -566,9 +506,9 @@
   font-weight: var(--fw-medium);
 }
 
-/* iter8 — readout strip's unit suffix also adopts the unified
- * `.unitPill` spec so the chip row, gutter, axis, and bottom strip
- * all read "M/S" identically. */
+/* Readout strip's unit suffix adopts the unified `.unitPill` spec so
+ * the chip row, gutter, axis, and bottom strip all read "M/S"
+ * identically. */
 .readoutUnit {
   font-family: var(--unit-pill-font);
   font-size: var(--unit-pill-size);
@@ -579,27 +519,20 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Iter3 issue #3 — numeric cells. Apply to any value that lives in a
- * column the user scans top-to-bottom (axis labels, cursor values,
- * readout strip values, chip units). Tabular figures keep every digit
- * the same width so `30.60` and `7.30` align by decimal point; right
- * alignment seals the deal when the cell is wider than the number. */
+/* Numeric cells — applied to any value the user scans top-to-bottom.
+ * Tabular figures keep every digit the same width so `30.60` and
+ * `7.30` align by decimal point. */
 .numCell {
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
   text-align: right;
 }
 
-/* Iter3 issue #1 — right-hand cursor-value gutter. Replaces the iter2
- * floating tooltip; the gutter sits in the panel chrome on the right
- * and never overlaps the data area. Width is fixed so the column
- * doesn't reflow as the cursor moves.
- *
- * Iter3 issue #2 — each row begins with a coloured ribbon keyed to the
- * channel's *source*, distinct from the per-channel swatch. The ribbon
- * is wide and unmistakable; the iter2 grey suffix badge was the audit's
- * #2 finding.
- */
+/* Right-hand cursor-value gutter. Width is fixed so the column doesn't
+ * reflow as the cursor moves. Each row begins with a coloured ribbon
+ * keyed to the channel's *source* (distinct from the per-channel
+ * swatch) so two same-named channels from different files are
+ * unmistakable. */
 .cursorGutter {
   width: 180px;
   flex-shrink: 0;
@@ -641,10 +574,9 @@
   gap: var(--sp-2);
 }
 
-/* Iter5 issue #1 — flip the hierarchy. The live value is the row's
- * dominant element (top, large, mono, accent-coloured); the channel
- * name and optional source badge sit underneath as confirmation text.
- * This row layout matches the new visual order top-to-bottom. */
+/* The live value is the row's dominant element (top, large, mono,
+ * accent-coloured); the channel name and optional source badge sit
+ * underneath as confirmation text. */
 .cursorGutterRow {
   display: grid;
   grid-template-columns: 4px 1fr;
@@ -663,9 +595,7 @@
   border-bottom: none;
 }
 
-/* The 4 px ribbon spanning the full row height. Coloured by source
- * (iter3 issue #2) so two same-named channels from different files
- * are unmistakable at a glance. */
+/* 4 px ribbon spanning the full row height, coloured by source. */
 .cursorGutterRibbon {
   grid-area: ribbon;
   align-self: stretch;
@@ -690,9 +620,8 @@
   flex-shrink: 0;
 }
 
-/* Iter5 issue #1 — channel name demoted from primary to secondary.
- * 13 px, fg-3 (still readable, not dim). The eye should hit the
- * value first; the label confirms what's being read. */
+/* Channel name is secondary — the eye should hit the value first; the
+ * label confirms what's being read. */
 .cursorGutterLabel {
   font-weight: var(--fw-regular);
   color: var(--color-fg-3);
@@ -704,9 +633,8 @@
   letter-spacing: 0;
 }
 
-/* Iter5 issue #1 — source qualifier is tertiary, 10 px, fg-5
- * (definitely subordinate). Only renders when the binding-set needs
- * source disambiguation. */
+/* Source qualifier is tertiary — only renders when the binding-set
+ * needs source disambiguation. */
 .cursorGutterBadge {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
@@ -717,27 +645,21 @@
   flex-shrink: 0;
 }
 
-/* Iter5 issue #1 — live value is the dominant text in the row.
- * 16 px (1 rem), mono, semi-bold, accent-coloured (the channel's
- * line stroke colour, set inline so the value matches the trace).
- * This is the only line the user reads every second; everything
- * else exists to confirm *which* number this is. */
+/* Live value is the dominant text in the row — accent-coloured (the
+ * channel's line stroke colour, set inline so the value matches the
+ * trace). Sits on the `lg` rung (16 px) — same role as the playhead
+ * badge time. inline-flex so the value swatch baselines with the
+ * value text and the unit suffix. */
 .cursorGutterValue {
   grid-area: value;
   color: var(--color-fg-1);
   font-family: var(--font-mono);
   font-weight: var(--fw-semibold, 600);
-  /* iter6 · cursor live value sits on the `lg` rung (16 px). Same role
-   * as the playhead badge time. */
   font-size: var(--fs-lg);
   line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  /* Iter4 alignment item #6 — the value cell carries an inline
-   * per-channel swatch (`.cursorGutterValueSwatch`) immediately
-   * before the digits. Use inline-flex so the swatch baselines with
-   * the value text and the unit suffix. */
   display: inline-flex;
   align-items: baseline;
   gap: 6px;
@@ -751,28 +673,22 @@
   display: inline-block;
 }
 
-/* Iter4 alignment item #6 — small vertical bar tinted to the
- * channel's line colour, sitting immediately next to the numeric
- * value so the user can trace colour → number → label in one
- * saccade. Bumped to 4×14 px to track the larger value text. */
+/* Small vertical bar tinted to the channel's line colour, sitting
+ * immediately next to the numeric value so the user can trace
+ * colour → number → label in one saccade. */
 .cursorGutterValueSwatch {
   width: 4px;
   height: 14px;
   border-radius: 1px;
   display: inline-block;
   flex-shrink: 0;
-  /* baseline alignment with the larger value text — nudge the swatch
-   * down to centre on the digits' cap height. */
+  /* Nudge down to centre on the digits' cap height. */
   transform: translateY(2px);
 }
 
-/* Unit suffix on the live-value line. Stays smaller and dimmer than
- * the digits so the eye lands on the number, not the unit.
- *
- * iter8 — adopted the shared `.unitPill` spec (see `--unit-pill-*` in
- * tokens.css). Pre-iter8 this read as mixed-case `m/s` at 12 px/regular
- * while the axis screamed `M/S` at 12 px/600 and the chip pill ran
- * `m/s` at 11 px/regular. All three now match. */
+/* Unit suffix on the live-value line. Adopts the shared `.unitPill`
+ * spec (see `--unit-pill-*` in tokens.css) so the chip row, gutter,
+ * and axis all read identically. */
 .cursorGutterUnit {
   font-family: var(--unit-pill-font);
   font-size: var(--unit-pill-size);
@@ -783,11 +699,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Floating cursor tooltip — retained for backwards-compatible callers
- * and tests (iter2). Not rendered by PlotPanel after iter3; the gutter
- * is the cursor-value surface. Keeping the classes around so
- * CursorTooltip continues to work as a standalone component for any
- * future overlay use-case. */
+/* Floating cursor tooltip — not rendered by PlotPanel (the gutter is
+ * the cursor-value surface), but kept so CursorTooltip still works as
+ * a standalone component. */
 .cursorTooltip {
   position: absolute;
   pointer-events: none;
@@ -875,11 +789,9 @@
   font-weight: var(--fw-regular);
 }
 
-/* Segment-boundary overlay (iter2 issue #4). One subtly tinted band per
- * loaded source, alternating between two near-invisible greys so the
- * boundaries register without dominating the canvas. Labels sit in the
- * top-left corner of each band so they don't clip the rendered line
- * data, with a small inset so they don't kiss the band edge. */
+/* Segment-boundary overlay — one subtly tinted band per loaded source,
+ * alternating between two near-invisible greys so the boundaries
+ * register without dominating the canvas. */
 .segmentBands {
   position: absolute;
   pointer-events: none;

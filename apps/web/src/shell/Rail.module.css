@@ -1,21 +1,6 @@
-/* UX overhaul (issue #14):
- *
- * iter5 #3 — labels are now always visible. The previous
- * hover-expanding (48 → 168 px) design hid the labels from a casual
- * glance — engineers who used the app daily would memorise the icons
- * but new users would not. We pick approach A from the audit ("icon
- * on top of label, rail widens to ~80 px") so the labels are part of
- * the rest state.
- *
- * Layout per button:
- *   - vertical stack: icon (top) then label (below).
- *   - hit target is the whole 80×56 cell.
- *
- * The active state combines an accent bar (left edge) with a filled
- * background and an accent foreground, instead of a colour-only
- * change. The bar persists across the whole rest state since the bar
- * was the only "you-are-here" cue when the rail was idle in iter2.
- */
+/* Each button: vertical icon-over-label stack inside an 80×56 cell.
+ * Active state combines a left-edge accent bar + filled background +
+ * accent foreground so "you are here" doesn't rely on hue alone. */
 
 .rail {
   display: flex;
@@ -76,25 +61,14 @@
   outline-offset: -2px;
 }
 
-/* iter6 · "orange on a diet". The active state used the CTA orange,
- * which made the rail compete with the play button and the playhead
- * for the eye's attention. The rail-active state moves to the
- * `--color-role-active` blue — same role as a focused FlexLayout
- * tabset, so "you are here" reads as one consistent cue across the
- * shell. Three concurrent affordances still apply:
- *   1. A 3 px accent bar anchored to the rail's left edge so the
- *      "selected" cue persists even when the rail is collapsed and
- *      the label is hidden.
- *   2. A filled background one shade brighter than hover, so the row
- *      doesn't lose contrast when the cursor moves off it.
- *   3. An accent foreground (blue) — the only colour cue is hue,
- *      so the glyph still pops even at 80×56 px. */
+/* Active uses `--color-role-active` (blue) — same role as a focused
+ * FlexLayout tabset — so "you are here" reads consistently across the
+ * shell. Orange is reserved for CTA + playhead. */
 .btn::before {
   content: "";
   position: absolute;
-  /* iter5 #3 — the rail is now full-width with labels at rest, so the
-   * accent bar anchors to the left edge of the button (which sits
-   * inside an `.sp-2` padded group). */
+  /* `-4px` puts the bar at the rail's left edge, outside the `.sp-2`
+   * group padding. */
   left: -4px;
   top: 6px;
   bottom: 6px;
@@ -118,18 +92,12 @@
   background: var(--color-role-active);
 }
 
-/* When the rail is collapsed (idle width 48 px) the label fades out
- * but the accent bar + filled icon column should still be obvious.
- * Bumping icon contrast on active makes the glyph itself pop. */
 .active .icon {
   color: var(--color-role-active);
 }
 
-/* iter5 #3 — vertical icon/label stack. Icon sits on top of the label so
- * the button reads as a labelled cell at a glance. The label is always
- * visible (no fade) so the discoverability win is the whole point.
- * `min-width: 0` on the label lets long words (e.g. "Channels") ellipsis
- * if the rail is narrowed further in the future. */
+/* `min-width: 0` on the label lets long words ellipsis if the rail is
+ * ever narrowed below 80 px. */
 .icon {
   display: grid;
   place-items: center;

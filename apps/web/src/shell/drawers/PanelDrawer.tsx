@@ -1,26 +1,10 @@
-// Phase 5 · Panel drawer. Phase 6 added bodies for the four new panel
-// kinds (scene / map / table / enum); each binds via the existing
-// `<ChannelPicker>` (filtered to scalar channels) so we don't introduce
-// a parallel picker per kind.
+// Panel drawer. Body switches on the kind of the currently-selected
+// panel; each kind binds through the shared `<ChannelPicker>` so we
+// don't ship a parallel picker per kind.
 //
-// Replaces the inline `panel` stub in `Drawer.tsx`. Body switches on the
-// kind of the currently-selected panel:
-//   - none   → "Select a panel to configure it" empty state
-//   - plot   → bound channels (× to remove), `+ add channel…` popover
-//              reusing the existing `<ChannelPicker>`
-//   - video  → decoder label, HUD overlay toggle (round-trips through
-//              `setVideoHudOn` / `toggleVideoHudOn` in the store, so the
-//              in-panel button + `h` keypress + this drawer all share
-//              one bit), and the bound channel with × to clear.
-//   - scene  → forward-compat single-channel binding (no rendering yet)
-//   - map    → lat/lon two-channel binding via two pickers
-//   - table  → multi-channel scalar binding (mirrors plot at v1)
-//   - enum   → single-channel binding for the state strip
-//
-// The drawer reads everything from the store via single-key selectors
-// and from the rAF-published `__drivelineVideoHud` snapshot for the
-// codec label (which is not in the store — only the worker decoder
-// owns it).
+// Reads everything via single-key store selectors except the video
+// codec label, which lives on the rAF-published
+// `__drivelineVideoHud` snapshot (only the worker decoder owns it).
 
 import { useEffect, useRef, useState } from "react";
 import { useSession, type Channel, type SourceMeta } from "../../state/store";
@@ -226,28 +210,22 @@ function PlotBody({ panelId }: BodyProps) {
 }
 
 /**
- * "Gap threshold" control surface — a toggle plus a number input that
- * round-trips through `setPlotGapThreshold`. Lives in its own component
- * so the `useState` for the in-flight numeric input doesn't churn the
- * rest of `PlotBody` on every keystroke. Off (default) preserves the
- * spanGaps:true rendering shipped in PR #83; on flips the panel into
- * step-hold + explicit-gap mode.
+ * Gap-threshold toggle + numeric input that round-trips through
+ * `setPlotGapThreshold`. Split out so the in-flight draft `useState`
+ * doesn't churn the rest of `PlotBody` on every keystroke.
  */
 function PlotGapThresholdControl({ panelId }: BodyProps) {
   const gapThresholdSec = useSession(
     (st) => st.plotPanelSettings[panelId]?.gapThresholdSec ?? null,
   );
   const isOn = gapThresholdSec !== null;
-  // Local draft so a partially-typed value (e.g. "0.") doesn't get
-  // immediately normalised to null by the store. Synced from the store
-  // value on every change, but only the blur/Enter commit calls the
-  // store action.
+  // Local draft so partial input (e.g. "0.") isn't immediately
+  // normalised to null. Only blur/Enter commits to the store.
   const [draft, setDraft] = useState<string>(
     gapThresholdSec === null ? "1" : String(gapThresholdSec),
   );
-  // Track the value we last saw from the store so external changes
-  // (e.g. restoring a named layout) re-seed the draft. We compare to
-  // the numeric value, not the string, so a user typing "1.0" while
+  // Re-seed the draft when the store value changes externally (e.g. on
+  // layout restore). Compare numerically so the user typing "1.0" while
   // the store says 1 doesn't get clobbered.
   const lastSeenRef = useRef<number | null>(gapThresholdSec);
   useEffect(() => {
@@ -264,9 +242,8 @@ function PlotGapThresholdControl({ panelId }: BodyProps) {
   const commitDraft = () => {
     const parsed = Number.parseFloat(draft);
     if (!Number.isFinite(parsed) || parsed <= 0) {
-      // Invalid input → revert the draft to the previous on-value
-      // rather than turning the threshold off. The user's intent here
-      // is "I typed something" not "turn this off."
+      // Invalid → revert the draft, do NOT turn the threshold off.
+      // "I typed something" should not be conflated with "turn off".
       setDraft(gapThresholdSec === null ? "1" : String(gapThresholdSec));
       return;
     }
@@ -516,9 +493,8 @@ function MapBody({ panelId }: BodyProps) {
     nextLon: string | null,
   ): void => {
     if (nextLat === null || nextLon === null) {
-      // Wait for the user to pick the missing axis before persisting —
-      // otherwise we'd save a half-formed binding and the panel would
-      // immediately render the empty state.
+      // Wait for both axes before persisting — otherwise the panel
+      // would render its empty state from a half-formed binding.
       setMapBinding(panelId, null);
       return;
     }
@@ -835,8 +811,7 @@ function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
 }
 
 // Codec lives on the rAF-published HUD snapshot, not in the store.
-// Poll at 250ms while a video is bound — cheap, doesn't churn the
-// reconciler, and the codec field is set once per fixture load anyway.
+// 250 ms poll is cheap — the codec field is set once per fixture load.
 function useDecoderCodec(bindingId: string | null): string | null {
   const [codec, setCodec] = useState<string | null>(null);
   useEffect(() => {

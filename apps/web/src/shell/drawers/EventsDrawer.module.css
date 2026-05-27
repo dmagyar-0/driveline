@@ -1,8 +1,6 @@
-/* Phase 8 · EventsDrawer styles. The 220px wrapper, padding, and
- * scroll behaviour come from `Drawer.module.css:.drawer`. Row + active
- * primitives `composes:` from `_row.module.css`. The row carries a
- * swatch (like SourcesDrawer) plus a meta column with the relative
- * timestamp, hence `8px 1fr auto`. */
+/* EventsDrawer styles. Wrapper comes from `Drawer.module.css:.drawer`;
+ * row primitives compose from `_row.module.css`. Rows are
+ * `8px 1fr auto`: swatch + label + relative-timestamp meta column. */
 
 .section {
   display: flex;

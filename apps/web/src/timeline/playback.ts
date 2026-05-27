@@ -1,16 +1,12 @@
-// T3.3 · Playback loop. rAF-driven advance of `cursorNs` while
-// `playing`; respects `speed`; anchored against `performance.now()` so
-// drift across the session is bounded by the clock precision rather
-// than accumulated frame deltas.
+// Playback loop. rAF-driven advance of `cursorNs` while `playing`;
+// anchored against `performance.now()` so drift is bounded by clock
+// precision rather than accumulated frame deltas.
 //
-// Kept as a plain module (not a React hook) so the tick logic is
-// testable under the existing `environment: "node"` vitest setup
-// without jsdom or React Testing Library.
+// Plain module (not a React hook) so the tick logic is testable
+// under the `environment: "node"` vitest setup without jsdom.
 //
-// The loop is a pure consumer of the T3.1 state machine — all clamp
-// and end-of-session auto-pause invariants live in `state/store.ts:
-// 189-201`, so the tick does nothing more than compute the next ns
-// value and hand it to `setCursor`.
+// Pure consumer of the state machine — clamp + end-of-session
+// auto-pause invariants live in `state/store.ts`.
 
 import type { StoreApi } from "zustand";
 import type { SessionState } from "../state/store";
@@ -20,27 +16,20 @@ import {
   type PanelReadiness,
 } from "../panels/videoReadiness";
 
-// Issue #2 — cursor gating signal. Mirrors the constant in
-// `panels/VideoPanel.tsx`; both modules independently consult their
-// own copy so neither has to import across the panels/timeline seam
-// just to compare two bigints.
+// Cursor gating signal. Mirrors the constant in `panels/VideoPanel.tsx`;
+// both consult their own copy so neither has to import across the
+// panels/timeline seam to compare two bigints.
 //
-// Rationale: at 30 fps the inter-frame interval is ~33 ms; ε = 100 ms
-// (≈3 frames) keeps the gate from flapping when a single rAF tick
-// happens to land between decode + blit. At 60 fps the same ε
-// trivially covers one frame.
+// ε = 100 ms (~3 frames at 30 fps) keeps the gate from flapping when
+// a single rAF tick lands between decode + blit.
 export const READY_EPSILON_NS = 100_000_000n;
 
-/** Issue #2 — flag readable by Playwright via the `getCursorGated`
- *  dev hook. Module-scope so the rAF loop can write it without
- *  routing through React state. Mirrors the most recent `tick()`
- *  decision; consult after a tick to know if the cursor was held.
+/** Flag readable by Playwright via `getCursorGated`. Module-scope so
+ *  the rAF loop can write it without routing through React state.
  *
- *  Caveat: only one playback loop may run against this module at a
- *  time — concurrent `startPlaybackLoop()` callers would race on this
- *  flag. Production has exactly one loop (mounted by `<App />`); unit
- *  tests in `playback.test.ts` rely on that singleton assumption to
- *  observe gate state via `isCursorGated()`. */
+ *  Singleton: only one playback loop may run against this module at
+ *  a time — concurrent callers would race. Production mounts exactly
+ *  one loop from `<App />`. */
 let cursorGated = false;
 export function isCursorGated(): boolean {
   return cursorGated;
@@ -53,13 +42,11 @@ export interface PlaybackDeps {
   raf: (cb: FrameRequestCallback) => number;
   /** Cancels a previously-returned rAF handle. */
   caf: (id: number) => void;
-  /** Issue #2 — readiness map source. Defaults to the live registry;
-   *  unit tests inject a hand-rolled Map so the gate can be exercised
-   *  without spinning up a VideoPanel. */
+  /** Readiness map source. Defaults to the live registry; unit tests
+   *  inject a Map so the gate can be exercised without a VideoPanel. */
   readiness: () => Map<string, PanelReadiness>;
-  /** Issue #2 — list of bound video panel ids. Defaults to reading
-   *  `videoBindings` off the store; unit tests pass a closure to
-   *  drive the gate directly. */
+  /** Bound video panel ids. Defaults to reading `videoBindings` off
+   *  the store; unit tests pass a closure to drive the gate directly. */
   boundVideoPanelIds: (state: SessionState) => string[];
 }
 
@@ -69,9 +56,7 @@ type SessionStore = Pick<
 >;
 
 function defaultBoundVideoPanelIds(state: SessionState): string[] {
-  // Walk `videoBindings` once per tick; a panel is "bound" iff its
-  // entry exists and is non-null. Allocation-light: the array is at
-  // most one entry per video panel (typically ≤ 4).
+  // A panel is "bound" iff its entry exists and is non-null.
   const out: string[] = [];
   const b = state.videoBindings;
   for (const k in b) {
@@ -133,14 +118,11 @@ export function startPlaybackLoop(
     if (!state.playing) return;
     mark("tick:start");
 
-    // Issue #2 — decode-aware gate. Hold the cursor whenever any bound
-    // video panel reports "waiting" or "absent"; ignore stalled panels
-    // (they have their own inline error UI and we must not deadlock on
-    // them); and ignore bindings whose panel hasn't mounted yet — an
-    // orphan binding from a previous layout, with no rAF loop running,
-    // shouldn't gate the cursor forever. Once a panel mounts its rAF
-    // tick will land an entry in the registry within one frame and the
-    // gate engages naturally.
+    // Decode-aware gate. Hold the cursor whenever any bound video
+    // panel is "waiting" or "absent"; ignore stalled panels (they
+    // have their own inline error UI and we must not deadlock on
+    // them); ignore bindings whose panel hasn't mounted yet (orphan
+    // bindings from a previous layout would gate forever).
     const bound = boundVideoPanelIds(state);
     if (bound.length > 0) {
       const snaps = readiness();
@@ -148,14 +130,13 @@ export function startPlaybackLoop(
       for (let i = 0; i < bound.length; i++) {
         const r = snaps.get(bound[i]);
         // No registry entry = panel not mounted (orphan binding) →
-        // ignore. Mount lifecycle: panel's first rAF tick adds the
-        // entry, panel's cleanup `clearPanelReadiness` removes it.
+        // ignore. The panel's first rAF tick adds the entry on mount.
         if (!r) continue;
         if (r.state === "waiting" || r.state === "absent") {
           allReady = false;
           break;
         }
-        // "ready" → continue. "stalled" → ignore for cursor gating.
+        // "stalled" → ignore for cursor gating.
       }
       if (!allReady) {
         cursorGated = true;
@@ -171,16 +152,16 @@ export function startPlaybackLoop(
     const deltaNs = BigInt(Math.round(elapsedMs * 1e6 * a.speed));
     const nextNs = a.cursorNs + deltaNs;
     lastWritten = nextNs;
-    // `advanceCursor` is the playback-only seam: same clamp + auto-pause
-    // semantics as `setCursor`, but it does not bump `seekEpoch`. That
-    // keeps the videoDecode pipeline from interpreting a 60 Hz playback
-    // tick as a user scrub and tearing down the decoder on every frame.
+    // `advanceCursor` is the playback-only seam: same clamp +
+    // auto-pause as `setCursor`, but does NOT bump `seekEpoch`. That
+    // prevents the videoDecode pipeline from treating a 60 Hz tick as
+    // a user scrub and tearing down the decoder every frame.
     state.advanceCursor(nextNs);
     mark("tick:end");
     measure("tick", "tick:start", "tick:end");
-    // advanceCursor may have clamped and auto-paused at end-of-session;
-    // the subscribe listener will have already cleared `anchor` in that
-    // case, so re-check before scheduling the next frame.
+    // advanceCursor may have auto-paused at end-of-session; the
+    // subscribe listener clears `anchor` in that case, so re-check
+    // before scheduling.
     if (store.getState().playing && anchor !== null) {
       rafId = raf(tick);
     }
@@ -218,8 +199,8 @@ export function startPlaybackLoop(
     }
   });
 
-  // Initial sync: if the store is already playing when the loop is
-  // wired up, seed the anchor and schedule immediately.
+  // If the store is already playing at wire-up, seed the anchor and
+  // schedule immediately.
   const init = store.getState();
   if (init.playing) {
     capture(init);

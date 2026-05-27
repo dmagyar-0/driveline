@@ -1,38 +1,15 @@
-// Right-side cursor-value gutter for the Plot panel (iter3 issue #1).
+// Right-side cursor-value gutter for the Plot panel.
 //
-// Iter2 anchored a floating tooltip to the playhead. The designer audit
-// found it occluded 25–30% of the plotted data in the upper-right
-// quadrant — the user scrubs to see a value, the tooltip flips on top
-// of it. Iter3 moves the cursor-value readout into a fixed gutter
-// column on the right side of the panel. The plot canvas shrinks to
-// accommodate; the gutter never overlaps the traces, and the column
-// position stays stable as the cursor moves.
-//
-// Iter5 issue #1 — promote the live value. The audit found the iter4
-// hierarchy backwards: the channel name was the largest text in each
-// row, and the live value (`30.58 m/s`) sat on a second line in a
-// smaller, dimmer font. Engineers read the *number* every second; the
-// name is only confirmation. The new hierarchy is:
-//   - **Live value** — first line, largest (~16 px), monospaced semi-
-//     bold, in the channel's accent colour. This is what the eye hits
-//     first.
-//   - **Channel name** — second line, ~13 px, secondary fg.
-//   - **Source badge** — tertiary 10 px, dimmed. Optional; only shown
-//     when binding-set disambiguation requires it.
-//
-// Layout shape:
-//   - one column ~180 px wide pinned to the right of `.plotArea`;
-//   - one row per bound channel, in binding order;
-//   - each row shows:
-//       * a 4 px coloured source ribbon (per-source palette colour,
-//         iter3 issue #2 — coordinates with `palette.colorForSource`);
-//       * the live value (dominant text), with its unit;
-//       * the channel's short label + optional badge underneath.
-//   - a time header above the rows (iter3 issue #6 — 24h `HH:MM:SS`).
+// Fixed ~180 px column pinned to the right of `.plotArea` so the
+// readout never overlaps the traces (a floating tooltip occluded
+// 25–30% of the upper-right quadrant). Each row shows a source-coloured
+// ribbon, the live value (dominant — engineers read the number every
+// second, the name is only confirmation), and the channel label /
+// optional source badge underneath.
 //
 // Pure-presentational: receives an `entries` array and a time label.
-// The parent already computes both once per cursor tick in the same
-// effect that updates the snapshot — no extra work on the hot path.
+// The parent computes both once per cursor tick in the same effect
+// that updates the snapshot — no extra work on the hot path.
 
 import { colorFor, colorForSource } from "./palette";
 import type { CursorReadoutEntry } from "./CursorReadout";
@@ -97,23 +74,18 @@ export function CursorGutter({ timeLabel, entries }: CursorGutterProps) {
                 data-testid={`gutter-ribbon-${e.channelId}`}
                 aria-hidden
               />
-              {/* Iter5 issue #1 — live value is the dominant line.
-                  Engineers read the number every second; the channel
-                  name and source qualifier are only used to confirm
-                  *what* they're reading. We render value first (~16 px,
+              {/* Live value is the dominant line — value first (~16 px,
                   mono semi-bold, accent colour) and the label
-                  underneath at 13 px secondary fg. */}
+                  underneath. */}
               <span
                 className={`${styles.cursorGutterValue} ${styles.numCell}`}
                 style={{ color: accent }}
                 data-testid={`gutter-value-${e.channelId}`}
               >
-                {/* Iter4 alignment item #6 — a tiny per-channel swatch
-                    sits adjacent to the numeric value so the user can
-                    trace colour → number → label in one saccade. The
-                    source ribbon at the row's left edge already keys
-                    the row by source; this swatch keys the value by
-                    channel, mirroring the line's stroke colour. */}
+                {/* Per-channel swatch beside the numeric value so the
+                    user can trace colour → number → label in one
+                    saccade. The source ribbon keys the row by source;
+                    this swatch keys the value by channel. */}
                 <span
                   className={styles.cursorGutterValueSwatch}
                   style={{ background: accent }}

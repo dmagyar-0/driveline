@@ -3,46 +3,26 @@
   width: 100%;
   height: 100%;
   background: var(--color-bg-1);
-  /* Iter 4 issue #4 — the outer panel padding used to be `--sp-4`,
-   * eating ~16 px of pixels on every side that were spent purely on
-   * a margin around the letterbox. Drop it to 0; the FlexLayout panel
-   * chrome already provides enough breathing room, and the toolbar +
-   * frame border together carry the visual edge.
-   *
-   * The toolbar lives above the frame, so the panel is a column
-   * flexbox. No gap between them — the toolbar squares its bottom
-   * border into the top of the frame so they read as one chrome
-   * unit. */
+  /* Padding 0 — FlexLayout panel chrome supplies the breathing room.
+   * Toolbar sits above the frame in a column flexbox with no gap; the
+   * toolbar squares its bottom border into the frame so they read as
+   * one chrome unit. */
   padding: 0;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
 }
 
-/* Issue #18 — explicit video frame. A 1px inner border plus a subtle
- * inset highlight separates the dashcam region from the surrounding
- * dark chrome. The frame is just the wrapper; we never modify the
- * decoded pixels.
- *
- * Iter 3 — the toolbar wraps the same border above. The frame keeps a
- * single rounded shell; the toolbar squares its bottom edge so the
- * pair reads as one chrome unit. */
+/* Video frame — 1px inset highlight separates the dashcam region from
+ * the surrounding chrome. Frame is the wrapper; we never modify the
+ * decoded pixels. Letterbox background uses --color-bg-1 so the bars
+ * read as panel chrome rather than as part of the (potentially dark)
+ * video. */
 .frame {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  /* Iter 3 — letterbox aesthetic. Previously --color-bg-0 (pure
-   * black) made the bars indistinguishable from a night dashcam
-   * frame but visually fought the surrounding panel chrome
-   * (--color-bg-1). Aligning with --color-bg-1 makes the bars read
-   * as panel chrome, not as part of the video.
-   *
-   * Iter 4 issue #4 — with the outer panel padding removed, the
-   * frame now hugs the FlexLayout edge. Drop the rounded corners +
-   * outer shadow so the chrome doesn't paint a 4 px sliver of
-   * background through them; the toolbar's bottom border + the
-   * panel chrome above us are enough edge definition. */
   background: var(--color-bg-1);
   border: 0;
   border-radius: 0;
@@ -59,29 +39,17 @@
   object-fit: contain;
 }
 
-/* Iter 3 — fill mode. Crops to fill the panel; loses any pixels that
- * fall outside the frame. The user has explicitly opted in (toolbar
- * toggle), so the lossy crop is acceptable. */
+/* Fill mode crops to fill the panel; user has explicitly opted in via
+ * the toolbar toggle, so the lossy crop is acceptable. */
 .canvasFill {
   object-fit: cover;
 }
 
-/* Iter 4 issue #4 — the absolutely-positioned `.hudToggle` pill that
- * used to live here moved into the VideoToolbar so it stops overlapping
- * the letterbox bars in fit mode. Its styling lives in
- * `VideoToolbar.module.css :: .btnHud`. */
-
-/* iter6 · structured video HUD.
- *
- * Was: a single <div> with multi-line textContent that looked like a
- * `console.log` dump (pts / frame / decoded / decode / blit / dropped
- * / codec, all in mono and left-aligned).
- *
- * A single `max-content 1fr` grid spans the whole popover so every
- * label/value pair aligns on one shared column boundary; each
- * `.hudRow` is `display: contents` so the row element survives as a
- * `[hidden]` / `data-warn` hook without breaking the grid. Values
- * right-align in tabular-nums so digits across rows stack cleanly. */
+/* Structured video HUD — a `max-content 1fr` grid spans the whole
+ * popover so every label/value pair aligns on one shared column
+ * boundary; each `.hudRow` is `display: contents` so the row element
+ * survives as a `[hidden]` / `data-warn` hook without breaking the
+ * grid. */
 .hud {
   position: absolute;
   top: var(--sp-4);
@@ -147,21 +115,17 @@
   line-height: 1.4;
 }
 
-/* iter6 → iter7 wave1 · the dropped-frames row lights up amber only
- * when the count climbs above zero. A healthy stream reads as
- * all-neutral so the warning state pops at a glance. Uses
- * --color-warn-amber (the iter7 dedicated alias) so every "this is a
- * caution, not an action" surface in the app lands on one hue. */
+/* Dropped-frames row lights up amber only when the count climbs above
+ * zero — a healthy stream reads as all-neutral so the warning state
+ * pops at a glance. */
 .hudRow[data-warn="true"] .hudLabel,
 .hudRow[data-warn="true"] .hudValue {
   color: var(--color-warn-amber);
 }
 
-/* Issue #20 — timestamp burn-in. Bottom-left of the frame so it
- * doesn't fight the HUD pill (top-right) or the centered stalled
- * badge. Always-on while a session is loaded; cleared by the rAF
- * loop when `globalRange === null`. Tabular numerals so the digits
- * don't jitter horizontally while playing. */
+/* Timestamp burn-in — bottom-left so it doesn't fight the top-right
+ * HUD pill or the centered stalled badge. Always-on while a session
+ * is loaded; cleared by the rAF loop when `globalRange === null`. */
 .timestamp {
   position: absolute;
   bottom: var(--sp-4);
@@ -192,13 +156,10 @@
   display: none;
 }
 
-/* Subtle stats badge in the bottom-right corner. Reads from the same
- * HUD snapshot the toggleable overlay above shows; this strip is the
- * at-a-glance subset (drops, blit lag, queue depth). Issue #21 — the
- * stats element is `hidden` from the markup by default; the rAF blit
+/* Bottom-right stats badge — at-a-glance subset of the HUD snapshot
+ * (drops, blit lag, queue depth). `hidden` by default; the rAF blit
  * loop unhides it when the HUD toggle is on or when something has
- * gone wrong. That kills the cryptic "drop 0 lag 51m q 12/16" bleed
- * that used to show during normal playback. */
+ * gone wrong, so normal playback doesn't bleed a cryptic stats line. */
 .stats {
   position: absolute;
   bottom: var(--sp-4);
@@ -232,10 +193,9 @@
   opacity: 1;
 }
 
-/* Issue #33 — Decoding affordance. Centered overlay shown until the
- * first frame is blitted to the canvas (readiness flips out of
- * `absent`/`waiting`). Keeps the panel from looking dead during the
- * decoder open/seek pass. */
+/* Decoding affordance — centred overlay shown until the first frame
+ * is blitted to the canvas. Keeps the panel from looking dead during
+ * the decoder open/seek pass. */
 .loading {
   position: absolute;
   inset: 0;
@@ -255,9 +215,8 @@
 }
 
 .spinner {
-  /* iter6 · loading spinner = "in progress", not a CTA. Move off
-   * orange so the play button remains the only orange affordance in
-   * the video panel. Blue matches the active/focus role family. */
+  /* Spinner = "in progress", not a CTA. Blue keeps the play button as
+   * the only orange affordance in the video panel. */
   width: 28px;
   height: 28px;
   border: 2px solid rgba(255, 255, 255, 0.12);
@@ -279,11 +238,9 @@
   }
 }
 
-/* Issue #2 — per-panel "stream stalled" badge. Surfaced when the
- * readiness registry escalates a panel from "waiting" to "stalled"
- * (decoder alive but producing no new frames for >5 s). Centered so
- * it doesn't fight the bottom-right stats strip; uses the error tint
- * so it reads as a problem at a glance. */
+/* Per-panel "stream stalled" badge — surfaced when the readiness
+ * registry escalates a panel from "waiting" to "stalled" (decoder
+ * alive but no new frames for >5 s). */
 .stalledBadge {
   position: absolute;
   top: 50%;

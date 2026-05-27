@@ -1,13 +1,10 @@
-// T6.2 · FlexLayout container for VideoPanel.
+// FlexLayout container for VideoPanel.
 //
 // Resolves `videoBindings[panelId]` from the store, finds the owning
-// source (MCAP or mp4+sidecar), and renders the existing `VideoPanel`
-// with props. When unbound, or when the bound channel no longer exists
-// (session cleared, different file loaded), we surface either:
-//   - the rich `VideoPanelEmptyState` (no candidate channels — first
-//     impression, with the "Try sample data" CTA wired through), or
-//   - a compact picker on top of a stripped-down empty state when
-//     candidate channels exist but the user hasn't bound one.
+// source (MCAP or mp4+sidecar), and renders VideoPanel. When unbound
+// or the bound channel no longer exists, surfaces VideoPanelEmptyState
+// in either the primary or the compact variant depending on whether a
+// previous binding is being replaced.
 
 import { useMemo } from "react";
 import { useSession } from "../state/store";
@@ -68,20 +65,15 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
   const candidates = useMemo(() => videoChannels(sources), [sources]);
 
   if (resolved) {
-    // Iter 3 — surface the sidecar's per-frame PTS table to the panel
-    // so the toolbar can drive frame stepping + derive expected FPS
-    // for the decode-health badge. Only mp4+sidecar sources expose
-    // one; MCAP sources stay null and the toolbar falls back gracefully
-    // (frame buttons disabled, target FPS = 30).
+    // Surface the sidecar's per-frame PTS table to the panel so the
+    // toolbar can drive frame stepping + derive expected FPS for the
+    // health badge. Only mp4+sidecar sources expose one; MCAP sources
+    // stay null and the toolbar falls back to a 30 fps target with
+    // frame-step buttons disabled.
     const sidecarPtsNs =
       resolved.source.kind === "mp4+sidecar"
         ? resolved.source.mp4Cache?.index.ptsNs ?? null
         : null;
-    // Iter 4 issue #4 — the "Change channel" button used to live here
-    // as an absolute-positioned, hover-revealed pill that painted over
-    // the letterbox bars. It now lives in the VideoToolbar so it never
-    // overlaps the video region; the container forwards the action and
-    // the toolbar renders the affordance.
     // Keyed by the binding id so switching channel tears down + remounts
     // the worker wiring.
     return (
@@ -99,20 +91,13 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
     );
   }
 
-  // iter5 issue #5 — single unified empty state. Whether or not
-  // candidates already exist, the user sees the same layout:
+  // Empty state structure (same regardless of variant):
   //   1. Drop zone (primary)
   //   2. Try sample data (secondary text link)
   //   3. Picker list (tertiary, rendered only when candidates > 0)
   //
-  // The previous two-design split ("rich" vs "compact + picker") was
-  // the audit finding the iter5 brief calls out: two empty states for
-  // the same panel state. The container now passes candidates +
-  // onPick down and lets the empty state render them inline.
-  //
-  // The "channel no longer available" branch still uses the compact
-  // variant so the explainer copy fits in a tighter space; the rest
-  // of the structure (drop zone, sample link, picker) stays the same.
+  // The "channel no longer available" branch uses the compact variant
+  // so the explainer copy fits in a tighter space.
   const headline = bindingId ? "Channel no longer available" : undefined;
   const description = bindingId
     ? "The previously bound channel isn't in the current session. Drop a new recording or pick another channel below."

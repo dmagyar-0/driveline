@@ -41,7 +41,7 @@ export interface DevFileDesc {
   bytes: Uint8Array;
 }
 
-// Dev-only hook surface. Playwright drives all smoke tests and the T2.4
+// Dev-only hook surface. Playwright drives all smoke tests and the
 // `openFiles` drop test through this. The real `onDrop` handler calls
 // exactly the same store action.
 declare global {
@@ -62,8 +62,8 @@ declare global {
       openFiles: (files: DevFileDesc[]) => Promise<OpenResult>;
       clearSession: () => Promise<void>;
       videoLastBlitPtsNs: () => bigint | null;
-      // T5.2 — serialised HUD snapshot so Playwright can assert seek
-      // settles without pixel compare. BigInt → string for `page.evaluate`.
+      // Serialised HUD snapshot so Playwright can assert seek settles
+      // without pixel compare. BigInt → string for `page.evaluate`.
       videoHudStats: () => {
         ptsNs: string | null;
         frameIndex: number;
@@ -73,39 +73,36 @@ declare global {
         codec: string | null;
         hudOn: boolean;
       } | null;
-      // Read-only snapshot for e2e (T3.2). BigInts serialised as strings
-      // so the value survives `page.evaluate`.
+      // Read-only snapshot for e2e. BigInts serialised as strings so the
+      // value survives `page.evaluate`.
       getSessionSnapshot: () => {
         cursorNs: string;
         playing: boolean;
         speed: number;
         globalRange: { startNs: string; endNs: string } | null;
       };
-      // T6.2 — expose layout + panel-add actions for future e2e driving.
-      // `getLayoutJson` returns a serialised snapshot; `setLayoutJson`
-      // replaces it wholesale; the add methods create a new FlexLayout
-      // tab (video/plot) with a fresh panel id.
+      // Layout + panel-add actions for e2e. `getLayoutJson` returns a
+      // serialised snapshot; `setLayoutJson` replaces wholesale; the
+      // add methods create a new FlexLayout tab with a fresh panel id.
       getLayoutJson: () => string;
       setLayoutJson: (json: unknown | null) => void;
       addVideoPanel: (channelId?: string) => string | undefined;
       addPlotPanel: () => string | undefined;
-      // Phase 6 — mint new panel kinds. Each returns the freshly-minted
-      // tab id so e2e specs can correlate the binding flow with the
-      // panel that was just added.
+      // Each addXPanel returns the freshly-minted tab id so e2e specs can
+      // correlate the binding flow with the new panel.
       addScenePanel: () => string | undefined;
       addMapPanel: () => string | undefined;
       addTablePanel: () => string | undefined;
       addEnumPanel: () => string | undefined;
       resetLayout: () => void;
-      // T6.1 — bind panels programmatically and read the per-panel
-      // sync snapshot so e2e specs can assert the cross-panel
-      // "PTS/ts ≤ cursor" invariant without driving the picker UI.
+      // Programmatic bindings + per-panel sync snapshot so e2e specs can
+      // assert the cross-panel "PTS/ts ≤ cursor" invariant without
+      // driving the picker UI.
       setVideoChannelBinding: (
         panelId: string,
         channelId: string | null,
       ) => void;
       addPlotChannelBinding: (panelId: string, channelId: string) => void;
-      // Phase 6 — bind new panel kinds programmatically from e2e.
       setSceneChannelBinding: (
         panelId: string,
         channelId: string | null,
@@ -130,15 +127,15 @@ declare global {
           value: number;
         } | null>;
       } | null;
-      // T6.3 — per-series min/max stats over the most recent render for
-      // `signalAlignment.spec.ts`.
+      // Per-series min/max stats over the most recent render
+      // (`signalAlignment.spec.ts`).
       getPlotPanelSeriesStats: (panelId: string) => Array<{
         channelId: string;
         min: number;
         max: number;
         count: number;
       }> | null;
-      // T6.3 — enumerate channels without exposing the Zustand store.
+      // Enumerate channels without exposing the Zustand store.
       listChannels: () => Array<{
         id: string;
         sourceId: string;
@@ -148,21 +145,18 @@ declare global {
         unit: string | null;
         sampleCount: number;
       }>;
-      // Resolve the qualified channel id used by the binding maps from the
-      // per-source native id surfaced by the wasm reader (e.g. "1/video",
-      // "/camera/front"). Tests that bind by content rather than by envelope
-      // id call this so a future change to `qualifiedChannelId` doesn't
-      // break specs. `sourceName` is matched against `SourceMeta.name` —
-      // equality first, substring fallback so `"short.mp4 (2)"` still
-      // resolves when a re-run collides on the base name. Returns null if
-      // no source/channel matches.
+      // Resolve the qualified channel id from a per-source native id.
+      // `sourceName` is matched against `SourceMeta.name` — equality
+      // first, substring fallback so `"short.mp4 (2)"` still resolves
+      // when a re-run collides on the base name. Returns null if no
+      // source/channel matches.
       findChannelId: (q: {
         sourceName: string;
         nativeId: string;
       }) => string | null;
-      // Phase 2 (Sources drawer) — enumerate loaded sources and the
-      // session's global range. BigInts are serialised as decimal
-      // strings so `page.evaluate` can return them.
+      // Enumerate loaded sources and the session's global range.
+      // BigInts serialised as decimal strings so `page.evaluate` can
+      // return them.
       listSources: () => Array<{
         id: string;
         kind: "mcap" | "mf4" | "mp4+sidecar";
@@ -171,23 +165,22 @@ declare global {
         channelIds: string[];
       }>;
       getGlobalRange: () => { startNs: string; endNs: string } | null;
-      // Phase 1 (V1 shell) — drive the rail/drawer state from e2e.
+      // Rail/drawer state seam.
       setActiveRailTab: (tab: RailTab | null) => void;
       getActiveRailTab: () => RailTab | null;
       setRailCollapsed: (collapsed: boolean) => void;
-      // Phase 3 — set/read the panel marked active for click-to-bind in
-      // the Channels drawer (and, in Phase 5+, the Panel drawer).
+      // Panel marked active for click-to-bind in the Channels / Panel
+      // drawers.
       setSelectedPanelId: (id: string | null) => void;
       getSelectedPanelId: () => string | null;
-      // Phase 5 — read the per-panel HUD overlay bit straight from the
-      // store (decoupled from the rAF-published `__drivelineVideoHud`
-      // snapshot so persistence-survival e2e doesn't have to wait for a
-      // VideoPanel remount + republish after reload).
+      // Read the per-panel HUD overlay bit straight from the store,
+      // decoupled from the rAF-published `__drivelineVideoHud` snapshot
+      // so persistence-survival e2e doesn't have to wait for a
+      // VideoPanel remount + republish after reload.
       getVideoHudOn: (panelId: string) => boolean;
-      // Phase 4 (Layout drawer) — drive saved-layout actions from e2e.
-      // `saveCurrentLayoutAs` returns the freshly-minted id;
-      // `listNamedLayouts` deliberately omits the heavy `layoutJson`
-      // and binding maps — tests assert on names / live / active.
+      // Saved-layout actions. `listNamedLayouts` deliberately omits the
+      // heavy `layoutJson` and binding maps — tests assert on
+      // names/live/active.
       saveCurrentLayoutAs: (name: string) => string;
       restoreNamedLayout: (id: string) => void;
       listNamedLayouts: () => Array<{
@@ -197,10 +190,9 @@ declare global {
         isLive: boolean;
         isActive: boolean;
       }>;
-      // Phase 8 (Events drawer) — drive bookmark actions from e2e.
-      // `addBookmarkAtCursor` returns the freshly-minted id, or `null`
-      // when no fixture is loaded. `listBookmarks` serialises `ns` as
-      // a decimal string (mirror `getSessionSnapshot`'s BigInt convention).
+      // Bookmark actions. `addBookmarkAtCursor` returns the new id, or
+      // `null` when no fixture is loaded. `listBookmarks` serialises
+      // `ns` as a decimal string (matches `getSessionSnapshot`).
       addBookmarkAtCursor: (label?: string) => string | null;
       listBookmarks: () => Array<{
         id: string;
@@ -211,11 +203,10 @@ declare global {
       }>;
       removeBookmark: (id: string) => void;
       renameBookmark: (id: string, label: string) => void;
-      // Issue #2 — decode-aware cursor gating.
-      // `getVideoReadiness` returns the per-panel state of every
-      // entry currently in the readiness registry; `getCursorGated`
-      // returns the most recent gate decision from `playback.ts`'s
-      // tick. Both are read-only Playwright seams.
+      // Decode-aware cursor gating. `getVideoReadiness` returns the
+      // per-panel state of every entry in the readiness registry;
+      // `getCursorGated` returns the most recent gate decision from
+      // `playback.ts`'s tick. Read-only Playwright seams.
       getVideoReadiness: () => Array<{
         panelId: string;
         state: "ready" | "waiting" | "stalled" | "absent";
@@ -224,29 +215,21 @@ declare global {
         lastBlitPtsNs: string | null;
       }>;
       getCursorGated: () => boolean;
-      // Agent B (Transport / scrubber UX overhaul, issue #7) — seed
-      // synthetic offset segments so the screenshot spec can exercise
-      // the segment-tick path without the cost of building the real
-      // multi-segment comma2k19 fixtures. Test-only seam; do NOT use
-      // in production code. Each entry is a plain `{start,end,name}`
-      // tuple in nanoseconds-as-number (segment ranges are short
-      // enough to stay safely inside Number.MAX_SAFE_INTEGER for the
-      // synthetic timestamps we use).
+      // Seed synthetic offset segments so the screenshot spec can
+      // exercise the segment-tick path without building real
+      // multi-segment fixtures. Test-only — do NOT use in production
+      // code. Segment ranges are short enough to stay inside
+      // `Number.MAX_SAFE_INTEGER`.
       seedSegmentsForScreenshot: (
         segments: { start: number; end: number; name: string }[],
       ) => void;
-      // Agent B iteration 2 — synchronous cursor seek hook used by the
-      // next critique screenshot pass. Lets the spec place the cursor
-      // mid-timeline before snapshotting so the playhead badge +
-      // hover tooltip are visible. Accepts either a `bigint` (the
-      // store's native unit) or a finite `number` (decimal ns,
-      // converted via `BigInt(Math.round(n))`). Anything else is
-      // ignored. Clamps and seek-epoch bumping live in the store, so
-      // this is a pure call-through.
+      // Synchronous cursor seek. Accepts a `bigint` (the store's native
+      // unit) or a finite `number` (decimal ns, converted via
+      // `BigInt(Math.round(n))`). Anything else is ignored. Clamps and
+      // seek-epoch bumping happen in the store.
       setCursorNs: (ns: bigint | number) => void;
-      // Agent B iteration 2 — direct setter for the time-display mode
-      // so the screenshot spec doesn't depend on the chip's current
-      // visible label (which depends on the starting state).
+      // Direct setter for the time-display mode — screenshot specs
+      // shouldn't depend on the chip's currently-visible label.
       setTimeMode: (mode: "relative" | "absolute") => void;
     };
   }
@@ -266,19 +249,13 @@ export function App() {
     videoDecode.current = vd;
     useSession.getState().setWorker(dc);
     installPerfHooks();
-    // T6.2 — start saving `layoutJson` / `videoBindings` / `plotBindings`
-    // to localStorage on every change. The store was hydrated from the
-    // same key at module load, so the first render already matches.
+    // Persistence subscribers — each writes its slice to localStorage on
+    // every change. Stores were hydrated from the same keys at module
+    // load, so the first render already matches.
     const detachPersistence = attachLayoutPersistence(useSession);
-    // Phase 1 — persist `activeRailTab` / `railCollapsed` to
-    // `driveline.ui.v1` so the rail state survives reloads.
     const detachUiPersistence = attachUiPersistence(useSession);
-    // Phase 4 — persist `namedLayouts` and `activeNamedLayoutId` to
-    // `driveline.layouts.named.v1`. Saved layouts outlive a session.
     const detachNamedLayoutsPersistence =
       attachNamedLayoutsPersistence(useSession);
-    // Phase 8 — persist `bookmarks` to `driveline.bookmarks.v1`.
-    // Bookmarks outlive a session (same posture as `namedLayouts`).
     const detachBookmarksPersistence = attachBookmarksPersistence(useSession);
 
     window.__drivelineDevHooks = {
@@ -511,14 +488,6 @@ export function App() {
         return out;
       },
       getCursorGated: () => isCursorGated(),
-      // Agent B — see the type-decl above. Bypasses the bucket/open
-      // path so the screenshot spec can paint multi-segment ticks
-      // without a real fixture build. Sets only `sources` /
-      // `channels` / `globalRange`; binding maps are untouched.
-      // Agent B iter 2 — synchronous cursor placement for the next
-      // critique's screenshot spec. Documented next to the other
-      // `__driveline*` hooks; see the type declaration above for
-      // accepted argument shapes and conversion semantics.
       setCursorNs: (ns) => {
         let asBigInt: bigint;
         if (typeof ns === "bigint") {
@@ -574,9 +543,9 @@ export function App() {
     };
   }, []);
 
-  // T3.3 · Drive `cursorNs` forward in real time while `playing`. The
-  // loop only reads/writes the existing store actions; its lifetime is
-  // tied to the App component.
+  // Drive `cursorNs` forward in real time while `playing`. The loop
+  // only reads/writes the existing store actions; lifetime is tied to
+  // the App component.
   useEffect(() => startPlaybackLoop(useSession), []);
 
   const onDrop = async (e: React.DragEvent<HTMLElement>) => {
@@ -596,19 +565,14 @@ export function App() {
     setDragActive(false);
   };
 
-  // Phase 3 — the Channels drawer auto-adds a plot panel when the user
-  // clicks a channel with no panel selected. The drawer can't reach
-  // FlexLayout directly; App owns `workspaceRef`, so it forwards a
-  // narrow callback. `addPlotPanel` is synchronous (it mutates the
-  // FlexLayout model and returns the new tab id), so reading the id
-  // here is safe.
+  // The Channels drawer auto-adds a plot panel when the user clicks a
+  // channel with no panel selected. App owns `workspaceRef` and
+  // forwards a narrow callback so Shell/Drawer/LayoutDrawer don't have
+  // to know about the FlexLayout ref. `addPlotPanel` mutates the
+  // FlexLayout model and returns the new tab id synchronously.
   const ensurePlotPanel = (): string | null =>
     workspaceRef.current?.addPlotPanel() ?? null;
 
-  // Phase 4 — the Layout drawer's add-panel and reset rows. Same
-  // indirection as `ensurePlotPanel`: App owns the WorkspaceHandle and
-  // exposes narrow callbacks so Shell/Drawer/LayoutDrawer don't have
-  // to know about the FlexLayout ref.
   const addVideoPanel = (): void => {
     workspaceRef.current?.addVideoPanel();
   };

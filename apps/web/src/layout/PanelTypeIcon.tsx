@@ -1,15 +1,7 @@
-// Phase 7+ · Per-panel-kind identity icon.
-//
-// Replaces the previous text badge (`PLOT` / `VIDEO` / …) with a small
-// SVG glyph that gives the panel an at-a-glance identity. The icon
-// doubles as the drag affordance (`cursor: grab` lives on the wrapping
-// header row in `PanelHeader.module.css`).
-//
-// `accentVar` returns the CSS variable name carrying the panel-kind
-// accent colour — consumed by `PanelHeader.module.css` to paint the
-// thin 2-px header underline. Centralising the colour mapping here
-// keeps the chrome → series colour space separation honest: these
-// are *chrome* tokens (one per panel kind), not plot palette tokens.
+// Per-panel-kind identity icon + accent token mapping. The icons sit
+// in the tab strip and share the strip's `currentColor`. Accent tokens
+// here are CHROME-only — kept distinct from the plot palette in
+// `panels/palette.ts`.
 
 import type { PanelKind } from "./panelId";
 
@@ -22,12 +14,9 @@ export const PANEL_KIND_LABEL: Record<PanelKind, string> = {
   enum: "Enum",
 };
 
-/**
- * CSS custom property carrying the kind's accent colour. Declared in
- * `PanelHeader.module.css`. Kept as a function (not a record of raw
- * hex strings) so tokens stay in CSS where the dark-mode palette
- * decisions live.
- */
+/** CSS custom property carrying the kind's accent colour. Values live
+ * in `PanelHeader.module.css` so dark-mode palette decisions stay in
+ * CSS. */
 export function panelKindAccentVar(kind: PanelKind): string {
   return `var(--panel-kind-${kind}-accent)`;
 }
@@ -37,12 +26,8 @@ interface IconProps {
   size?: number;
 }
 
-/**
- * Renders the kind's SVG glyph. Icons live inline so they share the
- * tab strip's `currentColor` and don't pull in an icon font. Stroke
- * width and viewbox are normalised to 16×16 for consistent visual
- * weight against the other tab chrome icons.
- */
+/** Inline SVG glyph per panel kind. 16×16 viewBox so stroke width
+ * stays consistent with other tab chrome icons. */
 export function PanelTypeIcon({
   kind,
   size = 14,

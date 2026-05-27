@@ -1,26 +1,5 @@
-/* Sources popover · sits below the topbar's "N sources" chip.
- *
- * Positioned absolutely from the right edge of the topbar so the
- * popover stays anchored to the chip cluster regardless of viewport
- * width. The popover never grows past 380px so it doesn't crowd the
- * workspace.
- *
- * iter2 #4 updates:
- *   - Row layout switched from a fixed 5-col grid to swatch/icon/text
- *     block/remove so we can stack "name" over a "kind · N channels ·
- *     duration" meta line without truncating.
- *   - Swatch widened from 4 → 6 px so the palette match with the plot
- *     legend is readable at a glance.
- *   - Per-row × button added on the right of each row.
- *
- * iter3 #1 updates:
- *   - Search input + sort toggle row above the list (`.controls`).
- *   - Group subheadings (MCAP / MF4 / MP4) when ≥3 sources of mixed
- *     kinds are present.
- *   - "Clear all" demoted to a small secondary-text button so it does
- *     not read as equal weight to the primary "Open Sources panel"
- *     link.
- */
+/* Sources popover · anchored below the topbar's "N sources" chip.
+ * Capped at 380 px so it doesn't crowd the workspace. */
 
 .popover {
   position: absolute;
@@ -76,11 +55,6 @@
   line-height: var(--lh-snug);
 }
 
-/* iter5 #5 — promoted primary "Add file" action.
- *
- * Sits just under the header. Visually weighted (accent border + bold
- * label + a "+" glyph) so it reads as the obvious next action when
- * the user lands in the popover. */
 .addFileBtn {
   display: inline-flex;
   align-items: center;
@@ -137,11 +111,6 @@
   border: 0;
 }
 
-/* iter3 #1 — search + sort controls row.
- *
- * The search input expands to fill the available width; the sort
- * pill-group is fixed-content width on the right. On narrow popovers
- * the two stack vertically. */
 .controls {
   display: flex;
   flex-direction: column;
@@ -183,11 +152,8 @@
 }
 
 .searchInput:focus-visible {
-  /* iter6 · keep the input's blue border + tint glow as the
-   * primary cue, but pair it with an explicit outline so the focus
-   * indicator obeys the same "colour + offset gap" rule as every
-   * other interactive element. The outline-offset is negative so
-   * the ring nests inside the rounded border instead of doubling up. */
+  /* Negative outline-offset nests the focus ring inside the rounded
+   * border instead of doubling up. */
   outline: 2px solid var(--color-role-focus);
   outline-offset: -1px;
   border-color: var(--color-role-active);
@@ -239,8 +205,7 @@
   color: var(--color-fg-1);
 }
 
-/* Group subheadings — appear when ≥3 sources of mixed kinds exist.
- * Visually subordinate to source rows so the eye still skims by row,
+/* Visually subordinate to source rows so the eye still skims by row,
  * not by header. */
 .groupHeading {
   display: flex;
@@ -345,8 +310,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Per-row remove button. Disabled until the store exposes a
- * per-source remove action — see SourcesPopover.tsx TODO. */
+/* Disabled until the store grows a per-source remove action — see
+ * SourcesPopover.tsx TODO. */
 .removeBtn {
   width: 22px;
   height: 22px;
@@ -379,10 +344,6 @@
   opacity: 0.45;
 }
 
-/* iter5 #4 — the actions row used to host both "Open Sources panel"
- * (primary) and "Clear all" (demoted). The redirect is gone; the row
- * now carries only the demoted destructive affordance so we align it
- * to the end rather than space-between. */
 .actions {
   display: flex;
   align-items: center;
@@ -415,10 +376,9 @@
   background: var(--color-bg-5);
 }
 
-/* iter3 #1 — "Clear all" is deliberately demoted: smaller text and
- * muted fg colour so it does not compete with "Open Sources panel".
- * No border, no error-red — destructive confirmation lives in the
- * Sources drawer if/when we ever need a heavier guard. */
+/* "Clear all" is deliberately demoted (small text, muted fg). Heavier
+ * destructive confirmation, if ever needed, lives in the Sources
+ * drawer. */
 .clearBtn {
   font-size: var(--fs-11);
   color: var(--color-fg-5);

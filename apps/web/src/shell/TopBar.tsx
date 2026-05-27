@@ -1,43 +1,10 @@
-// UX overhaul (issues #15, #16, #17) · Top bar.
-//
-// Structure (post-iter5 #1):
-//
-//   [ brand | session-title (centre, grows) | status zone | divider | help ]
-//
-//   brand zone   — Driveline logo + wordmark. No version string,
-//                  no hover treatment; it does not behave like a nav
-//                  target. (iter2 #1 — version moved to About dialog.)
-//   session zone — iter5 #1: filling the previously empty centre with a
-//                  brief session identity:
-//                    - 0 sources: hint "Drop a recording to begin".
-//                    - 1 source: the file name and the duration (monospaced).
-//                    - 2+ sources: "N sources" + the union duration.
-//                  Centre-aligned, muted colour, truncates with ellipsis
-//                  if the file name is long.
-//   status zone  — sources chip (clickable — opens SourcesPopover),
-//                  system status chip (semantic four-state, iter5 #2).
-//   help cluster — small "i" (About) and "?" (Keyboard shortcuts)
-//                  buttons, separated from the status zone by a vertical
-//                  divider. The "?" is the rightmost top-bar item.
-//
-// iter3 #2 changes:
-//   - Dropped the topbar cursor readout. The transport bar carries the
-//     load-bearing cursor display; duplicating it here added typographic
-//     noise (mixed casing, mixed chip shapes).
-//   - The sources chip and status chip now use the same pill shape so
-//     they read as one cluster.
-//   - The "Ready" status chip auto-hides after 5 s of steady-state
-//     readiness. The DOM-only e2e sentinel (`worker-status`) stays
-//     mounted regardless so the ~14 specs that assert on it keep
-//     working.
-//   - A vertical divider sits between the status zone and the help
-//     cluster so the two visually separate.
+// Top bar layout: [brand | session-title (centre) | status | divider | help].
 //
 // E2e contract: a hidden element with `data-testid="worker-status"` and
 // the literal text `workers ready` MUST exist when `ready === true` —
-// ~14 specs assert on it. We keep that sentinel mounted unconditionally
-// (just visually-hidden) so the auto-hide of the visible chip cannot
-// break the contract.
+// ~14 specs assert on it. The sentinel stays mounted unconditionally
+// (visually-hidden) so the auto-hide of the visible chip cannot break
+// the contract.
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useSession } from "../state/store";
@@ -47,42 +14,19 @@ import { ShortcutsOverlay } from "../timeline/ShortcutsOverlay";
 import { formatDurationCoarse } from "../timeline/formatTime";
 import styles from "./TopBar.module.css";
 
-// How long the "Ready" chip stays visible after we transition to ready.
-// After this it fades out so it doesn't shout at the user during normal
-// use. Any new activity (load, error, re-init) re-shows it.
+// Ready chip fades after this idle window. Any new activity (load, error,
+// re-init) re-shows it.
 const READY_CHIP_IDLE_TIMEOUT_MS = 5_000;
 
 export interface TopBarProps {
   ready: boolean;
-  /**
-   * iter5 #4 — was the rail-flip callback that the SourcesPopover's
-   * "Open Sources panel" link invoked. The popover dropped that
-   * redirect (the popover IS the top-bar sources surface), so this
-   * prop is no longer used by the rendered tree. Kept optional on
-   * the type so Shell's existing wiring compiles untouched; remove
-   * the Shell call site in a follow-up sweep.
-   */
+  /** Unused by the rendered tree; kept optional so Shell's wiring
+   *  compiles untouched. Remove in a follow-up sweep. */
   onOpenSourcesDrawer?: () => void;
 }
 
-// iter5 issue #2 — failure-mode status taxonomy.
-//
-// The status chip used to be a binary `ready` ↔ `initialising` flag.
-// That communicated nothing on failure paths (decode crash, corrupt
-// file, low-memory). We now derive a four-state semantic from existing
-// store flags (no store-shape change):
-//
-//   loading   — workers booting, first sources still ingesting.
-//   ready     — green; auto-hides 5 s after settling.
-//   degraded  — open errors persist after at least one source loaded.
-//   error     — open errors and no sources at all (load failed).
-//
-// `degraded` vs `error` is a soft heuristic: if any source DID load
-// (so the user has something to look at) we show yellow `degraded`;
-// if no source loaded but errors are pending, the session is in an
-// `error` state. The chip surfaces an inline "Details" toggle that
-// expands a small list of error names — wired to the same
-// `lastOpenErrors` array the SourcesDrawer reads.
+// `degraded` = at least one source loaded but `lastOpenErrors` is non-empty
+// (partial-but-usable). `error` = errors pending with zero sources loaded.
 type DerivedStatus = "loading" | "ready" | "degraded" | "error";
 
 function deriveStatus(
@@ -110,7 +54,6 @@ const STATUS_TITLE: Record<DerivedStatus, string> = {
 };
 
 export function TopBar({ ready }: TopBarProps) {
-  // Single-key selectors only (frontend skill).
   const sourceCount = useSession((s) => s.sources.length);
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -124,20 +67,10 @@ export function TopBar({ ready }: TopBarProps) {
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false);
   const sourcesTriggerId = useId();
 
-  // Derived status from the ready flag + any persistent open errors.
-  // Kept as a single selector boundary so we don't widen the slice.
   const errorCount = lastOpenErrors.length;
   const status = deriveStatus(ready, sourceCount, errorCount);
-
-  // Coalesce the visible status to a single semantic word; the hidden
-  // sibling keeps the load-bearing e2e text.
   const statusWord = STATUS_WORD[status];
 
-  // iter5 issue #1 — session-title summary. The text shown in the
-  // top-bar centre is purely derived from `sources` + `globalRange`.
-  // 0 sources → hint copy; 1 source → file name + duration; 2+ →
-  // `N sources · duration`. Duration uses the coarse formatter
-  // (HH:MM:SS), monospaced, so the eye latches onto it.
   let sessionPrimary = "";
   let sessionDuration = "";
   if (sourceCount === 1) {
@@ -152,11 +85,8 @@ export function TopBar({ ready }: TopBarProps) {
   }
   const sessionHint = sourceCount === 0 ? "Drop a recording to begin" : "";
 
-  // iter3 #2 / iter5 #2 — the visible status chip auto-hides 5 s after
-  // we settle into the *ready* state. Any other state (loading,
-  // degraded, error) stays sticky — failure modes are the whole point
-  // of the chip and the user needs to see them. The hidden e2e
-  // sentinel below is unaffected.
+  // Only `ready` auto-hides; loading/degraded/error stay sticky so failure
+  // modes are not missed. The hidden e2e sentinel below is unaffected.
   const [statusVisible, setStatusVisible] = useState(true);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -164,10 +94,7 @@ export function TopBar({ ready }: TopBarProps) {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
-    // Always show the chip immediately on a state change.
     setStatusVisible(true);
-    // Collapse any open error-detail panel when we leave the
-    // degraded/error states so it doesn't dangle.
     if (status !== "degraded" && status !== "error") {
       setErrorDetailsOpen(false);
     }
@@ -185,8 +112,6 @@ export function TopBar({ ready }: TopBarProps) {
     };
   }, [status]);
 
-  // iter5 #2 — map derived status → CSS modifier so we don't ship four
-  // boolean class twiddles in JSX.
   const statusClass =
     status === "ready"
       ? styles.statusReady
@@ -206,9 +131,6 @@ export function TopBar({ ready }: TopBarProps) {
 
   return (
     <header className={styles.bar} data-testid="topbar">
-      {/* Brand zone (issue #15) — own bounded region, no hover state.
-       *  iter2 #1: version string removed from production chrome —
-       *  it lives in the About dialog now. */}
       <div className={styles.brand} aria-label="Driveline">
         <img
           className={styles.logo}
@@ -221,10 +143,6 @@ export function TopBar({ ready }: TopBarProps) {
         <span className={styles.wordmark}>driveline</span>
       </div>
 
-      {/* Session zone (iter5 #1) — fills the previously empty centre with
-       *  the current session identity. Pure-derived from `sources` +
-       *  `globalRange`; no state changes. Truncates with ellipsis so a
-       *  long filename never crowds the help cluster. */}
       <div
         className={styles.session}
         data-testid="topbar-session-title"
@@ -258,10 +176,6 @@ export function TopBar({ ready }: TopBarProps) {
         )}
       </div>
 
-      {/* Status zone (issue #16, iter3 #2, iter5 #2) — sources + status
-       *  chips share one pill shape and one baseline. The topbar cursor
-       *  readout is gone: the transport bar carries the load-bearing
-       *  cursor display. */}
       <div className={styles.status}>
         <button
           type="button"
@@ -299,11 +213,6 @@ export function TopBar({ ready }: TopBarProps) {
           </span>
         </button>
 
-        {/* The visible status chip (iter5 #2): four states share the same
-         *  pill chrome with a colour-coded dot + word. Only `ready`
-         *  auto-hides — loading / degraded / error are sticky because
-         *  surfacing failures is the whole point. The error state adds
-         *  a "Details" toggle that expands a list of recent error names. */}
         <div
           className={`${styles.statusChip} ${statusClass} ${statusVisible ? "" : styles.statusHidden}`}
           role="status"
@@ -336,11 +245,8 @@ export function TopBar({ ready }: TopBarProps) {
           ) : null}
         </div>
 
-        {/* Inline details flyout for the failure states. Anchored beneath
-         *  the chip; outside-click and Escape do not dismiss it — the
-         *  same toggle button collapses it. Wired to `lastOpenErrors` so
-         *  it stays useful even before a richer per-channel decoder
-         *  status lands in the store. */}
+        {/* Failure-state flyout: outside-click + Escape do NOT dismiss —
+         *  the toggle button is the only way to collapse it. */}
         {errorDetailsOpen &&
         (status === "error" || status === "degraded") &&
         lastOpenErrors.length > 0 ? (
@@ -380,19 +286,14 @@ export function TopBar({ ready }: TopBarProps) {
           </div>
         ) : null}
 
-        {/* Screen-reader / e2e sentinel — preserves the literal text
-         *  ~14 Playwright specs assert against. Visually hidden.
-         *  Lives OUTSIDE the auto-hiding chip so the contract holds
-         *  even after the chip fades. */}
+        {/* E2e sentinel — ~14 Playwright specs assert on this literal text.
+         *  Lives OUTSIDE the auto-hiding chip so the contract holds even
+         *  after the visible chip fades. */}
         <span className={styles.srOnly} data-testid="worker-status">
           {ready ? "workers ready" : "workers initialising"}
         </span>
       </div>
 
-      {/* Help cluster (iter2 #1, #5; iter3 #2) — About + Keyboard
-       *  shortcuts, separated from the status zone by a vertical
-       *  divider so the two clusters read as distinct concerns. The
-       *  "?" button is the rightmost item in the top bar. */}
       <div className={styles.help}>
         <button
           type="button"
@@ -443,10 +344,6 @@ export function TopBar({ ready }: TopBarProps) {
         </button>
       </div>
 
-      {/* iter5 #4 — `onOpenDrawer` removed: the popover IS the top-bar
-       *  entry to source management, so it no longer redirects to a
-       *  second surface. The rail's Sources item remains the only
-       *  other path. */}
       <SourcesPopover
         open={sourcesOpen}
         anchorId={sourcesTriggerId}

@@ -1,29 +1,14 @@
-// Floating cursor-value tooltip for the Plot panel (iter2 issue #1).
+// Floating cursor-value tooltip for the Plot panel.
 //
-// The under-plot strip (`CursorReadout`) survives as a persistent
-// secondary readout — useful for at-a-glance reference when the panel
-// is wide. The audit found it insufficient on its own: when the user
-// scrubs the playhead they look at the orange crosshair, not at the
-// strip below the canvas. A tooltip anchored to the playhead puts the
-// answer where the eye is already pointed.
+// Anchored to the cursor X (CSS pixels relative to the plot container).
+// Prefer anchoring to the right of the cursor; flip left when that
+// would clip the panel. When the cursor falls outside the rendered
+// range, the caller passes `xPx = null` to hide the tooltip.
 //
-// Positioning rules:
-//   - Anchored to the cursor X (in CSS pixels relative to the plot
-//     container). The vertical offset stays near the top of the plot
-//     area so the tooltip never overlaps the readout strip below or
-//     the panel-chrome above.
-//   - If anchoring on the right would push the tooltip past the panel
-//     edge, flip it to the left of the cursor. Symmetric flip when the
-//     cursor is on the far left.
-//   - When the cursor falls outside the rendered range the tooltip is
-//     omitted entirely (caller passes `x = null`).
-//
-// Hot-path discipline: this is a pure-presentational component; it
-// receives a memoized `entries` array (already used by the strip) and
-// a numeric `x`. No DOM measurement at render time — the flip decision
-// uses the container width supplied by the parent's ResizeObserver. A
-// re-render happens at most once per cursor tick (≤1 per rAF in the
-// panel's hot path).
+// Hot-path discipline: pure-presentational, receives a memoized
+// `entries` array and a numeric `x`. No DOM measurement at render time
+// — the flip uses the container width supplied by the parent's
+// ResizeObserver. Re-renders ≤ once per cursor tick.
 
 import { colorFor } from "./palette";
 import type { CursorReadoutEntry } from "./CursorReadout";

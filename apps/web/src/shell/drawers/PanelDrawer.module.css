@@ -1,6 +1,5 @@
-/* Phase 5 · Panel drawer styling. Row primitive composes from
- * `_row.module.css`; the rest is local (sections, header subtitle,
- * toggle pills, codec label). */
+/* Panel drawer styling. Row primitive composes from
+ * `_row.module.css`; the rest is local. */
 
 .kindPill {
   display: inline-block;
@@ -183,8 +182,8 @@
 }
 
 .toggleOn {
-  /* iter6 · toggle "on" reads as an active selection (blue), not a
-   * primary CTA (orange). Reserves orange for cursor + CTA only. */
+  /* "On" reads as active selection (blue), not a CTA. Orange is
+   * reserved for cursor + CTA. */
   background: var(--color-bg-5);
   border-color: var(--color-role-active);
 }
@@ -253,8 +252,6 @@
 }
 
 .gapInput:focus-visible {
-  /* iter6 · the focus ring carries the blue cue; the border just
-   * lifts to the active blue to match. No more orange-on-input. */
   outline: var(--focus-ring);
   outline-offset: 1px;
   border-color: var(--color-role-active);

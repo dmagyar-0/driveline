@@ -1,18 +1,16 @@
-// Phase 8 · Bookmarks persistence.
-//
-// Mirrors `state/persist/namedLayouts.ts` and `state/persist/ui.ts`:
-// schema-versioned JSON in a single `localStorage` key, fail-closed
-// validation, write-on-change subscriber that skips identical fires.
-// Bookmarks outlive a session — `clear()` does NOT reset them, same
-// posture as `namedLayouts`.
+// Bookmarks persistence. Mirrors `state/persist/namedLayouts.ts` and
+// `state/persist/ui.ts`: schema-versioned JSON in a single localStorage
+// key, fail-closed validation, write-on-change subscriber that skips
+// identical fires. Bookmarks outlive a session — `clear()` does NOT
+// reset them, same posture as `namedLayouts`.
 //
 // `Bookmark.ns` is a `bigint` in-memory; on disk it round-trips as a
-// decimal string so JSON parses cleanly across the structured-clone
-// boundary. Mirrors `layout/persist.ts`'s BigInt encoding.
+// decimal string so JSON parses across the structured-clone boundary
+// (matches `layout/persist.ts`'s BigInt encoding).
 //
-// Color is stored (not recomputed at render): we freeze the FNV-1a
-// `colorFor(id)` lookup at create-time so a future palette change can
-// not retroactively re-skin user bookmarks.
+// Colour is frozen at create-time via FNV-1a `colorFor(id)` rather than
+// recomputed at render — a future palette change must not retroactively
+// re-skin user bookmarks.
 
 import type { useSession } from "../store";
 

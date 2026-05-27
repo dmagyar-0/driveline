@@ -1,53 +1,19 @@
 // VideoToolbar — interactive controls + decode telemetry for a single
-// VideoPanel (iter 3 video-polish cluster).
+// VideoPanel. Lives inside the video frame, just below the panel header.
+// Owns transport controls (frame-back / 1 s scrub / play-pause / 1 s
+// scrub / frame-forward), a fit/fill toggle (persisted per panelId via
+// localStorage), a compact codec/fps/resolution info chip, and a
+// "cropped" badge that appears only in fill mode.
 //
-// Lives inside the video frame, just below the panel header. Owns:
-//   • transport controls (frame-back / scrub-back 1 s / play-pause /
-//     scrub-forward 1 s / frame-forward) that delegate to the existing
-//     global Transport actions (`setCursor`, `play`, `pause`).
-//   • a fit/fill toggle for the canvas object-fit mode (persisted per
-//     panelId via localStorage — no store-shape change required).
-//   • a compact info chip (codec · fps · resolution) with a verbose
-//     tooltip; replaces the iter4 inline strip that wrapped or truncated
-//     the codec string ("avc1.640…") in narrow panels.
-//   • a "cropped" badge that surfaces only when fit mode is `fill`, so
-//     users have an obvious cue that pixels at the panel edge are
-//     clipped.
+// Lives as a separate component so its rAF-paced re-renders (driven by
+// the cursor / playing slice) don't pull VideoPanel itself into the
+// React commit phase — VideoPanel must stay out of reconciliation on
+// the 60 Hz decode/blit hot path.
 //
-// Why a separate component:
-//   • keeps VideoPanel.tsx focused on the decode/blit hot path.
-//   • the toolbar re-renders on the cursor / playing slice — VideoPanel
-//     deliberately does not, since 60 Hz cursor ticks would churn the
-//     reconciler. Putting the toolbar in its own component isolates
-//     that React work.
-//
-// We never reach into the decoder directly; everything we need is
-// already exposed via the existing HUD snapshot or via the source's
-// `mp4Cache.index.ptsNs` array. Sidecar PTS drives both frame stepping
-// and the "expected fps" target the health-badge dot uses.
-//
-// iter5 polish (issues #1, #2, #4, #6):
-//   • All utility buttons share a single base class (`.utilBtn`) so the
-//     HUD toggle / Change channel / Cropped chip read as one family
-//     instead of "three engineers shipped three solutions to one row".
-//   • Codec/fps/resolution collapse into a single `.infoChip` with a
-//     tooltip carrying the full breakdown (no more truncated tokens).
-//   • Toolbar slimmed to 36 px so it doesn't eat the panel surface.
-//   • Visual separators (`.sep`) bracket logical groups so the toolbar
-//     reads left-to-right: [transport] | [fit/fill] | [HUD] [Change]
-//     | [info chip] [cropped] [health dot].
-//
-// iter7 wave2A — the UX critic scored the video panel 62/100, lowest
-// of six surfaces, calling the toolbar "nine clustered controls
-// without grouping or separators". This pass collapses the row into
-// three explicit clusters with subtle 1 px dividers between them:
-//   1. transport mini-controls
-//   2. fit controls (FIT/FILL toggle + the transient Cropped chip)
-//   3. inspection / source (HUD toggle, Change-source, codec info chip,
-//      health dot)
-// Each cluster is its own flex group so narrow widths wrap by cluster
-// rather than mid-group. The HUD-active state continues to use the
-// wave1 active-blue tokens.
+// The toolbar reads the published HUD snapshot rather than reaching
+// into the decoder, and uses the source's `mp4Cache.index.ptsNs` array
+// for both frame stepping and the "expected fps" target the health dot
+// resolves against.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
@@ -67,17 +33,12 @@ interface VideoToolbarProps {
   resolution: { width: number; height: number } | null;
   fitMode: FitMode;
   onFitModeChange: (mode: FitMode) => void;
-  /** Iter 4 issue #4 — the HUD toggle used to sit absolute-positioned
-   *  *inside* the video frame, on top of the letterbox bars. Lifting
-   *  it into the toolbar removes the overlap and reclaims pixels for
-   *  the actual video region. Container forwards both the current
-   *  bit and the toggle action so the toolbar stays state-free. */
+  /** Container forwards both the current bit and the toggle action so
+   *  the toolbar stays state-free. */
   hudOn?: boolean;
   onHudToggle?: () => void;
-  /** Iter 4 issue #4 — the "Change channel" pill used to sit
-   *  hover-revealed inside the frame too. The container passes a
-   *  no-op when no binding is set or change is disallowed; we render
-   *  the button only when this is provided. */
+  /** Container passes a no-op when no binding is set or change is
+   *  disallowed; we render the button only when this is provided. */
   onClearBinding?: () => void;
 }
 
@@ -101,10 +62,9 @@ interface FpsSample {
  * (e.g. dropped key-frame at EOF) which would skew the target.
  */
 /**
- * iter5 issue #1 — humanise a codec token (e.g. `avc1.640033`) into
- * its family name. Returns null when we don't recognise the prefix
- * so callers can fall back to the raw token. Pure function, exported
- * via the `__test` seam so the unit test can pin the mappings.
+ * Humanise a codec token (e.g. `avc1.640033`) into its family name.
+ * Returns null when we don't recognise the prefix so callers can fall
+ * back to the raw token.
  */
 function codecFamily(raw: string | null): string | null {
   if (!raw) return null;
@@ -195,14 +155,14 @@ export function saveFitMode(panelId: string, mode: FitMode): void {
   }
 }
 
-// Iter 4 issue #1 — health tones are now decoupled from playback state.
-//   - "paused": video is intentionally paused; FPS=0 is expected and the
-//     dot reads neutral grey, never red.
+// Health tones are decoupled from playback state:
+//   - "paused": intentionally paused; FPS=0 is expected and the dot
+//     reads neutral grey, never red.
 //   - "buffering": a seek/scrub just landed and the decoder hasn't yet
 //     produced the matching frame. Amber, transient.
-//   - "ok"/"warn"/"bad": live decode health *while playing* — matches
+//   - "ok"/"warn"/"bad": live decode health *while playing*, matched
 //     against the sidecar's target FPS so a healthy 30 fps stream isn't
-//     flagged as bad when the user expected 60 fps.
+//     flagged bad when the user expected 60 fps.
 //   - "unknown": pre-first-frame.
 type HealthTone =
   | "ok"
@@ -246,11 +206,10 @@ function healthTone(input: HealthInput): HealthTone {
 }
 
 /**
- * Format a smoothed FPS as a short string. We use 0 decimals at 30+ fps
- * (whole numbers read cleaner in a tiny chip) and 1 decimal below that
- * so the difference between 24 and 25 fps is visible. When the transport
- * is paused, FPS is meaningless — return "paused" so the chip doesn't
- * read "0.0 fps" as if the stream had stalled (iter 4 issue #1).
+ * Format a smoothed FPS as a short string. 0 decimals at 30+ fps (whole
+ * numbers read cleaner in a tiny chip); 1 decimal below that so 24 vs
+ * 25 fps is visible. When paused, return "paused" so the chip doesn't
+ * read "0.0 fps" as if the stream had stalled.
  */
 function formatFps(fps: number | null, playing = true): string {
   if (!playing) return "paused";
@@ -302,12 +261,10 @@ export function VideoToolbar({
     setDrops(0);
   }, [panelId, ptsNs]);
 
-  // Iter 4 issue #1 — buffering window. We stamp `lastSeekMsRef` on
-  // every seek-epoch bump; the health-tone resolver flips to "buffering"
-  // for BUFFERING_WINDOW_MS so the dot reads amber while the decoder is
-  // catching up after a scrub, then returns to green/yellow/red based on
-  // live FPS. A ref keeps the tick loop allocation-free; React state
-  // would force a 60 Hz re-render here.
+  // Stamped on every seek-epoch bump; the health-tone resolver flips
+  // to "buffering" for BUFFERING_WINDOW_MS so the dot reads amber
+  // while the decoder catches up after a scrub. A ref keeps the tick
+  // loop allocation-free; React state would force a 60 Hz re-render.
   const lastSeekMsRef = useRef<number>(Number.NEGATIVE_INFINITY);
 
   // Subscribe to seekEpoch so a user scrub resets the drops baseline.
@@ -421,13 +378,10 @@ export function VideoToolbar({
 
   const canFrameStep = ptsNs !== null && ptsNs.length > 0;
 
-  // Iter 4 issue #3 — frame-step keyboard shortcuts. `,` / `.` mirror
-  // the standard YouTube/VLC convention for frame-accurate review and
-  // — crucially — don't collide with the global Transport bindings
-  // (which already own ←/→/J/L for 1 s steps). The handler attaches
-  // to `window` rather than the panel wrapper so the user doesn't have
-  // to chase focus into the canvas after each scrub. Mirrors the
-  // Transport's input-guard convention (skip when typing).
+  // Frame-step keyboard shortcuts. `,` / `.` mirror the YouTube/VLC
+  // convention and don't collide with the global Transport bindings
+  // (which own ←/→/J/L for 1 s steps). Attaches to `window` so the
+  // user doesn't have to chase focus into the canvas after each scrub.
   useEffect(() => {
     if (!canFrameStep) return;
     const onKey = (e: KeyboardEvent) => {
@@ -460,11 +414,9 @@ export function VideoToolbar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canFrameStep]);
 
-  // Iter 4 issue #1 — recompute the tone from the *current* signals,
-  // not from FPS alone. `playing` short-circuits to a neutral grey dot
-  // so a deliberate pause never trips the red "stalled stream" reading.
-  // The buffering window is driven from `lastSeekMsRef` (stamped on
-  // every seek-epoch bump above).
+  // Tone resolves from the current signals (not from FPS alone);
+  // `playing: false` short-circuits to neutral grey so a deliberate
+  // pause never trips the red "stalled stream" reading.
   const msSinceSeek = performance.now() - lastSeekMsRef.current;
   const tone = healthTone({
     fps,
@@ -487,10 +439,8 @@ export function VideoToolbar({
     paused: "paused",
     buffering: "buffering after seek",
   };
-  // iter5 issue #1 — humanise the codec string for the tooltip. The
-  // raw `avc1.640033` token is informative for a debug-y user but
-  // reads as gibberish to most. Prefix with the family name when we
-  // can recognise it; if we can't, we just surface the raw token.
+  // Prefix the raw codec token with the family name when we can
+  // recognise it (`avc1.640033` is gibberish to most users on its own).
   const family = codecFamily(codec);
   const codecTooltipPart = family ? `${family} · ${codecLabel}` : codecLabel;
   // Tooltip surfaces everything in the order the audit asked for:
@@ -529,9 +479,9 @@ export function VideoToolbar({
       role="toolbar"
       aria-label="Video panel controls"
     >
-      {/* iter7 wave2A — cluster 1: transport mini-controls. Frame-step
-       *  (32 px hit target) + 1 s scrub + play-pause, tightly grouped
-       *  because they read as a single segmented affordance. */}
+      {/* Cluster 1: transport mini-controls — frame-step (32 px hit
+       *  target) + 1 s scrub + play-pause, grouped because they read
+       *  as one segmented affordance. */}
       <div
         className={`${styles.cluster} ${styles.clusterTransport}`}
         data-testid="video-toolbar-cluster-transport"
@@ -603,10 +553,9 @@ export function VideoToolbar({
 
       <div className={styles.divider} role="separator" aria-hidden="true" />
 
-      {/* iter7 wave2A — cluster 2: fit controls. FIT/FILL toggle plus
-       *  the transient Cropped chip that only appears in FILL mode —
-       *  the chip is conceptually a side-effect of FILL, so it lives
-       *  in the same cluster rather than orphaned to inspection. */}
+      {/* Cluster 2: fit controls. The Cropped chip only appears in
+       *  FILL mode and is conceptually a side-effect of FILL, so it
+       *  lives in the same cluster rather than orphaned to inspection. */}
       <div
         className={styles.cluster}
         data-testid="video-toolbar-cluster-fit"
@@ -665,10 +614,9 @@ export function VideoToolbar({
 
       <div className={styles.divider} role="separator" aria-hidden="true" />
 
-      {/* iter7 wave2A — cluster 3: inspection / source. HUD toggle,
-       *  Change-source pill, codec info chip, and the decode-health
-       *  dot. The cluster expands to fill the row so the codec chip
-       *  + health dot right-align via margin-left:auto on .infoChip. */}
+      {/* Cluster 3: inspection / source. Cluster expands to fill the
+       *  row so the codec chip + health dot right-align via
+       *  margin-left:auto on .infoChip. */}
       <div
         className={`${styles.cluster} ${styles.clusterInspection}`}
         data-testid="video-toolbar-cluster-inspection"

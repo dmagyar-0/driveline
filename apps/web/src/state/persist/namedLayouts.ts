@@ -1,16 +1,14 @@
-// Phase 4 · Named-layouts persistence. Phase 6 bumped to v2 to carry
-// the four new panel-kind binding maps in saved layouts so a restore
-// brings back scene/map/table/enum panels intact.
+// Named-layouts persistence. Mirrors `state/persist/ui.ts` and
+// `layout/persist.ts`: schema-versioned JSON in a single localStorage
+// key, fail-closed validation, write-on-change subscriber that skips
+// identical fires. Saved layouts outlive a `clearSession`.
 //
-// Mirrors `state/persist/ui.ts` and `layout/persist.ts`: schema-versioned
-// JSON in a single `localStorage` key, fail-closed validation, write-on-
-// change subscriber that skips identical fires. The `namedLayouts` slice
-// is independent of session lifetime (saved layouts outlive a
-// `clearSession`, like bookmarks will in Phase 8).
+// No BigInts in this slice — panel/channel ids and the user-typed name
+// are strings; `createdAt` is a millisecond `number`. No string-encoding
+// round-trip is required (unlike `bookmarks.ts`).
 //
-// No BigInts in this slice — panel ids, channel ids, and the user-typed
-// name are strings; `createdAt` is a millisecond `number`. So unlike the
-// (future) bookmarks adapter no string-encoding round-trip is needed.
+// v2 carries the four newer panel-kind binding maps so a restore brings
+// back scene/map/table/enum panels intact.
 
 import type { useSession } from "../store";
 import type { MapBinding, PlotPanelSettingsLite } from "../../layout/persist";
@@ -28,9 +26,9 @@ export interface NamedLayout {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
-  // Phase 8 · added as an OPTIONAL v2 field rather than bumping the
-  // schema, so saved-layout entries created before per-panel settings
-  // existed don't get dropped on read. New writes always include it.
+  // OPTIONAL v2 field — saved-layout entries created before per-panel
+  // settings existed don't get dropped on read. New writes always
+  // include it.
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
   createdAt: number;
 }
@@ -122,8 +120,8 @@ function validateLayout(raw: unknown): NamedLayout | null {
   if (!tableBindings) return null;
   const enumBindings = validateNullableStringMap(raw.enumBindings);
   if (!enumBindings) return null;
-  // Optional Phase 8 field — entries saved before per-panel settings
-  // existed default to an empty map.
+  // Optional field — entries saved before per-panel settings existed
+  // default to an empty map.
   const plotPanelSettings = validatePlotPanelSettingsMap(
     raw.plotPanelSettings ?? {},
   );

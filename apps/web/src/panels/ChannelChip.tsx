@@ -1,18 +1,8 @@
-// Compact, source-aware channel chip for the Plot panel header (UX
-// overhaul issues #1, #2, #7).
-//
-// Renders a single bound channel as a pill containing:
-//   - a colour swatch (exact line stroke colour from `palette.colorFor`)
-//   - a short label (last `/`-delimited segment by default — full name
-//     and unit available on hover)
-//   - an optional source badge so users can disambiguate chips that
-//     share a name across files / segments
-//   - a remove button (`×`)
-//
-// The chip is a span (not a button) so the remove control's click target
-// is unambiguous and the chip itself can carry a `title` tooltip with
-// the full path. Width is bounded by CSS so a long topic name does not
-// take over the panel header.
+// Compact, source-aware channel chip for the Plot panel header.
+// Renders a bound channel as a pill: swatch · short label · unit ·
+// optional source badge · remove button. The chip is a span (not a
+// button) so the remove control's click target is unambiguous and the
+// chip itself can carry a `title` tooltip with the full path.
 
 import type { Channel } from "../state/store";
 import { colorFor, colorForSource, dashForIndex } from "./palette";
@@ -24,25 +14,21 @@ interface Props {
   /** Empty string disables the badge; non-empty renders the short stem. */
   sourceBadge: string;
   onRemove: (id: string) => void;
-  /** Iter4 alignment item #5 — when the chip overflow detector pushes
-   *  this chip out of the visible row, mark it hidden so the wrapping
-   *  `<ChipOverflow />` can list it in the popover instead. The DOM
-   *  element stays in place so ResizeObserver-driven measurements
-   *  remain consistent. */
+  /** When the chip overflow detector pushes this chip out of the
+   *  visible row, mark it hidden so `<ChipOverflow />` can list it
+   *  in the popover. The DOM element stays in place so the
+   *  ResizeObserver measurements remain consistent. */
   hidden?: boolean;
-  /** Iter5 issue #7 — index within the bound-channel list, used to
-   *  render the dash pattern in the chip swatch. */
+  /** Index within the bound-channel list — drives the dash pattern. */
   seriesIndex?: number;
-  /** Iter5 issue #7 — total bound-channel count, gates whether the
-   *  dash pattern kicks in (no dashes below DASH_THRESHOLD). */
+  /** Total bound-channel count — gates whether the dash pattern kicks
+   *  in (no dashes below DASH_THRESHOLD). */
   seriesCount?: number;
-  /** Iter5 issue #2 — `L` or `R` for the axis the channel belongs to
-   *  in a dual-axis plot. Empty string suppresses the badge (single
-   *  axis or third+ axis group). */
+  /** `L` or `R` for the axis the channel belongs to in a dual-axis
+   *  plot. Empty string suppresses the badge. */
   axisSide?: "" | "L" | "R";
-  /** Iter5 issue #2 — tint for the L/R badge so it shares the axis's
-   *  identity colour from `axisGroups`. Falls back to fg-2 when
-   *  undefined. */
+  /** Tint for the L/R badge so it shares the axis's identity colour
+   *  from `axisGroups`. Falls back to fg-2 when undefined. */
   axisTint?: string;
 }
 
@@ -58,13 +44,9 @@ export function ChannelChip({
 }: Props) {
   const full = fullChannelLabel(channel);
   const short = shortChannelLabel(channel);
-  // Iter3 issue #2 — the chip splits into a leading source-coloured
-  // ribbon (`.chipRibbon`) and the existing pill body (`.chipBody`).
-  // The ribbon makes the source unmistakable at a glance even when the
-  // text badge is hidden (single-source view) or invisible at small
-  // panel widths. Ribbon is rendered even without a badge so the same
-  // colour signal exists in single-source layouts too — but in a more
-  // muted way (the ribbon doubles as a visual anchor).
+  // Leading source-coloured ribbon makes the source unmistakable even
+  // when the text badge is hidden or invisible at small panel widths.
+  // Always rendered so single-source layouts also gain a visual anchor.
   return (
     <span
       className={styles.chip}
@@ -81,12 +63,9 @@ export function ChannelChip({
         aria-hidden
       />
       <span className={styles.chipBody}>
-        {/* Iter5 issue #7 — chip swatch now renders the trace's dash
-            pattern (when active) so the chip reads exactly like the
-            plotted line. The swatch is an SVG line with the same colour
-            + dash array as the uPlot series. Below the dash threshold
-            (4 traces) it falls back to a solid colour line, matching
-            the trace. */}
+        {/* Chip swatch renders the trace's dash pattern (when active)
+            so the chip reads exactly like the plotted line. Below the
+            dash threshold (4 traces) it falls back to a solid line. */}
         <ChipSwatch
           color={colorFor(channel.id)}
           dash={
@@ -100,10 +79,9 @@ export function ChannelChip({
         {channel.unit && (
           <span className={styles.chipUnit}>{channel.unit}</span>
         )}
-        {/* Iter5 issue #2 — per-series L/R axis badge in dual-axis
-            plots. Tells the user which side's tick numbers track this
-            chip's value range. Single-axis plots omit the badge so a
-            one-chip panel doesn't read as cluttered. */}
+        {/* Per-series L/R axis badge in dual-axis plots. Single-axis
+            plots omit the badge so a one-chip panel doesn't read as
+            cluttered. */}
         {axisSide && (
           <span
             className={styles.chipAxisBadge}
@@ -139,15 +117,9 @@ export function ChannelChip({
   );
 }
 
-/** Iter5 issue #7 — chip swatch that mirrors the trace's stroke
- *  pattern. Renders as a 10×10 SVG with a single horizontal stroke
- *  through the middle; `dash` is the uPlot-style `[on, off, …]`
- *  pixel array (empty array → solid). The colour matches the trace
- *  exactly so the chip and the line agree on both hue *and* texture.
- *
- *  Kept inline in this file because it's the only consumer; promoting
- *  it would force a separate test file for what is effectively one
- *  SVG path. */
+/** Chip swatch that mirrors the trace's stroke pattern. 10×10 SVG with
+ *  a single horizontal stroke; `dash` is the uPlot-style `[on, off, …]`
+ *  pixel array (empty array → solid). */
 interface ChipSwatchProps {
   color: string;
   dash: readonly number[];

@@ -1,55 +1,26 @@
 /* ============================================================
  * Driveline — Design Tokens
- * Source: github.com/dmagyar-0/driveline @ main
  * ============================================================
  *
- * Driveline is a dark-only, engineer-first interface. Tokens here
- * mirror the values lifted from apps/web/src/**.module.css and
- * panels/palette.ts. Keep changes minimal and grounded in source.
+ * Tokens are the single source of truth for the dark-only engineer UI.
+ * Components must reach for these vars; never hard-code colours. Token
+ * names are stable — value-only tweaks ripple through CSS Modules.
  *
- * iter2 · polish pass introduced:
- *   1) Tonal hierarchy. The previous ramp had chrome (TopBar, Rail,
- *      Transport, PanelHeader at `--color-bg-2`) *darker* than panel
- *      bodies (`--color-bg-3`), so the eye couldn't parse where a
- *      panel ended and the shell began. The new ramp lifts chrome one
- *      step *above* panel bodies. Existing token names are preserved
- *      so per-area CSS Modules pick the new values up automatically;
- *      semantic aliases (--bg-app, --bg-chrome, --bg-panel-body,
- *      --bg-panel-body-elevated) are added for new code.
- *   2) Foreground ramp lifted so every fg-3/-4/-5 reads ≥4.5:1 against
- *      both --bg-chrome and --bg-panel-body. fg-1 stays an off-white
- *      (not pure #fff — easier on the eye in dark mode).
- *   3) Accent split. The legacy `--color-accent-orange` carried three
- *      jobs (primary CTA, cursor line, rail-active dot). Three
- *      semantic accents take over: --accent-primary (orange CTAs),
- *      --accent-cursor (vivid cyan for the time cursor — distinct
- *      from the data palette teal #14b8a6), --accent-active (a
- *      desaturated derivative of primary for the rail-active state).
- *   4) Colour-blind utilities. Dashed-line tokens + a focus-ring style
- *      that combines colour AND a 2 px solid offset so plots can offer
- *      a non-colour cue (plot agent owns adoption).
- *   5) `--touch-target-min: 32 px`. Floor for icon-only chrome
- *      buttons (PanelHeader actionBtn, Transport help/mode chips).
- *      Per-area CSS Modules adopt in their hot-path classes.
- *   6) `prefers-reduced-motion` global fallback. Component CSS already
- *      kills its own transitions inside the media query; the blanket
- *      `*` rule below covers any animation a future hand forgets.
+ * Ramp invariants this file maintains:
+ *   * Chrome (bg-2) sits one step *above* panel bodies (bg-3) so the
+ *     eye can parse where a panel ends and the shell begins.
+ *   * Every fg-3/-4/-5 reads ≥4.5:1 against bg-2 AND bg-3 (WCAG AA).
+ *   * Accent orange is reserved for two roles only: --color-role-cta
+ *     and --color-role-cursor. All other "primary" / "active" cues
+ *     use the blue role tokens — see the role block below.
  */
 
 :root {
   /* ---------- Color: surfaces (dark, near-black ramp) ----------
-   *
-   * Ordering is intentional: bg-1 is the app shell (deepest visible
-   * neutral), bg-2 is CHROME (a step *above* panel bodies so the eye
-   * can resolve regions), bg-3 is panel/popover (back at the deepest
-   * neutral so panels read as the canvas), bg-4..6 climb toward
-   * button + hover surfaces.
-   *
-   * Hex values were chosen so:
-   *   - bg-2 sits ≥8 L* above bg-3 (perceptible step in dark mode).
-   *   - bg-4..6 each rise ≥6 L* above the previous step.
-   *   - Every fg-3/-4/-5 reads ≥4.5:1 against bg-2 AND bg-3
-   *     (see fg ramp below).
+   * Ordering: bg-1 is the app shell (deepest visible neutral), bg-2
+   * is CHROME (a step above panel bodies so regions resolve), bg-3 is
+   * the panel/popover surface (back at the deepest neutral so panels
+   * read as the canvas), bg-4..6 climb toward button + hover surfaces.
    */
   --color-bg-0: #000000; /* video panel, deepest */
   --color-bg-1: #0a0b0d; /* workspace shell (app canvas) */
@@ -60,12 +31,9 @@
   --color-bg-6: #353a44; /* button hover (top of neutral ramp) */
 
   /* ---------- Color: surfaces — semantic aliases ----------
-   *
-   * Future components should prefer these over numeric tokens — the
-   * intent (chrome / panel body / elevated overlay) is what we care
-   * about, not which step of the ramp it lands on. Per-area CSS
-   * Modules can migrate at their own pace; values match the numbered
-   * ramp above so today's references keep working unchanged. */
+   * Prefer these over numeric tokens — the intent (chrome / panel
+   * body / elevated overlay) is what we care about, not which step of
+   * the ramp it lands on. */
   --bg-app: var(--color-bg-1); /* deepest — workspace shell, empty states */
   --bg-chrome: var(--color-bg-2); /* TopBar, Rail, Transport, PanelHeader */
   --bg-panel-body: var(--color-bg-3); /* panel content surface */
@@ -78,18 +46,12 @@
   --color-splitter-hover: #3a3f49; /* flexlayout splitter hover */
 
   /* ---------- Color: foreground / text ----------
-   *
-   * iter2 · all secondary tones lifted ~6-10 L* so labels like
-   * "ELAPSED / TOTAL / TIME / SPEED" clear WCAG AA against both
-   * --bg-chrome (#1c1f24) and --bg-panel-body (#0e0f12).
-   *
-   * Contrast (BG-2 / BG-3):
+   * Contrast (vs BG-2 / BG-3):
    *   fg-2 #e6e8ec → 12.7 / 14.9   (primary body)
    *   fg-3 #c8ccd2 →  9.9 / 11.7   (secondary)
    *   fg-4 #b4b9c1 →  7.9 /  9.3   (tertiary / labels)
    *   fg-5 #969ba4 →  5.6 /  6.6   (meta / muted)
-   *   fg-6 #757b85 →  3.6 /  4.2   (placeholder / disabled — WCAG carve-out)
-   *
+   *   fg-6 #757b85 →  3.6 /  4.2   (placeholder / disabled — AA carve-out)
    * fg-1 stays off-white (#f5f7fa, not #fff) — kinder on dark backgrounds. */
   --color-fg-1: #f5f7fa; /* highest contrast (rare) */
   --color-fg-2: #e6e8ec; /* primary body text */
@@ -100,48 +62,19 @@
 
   /* ---------- Color: accent (functional) ----------
    *
-   * iter6 · "Orange on a diet". The audit found orange playing six
-   * unrelated jobs simultaneously (brand mark, playhead, play button,
-   * active panel tab, primary CTA, warning) — so none of them read as
-   * important. The new rule: orange is reserved for exactly TWO roles:
+   * Orange is reserved for exactly two roles — `--color-role-cta` (the
+   * play button, hero CTAs) and `--color-role-cursor` (the time cursor /
+   * playhead). Everything else that used to be orange moves to a
+   * sibling role token (active / focus / brand / warning) below.
    *
-   *   --color-role-cta       → primary CTA (the play button, "Try
-   *                            sample data" hero buttons, big actions).
-   *   --color-role-cursor    → the time cursor / playhead (across
-   *                            plots, transport, scrubber).
+   * Invariant: the blue family is held at ~50% chroma below orange so
+   * any frame containing both reads orange (action/temporal) as primary
+   * and blue (selection/focus/state) as subordinate. Keep that ratio if
+   * either side is ever retuned.
    *
-   * Everything else that used to be orange moves to a sibling role:
-   *
-   *   --color-role-active    → blue, for "this is the focused thing"
-   *                            (active rail item, selected sources row,
-   *                            active panel border / ring). Distinct
-   *                            from the playhead so the eye doesn't
-   *                            conflate "I am editing this" with
-   *                            "the time cursor sits here".
-   *   --color-role-focus     → blue (slightly hotter shade), for the
-   *                            keyboard focus ring on every interactive
-   *                            element. Same hue family as --active so
-   *                            the keyboard cue feels at home.
-   *   --color-role-brand     → neutral off-white, for the brand
-   *                            wordmark + logo arrow. The brand mark
-   *                            should not compete with the playhead.
-   *   --color-role-warning   → amber, for buffering / cropped / partial-
-   *                            success states. A genuinely warm hue,
-   *                            but distinguishable from CTA orange.
-   *
-   * Cursor + CTA share the same `#f97316` orange — same hue, different
-   * jobs — but the role tokens let downstream CSS spell intent (e.g. a
-   * rail-active item should NOT become orange if we rebrand later).
-   *
-   * Legacy `--color-accent-orange` is preserved as a value-equal alias
-   * so `cursorOverlay.ts` (which reads it from the CSS custom prop) and
-   * any out-of-tree CSS keep working. New code should use the role
-   * tokens.
-   *
-   * Blue family is held at ~50% chroma below orange so any frame
-   * containing both reads orange (action/temporal) as primary and
-   * blue (selection/focus/state) as subordinate. Keep that ratio
-   * if either side is ever retuned. */
+   * `cursorOverlay.ts` reads `--color-accent-orange` directly via
+   * `getComputedStyle`, so the legacy alias stays as a value-equal
+   * pointer to `--color-role-cta`. New code should use role tokens. */
   --color-accent-orange: #f97316; /* legacy alias — equals --color-role-cta */
   --color-accent-blue: #6e9ad1; /* selection / focus, desaturated vs orange CTA */
   --color-accent-blue-tint: rgba(110, 154, 209, 0.08);
@@ -165,44 +98,13 @@
   --color-role-brand: var(--color-fg-2); /* brand wordmark + logo arrow — neutral */
   --color-role-brand-muted: var(--color-fg-4);
 
-  --color-role-warning: #f2b33d; /* amber — buffering / cropped / partial (iter7: lifted from #eab308 for wider gap from CTA orange) */
+  --color-role-warning: #f2b33d; /* amber — buffering / cropped / partial */
   --color-role-warning-tint: rgba(242, 179, 61, 0.14);
 
-  /* iter7 wave1 · "Orange off semantic load" ---------------------
-   *
-   * The iter6 role tokens (cta, cursor, active, focus, brand, warning)
-   * split the legacy `--color-accent-orange` into six jobs, but the
-   * downstream CSS still reaches for `--color-role-warning` for two
-   * semantically distinct uses:
-   *   1) transient buffering / mixed-units / cropped affordances
-   *   2) the "Degraded" status pill in the TopBar (a sticky failure mode)
-   *
-   * Wave 1 introduces dedicated *named* iter7 tokens so each use-site
-   * spells its intent and the next critic pass can tell which surfaces
-   * are "caution chips" vs "this session is partial":
-   *
-   *   --color-warn-amber          warning chips ("Mixed units · 3",
-   *                               Cropped, buffering)
-   *   --color-warn-amber-bg       subtle background tint for the chip
-   *   --color-warn-amber-border   border tint for the chip
-   *   --color-degraded-amber      "Degraded" status pill in TopBar
-   *   --color-active-blue         HUD-active toggle, "this is on"
-   *   --color-active-blue-bg      subtle blue background tint
-   *   --color-brand-neutral       brand wordmark + arrow glyph
-   *
-   * Hex values:
-   *   amber #f2b33d  — warm gold, distinctly NOT orange (#f97316). At
-   *                    L* ~76 it reads as "caution" without competing
-   *                    with the playhead.
-   *   blue  #6e9ad1  — matches the iter6 active role so the language
-   *                    "this is on" is one hue across rail, drawer
-   *                    rows, splitter drag, HUD toggle. Held below
-   *                    orange's chroma so the CTA family stays loud.
-   *   neutral fg-2   — off-white (#e6e8ec), so the wordmark recedes
-   *                    behind the playhead and CTAs.
-   *
-   * All tokens here are *aliases* on the iter6 role tokens so a
-   * downstream rebrand still has a single edit point. */
+  /* Named use-site aliases on the role tokens above. Each site spells
+   * its intent (caution chip vs sticky "Degraded" pill vs "this is
+   * on") so a future rebrand has one edit point per role, not per
+   * use-site. Keep these as aliases — never inline the hex. */
   --color-warn-amber: var(--color-role-warning);
   --color-warn-amber-bg: var(--color-role-warning-tint);
   --color-warn-amber-border: rgba(242, 179, 61, 0.45);
@@ -215,7 +117,7 @@
   --color-brand-neutral: var(--color-role-brand);
   --color-brand-neutral-muted: var(--color-role-brand-muted);
 
-  /* Back-compat semantic aliases preserved (iter2 introduced these). */
+  /* Back-compat semantic aliases. */
   --accent-primary: var(--color-role-cta);
   --accent-primary-hover: var(--color-role-cta-hover);
   --accent-cursor: var(--color-role-cursor);
@@ -226,18 +128,13 @@
   --color-error: #b23a00; /* light bg */
   --color-error-dark: #ff8a5c; /* dark bg (used in app) */
 
-  /* ---------- Color: data viz palette (8 series, FNV-hashed) ---------- *
-   * NOTE · owned by `apps/web/src/panels/palette.ts` (plot agent).
-   * Do not change these values from the tokens file.
-   *
-   * iter8 · mirrored to the Wong colourblind-safe palette currently
-   * shipping from palette.ts. Slot 2 was retuned from Wong sky blue
-   * `#56b4e9` to a brighter cyan `#22d3ee` so the wheel_speed_* sibling
-   * cluster (slots 2 + 3 + 5) no longer overplots as one cyan/teal
-   * band. See palette.ts for the full rationale. */
+  /* ---------- Color: data viz palette (8 series, FNV-hashed) ----------
+   * Source of truth lives in `apps/web/src/panels/palette.ts`. These
+   * tokens mirror that palette for non-canvas use sites (CSS swatches,
+   * legend chips). Do not change values here without updating palette.ts. */
   --plot-1: #9aa0aa; /* muted cool grey */
   --plot-2: #e69f00; /* orange */
-  --plot-3: #22d3ee; /* bright cyan (iter8; was Wong sky blue #56b4e9) */
+  --plot-3: #22d3ee; /* bright cyan */
   --plot-4: #009e73; /* bluish green */
   --plot-5: #f0e442; /* yellow */
   --plot-6: #0072b2; /* blue */
@@ -245,13 +142,9 @@
   --plot-8: #cc79a7; /* reddish purple */
 
   /* ---------- Trace dash patterns (colour-blind redundancy) ----------
-   *
-   * `stroke-dasharray` values, ready to drop into uPlot series or SVG
-   * paths. The intent is that traces can be distinguished by *dash*
-   * pattern as well as hue, so users with red/green colour deficiency
-   * (~8% of male engineers) still get a unique signal per series.
-   * Plot agent owns adoption — these tokens just make the pattern set
-   * available. */
+   * `stroke-dasharray` values for uPlot series / SVG paths. Traces stay
+   * distinguishable by dash pattern as well as hue for users with
+   * red/green colour deficiency. */
   --trace-dash-1: 0; /* solid */
   --trace-dash-2: 4 4; /* even dashes */
   --trace-dash-3: 8 4; /* long dash short gap */
@@ -279,21 +172,9 @@
   --fw-semibold: 600;
 
   /* ---------- Type: scale (rem-based, dense engineer UI) ----------
-   *
-   * iter6 · "five-tier type system". The audit asked for a clear,
-   * named role scale on top of the existing numeric tokens. The
-   * numeric tokens (--fs-10..--fs-28) stay — they're useful when you
-   * really do mean "11 px exactly" — but new code should reach for
-   * the role tokens:
-   *
-   *   --fs-xs   (10 px)  micro labels, source qualifiers
-   *   --fs-sm   (12 px)  chip labels, secondary info
-   *   --fs-md   (14 px)  body text, panel titles
-   *   --fs-lg   (16 px)  primary actions, cursor live values
-   *   --fs-xl   (20 px)  major readouts (cursor badge time)
-   *
-   * Existing components keep their --fs-NN refs (back-compat); panel
-   * headers / topbar / transport / cursor gutter migrate to roles. */
+   * Numeric tokens (--fs-10..--fs-28) are for use sites that really
+   * mean "11 px exactly". New code should reach for the role tokens
+   * (--fs-xs/sm/md/lg/xl) declared below. */
   --fs-10: 0.625rem; /* 10px — micro buttons (transport prev/next, mode pill) */
   --fs-11: 0.6875rem; /* 11px — HUD, smallest meta */
   --fs-12: 0.75rem; /* 12px — chip count, footer hints */
@@ -307,7 +188,7 @@
   --fs-22: 1.375rem;
   --fs-28: 1.75rem;
 
-  /* Role-based type scale (iter6) ------------------------------- */
+  /* Role-based type scale ---------------------------------------- */
   --fs-xs: var(--fs-10); /* 10px — micro labels, source qualifiers */
   --fs-sm: var(--fs-12); /* 12px — chip labels, secondary info */
   --fs-md: var(--fs-14); /* 14px — body text, panel titles */
@@ -325,24 +206,12 @@
   --tracking-normal: 0;
   --tracking-wide: 0.05em; /* SOURCE-KIND etc, uppercase labels */
 
-  /* ---------- Unit-pill micro-typography (iter8) ----------
-   *
-   * Single role-token block for the "M/S" / "DEG" / "M/S^2" unit
-   * pill that appears in three places on the plot panel:
-   *   1) chip row    — `.chipUnit` next to each bound channel
-   *   2) gutter      — `.cursorGutterUnit` next to each live value
-   *   3) axis label  — uPlot canvas-drawn caption on Y axes
-   *
-   * Before iter8 these three sites used three different treatments
-   * (lower-case vs uppercase, fg-4 vs fg-5, fw-regular vs 600, 10/11/
-   * 12 px, no tracking vs 0.05em). The critic flagged this as the most
-   * visible inconsistency on the plot. Tokens here define the unified
-   * spec — small caps, muted, medium weight, wide-tracked — so every
-   * surface reads as the same "unit qualifier" role.
-   *
-   * Canvas axis labels (drawn by uPlot) read the values via
-   * `getComputedStyle(document.documentElement).getPropertyValue('--unit-pill-*')`
-   * in PlotPanel's `axisStyle()` helper. */
+  /* ---------- Unit-pill micro-typography ----------
+   * Unified spec for the "M/S" / "DEG" / "M/S^2" unit qualifier used in
+   * three places on the plot panel: chip row (`.chipUnit`), gutter
+   * (`.cursorGutterUnit`), and the uPlot canvas-drawn Y-axis caption.
+   * PlotPanel's `axisStyle()` reads these via `getComputedStyle` on
+   * `document.documentElement` so the canvas sites stay in sync. */
   --unit-pill-font: var(--font-sans);
   --unit-pill-size: var(--fs-11); /* 11px — small qualifier, legible on canvas */
   --unit-pill-weight: var(--fw-medium); /* 500 — distinct from the value (600+) */
@@ -377,42 +246,25 @@
   --shell-transport-h: 32px;
 
   /* ---------- Touch / tap targets ----------
-   *
-   * iter2 · the audit flagged ~24 px chrome buttons (PanelHeader close,
-   * Transport help/mode chip) as below the ergonomic floor. 44 px is
-   * Apple's full pointer-coarse target, but feels comically large in a
-   * dense engineer UI — 32 px is the compromise that keeps the strip
-   * compact while clearing the "mis-click on a trackpad" threshold.
-   *
-   * Per-area CSS Modules should `min-width: var(--touch-target-min);
-   * min-height: var(--touch-target-min);` on any icon-only button. */
+   * 32 px is the chrome-button floor — compact enough for a dense
+   * engineer UI, past Fitts' trackpad mis-click threshold. Apply via
+   * `min-width: var(--touch-target-min); min-height: ...` on icon-only
+   * buttons. `--icon-hit-target` (28 px) is the carve-out for dense
+   * action clusters like the panel header strip; the wider Transport
+   * help/mode chip etc. should still use `--touch-target-min`. */
   --touch-target-min: 32px;
-  --touch-target-comfortable: 36px; /* rail buttons already use this */
-  /* iter8 · `--icon-hit-target: 28px` — a focused floor for dense
-   * panel-header icon buttons (close, gear, maximize). The calibrated
-   * critic asked for ≥28 px hit areas without bloating the tab strip,
-   * so this sits below `--touch-target-min` (32 px) which remains the
-   * default for free-standing chrome (Transport help/mode chip etc.).
-   * Use this token only inside dense action clusters where every pixel
-   * of strip height matters; reach for `--touch-target-min` otherwise. */
+  --touch-target-comfortable: 36px; /* rail buttons */
   --icon-hit-target: 28px;
 
   /* ---------- Focus ring ----------
-   *
-   * iter6 · the role token (--color-role-focus) is the single source
-   * of truth for the focus hue. A 2 px solid stroke + 2 px offset
-   * yields two cues (colour + halo gap) so users with reduced colour
-   * perception still see a discoverable focus indicator. The global
-   * `*:focus-visible` rule at the bottom of this file applies the
-   * ring to every interactive element by default; components only
-   * need to override when the inherited treatment clashes with their
-   * own border/background (e.g. inset rings on rail items).
-   *
-   * Contrast: --color-role-focus #7ba3dd against bg-2 (#1c1f24) is
-   * 6.4:1; against bg-3 (#0e0f12) is 7.4:1; against bg-6 (#353a44)
-   * is 4.4:1 — all clear AA. The ring is the same hue family as
-   * --color-role-active so a focused rail item shows BOTH the ring
-   * AND the active blue bar without colour clash. */
+   * 2-px solid stroke + 2-px offset → two cues (colour + halo gap) so
+   * users with reduced colour perception still see a discoverable
+   * indicator. The global `*:focus-visible` rule at the bottom of this
+   * file applies the ring to every interactive element by default;
+   * components override only when the inherited treatment clashes with
+   * their own border/background (e.g. inset rings on rail items).
+   * --color-role-focus shares the active-blue hue family so a focused
+   * rail item shows BOTH the ring AND the active bar without clash. */
   --focus-ring: 2px solid var(--color-role-focus);
   --focus-offset: 2px;
 
@@ -515,25 +367,14 @@ a:focus-visible {
 }
 
 /* =============================================================
- * a11y · global focus-ring safety net (iter6).
+ * a11y · global focus-ring safety net.
  *
- * The iter5 audit found 8+ interactive elements with no visible
- * focus indicator — drag handles, chips, popover toggles, video
- * toolbar controls, drawer rows. Component-level CSS Modules each
- * decide whether to roll a custom :focus-visible (see PanelHeader,
- * Rail, Transport, VideoToolbar) but the wide universal selector
- * below is the safety net: ANY tabbable element gets a visible
- * ring by default. Component rules override when they need a
- * different inset / colour treatment.
- *
- * The two `:focus-visible` blocks below are intentionally separate:
- *   1. The element / role / tabindex selector covers semantic
- *      interactive elements (every `<button>`, `<a>` with href,
- *      `<input>`, `[role="slider"]`, anything with `tabindex >= 0`).
- *   2. The `[draggable]` rule catches the FlexLayout splitters and
- *      tabset drag handles, which are <div> elements that React
- *      hooks up as focusable but don't carry a role or tabindex
- *      attribute we can target directly.
+ * Universal selector covers any tabbable element so a forgotten
+ * component still has a visible focus indicator; component CSS
+ * Modules override when they need a different inset / colour.
+ * The two `:focus-visible` blocks are intentionally separate — the
+ * second targets FlexLayout splitters / drag handles (focusable
+ * <div>s without a role or tabindex attribute we can hit otherwise).
  * ============================================================= */
 
 button:focus-visible,
@@ -563,22 +404,16 @@ label:focus-visible {
 }
 
 /* =============================================================
- * Reduced-motion baseline.
+ * Reduced-motion baseline. Belt-and-braces fallback for any class
+ * that forgot its own `prefers-reduced-motion` block. `!important`
+ * is necessary to override component-scoped transition declarations
+ * that haven't opted in.
  *
- * Component CSS Modules (PanelHeader, Rail, Transport, Workspace)
- * already kill their own transitions in their own
- * `prefers-reduced-motion` blocks. This GLOBAL rule is a belt-and-
- * braces fallback so any future class that forgets still respects
- * the user preference. The `!important` is reluctant but necessary
- * to override component-scoped transition declarations that don't
- * yet opt in.
- *
- * NB · we keep the scrubber/playhead in place — there is no
- * keyframe animation on the position update; it's a CSS transform
- * driven by React state, which `prefers-reduced-motion` does not
- * intercept. Status spinners (decode pulse, fetch spinner) are
- * silenced by their own component-level rules so the colour cue
- * remains visible. */
+ * Scrubber/playhead position is a CSS transform driven by React
+ * state, which `prefers-reduced-motion` does not intercept — so it
+ * keeps moving (no keyframe animation to silence). Status spinners
+ * are silenced by their own component rules to preserve the colour
+ * cue. */
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
@@ -593,13 +428,9 @@ label:focus-visible {
   }
 }
 
-/* =============================================================
- * a11y · visually-hidden utility, shared by any component that
- * needs to surface a label to assistive tech without painting
- * pixels. Mirrors the WAI-ARIA Authoring Practices "sr-only"
- * pattern. Components that want their own may still define a
- * local `.srOnly` (TopBar, PanelHeader); both behave the same.
- * ============================================================= */
+/* a11y · visually-hidden utility (WAI-ARIA "sr-only" pattern).
+ * Components may also define their own local `.srOnly` — both behave
+ * the same. */
 .sr-only,
 .visually-hidden {
   position: absolute;
@@ -613,17 +444,8 @@ label:focus-visible {
   border: 0;
 }
 
-/* =============================================================
- * Focus ring utility class.
- *
- * Combines colour AND a 2 px solid offset so the focus indicator
- * has TWO cues (hue + gap). Per the audit, colour-only focus
- * indicators fail for users with reduced colour perception; the
- * `outline-offset` creates a visible "halo gap" that reads even
- * without colour. Apply on any element that doesn't already roll
- * its own `:focus-visible` (PanelHeader, Rail, Transport, Plot
- * panels all do — this is for new code).
- * ============================================================= */
+/* Focus ring utility class — for new code that doesn't already roll
+ * its own `:focus-visible`. */
 .focusRing:focus-visible,
 .focus-ring:focus-visible {
   outline: var(--focus-ring);

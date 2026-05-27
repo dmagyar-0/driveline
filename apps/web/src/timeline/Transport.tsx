@@ -1,33 +1,9 @@
-// T3.2 · Timeline UI (scrubber). Bottom-anchored transport bar that drives
-// the T3.1 state machine through the existing `useSession` actions — all
-// clamping, end-of-session auto-pause, and speed bounds live in the store
-// (see `state/store.ts:170-201`).
+// Timeline UI (scrubber). Bottom-anchored transport bar that drives
+// the state machine through `useSession` actions — clamping,
+// end-of-session auto-pause, and speed bounds live in the store.
 //
-// UX overhaul (Agent B, original issues #6-9). Iteration 2 (this rev):
-//
-//   #1 — Tall integrated scrub track (24 px tall, 32 px hit target).
-//        The track is now the dominant element on the bar; controls
-//        sit beneath it without a visual gap. Buffered / segment
-//        colour bands fill the track so the eye reads the timeline
-//        shape immediately.
-//   #2 — Full-height playhead line + draggable handle + hover tooltip.
-//        Pointer-move over the track previews the time under the
-//        cursor; pointer-down on the line/handle scrubs.
-//   #3 — Single source of truth for current time. The bottom-right
-//        "Elapsed / Total" duplicate is gone; the time-of-day above
-//        the playhead handle owns the current readout, and a small
-//        "TOTAL hh:mm:ss" sits to the right of the controls.
-//   #4 — Segments are visually obvious: alternating low-opacity bands
-//        + per-segment labels ("S1 · S2 · S3") in the band row above
-//        the track.
-//   #5 — Speed stays prominent; relative/absolute is demoted to a
-//        compact icon chip with a tooltip ("REL"/"ABS" toggle).
-//   #6 — Keyboard shortcuts (Space / J / K / L / ←/→ / Home / End)
-//        plus title hints on every control. A `?` button opens a
-//        small overlay listing them all.
-//
-// A `transport:scrub` perf mark still bounds the pointer-move work so
-// the existing perfBudgets spec catches a regression past one RAF.
+// The `transport:scrub` perf mark bounds the pointer-move work so the
+// perfBudgets spec catches a regression past one RAF.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
@@ -50,20 +26,18 @@ import {
 } from "../panels/videoReadiness";
 import styles from "./Transport.module.css";
 
-// Issue #2 — hysteresis for the decode-waiting dot. Plan §3 numbers:
-// don't show the dot for short waits (which happen on every tiny
-// scrub), and once shown keep it visible for a brief minimum so a
-// fast-flickering ready/waiting flap doesn't strobe.
+// Hysteresis for the decode-waiting dot. Don't show for sub-250 ms
+// waits (every tiny scrub) and once shown keep visible ≥400 ms so a
+// fast ready/waiting flap doesn't strobe.
 const WAITING_VISIBLE_DELAY_MS = 250;
 const WAITING_MIN_VISIBLE_MS = 400;
-// Array (not equality) so adding states later is a one-line change.
 // "stalled" is deliberately excluded — see `anyPanelWaiting` JSDoc.
 const STATES_THAT_SHOW_DOT: readonly ReadyState[] = ["waiting"];
 
-/** Returns true when at least one panel in the registry is in a
- *  state that should drive the loading affordance. "stalled" panels
- *  intentionally do NOT trigger the dot — they have their own
- *  inline error UI inside the VideoPanel. */
+/** True when at least one panel in the registry is in a state that
+ *  should drive the loading affordance. "stalled" panels intentionally
+ *  do NOT trigger the dot — they have their own inline error UI inside
+ *  the VideoPanel. */
 function anyPanelWaiting(): boolean {
   for (const r of getReadinessSnapshot().values()) {
     if (STATES_THAT_SHOW_DOT.includes(r.state)) return true;
@@ -71,11 +45,11 @@ function anyPanelWaiting(): boolean {
   return false;
 }
 
-/** Issue #2 — drives the "decode-waiting" dot. Subscribes to the
- *  readiness registry (coalesced to rAF) and applies plan §3
- *  hysteresis so the dot ignores sub-250 ms blips and stays visible
- *  for at least 400 ms once shown. The hook re-renders the Transport
- *  only on hysteresis transitions, never per rAF frame. */
+/** Drives the "decode-waiting" dot. Subscribes to the readiness
+ *  registry (coalesced to rAF) and applies hysteresis so the dot
+ *  ignores sub-250 ms blips and stays visible for at least 400 ms
+ *  once shown. Re-renders the Transport only on hysteresis
+ *  transitions, never per rAF frame. */
 function useDecodeWaiting(): boolean {
   const [visible, setVisible] = useState(false);
   // Refs hold the timers so unrelated parent re-renders don't tear
@@ -104,7 +78,6 @@ function useDecodeWaiting(): boolean {
     const evaluate = () => {
       const wantsDot = anyPanelWaiting();
       if (wantsDot) {
-        // Cancel any pending hide; we still want to be visible.
         clearHide();
         if (visibleRef.current || showTimerRef.current !== null) return;
         showTimerRef.current = setTimeout(() => {
@@ -131,9 +104,7 @@ function useDecodeWaiting(): boolean {
       }
     };
 
-    // Initial evaluation, then subscribe to coalesced state-change
-    // notifications. The registry's notify is rAF-batched, so this
-    // does not fire 60 times per second.
+    // The registry's notify is rAF-batched, so this doesn't fire 60×/s.
     evaluate();
     const unsub = subscribeReadiness(evaluate);
     return () => {
@@ -182,22 +153,12 @@ export function Transport() {
   const pendingNs = useRef<bigint | null>(null);
   const rafId = useRef<number | null>(null);
 
-  // Issue #2 — hover tooltip state. `hoverPct` drives the floating
-  // ghost line (and the tooltip's `left`); `hoverPrimary`/`hoverSub`
-  // carry the formatted preview time. Iter3: the hover tooltip now
-  // also surfaces the *other* convention as a sub-line, so the cursor
-  // badge can be slimmed down to a single number (issue #1) while the
-  // hovering user still gets both. Iter4 (issue #6): `hoverSegment`
-  // adds segment context inline ("Segment 2 · drive_2.mcap") so users
-  // discover what those tick marks mean without having to hit a 1 px
-  // boundary line. Stored in state so the tooltip re-renders, but
-  // updates land at most once per rAF via a shared scheduler so the
-  // hot path stays within budget.
-  // Iter5 (issue #4) — hover chip is now a one-line scout: the
-  // playhead badge owns the rich readout. We keep the rAF-scheduled
-  // batch but the payload collapses to a single label string.
+  // Hover tooltip state. `hoverPct` drives the ghost line (and the
+  // tooltip's `left`); `hoverLabel` carries the formatted preview.
   // Boundary detection runs in `labelForHover` and returns either
   // "Segment N start"/"…end" near a tick, or the time otherwise.
+  // Updates are rAF-batched via a shared scheduler so the cursor hot
+  // path stays within budget.
   const [hoverPct, setHoverPct] = useState<number | null>(null);
   const [hoverLabel, setHoverLabel] = useState<string>("");
   const hoverRafId = useRef<number | null>(null);
@@ -214,9 +175,8 @@ export function Transport() {
       pendingNs.current = null;
     }
     rafId.current = null;
-    // Issue #9 — perf budget mark closes the frame, paired with the
-    // `transport:scrub:start` mark scheduled below. The end-to-end
-    // budget spec asserts this stays ≤1 RAF.
+    // Paired with `transport:scrub:start` below — the perf budget spec
+    // asserts the round trip stays ≤1 RAF.
     mark("transport:scrub:flush");
     measure(
       "transport:scrub",
@@ -257,17 +217,11 @@ export function Transport() {
     return (e.clientX - rect.left) / rect.width;
   };
 
-  // Iter5 (issue #4) — single label for the hover scout. When the
-  // pointer is within `BOUNDARY_SNAP_PCT` of a segment boundary,
-  // return "Segment N start" / "Segment N end" so the user
-  // immediately understands the tick mark. Otherwise return the
-  // canonical playhead time in the current mode. No more alt
-  // convention, no more inline segment name — the cursor badge owns
-  // the rich readout, this chip is just "where my mouse points".
-  //
-  // BOUNDARY_SNAP_PCT is generous (0.4 % of track width ≈ 5 px at
-  // 1280 px) so users discover the boundary label easily without
-  // having to hit the 2 px tick exactly.
+  // When the pointer is within `BOUNDARY_SNAP_PCT` of a segment
+  // boundary, return "Segment N start" / "Segment N end" so the
+  // tick mark is self-explanatory. Otherwise return the canonical
+  // playhead time. 0.4 % of track width ≈ 5 px at 1280 px so users
+  // discover the boundary label without having to hit the 2 px tick.
   const BOUNDARY_SNAP_PCT = 0.4;
   const labelForHover = (ratio: number): string => {
     if (!globalRange) return "--:--.---";
@@ -275,9 +229,8 @@ export function Transport() {
     if (span === 0n) return "--:--.---";
     const ratioPct = ratio * 100;
 
-    // Multi-source: check boundary snap first. Compare in PERCENT
-    // space so the snap distance scales with the track regardless
-    // of zoom or device pixel ratio.
+    // Multi-source: compare in PERCENT space so the snap distance
+    // scales with the track regardless of zoom or DPR.
     if (sources.length > 1) {
       const ordered = [...sources].sort((a, b) => {
         const d = a.timeRange.startNs - b.timeRange.startNs;
@@ -367,9 +320,9 @@ export function Transport() {
     };
   }, []);
 
-  // Global keyboard shortcuts. Iteration 2 adds VLC-style J/K/L on
-  // top of Space / arrows / Home/End, plus `?` to toggle the help
-  // overlay. Inputs and contentEditable still opt out.
+  // Global keyboard shortcuts: Space / J / K / L / arrows / Home /
+  // End, plus `?` to toggle the help overlay. Inputs and
+  // contentEditable opt out.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -387,8 +340,8 @@ export function Transport() {
       }
       const store = useSession.getState();
       const range = store.globalRange;
-      // `?` is the one shortcut that works even with no session loaded
-      // (so users can discover bindings before they drop a file).
+      // `?` works even with no session loaded so users can discover
+      // bindings before they drop a file.
       if (e.key === "?" || (e.shiftKey && e.code === "Slash")) {
         e.preventDefault();
         setShortcutsOpen((open) => !open);
@@ -466,15 +419,9 @@ export function Transport() {
     }
   }
 
-  // Issue #4 — segments are now bands + boundary ticks + labels.
-  // Sources already carry `timeRange` so we don't invent a new
-  // ingest path. Ordering by start so adjacent bands alternate
-  // visually (even/odd index → two opacity classes).
-  //
-  // Iter5 (issue #2) — also carry the source `name` so the label
-  // row can render "S2 · drive_2.mcap" inline when the band is wide
-  // enough. The S-index is the load-bearing identifier; the name is
-  // promoted to a visible label (not just a tooltip).
+  // Sources are ordered by start so adjacent bands alternate visually
+  // (even/odd index → two opacity classes). The S-index is the
+  // load-bearing identifier; `name` is the visible label.
   type SegmentEntry = {
     key: string;
     label: string;
@@ -495,20 +442,9 @@ export function Transport() {
       const left = percentOf(src.timeRange.startNs, globalRange);
       const right = percentOf(src.timeRange.endNs, globalRange);
       const width = Math.max(0, right - left);
-      // Iter4 (issue #6) — match the PlotPanel segment-tooltip
-      // convention so users see the same metadata in the same shape
-      // whether they hover a Plot band or a Transport tick. The plot
-      // uses:
-      //
-      //   Segment N: <name>
-      //   Start: <wall> (<relative>)
-      //   End:   <relative>
-      //
-      // We don't have a wall-clock segment-start formatter handy in
-      // this module (formatAbsoluteClock is HH:MM:SS without ms and
-      // matches the plot's `formatRelativeTime24h` shape closely), so
-      // reuse it for the wall-clock line. Newlines render as separators
-      // in native browser title tooltips.
+      // Match the PlotPanel segment-tooltip shape so the user sees the
+      // same metadata whether hovering a Plot band or a Transport tick.
+      // Newlines render as separators in native browser title tooltips.
       const startRel = formatRelative(src.timeRange.startNs, globalRange.startNs);
       const endRel = formatRelative(src.timeRange.endNs, globalRange.startNs);
       const startWall = formatAbsoluteClock(src.timeRange.startNs);
@@ -544,16 +480,12 @@ export function Transport() {
   }, [segmentEntries, cursorNs, globalRange]);
 
   const span = globalRange ? globalRange.endNs - globalRange.startNs : 0n;
-  // Iter3 (issue #1) — single canonical format for the playhead badge.
-  // No more two-line stacked readout; the hover tooltip carries the
-  // alternate convention when the user wants it.
   const current = globalRange
     ? formatPlayheadPrimary(cursorNs, globalRange.startNs, timeMode)
     : "--:--.---";
-  // Iter3 (issue #3) — total promoted to a `current / total` pair next
-  // to the playhead badge. In relative mode it's the session duration;
-  // in absolute mode it's the wall-clock end of the session, formatted
-  // with the same precision as `current` so the pair lines up.
+  // In relative mode `totalLabel` is the session duration; in absolute
+  // mode it's the wall-clock end, formatted with the same precision so
+  // the `current / total` pair lines up.
   const totalLabel = !globalRange
     ? "--:--.---"
     : timeMode === "relative"
@@ -569,12 +501,9 @@ export function Transport() {
       ? formatDuration(globalRange.endNs - globalRange.startNs)
       : formatAbsoluteClock(globalRange.endNs)
     : "--:--";
-  // Iter4 (issue #3) — the "2024-01-01" date stamp only appears in
-  // ABSOLUTE mode now, and only in one place (a subtle sub-label
-  // under the playhead badge). In relative mode the date is implied
-  // by the session itself; surfacing it as a third visible format
-  // alongside the canonical cursor readout and the start/end tick
-  // anchors was the iter3 regression the designer flagged.
+  // Date stamp appears only in absolute mode as a subtle sublabel
+  // under the playhead badge; relative mode keeps a single canonical
+  // time format on the bar.
   const sessionDate =
     globalRange && timeMode === "absolute"
       ? formatDate(globalRange.startNs)
@@ -595,16 +524,8 @@ export function Transport() {
         <ShortcutsOverlay onClose={() => setShortcutsOpen(false)} />
       )}
 
-      {/* Per-segment label row sits above the track so the band ↔ label
-       *  relationship is obvious. Suppressed when there's only one
-       *  source.
-       *
-       *  Iter5 (issue #2) — labels promoted to primary navigational
-       *  information: each entry now renders a high-contrast S-pill
-       *  next to the source filename so segments are identifiable
-       *  even in a narrow window. The S-pill is the load-bearing
-       *  identifier; the name is auxiliary and truncates via the
-       *  container's overflow:hidden when the band is too narrow. */}
+      {/* Per-segment label row sits above the track so the band ↔
+       *  label relationship is obvious. Suppressed for single-source. */}
       {segmentEntries.length > 0 && (
         <div
           className={styles.segmentLabelRow}
@@ -632,8 +553,7 @@ export function Transport() {
         </div>
       )}
 
-      {/* Scrubber row — full width above the controls, tall enough to
-       *  feel like the heartbeat of the app. */}
+      {/* Scrubber row — full width above the controls. */}
       <div className={styles.scrubRow}>
         <div
           ref={trackRef}
@@ -654,9 +574,8 @@ export function Transport() {
           onPointerLeave={onPointerLeave}
         >
           <div className={styles.trackStrip}>
-            {/* Segment bands — alternating low-opacity fills so the
-             *  scrub track reads as "segmented, with this bit being
-             *  segment 2". The active band gets a bit more colour. */}
+            {/* Alternating low-opacity fills; the active band gets a
+             *  bit more colour. */}
             {segmentEntries.length > 0 && (
               <div
                 className={styles.segmentBands}
@@ -707,8 +626,8 @@ export function Transport() {
                 aria-hidden
               >
                 {segmentEntries.map((seg, i) =>
-                  // Suppress the leading tick — it would visually
-                  // collide with the track's left border-radius.
+                  // Suppress the leading tick — collides with the
+                  // track's left border-radius.
                   i === 0 ? null : (
                     <span
                       key={seg.key}
@@ -727,19 +646,8 @@ export function Transport() {
             />
             <BookmarkMarkers />
 
-            {/* Hover ghost line + tooltip — appears whenever the user
-             *  is hovering somewhere on the track that isn't the
-             *  current playhead position. Iter3 (issue #2): visually
-             *  distinct from the cursor badge. Neutral border (no
-             *  orange), softer shadow, no down-arrow tab. The cursor
-             *  badge is "where I am"; this is "where my mouse is".
-             *
-             *  Iter5 (issue #4): collapsed to a SINGLE short line.
-             *  The iter3/iter4 chip stacked the time + alt convention
-             *  + inline segment name, redundantly mirroring what the
-             *  cursor badge already shows. Now it's a quick scout:
-             *  just the time, or "Segment N start"/"…end" when the
-             *  pointer is near a boundary tick. */}
+            {/* Hover ghost + tooltip — neutral shape so it can't be
+             *  confused with the orange cursor badge. */}
             {hoverPct !== null && (
               <>
                 <div
@@ -761,24 +669,14 @@ export function Transport() {
               </>
             )}
 
-            {/* Issue #2 — full-height playhead line + handle. The line
-             *  spans the strip; the handle is the grabbable disc on
-             *  top. Both belong to the same translateX(-50%) wrapper
-             *  so they stay co-located across resizes. */}
+            {/* Playhead line + handle. translateX(-50%) wrapper keeps
+             *  them co-located across resizes. */}
             <div
               className={styles.playheadGroup}
               style={{ left: `${fillPct}%` }}
               data-testid="transport-playhead"
             >
               <div className={styles.playheadLine} aria-hidden />
-              {/* Iter3 (issues #1 + #3) — single canonical format for
-               *  the current time, paired with the total session length
-               *  as `current / total`. The total uses a muted weight
-               *  but matches the current's font size so the pair
-               *  reads as one unit. The alternate convention (wall
-               *  clock vs duration) is intentionally NOT rendered
-               *  here — hovering anywhere on the track shows it in
-               *  the neutral hover tooltip. */}
               <div
                 className={styles.playheadBadge}
                 data-testid="transport-playhead-badge"
@@ -796,12 +694,6 @@ export function Transport() {
                     {totalLabel}
                   </span>
                 </div>
-                {/* Iter4 (issue #3) — the YYYY-MM-DD date stamp lives
-                 *  inside the cursor badge as a tiny sublabel, but
-                 *  only when the user has opted into absolute mode.
-                 *  In relative mode the date is hidden entirely so
-                 *  the bar carries exactly one canonical time format
-                 *  at a glance. */}
                 {sessionDate && (
                   <div
                     className={styles.playheadBadgeDate}
@@ -832,17 +724,9 @@ export function Transport() {
             )}
           </div>
         </div>
-        {/* Iter5 (issue #5) — REL/ABS toggle promoted from the
-         *  bottom-right utility cluster (1300 px away from any time
-         *  it formats) into the label row directly beneath the
-         *  track, between the start and end edge labels. Proximity
-         *  fix: the toggle now lives next to the very labels it
-         *  governs (start / end / cursor badge), so the user reads
-         *  "this chip controls THESE numbers" in one glance.
-         *
-         *  The sr-only segment-count slot is preserved for the
-         *  e2e/AT consumers that read it; it's anchored as a
-         *  sibling of the visible toggle inside the centre slot. */}
+        {/* REL/ABS toggle lives next to the labels it governs (proximity).
+         *  The sr-only segment-count is anchored as a sibling for
+         *  e2e/AT consumers. */}
         <div className={styles.scrubRowLabels}>
           <span className={styles.scrubEdgeLabel} aria-hidden>
             {startLabel}
@@ -891,22 +775,13 @@ export function Transport() {
 
       {/* Controls row.
        *
-       * Iter4 (issue #4) — the iter3 layout had playback walled off
-       * on the LEFT and speed pinned to the FAR RIGHT, with REL/ABS
-       * and `?` between them. The designer audit: "speed and play
-       * controls belong together". Regrouped into:
-       *
        *   ┌─────────────────────────────────────────────────────────┐
        *   │ [⏮ ▶ ⏭] · [Speed ▾]              [REL/ABS] [?]          │
        *   └─────────────────────────────────────────────────────────┘
        *      └─── transportCluster (primary) ──┘   └ utilityCluster ┘
        *
-       * Iter4 (issue #5) — REL/ABS and `?` are demoted to the right
-       * corner with smaller chrome (see `.utilityCluster` /
-       * `.helpBtn` rules) so they no longer compete with playback.
-       *
-       * The big current-time readout is intentionally NOT duplicated
-       * here (iter3 #1+#3); it lives in the playhead badge. */}
+       * The current-time readout is intentionally NOT duplicated here;
+       * it lives in the playhead badge. */}
       <div className={styles.row}>
         <div
           className={styles.transportCluster}
@@ -947,11 +822,9 @@ export function Transport() {
             >
               <span aria-hidden>▶▶</span>
             </button>
-            {/* Issue #2 — decode-waiting dot. Pulses when at least one
-             *  bound video panel has been "waiting" continuously for
-             *  ≥ 250 ms (hysteresis-managed in `useDecodeWaiting`).
-             *  Stalled panels surface their own per-panel error badge
-             *  instead, so they don't trigger this. */}
+            {/* Pulses when a bound video panel has been "waiting"
+             *  continuously for ≥250 ms. Stalled panels surface their
+             *  own per-panel error badge so they don't trigger this. */}
             {decodeWaiting && (
               <span
                 className={styles.decodeWaitingDot}
@@ -963,15 +836,8 @@ export function Transport() {
             )}
           </div>
 
-          {/* Divider between play group and speed — same visual
-           *  language as the iter3 meta-cluster divider, but it now
-           *  groups two related controls (play + speed) rather than
-           *  separating them. */}
           <span className={styles.clusterDivider} aria-hidden />
 
-          {/* Iter4 (issue #4) — speed pill moved here, next to the
-           *  play buttons. Label sits above the select rather than as
-           *  floating microcaps so it's discoverable. */}
           <div className={styles.speedPill}>
             <label className={styles.fieldLabel} htmlFor="transport-speed">
               Speed
@@ -997,11 +863,9 @@ export function Transport() {
 
         <div className={styles.rowGrow} />
 
-        {/* Iter5 (issue #5) — utility cluster now carries only `?`.
-         *  REL/ABS moved up into the scrubRowLabels row next to the
-         *  start/end time labels (proximity fix). The cluster wrapper
-         *  + `transport-meta-cluster` testid stay so existing tests
-         *  that look up the cluster keep working. */}
+        {/* Utility cluster carries only `?`; REL/ABS lives above in
+         *  the scrubRowLabels row. The `transport-meta-cluster`
+         *  testid stays for existing test lookups. */}
         <div
           className={`${styles.utilityCluster} ${styles.metaCluster}`}
           data-testid="transport-meta-cluster"
