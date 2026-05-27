@@ -1,3 +1,6 @@
+# Claude Code agent worktrees (local scratch only)
+.claude/worktrees/
+
 # Rust
 /target
 **/*.rs.bk
