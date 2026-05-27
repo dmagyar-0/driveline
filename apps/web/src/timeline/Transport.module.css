@@ -532,6 +532,18 @@
   z-index: 3;
 }
 
+/* Iter4 (issue #6) — segment boundary tick. We deliberately keep
+ * `pointer-events: none` (inherited from `.segmentTicks`) so the
+ * tick does NOT swallow scrub gestures — making the tick clickable
+ * would create a 13 px dead zone every time the user tries to
+ * scrub across a segment boundary, which is the WORST place to be
+ * un-scrubbable.
+ *
+ * Hover discoverability for segment metadata is handled by the
+ * `.segmentLabel` row above the track (already `pointer-events:
+ * auto; cursor: help;` since iter3) and by the `.segmentBand` fill
+ * underneath the track. Both render the same multi-line title now
+ * (iter4 issue #6 in Transport.tsx). */
 .segmentTick {
   position: absolute;
   top: 0;
@@ -814,6 +826,26 @@
   font-size: var(--fs-10);
   color: var(--color-fg-5);
   line-height: 1;
+}
+
+/* Iter4 (issue #6) — segment context line inside the hover chip.
+ * Sans-serif (intentional — file/segment names are not numerics) to
+ * differentiate from the two mono time lines above. Small + muted so
+ * it doesn't overpower the time readout, but loud enough to read at
+ * a glance. Spans the chip width with a hairline divider so the eye
+ * reads time + segment as two related but separate facts. */
+.hoverTooltipSegment {
+  font-family: var(--font-sans);
+  font-size: var(--fs-10);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-4);
+  line-height: 1;
+  letter-spacing: var(--tracking-wide);
+  margin-top: 3px;
+  padding-top: 3px;
+  align-self: stretch;
+  text-align: center;
+  border-top: 1px solid color-mix(in srgb, var(--color-fg-6) 35%, transparent);
 }
 
 /* Issue #2 — decode-waiting dot in the play-button group. */

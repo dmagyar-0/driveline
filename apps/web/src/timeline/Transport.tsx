@@ -188,17 +188,22 @@ export function Transport() {
   // carry the formatted preview time. Iter3: the hover tooltip now
   // also surfaces the *other* convention as a sub-line, so the cursor
   // badge can be slimmed down to a single number (issue #1) while the
-  // hovering user still gets both. Stored in state so the tooltip
-  // re-renders, but updates land at most once per rAF via a shared
-  // scheduler so the hot path stays within budget.
+  // hovering user still gets both. Iter4 (issue #6): `hoverSegment`
+  // adds segment context inline ("Segment 2 · drive_2.mcap") so users
+  // discover what those tick marks mean without having to hit a 1 px
+  // boundary line. Stored in state so the tooltip re-renders, but
+  // updates land at most once per rAF via a shared scheduler so the
+  // hot path stays within budget.
   const [hoverPct, setHoverPct] = useState<number | null>(null);
   const [hoverPrimary, setHoverPrimary] = useState<string>("");
   const [hoverSub, setHoverSub] = useState<string>("");
+  const [hoverSegment, setHoverSegment] = useState<string>("");
   const hoverRafId = useRef<number | null>(null);
   const pendingHover = useRef<{
     pct: number;
     primary: string;
     sub: string;
+    segment: string;
   } | null>(null);
 
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -233,13 +238,19 @@ export function Transport() {
       setHoverPct(pendingHover.current.pct);
       setHoverPrimary(pendingHover.current.primary);
       setHoverSub(pendingHover.current.sub);
+      setHoverSegment(pendingHover.current.segment);
       pendingHover.current = null;
     }
     hoverRafId.current = null;
   };
 
-  const scheduleHover = (pct: number, primary: string, sub: string) => {
-    pendingHover.current = { pct, primary, sub };
+  const scheduleHover = (
+    pct: number,
+    primary: string,
+    sub: string,
+    segment: string,
+  ) => {
+    pendingHover.current = { pct, primary, sub, segment };
     if (hoverRafId.current === null) {
       hoverRafId.current = requestAnimationFrame(flushHover);
     }
@@ -268,6 +279,34 @@ export function Transport() {
     };
   };
 
+  // Iter4 (issue #6) — return the human-readable segment label for a
+  // ratio inside the track, so the hover tooltip can name "Segment 2
+  // · drive_2.mcap" inline. The user no longer has to land precisely
+  // on a 1 px tick to discover what the boundaries mean. Returns ""
+  // when the session has ≤ 1 segment OR the ratio falls in a gap
+  // between segments (e.g. cold/buffered region with no source).
+  const segmentLabelAtRatio = (ratio: number): string => {
+    // `sources` may be empty during initial load — defer to refs via
+    // `useSession.getState()` so we don't widen the effect dep set.
+    const srcs = sources;
+    if (srcs.length <= 1 || !globalRange) return "";
+    const span = globalRange.endNs - globalRange.startNs;
+    if (span === 0n) return "";
+    const ns =
+      globalRange.startNs + BigInt(Math.round(ratio * Number(span)));
+    const ordered = [...srcs].sort((a, b) => {
+      const d = a.timeRange.startNs - b.timeRange.startNs;
+      return d === 0n ? 0 : d < 0n ? -1 : 1;
+    });
+    for (let i = 0; i < ordered.length; i++) {
+      const s = ordered[i];
+      if (ns >= s.timeRange.startNs && ns <= s.timeRange.endNs) {
+        return `Segment ${i + 1} · ${s.name}`;
+      }
+    }
+    return "";
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (disabled || !globalRange) return;
     const track = trackRef.current;
@@ -291,7 +330,12 @@ export function Transport() {
     const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
     const ns = nsFromRatio(clamped, globalRange);
     const pair = formatHoverPair(ns);
-    scheduleHover(clamped * 100, pair.primary, pair.sub);
+    scheduleHover(
+      clamped * 100,
+      pair.primary,
+      pair.sub,
+      segmentLabelAtRatio(clamped),
+    );
   };
 
   const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -312,7 +356,12 @@ export function Transport() {
     const clamped = ratio < 0 ? 0 : ratio > 1 ? 1 : ratio;
     const ns = nsFromRatio(clamped, globalRange);
     const pair = formatHoverPair(ns);
-    scheduleHover(clamped * 100, pair.primary, pair.sub);
+    scheduleHover(
+      clamped * 100,
+      pair.primary,
+      pair.sub,
+      segmentLabelAtRatio(clamped),
+    );
   };
 
   const onPointerLeave = () => {
@@ -324,6 +373,7 @@ export function Transport() {
     setHoverPct(null);
     setHoverPrimary("");
     setHoverSub("");
+    setHoverSegment("");
   };
 
   // Cancel any in-flight rAF on unmount.
@@ -462,19 +512,32 @@ export function Transport() {
       const left = percentOf(src.timeRange.startNs, globalRange);
       const right = percentOf(src.timeRange.endNs, globalRange);
       const width = Math.max(0, right - left);
-      // Iter3 (issue #5) — explicit "Segment N (from <file>, starts
-      // at <time>)" tooltip so users know the dimension a tick
-      // represents without having to read the data model. We also
-      // include the end so range queries are obvious.
+      // Iter4 (issue #6) — match the PlotPanel segment-tooltip
+      // convention so users see the same metadata in the same shape
+      // whether they hover a Plot band or a Transport tick. The plot
+      // uses:
+      //
+      //   Segment N: <name>
+      //   Start: <wall> (<relative>)
+      //   End:   <relative>
+      //
+      // We don't have a wall-clock segment-start formatter handy in
+      // this module (formatAbsoluteClock is HH:MM:SS without ms and
+      // matches the plot's `formatRelativeTime24h` shape closely), so
+      // reuse it for the wall-clock line. Newlines render as separators
+      // in native browser title tooltips.
+      const startRel = formatRelative(src.timeRange.startNs, globalRange.startNs);
+      const endRel = formatRelative(src.timeRange.endNs, globalRange.startNs);
+      const startWall = formatAbsoluteClock(src.timeRange.startNs);
       entries.push({
         key: `seg:${src.id}:${i}`,
         label: `S${i + 1}`,
         leftPct: left,
         widthPct: width,
         title:
-          `Segment ${i + 1} (from ${src.name}, starts at ` +
-          `${formatRelative(src.timeRange.startNs, globalRange.startNs)}, ` +
-          `ends at ${formatRelative(src.timeRange.endNs, globalRange.startNs)})`,
+          `Segment ${i + 1}: ${src.name}\n` +
+          `Start: ${startWall} (${startRel})\n` +
+          `End: ${endRel}`,
       });
     }
     return entries;
@@ -697,6 +760,18 @@ export function Transport() {
                   </span>
                   {hoverSub && (
                     <span className={styles.hoverTooltipSub}>{hoverSub}</span>
+                  )}
+                  {/* Iter4 (issue #6) — inline segment context so the
+                   *  tick marks aren't unexplained. Only renders in
+                   *  multi-source sessions when the pointer falls
+                   *  inside a known segment. */}
+                  {hoverSegment && (
+                    <span
+                      className={styles.hoverTooltipSegment}
+                      data-testid="transport-hover-tooltip-segment"
+                    >
+                      {hoverSegment}
+                    </span>
                   )}
                 </div>
               </>

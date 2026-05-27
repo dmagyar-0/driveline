@@ -478,6 +478,114 @@ describe("Transport", () => {
     // cluster, not of the speed column.
     expect(meta.contains(getByTestId("transport-mode-toggle"))).toBe(true);
     expect(meta.contains(getByTestId("transport-shortcuts-toggle"))).toBe(true);
+    // Iter4 (issue #4) — speed pill moved INTO the primary
+    // transport-cluster (next to the play group), no longer in the
+    // utility/meta cluster on the right.
     expect(meta.contains(getByTestId("transport-speed"))).toBe(false);
+  });
+
+  // Iteration 4 (issue #4) — play group + speed pill are siblings
+  // inside the same primary cluster so the user reads "this is how
+  // I drive playback" in one glance.
+  it("playback buttons and speed pill share the primary transport cluster", () => {
+    const { getByTestId } = render(<Transport />);
+    const cluster = getByTestId("transport-cluster");
+    expect(cluster).toBeTruthy();
+    expect(cluster.contains(getByTestId("play-pause"))).toBe(true);
+    expect(cluster.contains(getByTestId("transport-prev-1s"))).toBe(true);
+    expect(cluster.contains(getByTestId("transport-next-1s"))).toBe(true);
+    expect(cluster.contains(getByTestId("transport-speed"))).toBe(true);
+    // …and explicitly NOT the demoted utility controls.
+    expect(cluster.contains(getByTestId("transport-mode-toggle"))).toBe(false);
+    expect(cluster.contains(getByTestId("transport-shortcuts-toggle"))).toBe(
+      false,
+    );
+  });
+
+  // Iteration 4 (issue #3) — date stamp sublabel inside the cursor
+  // badge only renders when timeMode is "absolute". In "relative"
+  // mode the badge is a single-line readout so the transport bar
+  // never shows competing time formats simultaneously.
+  it("date sublabel appears only in absolute mode", () => {
+    const { queryByTestId, getByTestId } = render(<Transport />);
+    expect(queryByTestId("transport-playhead-date")).toBeNull();
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-mode-toggle"));
+    });
+    const date = getByTestId("transport-playhead-date");
+    expect(date).toBeTruthy();
+    // YYYY-MM-DD shape; the absolute formatter prints the
+    // session-start day, which under our fixture seed is 1970-01-01.
+    expect(date.textContent).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    act(() => {
+      fireEvent.click(getByTestId("transport-mode-toggle"));
+    });
+    expect(queryByTestId("transport-playhead-date")).toBeNull();
+  });
+
+  // Iteration 4 (issue #6) — hovering inside a known segment band
+  // surfaces the segment context inline in the hover chip, so the
+  // tick marks aren't unexplained even if the user never lands on
+  // a 1 px boundary line.
+  it("hover tooltip names the segment under the pointer (multi-source)", () => {
+    useSession.setState({
+      sources: [
+        {
+          id: "a",
+          kind: "mcap",
+          name: "drive_1.mcap",
+          handle: 0,
+          timeRange: { startNs: 1_000_000_000n, endNs: 5_000_000_000n },
+          channels: [],
+        },
+        {
+          id: "b",
+          kind: "mcap",
+          name: "drive_2.mcap",
+          handle: 1,
+          timeRange: { startNs: 6_000_000_000n, endNs: 11_000_000_000n },
+          channels: [],
+        },
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ] as any,
+    });
+    const { getByTestId, queryByTestId } = render(<Transport />);
+    const track = getByTestId("scrubber");
+
+    // Mid-track (500/1000) → 50 % → ns ≈ 6e9, inside segment B.
+    act(() => {
+      fireEvent.pointerEnter(track, { pointerId: 1, clientX: 500 });
+    });
+    const seg = queryByTestId("transport-hover-tooltip-segment");
+    expect(seg).not.toBeNull();
+    expect(seg?.textContent).toBe("Segment 2 · drive_2.mcap");
+
+    // 10 % → ns ≈ 2e9, inside segment A. Use pointerLeave then
+    // pointerEnter to re-trigger the hover handler — `pointerMove`
+    // is checked separately in the multi-hover test below.
+    act(() => {
+      fireEvent.pointerLeave(track, { pointerId: 1 });
+    });
+    act(() => {
+      fireEvent.pointerEnter(track, { pointerId: 1, clientX: 100 });
+    });
+    expect(
+      getByTestId("transport-hover-tooltip-segment").textContent,
+    ).toBe("Segment 1 · drive_1.mcap");
+  });
+
+  // Iteration 4 (issue #6) — single-source sessions don't have
+  // segments to name, so the segment line stays absent even when
+  // hovering.
+  it("hover tooltip omits the segment line in single-source sessions", () => {
+    const { getByTestId, queryByTestId } = render(<Transport />);
+    const track = getByTestId("scrubber");
+
+    act(() => {
+      fireEvent.pointerEnter(track, { pointerId: 1, clientX: 500 });
+    });
+    expect(queryByTestId("transport-hover-tooltip-segment")).toBeNull();
   });
 });
