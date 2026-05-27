@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { colorFor, PLOT_PALETTE, MAX_PLOT_SERIES } from "./palette";
+import {
+  colorFor,
+  colorForSource,
+  PLOT_PALETTE,
+  SOURCE_PALETTE,
+  MAX_PLOT_SERIES,
+} from "./palette";
 
 describe("colorFor", () => {
   it("returns a colour from the palette", () => {
@@ -45,5 +51,43 @@ describe("colorFor", () => {
     for (const c of PLOT_PALETTE) {
       expect(c).toMatch(/^#[0-9a-fA-F]{6}$/);
     }
+  });
+});
+
+describe("colorForSource (iter3 issue #2 — source ribbons)", () => {
+  it("returns a colour from the SOURCE_PALETTE", () => {
+    expect(SOURCE_PALETTE).toContain(colorForSource("src-1"));
+  });
+
+  it("is deterministic for the same source id", () => {
+    const id = "comma2k19_seg4.mcap";
+    expect(colorForSource(id)).toBe(colorForSource(id));
+  });
+
+  it("distinguishes typical source ids across the palette", () => {
+    const ids = [
+      "comma2k19_seg1.mcap",
+      "comma2k19_seg4.mcap",
+      "comma2k19_seg7.mcap",
+      "comma2k19_seg10.mcap",
+      "comma2k19_chassis.mcap",
+      "comma2k19_imu.mf4",
+      "comma2k19_gnss.mf4",
+      "comma2k19.mf4",
+    ];
+    const colours = new Set(ids.map(colorForSource));
+    // Iter2's grey badge was indistinguishable across these. Iter3 must
+    // light each up with at least a few distinct hues.
+    expect(colours.size).toBeGreaterThanOrEqual(4);
+  });
+
+  it("every source palette colour is a 6-digit hex code", () => {
+    for (const c of SOURCE_PALETTE) {
+      expect(c).toMatch(/^#[0-9a-fA-F]{6}$/);
+    }
+  });
+
+  it("handles the empty source id without throwing", () => {
+    expect(SOURCE_PALETTE).toContain(colorForSource(""));
   });
 });

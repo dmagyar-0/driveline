@@ -28,14 +28,42 @@ export const PLOT_PALETTE = [
   "#bcbd22", // olive — non-neon green/yellow accent
 ] as const;
 
+// Iter3 issue #2 — per-source ribbon colours. Distinct ramp from the
+// per-channel palette so a "source" ribbon on a chip cannot be confused
+// with the line stroke colour. These are saturated banners (4 px ribbons
+// on chips/rows) tuned so `comma2k19__seg4` vs `comma2k19__seg7` reads
+// as two completely different colours at a glance — the iter2 audit's
+// chief complaint about 1-char-suffix grey badges.
+export const SOURCE_PALETTE = [
+  "#7a5cff", // violet — sits opposite the warm half of PLOT_PALETTE
+  "#ff8a3d", // burnt orange
+  "#00c2a8", // teal
+  "#ff5d8f", // hot pink
+  "#3da5ff", // azure
+  "#c2d22d", // lime
+  "#ffb84d", // honey
+  "#9b6bff", // lilac (cycles back near violet for >8 sources)
+] as const;
+
 export const MAX_PLOT_SERIES = 8;
 
 export function colorFor(channelId: string): string {
-  // FNV-1a 32-bit, coerced to unsigned via `>>> 0` so `% len` is safe.
+  return PLOT_PALETTE[hashIndex(channelId, PLOT_PALETTE.length)];
+}
+
+/** Stable per-source ribbon colour. Drives the 4 px coloured bar on
+ *  each chip and cursor-gutter row so two same-named channels from
+ *  different files are unmistakable. */
+export function colorForSource(sourceId: string): string {
+  return SOURCE_PALETTE[hashIndex(sourceId, SOURCE_PALETTE.length)];
+}
+
+// FNV-1a 32-bit, coerced to unsigned via `>>> 0` so `% len` is safe.
+function hashIndex(s: string, mod: number): number {
   let h = 0x811c9dc5;
-  for (let i = 0; i < channelId.length; i++) {
-    h ^= channelId.charCodeAt(i);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  return PLOT_PALETTE[h % PLOT_PALETTE.length];
+  return h % mod;
 }
