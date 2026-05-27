@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { CursorGutter, type CursorGutterEntry } from "./CursorGutter";
-import { colorForSource } from "./palette";
+import { colorFor, colorForSource } from "./palette";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT =
   true;
@@ -107,5 +107,23 @@ describe("<CursorGutter />", () => {
       />,
     );
     expect(getByTestId("gutter-badge-x").textContent).toBe("seg4");
+  });
+
+  it("renders a per-channel value swatch tinted to the line colour (iter4 #6)", () => {
+    const { getByTestId } = render(
+      <CursorGutter
+        timeLabel={null}
+        entries={[entry({ channelId: "chan-42" })]}
+      />,
+    );
+    const swatch = getByTestId("gutter-value-swatch-chan-42") as HTMLElement;
+    // The value swatch must match the channel's line stroke colour
+    // (the same `colorFor` used by the uPlot series stroke) so the
+    // user can trace colour → number → label in one saccade.
+    const expectedHex = colorFor("chan-42");
+    const r = parseInt(expectedHex.slice(1, 3), 16);
+    const g = parseInt(expectedHex.slice(3, 5), 16);
+    const b = parseInt(expectedHex.slice(5, 7), 16);
+    expect(swatch.style.background).toBe(`rgb(${r}, ${g}, ${b})`);
   });
 });

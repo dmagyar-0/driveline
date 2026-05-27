@@ -108,6 +108,18 @@ export function CursorGutter({ timeLabel, entries }: CursorGutterProps) {
                 className={`${styles.cursorGutterValue} ${styles.numCell}`}
                 data-testid={`gutter-value-${e.channelId}`}
               >
+                {/* Iter4 alignment item #6 — a tiny per-channel swatch
+                    sits adjacent to the numeric value so the user can
+                    trace colour → number → label in one saccade. The
+                    source ribbon at the row's left edge already keys
+                    the row by source; this swatch keys the value by
+                    channel, mirroring the line's stroke colour. */}
+                <span
+                  className={styles.cursorGutterValueSwatch}
+                  style={{ background: colorFor(e.channelId) }}
+                  data-testid={`gutter-value-swatch-${e.channelId}`}
+                  aria-hidden
+                />
                 {valueText}
                 {valueText !== "—" && e.unit ? (
                   <span className={styles.cursorGutterUnit}> {e.unit}</span>

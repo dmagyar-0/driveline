@@ -568,6 +568,27 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* Iter4 alignment item #6 — the value cell carries an inline
+   * per-channel swatch (`.cursorGutterValueSwatch`) immediately
+   * before the digits. Use inline-flex so the swatch baselines with
+   * the value text and the unit suffix. */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+/* Iter4 alignment item #6 — small vertical bar tinted to the
+ * channel's line colour, sitting immediately next to the numeric
+ * value so the user can trace colour → number → label in one
+ * saccade. 4×12 px keeps the row uncluttered while still being
+ * unmistakable against the gutter background. */
+.cursorGutterValueSwatch {
+  width: 4px;
+  height: 12px;
+  border-radius: 1px;
+  display: inline-block;
+  flex-shrink: 0;
 }
 
 .cursorGutterUnit {
