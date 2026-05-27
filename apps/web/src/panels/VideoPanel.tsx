@@ -167,11 +167,29 @@ export function VideoPanel({
 
   // HUD refs. We keep them off React state so metric updates don't churn
   // the reconciler; the rAF loop writes directly into the HUD DOM.
+  //
+  // iter6 · the HUD is a structured 2-column panel (label · value).
+  // To keep the rAF hot path cheap, each value cell has its own ref;
+  // the loop writes only into the cells whose value changed. The
+  // outer container is `hudDomRef` (kept for testID + the dev hook).
   const lastFrameIndexRef = useRef<number>(0);
   const lastDecodeQueueRef = useRef<number>(0);
   const droppedFramesRef = useRef<number>(0);
   const lastBlitPtsRef = useRef<bigint | null>(null);
   const codecRef = useRef<string | null>(null);
+
+  // iter6 · per-cell value refs for the structured HUD. Each writes
+  // its textContent independently so the rAF loop avoids reflowing
+  // the whole grid every tick.
+  const hudPtsRef = useRef<HTMLSpanElement | null>(null);
+  const hudFrameRef = useRef<HTMLSpanElement | null>(null);
+  const hudFrameRowRef = useRef<HTMLDivElement | null>(null);
+  const hudDecodedRef = useRef<HTMLSpanElement | null>(null);
+  const hudDecodeQRef = useRef<HTMLSpanElement | null>(null);
+  const hudBlitRef = useRef<HTMLSpanElement | null>(null);
+  const hudDroppedRowRef = useRef<HTMLDivElement | null>(null);
+  const hudDroppedRef = useRef<HTMLSpanElement | null>(null);
+  const hudCodecRef = useRef<HTMLSpanElement | null>(null);
   const hudDomRef = useRef<HTMLDivElement | null>(null);
   const hudOnRef = useRef<boolean>(false);
   const statsDomRef = useRef<HTMLDivElement | null>(null);
@@ -479,34 +497,54 @@ export function VideoPanel({
       };
       window.__drivelineVideoHud = snapshot;
       if (hudOnRef.current && hudDomRef.current) {
-        // Issue #19 — readable labels with consistent width so the
-        // HUD lines stay aligned in the monospace pill.
+        // iter6 · structured HUD. We write per-cell so the rAF loop
+        // doesn't reflow the whole grid every tick. Each value cell
+        // has its own ref; missing cells are tolerated (the JSX may
+        // omit `frame N / total` for MCAP sources without a sidecar).
         //
-        // iter5 issue #3 — surface "frame N / total" when a sidecar
-        // exposes the PTS table. The decoder's internal frame index
-        // (`snapshot.frameIndex`) is the count of frames the decoder
-        // has emitted since open(), which is *not* the same thing as
-        // "where am I in the recording" — it resets on every seek.
-        // The user wants the latter, so we derive it from the most
-        // recent blit PTS via a binary search over the sidecar table.
-        // Omit the line gracefully on MCAP sources (no sidecar).
+        // The previous implementation wrote a single multi-line
+        // textContent into the HUD div, which forced a layout pass
+        // for every tick AND looked like a `console.log` dump. The
+        // 2-column grid (label · value) handled by CSS now reads as
+        // a real diagnostics panel.
         const sidecarTotal = sidecarPtsRef.current?.length ?? 0;
         const sidecarIdx = sidecarFrameIndex(
           sidecarPtsRef.current,
           snapshot.ptsNs,
         );
-        const sidecarLine =
-          sidecarTotal > 0
-            ? `frame     ${sidecarIdx ?? "—"} / ${sidecarTotal}\n`
-            : "";
-        hudDomRef.current.textContent =
-          `pts       ${formatPts(snapshot.ptsNs)}\n` +
-          sidecarLine +
-          `decoded   #${snapshot.frameIndex}\n` +
-          `decode    ${snapshot.decodeQueue} q\n` +
-          `blit      ${snapshot.blitQueueLen} / ${MAX_QUEUE}\n` +
-          `dropped   ${snapshot.dropped}\n` +
-          `codec     ${snapshot.codec ?? "—"}`;
+        if (hudPtsRef.current) {
+          hudPtsRef.current.textContent = formatPts(snapshot.ptsNs);
+        }
+        if (hudFrameRowRef.current) {
+          hudFrameRowRef.current.hidden = sidecarTotal === 0;
+        }
+        if (hudFrameRef.current && sidecarTotal > 0) {
+          hudFrameRef.current.textContent =
+            `${sidecarIdx ?? "—"} / ${sidecarTotal}`;
+        }
+        if (hudDecodedRef.current) {
+          hudDecodedRef.current.textContent = `#${snapshot.frameIndex}`;
+        }
+        if (hudDecodeQRef.current) {
+          hudDecodeQRef.current.textContent = `${snapshot.decodeQueue}`;
+        }
+        if (hudBlitRef.current) {
+          hudBlitRef.current.textContent =
+            `${snapshot.blitQueueLen} / ${MAX_QUEUE}`;
+        }
+        if (hudDroppedRowRef.current) {
+          // iter6 · only colour the "dropped" row when it's > 0 so a
+          // healthy stream reads as all-neutral and the warning state
+          // pops at a glance.
+          hudDroppedRowRef.current.dataset.warn =
+            snapshot.dropped > 0 ? "true" : "false";
+        }
+        if (hudDroppedRef.current) {
+          hudDroppedRef.current.textContent = `${snapshot.dropped}`;
+        }
+        if (hudCodecRef.current) {
+          hudCodecRef.current.textContent = snapshot.codec ?? "—";
+        }
       }
       // Diagnostic stats strip — used to be always-on, which produced
       // the "drop drag flag g 12/19" junk-text bleed near the bottom
@@ -878,7 +916,60 @@ export function VideoPanel({
             data-testid="video-hud"
             className={styles.hud}
             aria-label="Video decode diagnostics"
-          />
+            role="group"
+          >
+            {/* iter6 · structured 2-column HUD. Labels (left column) sit
+             *  in a muted tone; values (right column) are right-aligned,
+             *  tabular-nums. The rAF loop above writes per-cell so we
+             *  avoid re-rendering React and avoid full-grid reflows. */}
+            <div className={styles.hudTitle}>Decode diagnostics</div>
+            <div className={styles.hudRow}>
+              <span className={styles.hudLabel}>PTS</span>
+              <span ref={hudPtsRef} className={styles.hudValue}>
+                —
+              </span>
+            </div>
+            <div ref={hudFrameRowRef} className={styles.hudRow} hidden>
+              <span className={styles.hudLabel}>Frame</span>
+              <span ref={hudFrameRef} className={styles.hudValue}>
+                —
+              </span>
+            </div>
+            <div className={styles.hudRow}>
+              <span className={styles.hudLabel}>Decoded</span>
+              <span ref={hudDecodedRef} className={styles.hudValue}>
+                —
+              </span>
+            </div>
+            <div className={styles.hudRow}>
+              <span className={styles.hudLabel}>Decode queue</span>
+              <span ref={hudDecodeQRef} className={styles.hudValue}>
+                —
+              </span>
+            </div>
+            <div className={styles.hudRow}>
+              <span className={styles.hudLabel}>Blit queue</span>
+              <span ref={hudBlitRef} className={styles.hudValue}>
+                —
+              </span>
+            </div>
+            <div
+              ref={hudDroppedRowRef}
+              className={styles.hudRow}
+              data-warn="false"
+            >
+              <span className={styles.hudLabel}>Dropped</span>
+              <span ref={hudDroppedRef} className={styles.hudValue}>
+                0
+              </span>
+            </div>
+            <div className={styles.hudRow}>
+              <span className={styles.hudLabel}>Codec</span>
+              <span ref={hudCodecRef} className={styles.hudValue}>
+                —
+              </span>
+            </div>
+          </div>
         )}
         {/* Stats strip is hidden by default; the rAF loop unhides it
          *  when the HUD toggle is on OR when something has gone wrong

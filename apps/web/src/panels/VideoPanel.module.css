@@ -71,30 +71,88 @@
  * the letterbox bars in fit mode. Its styling lives in
  * `VideoToolbar.module.css :: .btnHud`. */
 
+/* iter6 · structured video HUD.
+ *
+ * Was: a single <div> with multi-line textContent that looked like a
+ * `console.log` dump (pts / frame / decoded / decode / blit / dropped
+ * / codec, all in mono and left-aligned).
+ *
+ * Now: a 2-column grid (label · value) with a subtle title, panel
+ * chrome that matches the rest of the app (--bg-chrome surface,
+ * subtle border, subtle shadow), and values right-aligned in
+ * tabular-nums so the right edge of numbers stays visually quiet.
+ * The whole thing sits at lower visual weight than the iter5 HUD —
+ * smaller padding, smaller width, lighter border — so it doesn't
+ * dominate the video frame. */
 .hud {
   position: absolute;
-  /* Iter 4 issue #4 — the HUD toggle pill that used to anchor this
-   * overlay moved into the toolbar above, so the overlay now hugs
-   * the top of the frame instead of stacking below a pill that no
-   * longer exists. */
   top: var(--sp-4);
   right: var(--sp-4);
   z-index: 2;
-  padding: var(--sp-5) var(--sp-6);
-  background: rgba(0, 0, 0, 0.72);
-  color: var(--color-fg-2);
-  font-family: var(--font-mono);
-  font-size: var(--fs-11);
-  line-height: var(--lh-snug);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-4);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  /* Snug width keeps the panel compact; min-width prevents the
+   * shorter values (e.g. "0") from collapsing the grid. */
+  min-width: 13.5rem;
+  max-width: 16rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  padding: var(--sp-4) var(--sp-5);
+  background: rgba(14, 15, 18, 0.82);
+  color: var(--color-fg-3);
+  font-family: var(--font-sans);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: var(--radius-6);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   pointer-events: none;
-  white-space: pre;
   font-variant-numeric: tabular-nums;
-  min-width: 14rem;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.5);
+}
+
+.hudTitle {
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  padding-bottom: var(--sp-3);
+  margin-bottom: var(--sp-2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.hudRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: var(--sp-5);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+}
+
+.hudRow[hidden] {
+  display: none;
+}
+
+.hudLabel {
+  color: var(--color-fg-5);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+}
+
+.hudValue {
+  font-family: var(--font-mono);
+  color: var(--color-fg-2);
+  font-weight: var(--fw-medium);
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* iter6 · the dropped-frames row lights up amber only when the count
+ * climbs above zero. A healthy stream reads as all-neutral so the
+ * warning state pops at a glance. */
+.hudRow[data-warn="true"] .hudLabel,
+.hudRow[data-warn="true"] .hudValue {
+  color: var(--color-role-warning);
 }
 
 /* Issue #20 — timestamp burn-in. Bottom-left of the frame so it
