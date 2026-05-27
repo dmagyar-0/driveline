@@ -8,18 +8,26 @@
 // accommodate; the gutter never overlaps the traces, and the column
 // position stays stable as the cursor moves.
 //
+// Iter5 issue #1 — promote the live value. The audit found the iter4
+// hierarchy backwards: the channel name was the largest text in each
+// row, and the live value (`30.58 m/s`) sat on a second line in a
+// smaller, dimmer font. Engineers read the *number* every second; the
+// name is only confirmation. The new hierarchy is:
+//   - **Live value** — first line, largest (~16 px), monospaced semi-
+//     bold, in the channel's accent colour. This is what the eye hits
+//     first.
+//   - **Channel name** — second line, ~13 px, secondary fg.
+//   - **Source badge** — tertiary 10 px, dimmed. Optional; only shown
+//     when binding-set disambiguation requires it.
+//
 // Layout shape:
 //   - one column ~180 px wide pinned to the right of `.plotArea`;
 //   - one row per bound channel, in binding order;
 //   - each row shows:
 //       * a 4 px coloured source ribbon (per-source palette colour,
 //         iter3 issue #2 — coordinates with `palette.colorForSource`);
-//       * the channel's short label (badge-style source stem when
-//         multiple sources are bound — already redundant with the ribbon
-//         but useful for keyboard-driven scanning);
-//       * the current value, decimal-aligned with tabular figures
-//         (iter3 issue #3);
-//       * the unit, dimmed.
+//       * the live value (dominant text), with its unit;
+//       * the channel's short label + optional badge underneath.
 //   - a time header above the rows (iter3 issue #6 — 24h `HH:MM:SS`).
 //
 // Pure-presentational: receives an `entries` array and a time label.
@@ -71,6 +79,7 @@ export function CursorGutter({ timeLabel, entries }: CursorGutterProps) {
             e.rawValue !== null && Number.isFinite(e.rawValue)
               ? formatFixedForUnit(e.rawValue, e.unit)
               : "—";
+          const accent = colorFor(e.channelId);
           return (
             <li
               key={e.channelId}
@@ -88,24 +97,15 @@ export function CursorGutter({ timeLabel, entries }: CursorGutterProps) {
                 data-testid={`gutter-ribbon-${e.channelId}`}
                 aria-hidden
               />
-              <span className={styles.cursorGutterLabelRow}>
-                <span
-                  className={styles.cursorGutterSwatch}
-                  style={{ background: colorFor(e.channelId) }}
-                  aria-hidden
-                />
-                <span className={styles.cursorGutterLabel}>{e.shortLabel}</span>
-                {e.sourceBadge && (
-                  <span
-                    className={styles.cursorGutterBadge}
-                    data-testid={`gutter-badge-${e.channelId}`}
-                  >
-                    {e.sourceBadge}
-                  </span>
-                )}
-              </span>
+              {/* Iter5 issue #1 — live value is the dominant line.
+                  Engineers read the number every second; the channel
+                  name and source qualifier are only used to confirm
+                  *what* they're reading. We render value first (~16 px,
+                  mono semi-bold, accent colour) and the label
+                  underneath at 13 px secondary fg. */}
               <span
                 className={`${styles.cursorGutterValue} ${styles.numCell}`}
+                style={{ color: accent }}
                 data-testid={`gutter-value-${e.channelId}`}
               >
                 {/* Iter4 alignment item #6 — a tiny per-channel swatch
@@ -116,14 +116,25 @@ export function CursorGutter({ timeLabel, entries }: CursorGutterProps) {
                     channel, mirroring the line's stroke colour. */}
                 <span
                   className={styles.cursorGutterValueSwatch}
-                  style={{ background: colorFor(e.channelId) }}
+                  style={{ background: accent }}
                   data-testid={`gutter-value-swatch-${e.channelId}`}
                   aria-hidden
                 />
-                {valueText}
+                <span className={styles.cursorGutterValueNum}>{valueText}</span>
                 {valueText !== "—" && e.unit ? (
                   <span className={styles.cursorGutterUnit}> {e.unit}</span>
                 ) : null}
+              </span>
+              <span className={styles.cursorGutterLabelRow}>
+                <span className={styles.cursorGutterLabel}>{e.shortLabel}</span>
+                {e.sourceBadge && (
+                  <span
+                    className={styles.cursorGutterBadge}
+                    data-testid={`gutter-badge-${e.channelId}`}
+                  >
+                    {e.sourceBadge}
+                  </span>
+                )}
               </span>
             </li>
           );

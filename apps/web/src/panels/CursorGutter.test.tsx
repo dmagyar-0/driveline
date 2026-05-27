@@ -109,6 +109,48 @@ describe("<CursorGutter />", () => {
     expect(getByTestId("gutter-badge-x").textContent).toBe("seg4");
   });
 
+  it("renders the live value in the channel's accent colour (iter5 #1)", () => {
+    // Iter5 issue #1 — the live value is the dominant element in the
+    // row. It must wear the channel's line-stroke colour so the user
+    // can trace value → trace at a glance. Iter4 left the value in
+    // fg-1 (neutral white) which broke the colour correspondence.
+    const { getByTestId } = render(
+      <CursorGutter
+        timeLabel={null}
+        entries={[entry({ channelId: "chan-99" })]}
+      />,
+    );
+    const value = getByTestId("gutter-value-chan-99") as HTMLElement;
+    const expectedHex = colorFor("chan-99");
+    const r = parseInt(expectedHex.slice(1, 3), 16);
+    const g = parseInt(expectedHex.slice(3, 5), 16);
+    const b = parseInt(expectedHex.slice(5, 7), 16);
+    expect(value.style.color).toBe(`rgb(${r}, ${g}, ${b})`);
+  });
+
+  it("renders the live value above the channel name in the DOM (iter5 #1)", () => {
+    // Iter5 issue #1 — the live value must precede the label in the
+    // row so it reads first; the iter4 hierarchy had label-then-value
+    // which inverts what engineers actually scan for.
+    const { getByTestId } = render(
+      <CursorGutter
+        timeLabel={null}
+        entries={[entry({ channelId: "row-order" })]}
+      />,
+    );
+    const row = getByTestId("gutter-row-row-order") as HTMLElement;
+    const value = getByTestId("gutter-value-row-order") as HTMLElement;
+    const children = Array.from(row.children) as HTMLElement[];
+    const valueIdx = children.indexOf(value);
+    // Find the label row sibling.
+    const labelIdx = children.findIndex((c) =>
+      c.textContent?.includes("speed"),
+    );
+    expect(valueIdx).toBeGreaterThanOrEqual(0);
+    expect(labelIdx).toBeGreaterThanOrEqual(0);
+    expect(valueIdx).toBeLessThan(labelIdx);
+  });
+
   it("renders a per-channel value swatch tinted to the line colour (iter4 #6)", () => {
     const { getByTestId } = render(
       <CursorGutter

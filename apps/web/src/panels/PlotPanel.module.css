@@ -509,17 +509,21 @@
   gap: var(--sp-2);
 }
 
+/* Iter5 issue #1 — flip the hierarchy. The live value is the row's
+ * dominant element (top, large, mono, accent-coloured); the channel
+ * name and optional source badge sit underneath as confirmation text.
+ * This row layout matches the new visual order top-to-bottom. */
 .cursorGutterRow {
   display: grid;
   grid-template-columns: 4px 1fr;
   grid-template-rows: auto auto;
   grid-template-areas:
-    "ribbon label"
-    "ribbon value";
+    "ribbon value"
+    "ribbon label";
   column-gap: var(--sp-2);
-  row-gap: 1px;
+  row-gap: 2px;
   align-items: center;
-  padding: 4px 0;
+  padding: 6px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
 }
 
@@ -554,31 +558,45 @@
   flex-shrink: 0;
 }
 
+/* Iter5 issue #1 — channel name demoted from primary to secondary.
+ * 13 px, fg-3 (still readable, not dim). The eye should hit the
+ * value first; the label confirms what's being read. */
 .cursorGutterLabel {
-  font-weight: var(--fw-medium);
+  font-weight: var(--fw-regular);
   color: var(--color-fg-3);
+  font-size: var(--fs-12);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
+  letter-spacing: 0;
 }
 
+/* Iter5 issue #1 — source qualifier is tertiary, 10 px, fg-5
+ * (definitely subordinate). Only renders when the binding-set needs
+ * source disambiguation. */
 .cursorGutterBadge {
   font-family: var(--font-mono);
   font-size: var(--fs-10);
-  color: var(--color-fg-4);
+  color: var(--color-fg-5);
   background: var(--color-bg-3);
   border-radius: var(--radius-2);
   padding: 0 4px;
   flex-shrink: 0;
 }
 
+/* Iter5 issue #1 — live value is the dominant text in the row.
+ * 16 px (1 rem), mono, semi-bold, accent-coloured (the channel's
+ * line stroke colour, set inline so the value matches the trace).
+ * This is the only line the user reads every second; everything
+ * else exists to confirm *which* number this is. */
 .cursorGutterValue {
   grid-area: value;
   color: var(--color-fg-1);
   font-family: var(--font-mono);
-  font-weight: var(--fw-medium);
-  font-size: var(--fs-12);
+  font-weight: var(--fw-semibold, 600);
+  font-size: 1rem;
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -587,27 +605,39 @@
    * before the digits. Use inline-flex so the swatch baselines with
    * the value text and the unit suffix. */
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   justify-content: flex-end;
+  letter-spacing: -0.01em;
+}
+
+.cursorGutterValueNum {
+  /* Wrap the numeric text in its own span so the value swatch and
+   * unit can baseline independently. */
+  display: inline-block;
 }
 
 /* Iter4 alignment item #6 — small vertical bar tinted to the
  * channel's line colour, sitting immediately next to the numeric
  * value so the user can trace colour → number → label in one
- * saccade. 4×12 px keeps the row uncluttered while still being
- * unmistakable against the gutter background. */
+ * saccade. Bumped to 4×14 px to track the larger value text. */
 .cursorGutterValueSwatch {
   width: 4px;
-  height: 12px;
+  height: 14px;
   border-radius: 1px;
   display: inline-block;
   flex-shrink: 0;
+  /* baseline alignment with the larger value text — nudge the swatch
+   * down to centre on the digits' cap height. */
+  transform: translateY(2px);
 }
 
+/* Unit suffix on the live-value line. Stays smaller and dimmer than
+ * the digits so the eye lands on the number, not the unit. */
 .cursorGutterUnit {
-  color: var(--color-fg-5);
+  color: var(--color-fg-4);
   font-weight: var(--fw-regular);
+  font-size: var(--fs-12);
 }
 
 /* Floating cursor tooltip — retained for backwards-compatible callers
