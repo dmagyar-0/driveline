@@ -70,9 +70,9 @@ browser window and Driveline opens it.
 ```
 
 `pnpm build` runs the two right-hand steps in order. The wasm
-generated files live at `apps/web/src/wasm/` and are checked in — so
-CI runners and editors have something to import without needing
-`wasm-pack` available.
+generated files live at `apps/web/src/wasm/` and are gitignored;
+run `pnpm wasm:build` (or `:dev`) on a fresh checkout and after any
+`crates/` change before starting the dev server or running tests.
 
 ### Dev vs release wasm
 
