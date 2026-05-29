@@ -95,10 +95,23 @@ function getDataCore(): Comlink.Remote<DataCorePortApi> {
 async function pullAndFeed(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
-  const batch = (await session.ops.next(
-    session.streamId,
+  // Capture the session at start: if `seek()` replaces the module-level
+  // `session` while we're awaiting `ops.next`, the pull belongs to the
+  // PRIOR stream. Resuming and mutating `session.*` would poison the
+  // new session — most catastrophically, the empty batch we get back
+  // for a closed stream would set the *new* session's `ended = true`,
+  // wedging the decoder permanently (symptom: a big seek leaves the
+  // canvas frozen on the prior frame; `frameIndex` stops advancing).
+  const pulling = session;
+  const batch = (await pulling.ops.next(
+    pulling.streamId,
     PULL_BATCH,
   )) as EncodedChunkWire[];
+  // Bail if seek/open swapped the active session while we awaited.
+  // The new session does its own priming inside `openInternal`, so
+  // discarding `batch` here doesn't leave it under-fed.
+  if (session !== pulling) return;
+  if (session.ended) return;
   if (batch.length === 0) {
     session.ended = true;
     return;
