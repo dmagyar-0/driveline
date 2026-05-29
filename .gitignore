@@ -51,3 +51,5 @@ sample-data/realworld/*
 # Recordings produced by `tests/_record-4k.spec.ts` — local diagnostic
 # artefacts only, never committed.
 /apps/e2e/recordings
+
+.claude/worktrees/
