@@ -17,6 +17,11 @@ The MVP has shipped. This directory now holds two kinds of content:
 
 ## Start here
 
+- **Want the big picture, visually?** Open
+  [`codebase-map.html`](./codebase-map.html) — a self-contained,
+  interactive map of how the layers interact and what data crosses
+  each boundary (Architecture / Dependencies / Sequences views).
+  Just open the file in a browser; no build or server needed.
 - **New to the codebase?** Read the book. Eleven short chapters,
   starting at [`book/README.md`](./book/README.md).
 - **Need design rationale?** Read the numbered docs below.

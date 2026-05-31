@@ -1,0 +1,1023 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+<title>Driveline · Interactive Codebase Map</title>
+<!--
+  Driveline interactive codebase map.
+
+  A single self-contained file (no build, no server, no external CDN — open it
+  straight in a browser, works offline). It renders a *curated* model of how the
+  Driveline codebase fits together across four lenses:
+
+    • Architecture  — nodes grouped into swimlanes by execution context, with
+                      the data crossing each boundary labelled on the edges.
+    • Dependencies  — the module/file import graph.
+    • Sequences     — step-through of key runtime scenarios.
+
+  THE MODEL IS HAND-MAINTAINED. It is a snapshot derived from reading the source
+  (apps/web/src, crates/data-core, crates/wasm-bindings) — it is NOT generated.
+  When the architecture changes, edit the GRAPH and SEQUENCES constants below
+  (they are the first thing in the <script>) to keep this accurate.
+-->
+<style>
+  :root {
+    --bg: #0e1117;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --border: #2b3340;
+    --text: #e6edf3;
+    --muted: #8b97a7;
+    --accent: #58a6ff;
+    --dataflow: #4dd0c0;
+    --import: #6b7689;
+    --warn: #f0b429;
+    /* layer colours */
+    --L-main: #58a6ff;
+    --L-worker-data: #4dd0c0;
+    --L-worker-video: #bc8cff;
+    --L-wasm: #f0883e;
+    --L-rust: #ff7b72;
+    font-synthesis: none;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- top bar ---------- */
+  header {
+    flex: 0 0 auto;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 14px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    z-index: 5;
+  }
+  header h1 {
+    font-size: 15px;
+    margin: 0 8px 0 0;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  header h1 small { color: var(--muted); font-weight: 400; }
+  .group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--muted);
+    padding: 8px 12px; font: inherit; cursor: pointer; min-height: 40px;
+  }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button[aria-pressed="true"] { background: var(--panel-2); color: var(--text); box-shadow: inset 0 -2px 0 var(--accent); }
+  .chk { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; min-height: 40px; user-select: none; }
+  .chk input { width: 16px; height: 16px; accent-color: var(--accent); }
+  #search {
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; min-height: 40px; width: 180px; font: inherit;
+  }
+  #search::placeholder { color: var(--muted); }
+  .layerchips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .layerchip {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer; user-select: none;
+    border: 1px solid var(--border); border-radius: 999px; padding: 6px 10px; min-height: 36px;
+    color: var(--text); font-size: 12.5px; background: var(--panel-2);
+  }
+  .layerchip .dot { width: 10px; height: 10px; border-radius: 50%; }
+  .layerchip[data-off="true"] { opacity: .4; text-decoration: line-through; }
+  .btn {
+    appearance: none; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+    border-radius: 8px; padding: 8px 12px; min-height: 40px; cursor: pointer; font: inherit;
+  }
+  .btn:hover { border-color: var(--accent); }
+
+  /* ---------- main area ---------- */
+  main { flex: 1 1 auto; position: relative; min-height: 0; }
+  #stage { position: absolute; inset: 0; touch-action: none; cursor: grab; background:
+    radial-gradient(circle at 1px 1px, rgba(255,255,255,.04) 1px, transparent 0) 0 0 / 26px 26px; }
+  #stage.grabbing { cursor: grabbing; }
+  svg { width: 100%; height: 100%; display: block; }
+
+  .band rect { fill: rgba(255,255,255,.018); stroke: rgba(255,255,255,.05); }
+  .band text { fill: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+
+  .edge { fill: none; stroke: var(--import); stroke-width: 1.4; }
+  .edge.dataflow { stroke: var(--dataflow); stroke-width: 1.8; }
+  .edge.import { stroke-dasharray: 4 4; opacity: .55; }
+  .edgelabel { fill: var(--text); font-size: 11px; pointer-events: none; }
+  .edgelabel rect { fill: var(--bg); opacity: .85; }
+  .edge-hit { fill: none; stroke: transparent; stroke-width: 16px; cursor: pointer; }
+
+  .node rect { fill: var(--panel-2); stroke: var(--border); stroke-width: 1.5; rx: 9; }
+  .node .accent { fill: var(--accent); }
+  .node text.label { fill: var(--text); font-size: 12.5px; font-weight: 550; }
+  .node text.sub { fill: var(--muted); font-size: 10.5px; }
+  .node .chev { fill: var(--muted); font-size: 12px; }
+  .node { cursor: pointer; }
+  .node:hover rect { stroke: var(--accent); }
+
+  /* dim / highlight states */
+  svg.has-focus .node:not(.hi) rect { opacity: .28; }
+  svg.has-focus .node:not(.hi) text { opacity: .35; }
+  svg.has-focus .edge:not(.hi) { opacity: .08; }
+  svg.has-focus .edgelabel:not(.hi) { opacity: 0; }
+  .node.hi rect { stroke-width: 2.5; }
+  .node.sel rect { stroke: var(--warn); stroke-width: 2.5; }
+  .edge.hi { stroke-width: 3; }
+  .edge.seqhi { stroke: var(--warn); stroke-width: 3.5; }
+  .node.seqhi rect { stroke: var(--warn); stroke-width: 3; }
+
+  /* ---------- details panel ---------- */
+  #details {
+    position: absolute; top: 0; right: 0; bottom: 0; width: 340px; max-width: 86vw;
+    background: var(--panel); border-left: 1px solid var(--border);
+    padding: 16px 16px 24px; overflow: auto; transform: translateX(100%);
+    transition: transform .18s ease; z-index: 6;
+  }
+  #details.open { transform: none; }
+  #details h2 { font-size: 15px; margin: 0 0 4px; }
+  #details .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted); word-break: break-all; }
+  #details .tag { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 999px; margin: 8px 0; }
+  #details p { margin: 10px 0; }
+  #details .kv { margin: 10px 0; }
+  #details .kv b { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 2px; }
+  #details .close { position: absolute; top: 10px; right: 10px; }
+  #details .hint { color: var(--muted); font-size: 12px; }
+
+  /* ---------- sequence rail ---------- */
+  #seqbar {
+    position: absolute; left: 0; right: 0; bottom: 0; background: var(--panel);
+    border-top: 1px solid var(--border); padding: 10px 14px; display: none; z-index: 4;
+  }
+  #seqbar.open { display: block; }
+  #seqbar .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  #seqbar select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; min-height: 40px; font: inherit; }
+  #seqcap { margin-top: 8px; color: var(--text); }
+  #seqcap b { color: var(--warn); }
+  #seqprogress { color: var(--muted); font-size: 12px; min-width: 64px; text-align: center; }
+
+  .legend { position: absolute; left: 12px; bottom: 12px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 10px; font-size: 11.5px; color: var(--muted); z-index: 3; }
+  .legend .line { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .legend .swatch { width: 22px; height: 0; border-top: 2px solid var(--dataflow); }
+  .legend .swatch.imp { border-top: 2px dashed var(--import); }
+
+  .zoomctl { position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; gap: 6px; z-index: 3; }
+  .zoomctl button { width: 40px; height: 40px; border-radius: 8px; font-size: 18px; line-height: 1; }
+
+  /* ---------- responsive / mobile ---------- */
+  @media (max-width: 820px) {
+    header { gap: 6px 10px; padding: 8px 10px; }
+    header h1 { width: 100%; }
+    #search { width: 100%; }
+    .group.layers { width: 100%; }
+    #details {
+      top: auto; left: 0; right: 0; bottom: 0; width: auto; max-width: none;
+      height: 52vh; border-left: 0; border-top: 1px solid var(--border);
+      border-radius: 14px 14px 0 0; transform: translateY(100%);
+    }
+    #details.open { transform: none; }
+    .legend { display: none; }
+    /* keep the sequence rail above the details sheet */
+    #seqbar { z-index: 7; }
+  }
+  @media (max-width: 520px) {
+    .seg button { padding: 8px 9px; }
+    .layerchip { font-size: 11.5px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Driveline <small>· interactive codebase map</small></h1>
+
+  <div class="group">
+    <div class="seg" role="tablist" aria-label="View">
+      <button id="view-arch" aria-pressed="true">Architecture</button>
+      <button id="view-deps" aria-pressed="false">Dependencies</button>
+      <button id="view-seq"  aria-pressed="false">Sequences</button>
+    </div>
+  </div>
+
+  <div class="group">
+    <label class="chk"><input type="checkbox" id="toggle-labels" checked /> data labels</label>
+    <button class="btn" id="expand-all">Expand all</button>
+    <button class="btn" id="reset-view">Fit</button>
+  </div>
+
+  <div class="group">
+    <input id="search" type="search" placeholder="Search files / modules…" autocomplete="off" />
+  </div>
+
+  <div class="group layers">
+    <div class="layerchips" id="layerchips"></div>
+  </div>
+</header>
+
+<main>
+  <div id="stage">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="9" markerHeight="9" refX="7.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+          <path d="M0,0 L8,3 L0,6 Z" fill="context-stroke"></path>
+        </marker>
+      </defs>
+      <g id="viewport">
+        <g id="bands"></g>
+        <g id="edges"></g>
+        <g id="labels"></g>
+        <g id="nodes"></g>
+      </g>
+    </svg>
+  </div>
+
+  <div class="legend">
+    <div class="line"><span class="swatch"></span> data flow (labelled)</div>
+    <div class="line"><span class="swatch imp"></span> import / depends-on</div>
+    <div class="line">tap a node to expand · tap edge for data</div>
+  </div>
+
+  <div class="zoomctl">
+    <button class="btn" id="zoom-in" aria-label="Zoom in">+</button>
+    <button class="btn" id="zoom-out" aria-label="Zoom out">−</button>
+  </div>
+
+  <aside id="details" aria-live="polite">
+    <button class="btn close" id="details-close" aria-label="Close">✕</button>
+    <div id="details-body"></div>
+  </aside>
+
+  <div id="seqbar">
+    <div class="row">
+      <select id="seq-select" aria-label="Scenario"></select>
+      <button class="btn" id="seq-prev">‹ Prev</button>
+      <span id="seqprogress">–</span>
+      <button class="btn" id="seq-next">Next ›</button>
+      <button class="btn" id="seq-play">▶ Play</button>
+    </div>
+    <div id="seqcap" class="hint">Pick a scenario and step through it.</div>
+  </div>
+</main>
+
+<script>
+/* ============================================================================
+ * 1. THE CURATED MODEL  — edit here to keep the map accurate.
+ * ==========================================================================*/
+
+const LAYERS = [
+  { id: "main",         label: "Main thread · React + Zustand" },
+  { id: "worker-data",  label: "Worker · dataCore" },
+  { id: "worker-video", label: "Worker · videoDecode" },
+  { id: "wasm",         label: "WASM bridge · wasm-bindings" },
+  { id: "rust",         label: "Rust core · data-core" },
+];
+
+/* Nodes. level: "module" (drillable container) | "file" (leaf) | plain leaf.
+ * parent links a file to its module so the module can drill down. */
+const NODES = [
+  // ---- main thread ----
+  { id: "app",        layer: "main", label: "App.tsx", path: "apps/web/src/App.tsx",
+    desc: "Root component. Creates the Comlink workers, mounts the store, wires FlexLayout, and owns the file-drop handler. Exposes window.__driveline* hooks for Playwright.",
+    sends: "Dropped File[] → store.openFiles()", receives: "Worker handles, layout state" },
+  { id: "store",      layer: "main", label: "state/store.ts", path: "apps/web/src/state/store.ts",
+    desc: "The single Zustand store — the hub. Holds sources, channels, globalRange, transport (cursorNs, playing, speed, seekEpoch), layout JSON, and all panel bindings. Owns the dataCore worker proxy.",
+    sends: "Comlink RPC to dataCore worker; selector updates to panels", receives: "File[] from App; setCursor/play from Transport; fetchChannelRange from panels" },
+  { id: "workerclient", layer: "main", label: "workerClient.ts", path: "apps/web/src/workerClient.ts",
+    desc: "Comlink client factories that wrap the dataCore and videoDecode workers into typed async proxies.",
+    sends: "—", receives: "—" },
+  { id: "panels",     layer: "main", label: "panels/", level: "module",
+    path: "apps/web/src/panels/", desc: "FlexLayout-docked panels. Each subscribes to the store via selectors and renders one facet of the session. Click to drill into the individual panels.",
+    sends: "fetchChannelRange(channelId,[startNs,endNs])", receives: "cursorNs, seekEpoch, bindings" },
+  { id: "p_plot",  layer: "main", parent: "panels", label: "PlotPanel.tsx", path: "apps/web/src/panels/PlotPanel.tsx",
+    desc: "uPlot line chart for up to 8 scalar channels. Fetches Arrow ranges, decodes via seriesFromArrow, draws a cursor overlay at cursorNs.",
+    sends: "fetchChannelRange", receives: "Arrow IPC bytes → PlotSeries" },
+  { id: "p_video", layer: "main", parent: "panels", label: "VideoPanel.tsx", path: "apps/web/src/panels/VideoPanel.tsx",
+    desc: "Binds one video channel. Drives the videoDecode worker (open/seek/close) and blits the VideoFrame whose PTS ≤ cursor onto a canvas.",
+    sends: "Comlink open/seek/setCursor", receives: "VideoFrame via MessagePort" },
+  { id: "p_table", layer: "main", parent: "panels", label: "TablePanel.tsx", path: "apps/web/src/panels/TablePanel.tsx",
+    desc: "Tabular value-at-cursor readout for scalar channels; binary-searches rawTsNs for the sample at the cursor.",
+    sends: "fetchChannelRange", receives: "Arrow IPC bytes" },
+  { id: "p_map",   layer: "main", parent: "panels", label: "MapPanel.tsx", path: "apps/web/src/panels/MapPanel.tsx",
+    desc: "Leaflet/Mapbox track from a lat/lon channel pair plus a cursor marker.",
+    sends: "fetchChannelRange (lat, lon)", receives: "Arrow IPC bytes" },
+  { id: "p_enum",  layer: "main", parent: "panels", label: "EnumPanel.tsx", path: "apps/web/src/panels/EnumPanel.tsx",
+    desc: "Shows the enum/state value active at the cursor for an Enum channel.",
+    sends: "fetchChannelRange", receives: "Arrow IPC bytes" },
+  { id: "p_scene", layer: "main", parent: "panels", label: "ScenePanel.tsx", path: "apps/web/src/panels/ScenePanel.tsx",
+    desc: "Placeholder 3-D scene/point-cloud panel (schema not yet defined in Rust).",
+    sends: "—", receives: "—" },
+  { id: "series",   layer: "main", label: "seriesFromArrow.ts", path: "apps/web/src/panels/seriesFromArrow.ts",
+    desc: "Decodes an Arrow IPC scalar batch ({ ts: Timestamp(ns,UTC), value: Float64 }) into { xs (seconds), ys, rawTsNs }. xs/ys feed uPlot; rawTsNs (zero-copy BigInt64) preserves ns for cursor binary-search.",
+    sends: "PlotSeries to panels", receives: "Arrow IPC Uint8Array" },
+  { id: "transport", layer: "main", label: "timeline/Transport.tsx", path: "apps/web/src/timeline/Transport.tsx",
+    desc: "Scrubber + playback controls. User scrubs → store.setCursor(ns), which bumps seekEpoch so the video pipeline issues a real seek.",
+    sends: "setCursor / play / pause / setSpeed", receives: "cursorNs, playing, globalRange" },
+  { id: "playback",  layer: "main", label: "timeline/playback.ts", path: "apps/web/src/timeline/playback.ts",
+    desc: "requestAnimationFrame playback loop. Advances the cursor via advanceCursor(ns) — which does NOT bump seekEpoch — keeping the hot path off the seek code.",
+    sends: "advanceCursor(ns) per rAF", receives: "playing, speed" },
+  { id: "bucket",    layer: "main", label: "state/bucket.ts", path: "apps/web/src/state/bucket.ts",
+    desc: "Classifies dropped files by extension into { mcap, mf4, mp4Pairs, errors } and pairs .mp4 with its .mp4.timestamps sidecar.",
+    sends: "Buckets", receives: "File[]" },
+  { id: "mp4cache",  layer: "main", label: "state/mp4SampleCache.ts", path: "apps/web/src/state/mp4SampleCache.ts",
+    desc: "Holds the mp4 per-sample index (offset/size/is_sync/pts) plus the original File. Reads mdat sample bodies on demand via File.slice() with an LRU + memory budget. The mdat bytes never cross the WASM boundary.",
+    sends: "Annex-B sample bytes to video worker", receives: "Sample index from WASM; File blob" },
+
+  // ---- dataCore worker ----
+  { id: "wd_worker", layer: "worker-data", label: "dataCore.worker.ts", path: "apps/web/src/workers/dataCore.worker.ts",
+    desc: "Comlink-exposed DataCoreApi (ping, openMcap/openMf4/openMp4Sidecar, *Summary, *FetchRange, mp4SidecarIndex, mcapVideoOpen/NextBatch). Awaits wasm init, then calls the wasm-bindgen surface directly.",
+    sends: "WASM calls", receives: "Comlink RPC from store; file bytes (Uint8Array, transferred)" },
+  { id: "wd_norm",   layer: "worker-data", label: "normalise.ts", path: "apps/web/src/workers/normalise.ts",
+    desc: "Maps snake_case WASM output to camelCase and coerces serde_wasm_bindgen number|bigint timestamps to guaranteed bigint ns. Defines the McapSummary/Mf4Summary/Mp4SidecarSummary/EncodedChunkWire wire types.",
+    sends: "Normalised summaries", receives: "Raw JsValue from WASM" },
+
+  // ---- videoDecode worker ----
+  { id: "wv_worker", layer: "worker-video", label: "videoDecode.worker.ts", path: "apps/web/src/workers/videoDecode.worker.ts",
+    desc: "Owns a single WebCodecs VideoDecoder. Reader-agnostic: pulls Annex-B chunks (MCAP via dataCore, MP4 via the sample cache), feeds the decoder, and posts VideoFrame objects to VideoPanel over a MessagePort.",
+    sends: "VideoFrame via MessagePort", receives: "EncodedChunkWire[] / Annex-B sample bytes" },
+  { id: "wv_ops",    layer: "worker-video", label: "videoDecodeOps.ts", path: "apps/web/src/workers/videoDecodeOps.ts",
+    desc: "Decoder state machine: SPS discovery, codec-string derivation, seek (flush + keyframe + decode-forward), batch sizing and frame pacing.",
+    sends: "—", receives: "—" },
+  { id: "wv_annexb", layer: "worker-video", label: "mp4AnnexB.ts", path: "apps/web/src/workers/mp4AnnexB.ts",
+    desc: "Assembles H.264 Annex-B access units from AVCC sample bytes (length-prefixed → start-code framing), prepending SPS/PPS to the first keyframe.",
+    sends: "Annex-B bytes", receives: "AVCC sample bytes" },
+
+  // ---- WASM bridge ----
+  { id: "ws_lib",    layer: "wasm", label: "wasm-bindings/src/lib.rs", path: "crates/wasm-bindings/src/lib.rs",
+    desc: "The wasm-bindgen surface: open_* / close_* / *_summary / *_fetch_range / mp4_sidecar_index / mcap_video_open|next_batch|close. Handles are u32 indices into thread-local Slabs. Summaries serialise via serde_wasm_bindgen with bigint ns; ranges return Arrow IPC Uint8Array.",
+    sends: "Reader::open / fetch_range / video_stream", receives: "JS calls + file bytes" },
+
+  // ---- Rust core ----
+  { id: "r_reader",  layer: "rust", label: "reader.rs", path: "crates/data-core/src/reader.rs",
+    desc: "The Reader trait: open(bytes) → Self, meta() → &SourceMeta, fetch_range(channel, TimeRange, FetchOpts) → ArrowIpc, optional video_stream(). Plus TimeRange / FetchOpts.",
+    sends: "—", receives: "—" },
+  { id: "r_types",   layer: "rust", label: "types.rs", path: "crates/data-core/src/types.rs",
+    desc: "Canonical data model: Channel, ChannelKind (Scalar/Vector/Enum/Video/Bytes), DType, SourceMeta. Shared by every reader.",
+    sends: "—", receives: "—" },
+  { id: "r_readers", layer: "rust", label: "readers", level: "module", path: "crates/data-core/src/",
+    desc: "The format adapters that implement Reader. Click to drill into the three readers.",
+    sends: "Arrow RecordBatch / EncodedChunk", receives: "Raw file bytes" },
+  { id: "r_mcap",    layer: "rust", parent: "r_readers", label: "mcap.rs", path: "crates/data-core/src/mcap.rs",
+    desc: "MCAP adapter (ruzstd-decompressed chunks). Infers ChannelKind from schema name, parses Foxglove/JSON payloads, and indexes H.264 keyframes for embedded video streams.",
+    sends: "Arrow IPC; EncodedChunk iter", receives: "MCAP bytes" },
+  { id: "r_mf4",     layer: "rust", parent: "r_readers", label: "mf4.rs", path: "crates/data-core/src/mf4.rs",
+    desc: "MF4 (MDF 4.1) adapter via mf4-rs. Resolves each group's master/time channel, converts relative seconds to absolute ns, surfaces other channels as Scalar(F64).",
+    sends: "Arrow IPC", receives: "MF4 bytes" },
+  { id: "r_mp4",     layer: "rust", parent: "r_readers", label: "mp4_sidecar.rs", path: "crates/data-core/src/mp4_sidecar.rs",
+    desc: "MP4 + .timestamps sidecar adapter. Parses moov (stsz/stsc/stco/stss) into a per-sample index and reads pts_ns from the sidecar. Emits the index for JS-side lazy reads; mdat stays out of WASM.",
+    sends: "Sample index (offset/size/is_sync/pts) + SPS/PPS", receives: "mp4 header + sidecar bytes" },
+  { id: "r_arrow",   layer: "rust", label: "arrow-ipc producer", path: "crates/data-core/ (arrow-ipc FileWriter)",
+    desc: "Serialises a RecordBatch [ ts: Timestamp(Nanosecond, UTC), value: Float64 ] to Arrow IPC (File format) — the wire format for all scalar data crossing into JS.",
+    sends: "Arrow IPC Vec<u8>", receives: "RecordBatch rows" },
+];
+
+/* Edges. kind: "dataflow" (solid, labelled — what is sent) | "import" (dashed). */
+const EDGES = [
+  // main internal
+  { from: "app", to: "store", kind: "import", data: "mounts store" },
+  { from: "app", to: "workerclient", kind: "import", data: "creates workers" },
+  { from: "app", to: "store", kind: "dataflow", data: "openFiles(File[])" },
+  { from: "store", to: "bucket", kind: "dataflow", data: "File[] → {mcap,mf4,mp4Pairs}" },
+  { from: "panels", to: "store", kind: "dataflow", data: "selectors + fetchChannelRange()" },
+  { from: "transport", to: "store", kind: "dataflow", data: "setCursor(ns) · bumps seekEpoch" },
+  { from: "playback", to: "store", kind: "dataflow", data: "advanceCursor(ns) per rAF" },
+  { from: "p_plot", to: "series", kind: "dataflow", data: "Arrow IPC → PlotSeries{xs,ys,rawTsNs}" },
+  { from: "p_table", to: "series", kind: "dataflow", data: "Arrow IPC → PlotSeries" },
+  { from: "store", to: "mp4cache", kind: "dataflow", data: "holds index + File blob" },
+  { from: "workerclient", to: "wd_worker", kind: "import", data: "wraps worker" },
+  { from: "workerclient", to: "wv_worker", kind: "import", data: "wraps worker" },
+
+  // main → workers
+  { from: "store", to: "wd_worker", kind: "dataflow", data: "Comlink RPC: openMcap / mcapFetchRange / *Summary; file bytes Uint8Array (transferred)" },
+  { from: "p_video", to: "wv_worker", kind: "dataflow", data: "Comlink open/seek/setCursor → ; ← VideoFrame (MessagePort)" },
+
+  // dataCore worker internal + → wasm
+  { from: "wd_worker", to: "wd_norm", kind: "dataflow", data: "raw JsValue → normalised (bigint ns)" },
+  { from: "wd_worker", to: "ws_lib", kind: "dataflow", data: "wasm calls; ← summary / Arrow IPC Uint8Array / EncodedChunkWire[]" },
+
+  // video worker internal + cross-worker
+  { from: "wv_worker", to: "wv_ops", kind: "import", data: "decode ops" },
+  { from: "wv_worker", to: "wv_annexb", kind: "import", data: "AVCC→Annex-B" },
+  { from: "wv_worker", to: "wd_worker", kind: "dataflow", data: "MCAP: mcapVideoNextBatch → EncodedChunkWire[]" },
+  { from: "wv_worker", to: "mp4cache", kind: "dataflow", data: "MP4: getEncodedChunks → Annex-B bytes (File.slice)" },
+
+  // wasm → rust
+  { from: "ws_lib", to: "r_reader", kind: "import", data: "Reader trait" },
+  { from: "ws_lib", to: "r_readers", kind: "dataflow", data: "Reader::open / fetch_range / video_stream" },
+  { from: "r_readers", to: "r_reader", kind: "import", data: "impl Reader" },
+  { from: "r_readers", to: "r_types", kind: "import", data: "Channel / ChannelKind / SourceMeta" },
+  { from: "r_readers", to: "r_arrow", kind: "dataflow", data: "RecordBatch [ts: Timestamp(ns,UTC), value: F64]" },
+  { from: "r_arrow", to: "ws_lib", kind: "dataflow", data: "Arrow IPC bytes (Vec<u8>)" },
+];
+
+/* Runtime sequences. Each step highlights nodes + edges (edges matched as
+ * unordered pairs, so return-flows light up the same edge). */
+const SEQUENCES = [
+  {
+    name: "Open a file",
+    steps: [
+      { cap: "User drops MCAP / MF4 / MP4+sidecar files onto the app; <b>App.tsx</b> calls <b>store.openFiles()</b>.",
+        nodes: ["app","store"], edges: [["app","store"]] },
+      { cap: "<b>openFiles</b> runs <b>bucket.ts</b> to classify by extension and pair .mp4 with .mp4.timestamps.",
+        nodes: ["store","bucket"], edges: [["store","bucket"]] },
+      { cap: "Per file, the store sends the bytes over <b>Comlink</b> to the dataCore worker (openMcap / openMf4 / openMp4Sidecar).",
+        nodes: ["store","wd_worker"], edges: [["store","wd_worker"]] },
+      { cap: "The worker calls the <b>WASM</b> open_* function, which constructs the matching <b>Rust reader</b> and parses the header.",
+        nodes: ["wd_worker","ws_lib","r_readers"], edges: [["wd_worker","ws_lib"],["ws_lib","r_readers"]] },
+      { cap: "The reader's <b>SourceMeta</b> comes back as a summary, normalised to bigint-ns in <b>normalise.ts</b>.",
+        nodes: ["r_readers","ws_lib","wd_worker","wd_norm"], edges: [["wd_worker","ws_lib"],["wd_worker","wd_norm"]] },
+      { cap: "The store builds the flat <b>Channel[]</b>, sets sources / channels / globalRange — panels re-render.",
+        nodes: ["store","panels"], edges: [["panels","store"]] },
+    ],
+  },
+  {
+    name: "Scrub the cursor",
+    steps: [
+      { cap: "User drags the scrubber → <b>Transport</b> calls <b>store.setCursor(ns)</b>.",
+        nodes: ["transport","store"], edges: [["transport","store"]] },
+      { cap: "The store updates <b>cursorNs</b> and bumps <b>seekEpoch</b> (a real seek, not a playback tick).",
+        nodes: ["store"], edges: [] },
+      { cap: "Plot / Table panels read the new cursorNs and redraw from their <b>already-cached</b> Arrow series — no fetch.",
+        nodes: ["panels","p_plot","series"], edges: [["panels","store"],["p_plot","series"]] },
+      { cap: "<b>VideoPanel</b> sees seekEpoch change and asks the video worker to seek (debounced 50 ms).",
+        nodes: ["p_video","wv_worker"], edges: [["p_video","wv_worker"]] },
+    ],
+  },
+  {
+    name: "Fetch & plot a range",
+    steps: [
+      { cap: "<b>PlotPanel</b> needs a [startNs,endNs] window for its bound channels and calls <b>fetchChannelRange</b>.",
+        nodes: ["p_plot","store"], edges: [["panels","store"]] },
+      { cap: "The store routes to <b>mcapFetchRange / mf4FetchRange</b> over Comlink (by the channel's source kind).",
+        nodes: ["store","wd_worker"], edges: [["store","wd_worker"]] },
+      { cap: "The worker calls <b>*_fetch_range</b> in WASM; the Rust reader slices that time range.",
+        nodes: ["wd_worker","ws_lib","r_readers"], edges: [["wd_worker","ws_lib"],["ws_lib","r_readers"]] },
+      { cap: "The reader builds a <b>RecordBatch [ts, value]</b> and the arrow-ipc FileWriter encodes it to bytes.",
+        nodes: ["r_readers","r_arrow"], edges: [["r_readers","r_arrow"],["r_arrow","ws_lib"]] },
+      { cap: "<b>Arrow IPC Uint8Array</b> returns to the panel; <b>seriesFromArrow</b> decodes it to {xs,ys,rawTsNs} and uPlot draws.",
+        nodes: ["ws_lib","wd_worker","p_plot","series"], edges: [["wd_worker","ws_lib"],["p_plot","series"]] },
+    ],
+  },
+  {
+    name: "Decode & show video",
+    steps: [
+      { cap: "Playback's <b>rAF loop</b> advances the cursor; <b>VideoPanel</b> drives the video worker to keep frames ahead.",
+        nodes: ["playback","store","p_video","wv_worker"], edges: [["playback","store"],["p_video","wv_worker"]] },
+      { cap: "<b>MCAP path:</b> the video worker pulls encoded chunks from the dataCore worker — <b>mcapVideoNextBatch → EncodedChunkWire[]</b>.",
+        nodes: ["wv_worker","wd_worker"], edges: [["wv_worker","wd_worker"]] },
+      { cap: "<b>MP4 path:</b> instead it reads sample bytes lazily from <b>mp4SampleCache</b> via File.slice() (mdat never enters WASM).",
+        nodes: ["wv_worker","mp4cache"], edges: [["wv_worker","mp4cache"]] },
+      { cap: "Chunks are framed as Annex-B (<b>mp4AnnexB</b>) and fed to the WebCodecs <b>VideoDecoder</b> (<b>videoDecodeOps</b>).",
+        nodes: ["wv_worker","wv_ops","wv_annexb"], edges: [["wv_worker","wv_ops"],["wv_worker","wv_annexb"]] },
+      { cap: "The decoded <b>VideoFrame</b> (PTS ≤ cursor) is posted over the MessagePort and blitted by <b>VideoPanel</b>.",
+        nodes: ["wv_worker","p_video"], edges: [["p_video","wv_worker"]] },
+    ],
+  },
+];
+
+const LAYER_VAR = {
+  "main": "--L-main", "worker-data": "--L-worker-data", "worker-video": "--L-worker-video",
+  "wasm": "--L-wasm", "rust": "--L-rust",
+};
+
+/* ============================================================================
+ * 2. DERIVED INDEXES
+ * ==========================================================================*/
+const SVGNS = "http://www.w3.org/2000/svg";
+const byId = Object.fromEntries(NODES.map(n => [n.id, n]));
+const parentOf = Object.fromEntries(NODES.map(n => [n.id, n.parent || null]));
+const childrenOf = {};
+NODES.forEach(n => { if (n.parent) (childrenOf[n.parent] ||= []).push(n.id); });
+const hasChildren = id => !!(childrenOf[id] && childrenOf[id].length);
+const layerColor = layer => getComputedStyle(document.documentElement).getPropertyValue(LAYER_VAR[layer]).trim();
+
+/* ============================================================================
+ * 3. VIEW STATE
+ * ==========================================================================*/
+const state = {
+  view: "arch",                 // arch | deps | seq
+  expanded: new Set(),          // module ids drilled open
+  hiddenLayers: new Set(),
+  showLabels: true,
+  search: "",
+  selectedNode: null,
+  selectedEdge: null,
+  seq: 0,
+  step: -1,
+  playTimer: null,
+};
+const view = { x: 0, y: 0, k: 1 };   // pan/zoom transform
+
+/* ============================================================================
+ * 4. RENDER MODEL  (which nodes show, where, which edges)
+ * ==========================================================================*/
+function isRendered(id) {
+  const n = byId[id];
+  if (state.hiddenLayers.has(n.layer)) return false;
+  let p = parentOf[id];
+  while (p) { if (!state.expanded.has(p)) return false; p = parentOf[p]; }
+  if (hasChildren(id) && state.expanded.has(id)) return false; // expanded → children shown instead
+  return true;
+}
+function renderedSet() {
+  const R = new Set();
+  for (const n of NODES) if (isRendered(n.id)) R.add(n.id);
+  return R;
+}
+/* Map any model node to the node currently on screen that represents it. */
+function displayNode(id, R) {
+  if (R.has(id)) return id;
+  let p = parentOf[id];
+  while (p) { if (R.has(p)) return p; p = parentOf[p]; }
+  // hidden because expanded: fall to first rendered descendant
+  const q = [...(childrenOf[id] || [])];
+  while (q.length) { const c = q.shift(); if (R.has(c)) return c; q.push(...(childrenOf[c] || [])); }
+  return null;
+}
+
+const COL_W = 250, NODE_W = 186, NODE_H = 48, V_GAP = 22, TOP = 52, PAD_X = 14;
+
+function layout(R) {
+  const pos = {};
+  let maxH = 0;
+  LAYERS.forEach((L, li) => {
+    const ids = NODES.filter(n => n.layer === L.id && R.has(n.id)).map(n => n.id);
+    ids.forEach((id, i) => {
+      pos[id] = {
+        x: li * COL_W + PAD_X + (COL_W - NODE_W) / 2,
+        y: TOP + i * (NODE_H + V_GAP),
+        w: NODE_W, h: NODE_H,
+      };
+    });
+    maxH = Math.max(maxH, TOP + ids.length * (NODE_H + V_GAP));
+  });
+  const width = LAYERS.length * COL_W + PAD_X * 2;
+  const height = Math.max(maxH + 30, 360);
+  return { pos, width, height };
+}
+
+function activeEdges(R) {
+  // Filter by view, remap endpoints, aggregate duplicates.
+  const agg = new Map();
+  for (const e of EDGES) {
+    if (state.view === "deps" && e.kind !== "import") continue;
+    const a = displayNode(e.from, R), b = displayNode(e.to, R);
+    if (!a || !b || a === b) continue;
+    const key = a + "|" + b + "|" + e.kind;
+    if (!agg.has(key)) agg.set(key, { from: a, to: b, kind: e.kind, datas: new Set(), orig: [] });
+    const g = agg.get(key);
+    if (e.data) g.datas.add(e.data);
+    g.orig.push(e);
+  }
+  return [...agg.values()].map((g, i) => ({
+    id: "e" + i, from: g.from, to: g.to, kind: g.kind,
+    data: [...g.datas].join("  ·  "),
+  }));
+}
+
+/* ============================================================================
+ * 5. DRAW
+ * ==========================================================================*/
+const svg = document.getElementById("svg");
+const gBands = document.getElementById("bands");
+const gEdges = document.getElementById("edges");
+const gLabels = document.getElementById("labels");
+const gNodes = document.getElementById("nodes");
+let CUR = { pos: {}, edges: [], R: new Set(), width: 0, height: 0 };
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function clear(g) { while (g.firstChild) g.removeChild(g.firstChild); }
+
+function anchors(s, t) {
+  // exit/enter on facing sides; same column → bow out left
+  if (t.x > s.x) return [{ x: s.x + s.w, y: s.y + s.h / 2 }, { x: t.x, y: t.y + t.h / 2 }, 1];
+  if (t.x < s.x) return [{ x: s.x, y: s.y + s.h / 2 }, { x: t.x + t.w, y: t.y + t.h / 2 }, -1];
+  return [{ x: s.x, y: s.y + s.h / 2 }, { x: t.x, y: t.y + t.h / 2 }, -1];
+}
+function edgePath(s, t) {
+  const [p0, p1, dir] = anchors(s, t);
+  const sameCol = s.x === t.x;
+  const dx = Math.max(60, Math.abs(p1.x - p0.x) * 0.5);
+  let c0x, c1x;
+  if (sameCol) { const off = 70; c0x = p0.x - off; c1x = p1.x - off; }
+  else { c0x = p0.x + dir * dx; c1x = p1.x - dir * dx; }
+  return { d: `M${p0.x},${p0.y} C${c0x},${p0.y} ${c1x},${p1.y} ${p1.x},${p1.y}`, mid: { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 } };
+}
+
+function draw() {
+  const R = renderedSet();
+  const { pos, width, height } = layout(R);
+  const edges = activeEdges(R);
+  CUR = { pos, edges, R, width, height };
+
+  clear(gBands); clear(gEdges); clear(gLabels); clear(gNodes);
+
+  // bands
+  LAYERS.forEach((L, li) => {
+    if (state.hiddenLayers.has(L.id)) return;
+    const g = el("g", { class: "band" }, gBands);
+    el("rect", { x: li * COL_W + PAD_X, y: 8, width: COL_W - 16, height: height - 16, rx: 12 }, g);
+    const t = el("text", { x: li * COL_W + PAD_X + (COL_W - 16) / 2, y: 30, "text-anchor": "middle" }, g);
+    t.textContent = L.label.split(" · ")[1] || L.label;
+    t.setAttribute("fill", layerColor(L.id));
+  });
+
+  // edges
+  edges.forEach(e => {
+    const s = pos[e.from], t = pos[e.to];
+    if (!s || !t) return;
+    const { d, mid } = edgePath(s, t);
+    const color = e.kind === "dataflow" ? "var(--dataflow)" : "var(--import)";
+    el("path", { class: "edge-hit", d, "data-edge": e.id }, gEdges);
+    el("path", { class: `edge ${e.kind}`, d, "marker-end": "url(#arrow)", stroke: color, "data-edge": e.id }, gEdges);
+
+    if (e.kind === "dataflow" && e.data) {
+      const txt = e.data.length > 30 ? e.data.slice(0, 29) + "…" : e.data;
+      const lg = el("g", { class: "edgelabel", "data-edge": e.id }, gLabels);
+      const r = el("rect", { rx: 3 }, lg);
+      const tx = el("text", { x: mid.x, y: mid.y - 4, "text-anchor": "middle" }, lg);
+      tx.textContent = txt;
+      const bb = tx.getBBox();
+      r.setAttribute("x", bb.x - 4); r.setAttribute("y", bb.y - 1);
+      r.setAttribute("width", bb.width + 8); r.setAttribute("height", bb.height + 2);
+    }
+  });
+
+  // nodes
+  NODES.forEach(n => {
+    if (!R.has(n.id)) return;
+    const p = pos[n.id];
+    const g = el("g", { class: "node", "data-node": n.id, transform: `translate(${p.x},${p.y})` }, gNodes);
+    el("rect", { class: hasChildren(n.id) ? "accent-edge" : "", x: 0, y: 0, width: p.w, height: p.h, rx: 9,
+      stroke: layerColor(n.layer) }, g);
+    const label = el("text", { class: "label", x: 12, y: 20 }, g);
+    label.textContent = n.label;
+    const sub = el("text", { class: "sub", x: 12, y: 36 }, g);
+    sub.textContent = hasChildren(n.id) ? `${childrenOf[n.id].length} files · tap to expand` : n.layer;
+    if (hasChildren(n.id)) {
+      const chev = el("text", { class: "chev", x: p.w - 16, y: 28, "text-anchor": "middle" }, g);
+      chev.textContent = "⤢";
+    }
+  });
+
+  applyHighlight();
+}
+
+/* ============================================================================
+ * 6. HIGHLIGHT (hover / selection / search / sequence)
+ * ==========================================================================*/
+function neighborsOf(nodeId) {
+  const ns = new Set([nodeId]); const es = new Set();
+  CUR.edges.forEach(e => { if (e.from === nodeId || e.to === nodeId) { es.add(e.id); ns.add(e.from); ns.add(e.to); } });
+  return { ns, es };
+}
+function applyHighlight() {
+  // clear
+  svg.classList.remove("has-focus");
+  gNodes.querySelectorAll(".node").forEach(n => n.classList.remove("hi", "sel", "seqhi"));
+  gEdges.querySelectorAll(".edge").forEach(e => e.classList.remove("hi", "seqhi"));
+  gLabels.querySelectorAll(".edgelabel").forEach(e => e.classList.remove("hi"));
+
+  // search dimming
+  if (state.search) {
+    const q = state.search.toLowerCase();
+    const match = id => {
+      const n = byId[id];
+      return (n.label + " " + (n.path || "") + " " + (n.desc || "")).toLowerCase().includes(q);
+    };
+    svg.classList.add("has-focus");
+    CUR.R.forEach(id => { if (match(id)) markNode(id, "hi"); });
+  }
+
+  // sequence step
+  if (state.view === "seq" && state.step >= 0) {
+    const step = SEQUENCES[state.seq].steps[state.step];
+    svg.classList.add("has-focus");
+    step.nodes.forEach(id => { const d = displayNode(id, CUR.R); if (d) markNode(d, "seqhi"); });
+    step.edges.forEach(([a, b]) => {
+      const da = displayNode(a, CUR.R), db = displayNode(b, CUR.R);
+      markEdgePair(da, db, "seqhi");
+    });
+    return;
+  }
+
+  // selection
+  if (state.selectedNode && CUR.R.has(state.selectedNode)) {
+    svg.classList.add("has-focus");
+    const { ns, es } = neighborsOf(state.selectedNode);
+    ns.forEach(id => markNode(id, "hi"));
+    markNode(state.selectedNode, "sel");
+    es.forEach(id => markEdge(id, "hi"));
+  } else if (state.selectedEdge) {
+    svg.classList.add("has-focus");
+    const e = CUR.edges.find(x => x.id === state.selectedEdge);
+    if (e) { markNode(e.from, "hi"); markNode(e.to, "hi"); markEdge(e.id, "hi"); }
+  }
+}
+function markNode(id, cls) {
+  const n = gNodes.querySelector(`.node[data-node="${id}"]`);
+  if (n) n.classList.add(cls);
+}
+function markEdge(id, cls) {
+  gEdges.querySelectorAll(`.edge[data-edge="${id}"]`).forEach(e => e.classList.add(cls));
+  if (cls === "hi") { const l = gLabels.querySelector(`.edgelabel[data-edge="${id}"]`); if (l) l.classList.add("hi"); }
+}
+function markEdgePair(a, b, cls) {
+  if (!a || !b) return;
+  CUR.edges.forEach(e => {
+    if ((e.from === a && e.to === b) || (e.from === b && e.to === a)) {
+      gEdges.querySelectorAll(`.edge[data-edge="${e.id}"]`).forEach(x => x.classList.add(cls));
+    }
+  });
+}
+
+/* ============================================================================
+ * 7. DETAILS PANEL
+ * ==========================================================================*/
+const details = document.getElementById("details");
+const detailsBody = document.getElementById("details-body");
+function openNodeDetails(id) {
+  const n = byId[id];
+  const col = layerColor(n.layer);
+  const drill = hasChildren(n.id)
+    ? `<button class="btn" id="drill-btn" style="margin-top:6px">${state.expanded.has(n.id) ? "Collapse" : "Expand"} ${childrenOf[n.id].length} files</button>` : "";
+  detailsBody.innerHTML = `
+    <h2>${n.label}</h2>
+    <div class="path">${n.path || ""}</div>
+    <span class="tag" style="background:${col}22;color:${col}">${LAYERS.find(l=>l.id===n.layer).label}</span>
+    <p>${n.desc || ""}</p>
+    ${n.sends && n.sends !== "—" ? `<div class="kv"><b>Sends →</b>${escapeHtml(n.sends)}</div>` : ""}
+    ${n.receives && n.receives !== "—" ? `<div class="kv"><b>← Receives</b>${escapeHtml(n.receives)}</div>` : ""}
+    ${drill}
+  `;
+  if (hasChildren(n.id)) document.getElementById("drill-btn").onclick = () => toggleExpand(n.id);
+  details.classList.add("open");
+}
+function openEdgeDetails(id) {
+  const e = CUR.edges.find(x => x.id === id);
+  if (!e) return;
+  const a = byId[e.from], b = byId[e.to];
+  detailsBody.innerHTML = `
+    <h2>${e.kind === "dataflow" ? "Data flow" : "Import / dependency"}</h2>
+    <div class="kv"><b>From</b>${a.label}</div>
+    <div class="kv"><b>To</b>${b.label}</div>
+    <div class="kv"><b>What crosses</b>${escapeHtml(e.data || "(structural dependency)")}</div>
+  `;
+  details.classList.add("open");
+}
+function escapeHtml(s) { return String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+document.getElementById("details-close").onclick = () => {
+  details.classList.remove("open");
+  state.selectedNode = state.selectedEdge = null;
+  if (state.view !== "seq") applyHighlight();
+};
+
+function toggleExpand(id) {
+  if (state.expanded.has(id)) state.expanded.delete(id); else state.expanded.add(id);
+  state.selectedNode = null; state.selectedEdge = null;
+  draw();
+  openNodeDetails(id); // keeps the panel showing an Expand/Collapse affordance
+}
+
+/* ============================================================================
+ * 8. INTERACTION  (tap/click, hover, pan, pinch-zoom)
+ * ==========================================================================*/
+const stage = document.getElementById("stage");
+
+function applyTransform() {
+  document.getElementById("viewport").setAttribute("transform", `translate(${view.x},${view.y}) scale(${view.k})`);
+}
+function fit() {
+  const rect = stage.getBoundingClientRect();
+  const pad = 30;
+  const k = Math.min((rect.width - pad * 2) / CUR.width, (rect.height - pad * 2) / CUR.height, 1.1);
+  view.k = Math.max(k, 0.25);
+  view.x = (rect.width - CUR.width * view.k) / 2;
+  view.y = pad;
+  applyTransform();
+}
+
+// desktop hover preview (no-op while a sequence is running)
+let hoverLocked = false;
+svg.addEventListener("mousemove", (ev) => {
+  if (state.view === "seq" && state.step >= 0) return;
+  if (state.selectedNode || state.selectedEdge || state.search) return;
+  const nodeEl = ev.target.closest(".node");
+  if (nodeEl) {
+    svg.classList.add("has-focus");
+    gNodes.querySelectorAll(".node").forEach(n => n.classList.remove("hi"));
+    gEdges.querySelectorAll(".edge").forEach(e => e.classList.remove("hi"));
+    gLabels.querySelectorAll(".edgelabel").forEach(e => e.classList.remove("hi"));
+    const { ns, es } = neighborsOf(nodeEl.getAttribute("data-node"));
+    ns.forEach(id => markNode(id, "hi")); es.forEach(id => markEdge(id, "hi"));
+    hoverLocked = true;
+  } else if (hoverLocked) { hoverLocked = false; applyHighlight(); }
+});
+svg.addEventListener("mouseleave", () => { if (hoverLocked) { hoverLocked = false; applyHighlight(); } });
+
+// pan + pinch via pointer events.
+// NOTE: we deliberately do NOT setPointerCapture on pointerdown — capturing the
+// pointer to `stage` makes Chromium retarget the synthesized `click` to `stage`,
+// so taps would never reach a node/edge. We only capture once a real drag starts.
+const pointers = new Map();
+let panStart = null, pinchStart = null, moved = false;
+const DRAG_THRESHOLD = 4;
+stage.addEventListener("pointerdown", (e) => {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  moved = false;
+  if (pointers.size === 1) { panStart = { id: e.pointerId, x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }; }
+  else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchStart = { dist: dist(a, b), k: view.k, cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, vx: view.x, vy: view.y };
+    panStart = null;
+  }
+});
+stage.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pointers.size >= 2 && pinchStart) {
+    const [a, b] = [...pointers.values()];
+    const k = clampK(pinchStart.k * (dist(a, b) / pinchStart.dist));
+    const rect = stage.getBoundingClientRect();
+    const cx = pinchStart.cx - rect.left, cy = pinchStart.cy - rect.top;
+    view.x = cx - ((cx - pinchStart.vx) / pinchStart.k) * k; // keep midpoint stable
+    view.y = cy - ((cy - pinchStart.vy) / pinchStart.k) * k;
+    view.k = k; applyTransform(); moved = true;
+  } else if (pointers.size === 1 && panStart) {
+    const dx = e.clientX - panStart.x, dy = e.clientY - panStart.y;
+    if (!moved && Math.abs(dx) + Math.abs(dy) > DRAG_THRESHOLD) {
+      moved = true; stage.classList.add("grabbing");
+      try { stage.setPointerCapture(panStart.id); } catch (_) {}
+    }
+    if (moved) { view.x = panStart.vx + dx; view.y = panStart.vy + dy; applyTransform(); }
+  }
+});
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinchStart = null;
+  if (pointers.size === 0) { panStart = null; stage.classList.remove("grabbing"); }
+}
+stage.addEventListener("pointerup", endPointer);
+stage.addEventListener("pointercancel", endPointer);
+
+// taps: single handler on `stage` so node/edge/background all resolve via bubbling.
+stage.addEventListener("click", (ev) => {
+  if (moved) { moved = false; return; } // it was a drag, not a tap
+  const nodeEl = ev.target.closest && ev.target.closest(".node");
+  const edgeEl = ev.target.closest && ev.target.closest("[data-edge]");
+  if (nodeEl) {
+    const id = nodeEl.getAttribute("data-node");
+    if (hasChildren(id)) { toggleExpand(id); return; } // drill in/out on tap
+    state.selectedNode = id; state.selectedEdge = null;
+    if (state.view !== "seq") applyHighlight();
+    openNodeDetails(id);
+  } else if (edgeEl) {
+    const id = edgeEl.getAttribute("data-edge");
+    state.selectedEdge = id; state.selectedNode = null;
+    if (state.view !== "seq") applyHighlight();
+    openEdgeDetails(id);
+  } else {
+    if (state.view === "seq") return;
+    state.selectedNode = state.selectedEdge = null;
+    details.classList.remove("open"); applyHighlight();
+  }
+});
+
+stage.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = stage.getBoundingClientRect();
+  const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+  const k = clampK(view.k * (e.deltaY < 0 ? 1.12 : 0.89));
+  view.x = cx - ((cx - view.x) / view.k) * k;
+  view.y = cy - ((cy - view.y) / view.k) * k;
+  view.k = k; applyTransform();
+}, { passive: false });
+
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+function clampK(k) { return Math.min(3, Math.max(0.2, k)); }
+function zoomBy(f) {
+  const rect = stage.getBoundingClientRect(), cx = rect.width / 2, cy = rect.height / 2;
+  const k = clampK(view.k * f);
+  view.x = cx - ((cx - view.x) / view.k) * k; view.y = cy - ((cy - view.y) / view.k) * k;
+  view.k = k; applyTransform();
+}
+document.getElementById("zoom-in").onclick = () => zoomBy(1.2);
+document.getElementById("zoom-out").onclick = () => zoomBy(0.83);
+document.getElementById("reset-view").onclick = fit;
+
+/* ============================================================================
+ * 9. TOP BAR CONTROLS
+ * ==========================================================================*/
+// layer chips
+const chips = document.getElementById("layerchips");
+LAYERS.forEach(L => {
+  const c = document.createElement("span");
+  c.className = "layerchip"; c.dataset.layer = L.id; c.dataset.off = "false";
+  c.innerHTML = `<span class="dot" style="background:${layerColor(L.id)}"></span>${L.label.split(" · ")[0]}`;
+  c.onclick = () => {
+    if (state.hiddenLayers.has(L.id)) state.hiddenLayers.delete(L.id); else state.hiddenLayers.add(L.id);
+    c.dataset.off = state.hiddenLayers.has(L.id) ? "true" : "false";
+    draw(); fit();
+  };
+  chips.appendChild(c);
+});
+
+function setView(v) {
+  state.view = v;
+  document.getElementById("view-arch").setAttribute("aria-pressed", v === "arch");
+  document.getElementById("view-deps").setAttribute("aria-pressed", v === "deps");
+  document.getElementById("view-seq").setAttribute("aria-pressed", v === "seq");
+  document.getElementById("seqbar").classList.toggle("open", v === "seq");
+  if (v === "seq") { state.selectedNode = state.selectedEdge = null; details.classList.remove("open"); loadSeq(0); }
+  else { stopPlay(); state.step = -1; }
+  draw(); fit();
+}
+document.getElementById("view-arch").onclick = () => setView("arch");
+document.getElementById("view-deps").onclick = () => setView("deps");
+document.getElementById("view-seq").onclick = () => setView("seq");
+
+document.getElementById("toggle-labels").onchange = (e) => {
+  state.showLabels = e.target.checked;
+  gLabels.style.display = state.showLabels ? "" : "none";
+};
+document.getElementById("expand-all").onclick = () => {
+  const allOpen = NODES.filter(hasChildrenNode).every(n => state.expanded.has(n.id));
+  state.expanded = allOpen ? new Set() : new Set(NODES.filter(hasChildrenNode).map(n => n.id));
+  document.getElementById("expand-all").textContent = allOpen ? "Expand all" : "Collapse all";
+  draw(); fit();
+};
+function hasChildrenNode(n) { return hasChildren(n.id); }
+
+const searchEl = document.getElementById("search");
+searchEl.oninput = () => {
+  state.search = searchEl.value.trim();
+  if (state.search) { // reveal matches by expanding modules
+    state.expanded = new Set(NODES.filter(hasChildrenNode).map(n => n.id));
+    draw();
+  } else { draw(); }
+  applyHighlight();
+};
+
+/* ============================================================================
+ * 10. SEQUENCES
+ * ==========================================================================*/
+const seqSelect = document.getElementById("seq-select");
+SEQUENCES.forEach((s, i) => { const o = document.createElement("option"); o.value = i; o.textContent = s.name; seqSelect.appendChild(o); });
+const seqCap = document.getElementById("seqcap");
+const seqProgress = document.getElementById("seqprogress");
+
+function loadSeq(i) { state.seq = i; state.step = -1; seqSelect.value = i; renderStep(); }
+function renderStep() {
+  const steps = SEQUENCES[state.seq].steps;
+  if (state.step < 0) {
+    seqCap.innerHTML = `<span class="hint">“${SEQUENCES[state.seq].name}” — press Next ›</span>`;
+    seqProgress.textContent = `0 / ${steps.length}`;
+  } else {
+    seqCap.innerHTML = `<b>Step ${state.step + 1}.</b> ${steps[state.step].cap}`;
+    seqProgress.textContent = `${state.step + 1} / ${steps.length}`;
+  }
+  applyHighlight();
+}
+seqSelect.onchange = () => loadSeq(+seqSelect.value);
+document.getElementById("seq-prev").onclick = () => { stopPlay(); state.step = Math.max(-1, state.step - 1); renderStep(); };
+document.getElementById("seq-next").onclick = () => { stopPlay(); nextStep(); };
+function nextStep() {
+  const steps = SEQUENCES[state.seq].steps;
+  if (state.step < steps.length - 1) state.step++; else state.step = 0;
+  renderStep();
+}
+const playBtn = document.getElementById("seq-play");
+playBtn.onclick = () => {
+  if (state.playTimer) { stopPlay(); return; }
+  playBtn.textContent = "❚❚ Pause";
+  if (state.step >= SEQUENCES[state.seq].steps.length - 1) state.step = -1;
+  state.playTimer = setInterval(() => {
+    const steps = SEQUENCES[state.seq].steps;
+    if (state.step < steps.length - 1) { state.step++; renderStep(); } else { stopPlay(); }
+  }, 1900);
+  nextStep();
+};
+function stopPlay() { if (state.playTimer) { clearInterval(state.playTimer); state.playTimer = null; } playBtn.textContent = "▶ Play"; }
+
+/* ============================================================================
+ * 11. BOOT
+ * ==========================================================================*/
+draw();
+fit();
+window.addEventListener("resize", () => { /* keep transform; just allow redraw on demand */ });
+</script>
+</body>
+</html>
