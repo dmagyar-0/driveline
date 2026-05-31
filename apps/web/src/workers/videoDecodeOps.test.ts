@@ -7,6 +7,7 @@ import {
   detectMp4Framing,
   findSps,
   hex,
+  makeOpQueue,
   pickStartCursor,
   ptsToMicros,
   shouldRefill,
@@ -563,5 +564,59 @@ describe("pickStartCursor", () => {
         expect(pickedPts).toBeLessThanOrEqual(t);
       }
     }
+  });
+});
+
+describe("makeOpQueue", () => {
+  // Regression guard for the comma2k19 "stream stalled" wedge: the video
+  // decode worker's open/seek/close MUST run one-at-a-time. When they
+  // overlapped (a jump landing mid-reopen), one reopen reset a decoder another
+  // was configuring, a delta NAL reached the decoder before its keyframe, and
+  // the stream died with `DataError: A key frame is required` — frozen canvas,
+  // blit queue drained to 0, "stream stalled". Reproduced live on comma2k19.
+  it("never lets two ops overlap, and preserves submission order", async () => {
+    const { runExclusive } = makeOpQueue();
+    let active = 0;
+    let maxActive = 0;
+    const completed: number[] = [];
+    const op = (id: number, delayMs: number) =>
+      runExclusive(async () => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((r) => setTimeout(r, delayMs));
+        completed.push(id);
+        active -= 1;
+      });
+    // Slow op first, then two fast ones. Without serialisation the fast ops
+    // would start while the slow one is still awaiting (maxActive >= 2) and
+    // could complete out of order.
+    await Promise.all([op(1, 25), op(2, 1), op(3, 1)]);
+    expect(maxActive).toBe(1);
+    expect(completed).toEqual([1, 2, 3]);
+  });
+
+  it("keeps the queue alive after an op rejects", async () => {
+    const { runExclusive } = makeOpQueue();
+    await expect(
+      runExclusive(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    // A failed op must not stall the chain — the next op still runs.
+    await expect(runExclusive(async () => 42)).resolves.toBe(42);
+  });
+
+  it("runs a later op strictly after an earlier one resolves", async () => {
+    const { runExclusive } = makeOpQueue();
+    const events: string[] = [];
+    const first = runExclusive(async () => {
+      await new Promise((r) => setTimeout(r, 15));
+      events.push("first-done");
+    });
+    const second = runExclusive(async () => {
+      events.push("second-start");
+    });
+    await Promise.all([first, second]);
+    expect(events).toEqual(["first-done", "second-start"]);
   });
 });

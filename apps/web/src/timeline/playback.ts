@@ -155,7 +155,10 @@ export function startPlaybackLoop(
           allReady = false;
           break;
         }
-        // "ready" → continue. "stalled" → ignore for cursor gating.
+        // "ready" → continue. "stalled"/"uncovered" → ignore for cursor
+        // gating: a stalled panel has its own error UI, and an uncovered
+        // panel simply has no frame at this time — neither should freeze
+        // playback for the other panels (signals must keep rolling).
       }
       if (!allReady) {
         cursorGated = true;

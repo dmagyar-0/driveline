@@ -22,6 +22,7 @@ import {
   codecStringFromSps,
   findSps,
   hex,
+  makeOpQueue,
   ptsToMicros,
   shouldRefill,
   videoStreamOps,
@@ -379,6 +380,19 @@ async function closeInternal(): Promise<void> {
   }
 }
 
+// --- open / seek serialisation ---------------------------------------------
+//
+// `open()`, `seek()` and `close()` each tear the current session down and
+// rebuild it; running two concurrently corrupts the shared decoder and wedges
+// the stream permanently (see `makeOpQueue` in `videoDecodeOps` for the full
+// failure mode + the DataError/EncodingError it produces). `runExclusive`
+// chains every open/seek/close so their bodies never overlap. `seekGeneration`
+// then coalesces a burst to last-wins: a queued seek already superseded by a
+// newer one returns immediately instead of replaying a now-pointless
+// teardown+reopen, so the chain drains straight to the final target.
+const { runExclusive } = makeOpQueue();
+let seekGeneration = 0;
+
 export const videoDecodeApi = {
   ping(): string {
     return "pong";
@@ -415,38 +429,51 @@ export const videoDecodeApi = {
     channelId: string,
     fromPtsNs: bigint,
   ): Promise<OpenResult> {
-    const result = await openInternal(
-      sourceKind,
-      sourceHandle,
-      channelId,
-      fromPtsNs,
-    );
-    if (session && pendingSink) session.sink = pendingSink;
-    return result;
+    return runExclusive(async () => {
+      const result = await openInternal(
+        sourceKind,
+        sourceHandle,
+        channelId,
+        fromPtsNs,
+      );
+      if (session && pendingSink) session.sink = pendingSink;
+      return result;
+    });
   },
-  async seek(targetNs: bigint): Promise<void> {
-    if (!session) return;
-    // Duplicate-target guard: the debounced effect in VideoPanel can fire
-    // with an unchanged target after a drag that ended on the same PTS.
-    // The teardown+reopen round-trip isn't free, so skip it.
-    if (session.lastOpenedFromNs === targetNs) return;
-    const { sourceKind, sourceHandle, channelId, ops } = session;
-    try {
-      session.decoder.reset();
-    } catch {
-      // If the decoder is already closed, restart fresh below.
-    }
-    const prevStreamId = session.streamId;
-    try {
-      await ops.close(prevStreamId);
-    } catch {
-      // ignore
-    }
-    await openInternal(sourceKind, sourceHandle, channelId, targetNs);
-    if (session && pendingSink) session.sink = pendingSink;
+  async seek(targetNs: bigint, force = false): Promise<void> {
+    // Stamp this seek up front so a newer one issued while we wait in the
+    // queue can supersede us. `force` (the panel's "retry") bypasses both the
+    // coalescing skip and the duplicate-target guard so a user can always
+    // re-prime a stream that has gone bad at the current cursor.
+    const myGen = ++seekGeneration;
+    await runExclusive(async () => {
+      // Coalesce: a queued seek that a later seek has already superseded does
+      // nothing — the newer one will reopen at the final target.
+      if (!force && myGen !== seekGeneration) return;
+      if (!session) return;
+      // Duplicate-target guard: the debounced effect in VideoPanel can fire
+      // with an unchanged target after a drag that ended on the same PTS.
+      // The teardown+reopen round-trip isn't free, so skip it — unless the
+      // caller forces it (retry re-seeks the same PTS on a wedged stream).
+      if (!force && session.lastOpenedFromNs === targetNs) return;
+      const { sourceKind, sourceHandle, channelId, ops } = session;
+      try {
+        session.decoder.reset();
+      } catch {
+        // If the decoder is already closed, restart fresh below.
+      }
+      const prevStreamId = session.streamId;
+      try {
+        await ops.close(prevStreamId);
+      } catch {
+        // ignore
+      }
+      await openInternal(sourceKind, sourceHandle, channelId, targetNs);
+      if (session && pendingSink) session.sink = pendingSink;
+    });
   },
   async close(): Promise<void> {
-    await closeInternal();
+    await runExclusive(() => closeInternal());
   },
 };
 
