@@ -1,0 +1,119 @@
+/* First-run empty state. Overlays the workspace (which stays mounted
+ * behind it) and is removed entirely once a session is loaded. */
+.root {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-7);
+  padding: var(--sp-9);
+  background: var(--color-bg-1);
+  text-align: center;
+}
+
+.glyph {
+  width: 56px;
+  height: 56px;
+}
+
+.title {
+  font-size: var(--fs-18);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-2);
+}
+
+.body {
+  max-width: 440px;
+  font-size: var(--fs-13);
+  color: var(--color-fg-5);
+  line-height: var(--lh-body);
+}
+
+.code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--color-fg-4);
+}
+
+.chips {
+  display: flex;
+  gap: var(--sp-4);
+}
+
+.kindChip {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: var(--fw-semibold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-4);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  padding: 2px 8px;
+  border-radius: var(--radius-3);
+}
+
+.loadBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  margin-top: var(--sp-3);
+  padding: 9px 18px;
+  background: var(--color-accent-orange);
+  border: 1px solid var(--color-accent-orange);
+  color: var(--color-bg-1);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  transition:
+    background var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.loadBtn:hover {
+  background: var(--color-accent-orange-hover);
+  border-color: var(--color-accent-orange-hover);
+}
+
+.loadBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.kbd {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
+}
+
+.kbd kbd {
+  color: var(--color-fg-3);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  padding: 1px 5px;
+}
+
+.hiddenInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  padding: 0;
+  margin: -1px;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loadBtn {
+    transition: none;
+  }
+}
