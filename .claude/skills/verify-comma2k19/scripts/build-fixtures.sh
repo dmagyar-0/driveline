@@ -148,12 +148,12 @@ spawn mf4  "gnss"                 "$OUTDIR/comma2k19_gnss.mf4"
 
 # C. per-segment files at proper segment-start offsets
 #    args: kind only out seg-idx seg-offset-seconds
-spawn mcap "" "$OUTDIR/comma2k19_seg10.mcap" 0 600
-spawn mf4  "" "$OUTDIR/comma2k19_seg10.mf4"  0 600
-spawn mcap "" "$OUTDIR/comma2k19_seg4.mcap"  1 240
-spawn mf4  "" "$OUTDIR/comma2k19_seg4.mf4"   1 240
-spawn mcap "" "$OUTDIR/comma2k19_seg7.mcap"  2 420
-spawn mf4  "" "$OUTDIR/comma2k19_seg7.mf4"   2 420
+spawn mcap "" "$OUTDIR/comma2k19_seg10_at600s.mcap" 0 600
+spawn mf4  "" "$OUTDIR/comma2k19_seg10_at600s.mf4"  0 600
+spawn mcap "" "$OUTDIR/comma2k19_seg4_at240s.mcap"  1 240
+spawn mf4  "" "$OUTDIR/comma2k19_seg4_at240s.mf4"   1 240
+spawn mcap "" "$OUTDIR/comma2k19_seg7_at420s.mcap"  2 420
+spawn mf4  "" "$OUTDIR/comma2k19_seg7_at420s.mf4"   2 420
 
 FAILED=0
 for pid in "${PIDS[@]}"; do

@@ -315,20 +315,27 @@ test.describe("comma2k19 dashcam + CAN", () => {
     // 2018-07-27--06-03-57 drive, each emitted as MCAP + MF4 with the
     // correct segment-start wall-clock so they line up on the unified
     // timeline rather than stacking at the drive root).
+    // These are the OFFSET signal variants: each is anchored N*60 s past
+    // the drive root (seg4 → +240 s, seg7 → +420 s, seg10 → +600 s) so the
+    // three 60 s blocks tile the timeline without overlapping. The `_atNNNs`
+    // suffix is load-bearing — the un-suffixed `comma2k19.mcap`/`.mf4` are
+    // the ZERO-offset variants that align with the dashcam, and mixing the
+    // two would land the signals 10 min away from the video (see README).
     const RELS = [
-      "realworld/comma2k19_seg4.mcap",
-      "realworld/comma2k19_seg4.mf4",
-      "realworld/comma2k19_seg7.mcap",
-      "realworld/comma2k19_seg7.mf4",
-      "realworld/comma2k19_seg10.mcap",
-      "realworld/comma2k19_seg10.mf4",
+      "realworld/comma2k19_seg4_at240s.mcap",
+      "realworld/comma2k19_seg4_at240s.mf4",
+      "realworld/comma2k19_seg7_at420s.mcap",
+      "realworld/comma2k19_seg7_at420s.mf4",
+      "realworld/comma2k19_seg10_at600s.mcap",
+      "realworld/comma2k19_seg10_at600s.mf4",
     ];
     test.skip(
       !RELS.every((r) =>
         existsSync(path.resolve(__dirname, "../../../sample-data", r)),
       ),
       "multi-segment comma2k19 fixtures missing — regenerate with " +
-        "scripts/convert_comma2k19_to_{mcap,mf4}.py at offsets 240/420/600",
+        "scripts/convert_comma2k19_to_{mcap,mf4}.py at offsets 240/420/600 " +
+        "(output names carry the _atNNNs offset suffix)",
     );
 
     // Custom layout: two PlotPanel tabs side by side, stable ids so
@@ -423,24 +430,24 @@ test.describe("comma2k19 dashcam + CAN", () => {
     // Plot 1 — chassis CAN speed (MCAP) and front-left wheel speed
     // (MF4), one each per segment. Six series, all m/s.
     const plot1Ids = [
-      pick(/seg4\.mcap/, "/vehicle/speed"),
-      pick(/seg7\.mcap/, "/vehicle/speed"),
-      pick(/seg10\.mcap/, "/vehicle/speed"),
-      pick(/seg4\.mf4/, "WheelSpeedFL"),
-      pick(/seg7\.mf4/, "WheelSpeedFL"),
-      pick(/seg10\.mf4/, "WheelSpeedFL"),
+      pick(/seg4_at240s\.mcap/, "/vehicle/speed"),
+      pick(/seg7_at420s\.mcap/, "/vehicle/speed"),
+      pick(/seg10_at600s\.mcap/, "/vehicle/speed"),
+      pick(/seg4_at240s\.mf4/, "WheelSpeedFL"),
+      pick(/seg7_at420s\.mf4/, "WheelSpeedFL"),
+      pick(/seg10_at600s\.mf4/, "WheelSpeedFL"),
     ];
 
     // Plot 2 — steering wheel angle (MCAP, deg) and yaw-rate gyro
     // (MF4, rad/s), one each per segment. uPlot drops a second y-axis
     // for the differing units.
     const plot2Ids = [
-      pick(/seg4\.mcap/, "/vehicle/steering_angle"),
-      pick(/seg7\.mcap/, "/vehicle/steering_angle"),
-      pick(/seg10\.mcap/, "/vehicle/steering_angle"),
-      pick(/seg4\.mf4/, "IMU_Gyro_Z"),
-      pick(/seg7\.mf4/, "IMU_Gyro_Z"),
-      pick(/seg10\.mf4/, "IMU_Gyro_Z"),
+      pick(/seg4_at240s\.mcap/, "/vehicle/steering_angle"),
+      pick(/seg7_at420s\.mcap/, "/vehicle/steering_angle"),
+      pick(/seg10_at600s\.mcap/, "/vehicle/steering_angle"),
+      pick(/seg4_at240s\.mf4/, "IMU_Gyro_Z"),
+      pick(/seg7_at420s\.mf4/, "IMU_Gyro_Z"),
+      pick(/seg10_at600s\.mf4/, "IMU_Gyro_Z"),
     ];
 
     await page.evaluate(

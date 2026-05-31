@@ -105,6 +105,18 @@ PY
 pnpm --filter e2e exec playwright test _demo-comma2k19-video.spec.ts
 ```
 
+> ⚠️ **Use the zero-offset signal files with the dashcam.** The dashcam
+> (`comma2k19_seg10.mp4`) is anchored at the drive root (06:03:57, the
+> true segment-10 start). Pair it with `comma2k19.mcap` /
+> `comma2k19.mf4`, which share that anchor, so video and signals line up.
+> Do **not** pair it with the `comma2k19_seg10_at600s.*` files — those are
+> the multi-segment-demo variants shifted +600 s (see the next section),
+> so their signals sit 10 minutes *after* the video on the unified
+> timeline. Dropping the `_at600s` files next to the dashcam is exactly
+> what produces a long stretch of timeline where the video panel reads
+> "no video at this time" while the plots show data elsewhere — the files
+> are individually correct, just not meant to be combined.
+
 The `_demo-*` prefix keeps the spec out of the default CI run — it
 needs the three large fixtures above, which aren't checked in.
 
@@ -141,12 +153,15 @@ segments 4, 7, 10 of the 2018-07-27--06-03-57 drive:
 ```sh
 for entry in 0:10:600 1:4:240 2:7:420; do
   IFS=: read -r idx seg off <<<"$entry"
+  # The `_at${off}s` suffix records the offset in the filename so these
+  # multi-segment files are never mistaken for the zero-offset
+  # comma2k19.mcap/.mf4 that align with the dashcam (see warning below).
   python3 scripts/convert_comma2k19_to_mcap.py \
     --segment-index "$idx" --segment-offset-seconds "$off" \
-    --out "sample-data/realworld/comma2k19_seg${seg}.mcap"
+    --out "sample-data/realworld/comma2k19_seg${seg}_at${off}s.mcap"
   python3 scripts/convert_comma2k19_to_mf4.py \
     --segment-index "$idx" --segment-offset-seconds "$off" \
-    --out "sample-data/realworld/comma2k19_seg${seg}.mf4"
+    --out "sample-data/realworld/comma2k19_seg${seg}_at${off}s.mf4"
 done
 ```
 
