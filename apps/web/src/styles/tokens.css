@@ -34,8 +34,10 @@
 
   /* ---------- Color: accent (functional) ---------- */
   --color-accent-orange: #f97316; /* selected tab, splitter drag, brand */
+  --color-accent-orange-hover: #fb8c46; /* primary CTA hover (brand) */
   --color-accent-blue:   #2a6df4; /* focus ring, scrubber fill, selection */
   --color-accent-blue-tint: rgba(42, 109, 244, 0.06);
+  --color-accent-green-glow: rgba(16, 185, 129, 0.14); /* worker-ok dot halo */
 
   /* ---------- Color: status / semantic ---------- */
   --color-error:        #b23a00;  /* light bg */
@@ -113,8 +115,8 @@
   --shadow-1: var(--shadow-popover); /* alias of --shadow-popover (scrim/overlays) */
 
   /* ---------- Shell layout heights ---------- */
-  --shell-topbar-h: 36px;
-  --shell-transport-h: 32px;
+  --shell-topbar-h: 48px;
+  --shell-transport-h: 72px;
 
   /* ---------- Focus ring ---------- */
   --focus-ring: 2px solid var(--color-accent-blue);

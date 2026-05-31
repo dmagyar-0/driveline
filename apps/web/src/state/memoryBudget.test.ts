@@ -4,7 +4,7 @@
 // can drive every branch — present/absent and pressure on/off — without
 // depending on the host engine.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { getInitialBudgetBytes, memoryPressure } from "./memoryBudget";
 
 interface FakeMemory {

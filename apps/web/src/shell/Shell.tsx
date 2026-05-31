@@ -13,6 +13,7 @@ import type { ReactNode } from "react";
 import { TopBar } from "./TopBar";
 import { Rail } from "./Rail";
 import { Drawer } from "./Drawer";
+import { FirstRun } from "./FirstRun";
 import styles from "./Shell.module.css";
 
 export interface ShellProps {
@@ -81,7 +82,10 @@ export function Shell({
           addEnumPanel={addEnumPanel}
           resetLayout={resetLayout}
         />
-        <div className={styles.workMain}>{children}</div>
+        <div className={styles.workMain}>
+          {children}
+          <FirstRun />
+        </div>
       </div>
       {transport}
       {dragActive && (

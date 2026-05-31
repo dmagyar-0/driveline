@@ -314,56 +314,7 @@ export function Transport() {
       data-testid="transport"
       aria-disabled={disabled}
     >
-      <div className={styles.row}>
-        <div className={styles.btnGroup}>
-          <button
-            type="button"
-            className={styles.btnT}
-            data-testid="transport-prev-1s"
-            aria-label="Step back 1 second"
-            onClick={onPrev1s}
-            disabled={disabled}
-            title="Step back 1 s"
-          >
-            ◀◀
-          </button>
-          <button
-            type="button"
-            className={`${styles.btnT} ${styles.play}`}
-            data-testid="play-pause"
-            aria-label={playing ? "Pause" : "Play"}
-            aria-pressed={playing}
-            onClick={onPlayPause}
-            disabled={disabled}
-          >
-            {playing ? "❚❚" : "▶"}
-          </button>
-          <button
-            type="button"
-            className={styles.btnT}
-            data-testid="transport-next-1s"
-            aria-label="Step forward 1 second"
-            onClick={onNext1s}
-            disabled={disabled}
-            title="Step forward 1 s"
-          >
-            ▶▶
-          </button>
-          {/* Issue #2 — decode-waiting dot. Pulses when at least one
-           *  bound video panel has been "waiting" continuously for
-           *  ≥ 250 ms (hysteresis-managed in `useDecodeWaiting`).
-           *  Stalled panels surface their own per-panel error badge
-           *  instead, so they don't trigger this. */}
-          {decodeWaiting && (
-            <span
-              className={styles.decodeWaitingDot}
-              data-testid="transport-decode-waiting"
-              role="status"
-              aria-label="Waiting for video decode"
-              title="Waiting for video decode"
-            />
-          )}
-        </div>
+      <div className={styles.trackRow}>
         <span className={styles.time}>{startLabel}</span>
         <div
           ref={trackRef}
@@ -426,40 +377,98 @@ export function Transport() {
           </div>
         </div>
         <span className={styles.time}>{endLabel}</span>
-        <select
-          id="transport-speed"
-          className={styles.speed}
-          data-testid="transport-speed"
-          value={speed}
-          onChange={onSpeedChange}
-          disabled={disabled}
-          aria-label="Playback speed"
-        >
-          {SPEED_OPTIONS.map((v) => (
-            <option key={v} value={v}>
-              {v}×
-            </option>
-          ))}
-        </select>
       </div>
-      <div className={styles.metaRow}>
-        <span
-          className={styles.readout}
-          data-testid="transport-readout"
-          aria-live="off"
-        >
-          {readout}
-        </span>
-        <button
-          type="button"
-          className={styles.modeButton}
-          data-testid="transport-mode"
-          onClick={onModeToggle}
-          disabled={disabled}
-          title="Toggle absolute / relative time readout"
-        >
-          {mode === "relative" ? "relative" : "absolute"}
-        </button>
+
+      <div className={styles.controlsRow}>
+        <div className={styles.readoutGroup}>
+          <span
+            className={styles.readout}
+            data-testid="transport-readout"
+            aria-live="off"
+          >
+            {readout}
+          </span>
+          <button
+            type="button"
+            className={styles.modeButton}
+            data-testid="transport-mode"
+            onClick={onModeToggle}
+            disabled={disabled}
+            title="Toggle absolute / relative time readout"
+          >
+            {mode === "relative" ? "relative" : "absolute"}
+          </button>
+        </div>
+
+        {/* Centred playback controls (review comment: buttons in the middle). */}
+        <div className={styles.btnGroup}>
+          <button
+            type="button"
+            className={styles.btnT}
+            data-testid="transport-prev-1s"
+            aria-label="Step back 1 second"
+            onClick={onPrev1s}
+            disabled={disabled}
+            title="Step back 1 s"
+          >
+            ◀◀
+          </button>
+          <button
+            type="button"
+            className={`${styles.btnT} ${styles.play}`}
+            data-testid="play-pause"
+            aria-label={playing ? "Pause" : "Play"}
+            aria-pressed={playing}
+            onClick={onPlayPause}
+            disabled={disabled}
+          >
+            {playing ? "❚❚" : "▶"}
+          </button>
+          <button
+            type="button"
+            className={styles.btnT}
+            data-testid="transport-next-1s"
+            aria-label="Step forward 1 second"
+            onClick={onNext1s}
+            disabled={disabled}
+            title="Step forward 1 s"
+          >
+            ▶▶
+          </button>
+          {/* Issue #2 — decode-waiting dot. Pulses when at least one
+           *  bound video panel has been "waiting" continuously for
+           *  ≥ 250 ms (hysteresis-managed in `useDecodeWaiting`).
+           *  Stalled panels surface their own per-panel error badge
+           *  instead, so they don't trigger this. */}
+          {decodeWaiting && (
+            <span
+              className={styles.decodeWaitingDot}
+              data-testid="transport-decode-waiting"
+              role="status"
+              aria-label="Waiting for video decode"
+              title="Waiting for video decode"
+            />
+          )}
+        </div>
+
+        <div className={styles.rightGroup}>
+          <span className={styles.speedLabel}>speed</span>
+          <select
+            id="transport-speed"
+            className={styles.speed}
+            data-testid="transport-speed"
+            value={speed}
+            onChange={onSpeedChange}
+            disabled={disabled}
+            aria-label="Playback speed"
+          >
+            {SPEED_OPTIONS.map((v) => (
+              <option key={v} value={v}>
+                {v}×
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
     </div>
   );
