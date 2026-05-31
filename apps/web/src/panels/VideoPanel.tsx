@@ -110,6 +110,13 @@ export function VideoPanel({
   const rafRef = useRef<number | null>(null);
   const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sizedRef = useRef<boolean>(false);
+  // T7 — bound source's frame-coverage bounds, mirrored into refs so the
+  // rAF blit loop can read them without a reactive selector on the hot path.
+  // `uncoveredPaintedRef` debounces the black-fill so we clear the canvas
+  // once on entry into an uncovered region rather than every tick.
+  const coverageStartRef = useRef<bigint | null>(null);
+  const coverageEndRef = useRef<bigint | null>(null);
+  const uncoveredPaintedRef = useRef<boolean>(false);
   const videoDecodeRef = useRef<Comlink.Remote<VideoDecodeApi> | null>(null);
   const videoDecodeWorkerRef = useRef<Worker | null>(null);
 
@@ -177,6 +184,29 @@ export function VideoPanel({
   // playing state are read non-reactively below via `useSession.subscribe`
   // so a 60 Hz cursor tick during playback doesn't churn the React tree.
   const globalRange = useSession((s) => s.globalRange);
+
+  // T7 — this source's own time coverage. The cursor roams the whole
+  // session timeline, but a source only has frames inside [startNs, endNs]
+  // (e.g. a 60 s dashcam dropped alongside signals that span 11 min). When
+  // the cursor is outside it we show an honest "no video at this time"
+  // state instead of escalating to the misleading "stream stalled" error.
+  // Select the bounds as bigint primitives (not a fresh object) so a 60 Hz
+  // cursor tick — which lives in the same store — can't churn this panel.
+  const storeSourceKind = sourceKind === "mp4" ? "mp4+sidecar" : "mcap";
+  const coverageStartNs = useSession(
+    (s) =>
+      s.sources.find(
+        (x) => x.kind === storeSourceKind && x.handle === sourceHandle,
+      )?.timeRange.startNs ?? null,
+  );
+  const coverageEndNs = useSession(
+    (s) =>
+      s.sources.find(
+        (x) => x.kind === storeSourceKind && x.handle === sourceHandle,
+      )?.timeRange.endNs ?? null,
+  );
+  coverageStartRef.current = coverageStartNs;
+  coverageEndRef.current = coverageEndNs;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -330,35 +360,50 @@ export function VideoPanel({
     const tick = () => {
       const q = queueRef.current;
       const cursor = cursorRef.current;
-      // Walk forward while the next frame's PTS is also <= cursor. That
-      // leaves us with the newest frame in [−∞, cursor], exactly the one
-      // we want to blit.
-      let blitIdx = -1;
-      for (let i = 0; i < q.length; i++) {
-        if (q[i].ptsNs <= cursor) blitIdx = i;
-        else break;
-      }
-      if (blitIdx >= 0) {
-        // Close every frame strictly before the one we're about to blit,
-        // plus the one we blit (we keep it on the canvas via drawImage,
-        // but drop the handle; the canvas owns its own pixels from here).
-        const target = q[blitIdx];
-        for (let i = 0; i < blitIdx; i++) q[i].frame.close();
-        q.splice(0, blitIdx);
-        ctx.drawImage(
-          target.frame,
-          0,
-          0,
-          canvas.width,
-          canvas.height,
-        );
-        if (lastBlitPtsRef.current === null) {
-          mark("video:first-frame");
+      // T7 — is the cursor inside this source's frame coverage?
+      const covStart = coverageStartRef.current;
+      const covEnd = coverageEndRef.current;
+      const outOfCoverage =
+        covStart !== null &&
+        covEnd !== null &&
+        (cursor < covStart || cursor > covEnd);
+
+      if (outOfCoverage) {
+        // No frame exists at this cursor. Don't leave a stale frame from a
+        // different time on the canvas — paint it black once on entry so the
+        // panel reads as honestly empty. Readiness below reports "uncovered"
+        // (non-gating), so playback keeps rolling for the other panels.
+        if (!uncoveredPaintedRef.current && sizedRef.current) {
+          ctx.fillStyle = "#000";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          uncoveredPaintedRef.current = true;
         }
-        window.__drivelineVideoLastBlitPtsNs = target.ptsNs;
-        lastBlitPtsRef.current = target.ptsNs;
-        target.frame.close();
-        q.shift();
+      } else {
+        uncoveredPaintedRef.current = false;
+        // Walk forward while the next frame's PTS is also <= cursor. That
+        // leaves us with the newest frame in [−∞, cursor], exactly the one
+        // we want to blit.
+        let blitIdx = -1;
+        for (let i = 0; i < q.length; i++) {
+          if (q[i].ptsNs <= cursor) blitIdx = i;
+          else break;
+        }
+        if (blitIdx >= 0) {
+          // Close every frame strictly before the one we're about to blit,
+          // plus the one we blit (we keep it on the canvas via drawImage,
+          // but drop the handle; the canvas owns its own pixels from here).
+          const target = q[blitIdx];
+          for (let i = 0; i < blitIdx; i++) q[i].frame.close();
+          q.splice(0, blitIdx);
+          ctx.drawImage(target.frame, 0, 0, canvas.width, canvas.height);
+          if (lastBlitPtsRef.current === null) {
+            mark("video:first-frame");
+          }
+          window.__drivelineVideoLastBlitPtsNs = target.ptsNs;
+          lastBlitPtsRef.current = target.ptsNs;
+          target.frame.close();
+          q.shift();
+        }
       }
       // Publish a HUD snapshot every tick. Cheap (plain object) and the
       // dev hook needs it available whether or not the HUD is visible.
@@ -460,7 +505,15 @@ export function VideoPanel({
 
       // Compute readiness state with stalled escalation.
       let nextState: ReadyState;
-      if (isReady) {
+      if (outOfCoverage) {
+        // The cursor is outside this source's coverage — there is no frame
+        // to wait for. Report "uncovered" (the playback gate treats it as
+        // non-blocking, like "stalled") and reset the wait clock so a later
+        // jump back into coverage doesn't inherit a stale "we've been
+        // waiting forever" timestamp and instantly escalate to stalled.
+        nextState = "uncovered";
+        waitingSinceMsRef.current = null;
+      } else if (isReady) {
         nextState = "ready";
         waitingSinceMsRef.current = null;
         lastReadyMsRef.current = nowMsRead;
@@ -560,13 +613,17 @@ export function VideoPanel({
   const onRetry = () => {
     // Re-issue a seek against the current cursor. The seek pipeline
     // tears down + reconfigures the decoder, which is exactly what a
-    // user pressing "retry" on a broken stream wants.
+    // user pressing "retry" on a broken stream wants. `force` bypasses
+    // the worker's duplicate-target / coalescing guards so retry always
+    // re-primes — otherwise a stall whose cursor still equals the last
+    // opened target (or a seek superseded mid-stall) would no-op and the
+    // stream would stay frozen.
     const target = useSession.getState().cursorNs;
     const client = videoDecodeRef.current;
     if (!client) return;
     waitingSinceMsRef.current = null;
     lastReadyMsRef.current = performance.now();
-    void client.seek(target).catch(() => undefined);
+    void client.seek(target, true).catch(() => undefined);
   };
 
   // Cursor + seek side effect.
@@ -685,6 +742,19 @@ export function VideoPanel({
         className={styles.stats}
         aria-live="off"
       />
+      {/* T7 — neutral "no video at this time" pill when the cursor is
+       *  outside this source's coverage. Distinct from the stalled badge:
+       *  informational, no retry (there is nothing to retry — the source
+       *  simply has no frame here). */}
+      {readyState === "uncovered" && (
+        <div
+          className={styles.uncoveredBadge}
+          data-testid="video-panel-uncovered-badge"
+          role="status"
+        >
+          <span>no video at this time</span>
+        </div>
+      )}
       {/* Issue #2 — inline stalled badge. Inclusion-list rendering: only
        *  the "stalled" state surfaces this UI; "waiting" is the
        *  Transport's responsibility (the orange dot next to play). */}

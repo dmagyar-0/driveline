@@ -456,6 +456,30 @@ describe("playback loop gating (Issue #2)", () => {
     stop();
   });
 
+  it("ignores uncovered panels for gating (cursor proceeds)", async () => {
+    // T7 — a dashcam that only spans the first 60 s of an 11 min session
+    // reports "uncovered" once the cursor leaves its coverage. Like
+    // "stalled", an uncovered panel must NOT freeze playback — the signal
+    // panels keep rolling and the video shows its own "no video at this
+    // time" pill. Without this the decode-aware gate would deadlock the
+    // whole timeline on a partially-overlapping load.
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([["video-1", "uncovered"]]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["video-1"],
+    });
+
+    useSession.getState().play();
+    clock.advance(100);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(100_000_000n);
+    expect(isCursorGated()).toBe(false);
+    stop();
+  });
+
   it("multi-panel: one waiting holds the cursor; the rest don't matter", async () => {
     await loadSession();
     const clock = makeFakeClock();

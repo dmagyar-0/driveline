@@ -11,7 +11,16 @@
 // Hot-path writes reuse a per-panel scratch object, so the `tick`
 // allocation budget here is a single Map.set per panel per frame.
 
-export type ReadyState = "ready" | "waiting" | "stalled" | "absent";
+// "uncovered": the cursor is outside this source's time coverage, so there
+// is no frame to wait for. Non-gating for playback (like "stalled"), but it
+// is NOT an error — the panel shows an informational "no video at this time"
+// pill rather than the red stalled/retry badge.
+export type ReadyState =
+  | "ready"
+  | "waiting"
+  | "stalled"
+  | "uncovered"
+  | "absent";
 
 export interface PanelReadiness {
   state: ReadyState;

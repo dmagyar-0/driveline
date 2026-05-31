@@ -217,7 +217,7 @@ declare global {
       // tick. Both are read-only Playwright seams.
       getVideoReadiness: () => Array<{
         panelId: string;
-        state: "ready" | "waiting" | "stalled" | "absent";
+        state: "ready" | "waiting" | "stalled" | "uncovered" | "absent";
         lastReadyMs: number;
         waitingSinceMs: number | null;
         lastBlitPtsNs: string | null;
@@ -474,7 +474,7 @@ export function App() {
       getVideoReadiness: () => {
         const out: Array<{
           panelId: string;
-          state: "ready" | "waiting" | "stalled" | "absent";
+          state: "ready" | "waiting" | "stalled" | "uncovered" | "absent";
           lastReadyMs: number;
           waitingSinceMs: number | null;
           lastBlitPtsNs: string | null;

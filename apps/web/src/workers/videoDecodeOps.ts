@@ -451,3 +451,41 @@ export function shouldRefill(state: RefillState): boolean {
   if (state.lastEmittedPtsNs === null) return true;
   return state.lastEmittedPtsNs - state.cursorNs <= LOOKAHEAD_NS;
 }
+
+/**
+ * Serialises the async open/seek/close operations in `videoDecode.worker`.
+ *
+ * Each of those ops tears the decode session down and builds a new one
+ * (`reset()` the decoder, close the reader stream, reopen + reconfigure).
+ * If two run concurrently — a scrub burst, or a jump that lands while the
+ * previous reopen is still awaiting its first mp4 slice — one reopen will
+ * `reset()`/close a decoder the other is mid-`configure()` on, so a delta
+ * NAL reaches the decoder before its keyframe. WebCodecs then throws
+ * `DataError: A key frame is required after configure()` /
+ * `EncodingError: Decoder failed`, the worker latches the session as ended,
+ * and the stream wedges permanently ("stream stalled").
+ *
+ * `runExclusive` chains every submitted op onto a private promise queue so
+ * their bodies never overlap. A rejected op does NOT break the chain — the
+ * next op still runs. Returned from a factory (rather than module-level
+ * state) so the "ops never interleave" invariant is unit-testable without a
+ * real `VideoDecoder`.
+ */
+export function makeOpQueue(): {
+  runExclusive: <T>(fn: () => Promise<T>) => Promise<T>;
+} {
+  let opChain: Promise<unknown> = Promise.resolve();
+  function runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    // `.then(fn, fn)` runs `fn` whether the previous op fulfilled or
+    // rejected, so one failed op can't stall the queue forever.
+    const run = opChain.then(fn, fn);
+    // Swallow this op's result/error for the *chain's* purposes only; the
+    // caller still observes it through the returned `run` promise.
+    opChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+  return { runExclusive };
+}
