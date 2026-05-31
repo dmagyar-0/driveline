@@ -44,9 +44,8 @@ transcode() {
   local sidecar="$OUTDIR/comma2k19_seg10.mp4.timestamps"
   if [[ -s "$mp4" && -s "$sidecar" ]]; then
     echo "[mp4] already present"
-    return 0
-  fi
-  echo "[mp4] transcoding HEVC -> H.264"
+  else
+    echo "[mp4] transcoding HEVC -> H.264"
   ffmpeg -hide_banner -v error -y -framerate 20 -i "$HEVC" \
     -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
     -g 20 -keyint_min 20 -movflags +faststart -an "$mp4"
@@ -69,6 +68,26 @@ with open(sidecar, "w") as f:
         f.write(f"{i}\t{start_ns + i * period_ns}\n")
 print(f"[mp4] sidecar wrote {n} lines")
 PY
+  fi
+
+  # Second camera — a horizontally-flipped re-encode of the front
+  # dashcam, reusing the front sidecar verbatim (identical frame count +
+  # timing, so it stays time-aligned on the unified clock). comma2k19's
+  # public demo ships only one real camera; this stands in as a second
+  # feed for the multi-video dashboard / replay-latency / frame-check
+  # specs. Same encode params as the front so WebCodecs still decodes it.
+  local rear="$OUTDIR/comma2k19_rear.mp4"
+  local rear_ts="$OUTDIR/comma2k19_rear.mp4.timestamps"
+  if [[ -s "$rear" && -s "$rear_ts" ]]; then
+    echo "[mp4] rear camera already present"
+  else
+    echo "[mp4] building rear (hflip) camera"
+    ffmpeg -hide_banner -v error -y -i "$mp4" -vf hflip \
+      -c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p \
+      -g 20 -keyint_min 20 -movflags +faststart -an "$rear"
+    cp "$sidecar" "$rear_ts"
+    echo "[mp4] rear camera ready"
+  fi
 }
 transcode &
 PID_MP4=$!
