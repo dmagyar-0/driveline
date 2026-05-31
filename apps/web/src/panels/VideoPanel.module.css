@@ -114,3 +114,27 @@
 .stalledRetry:hover {
   background: var(--color-bg-6);
 }
+
+/* T7 — neutral "no video at this time" pill. Shown when the cursor is
+ * outside this source's time coverage (e.g. a 60 s dashcam dropped next
+ * to signals that span 11 min). Unlike .stalledBadge this is NOT an
+ * error: muted foreground tint, no retry button — there is simply no
+ * frame to show here. Centered over the black canvas like the stalled
+ * badge so a glance reads "intentionally empty", not "broken". */
+.uncoveredBadge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3, 6px);
+  padding: 6px 10px;
+  background: var(--scrim-hud);
+  color: var(--color-fg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3, 3px);
+  font: var(--fs-11) / 1.35 var(--font-mono, ui-monospace, Menlo, monospace);
+  pointer-events: none;
+}
