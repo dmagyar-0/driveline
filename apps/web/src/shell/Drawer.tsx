@@ -12,6 +12,9 @@ import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
 import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import { PanelDrawer } from "./drawers/PanelDrawer";
 import { EventsDrawer } from "./drawers/EventsDrawer";
+import { AddPanelMenu } from "./AddPanelMenu";
+import styles from "./Drawer.module.css";
+import type { RailTab } from "../state/persist/ui";
 
 // Shared id for the active drawer's <section role="region">. Drawers render
 // mutually exclusively so a single id is unambiguous; rail buttons reference
@@ -52,6 +55,44 @@ export function Drawer({
 }: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
   if (activeRailTab === null) return null;
+  return (
+    <div className={styles.host} data-testid="drawer-host">
+      <DrawerBody
+        activeRailTab={activeRailTab}
+        ensurePlotPanel={ensurePlotPanel}
+        addVideoPanel={addVideoPanel}
+        addPlotPanel={addPlotPanel}
+        addScenePanel={addScenePanel}
+        addMapPanel={addMapPanel}
+        addTablePanel={addTablePanel}
+        addEnumPanel={addEnumPanel}
+        resetLayout={resetLayout}
+      />
+      {/* Persistent shortcut: add a panel from whichever drawer is open,
+          not just the Layout tab. */}
+      <AddPanelMenu
+        addVideoPanel={addVideoPanel}
+        addPlotPanel={addPlotPanel}
+        addScenePanel={addScenePanel}
+        addMapPanel={addMapPanel}
+        addTablePanel={addTablePanel}
+        addEnumPanel={addEnumPanel}
+      />
+    </div>
+  );
+}
+
+function DrawerBody({
+  activeRailTab,
+  ensurePlotPanel,
+  addVideoPanel,
+  addPlotPanel,
+  addScenePanel,
+  addMapPanel,
+  addTablePanel,
+  addEnumPanel,
+  resetLayout,
+}: DrawerProps & { activeRailTab: RailTab }) {
   switch (activeRailTab) {
     case "sources":
       return <SourcesDrawer />;

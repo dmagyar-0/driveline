@@ -1,8 +1,19 @@
-.drawer {
+/* Column host: the active drawer (scrollable) stacked above the
+ * persistent "Add panel" footer. Carries the 220px width and the
+ * narrow-viewport overlay behaviour that used to live on `.drawer`. */
+.host {
   flex: 0 0 220px;
   width: 220px;
   background: var(--color-bg-3);
   border-right: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.drawer {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: var(--sp-6);
   overflow-y: auto;
   display: flex;
@@ -17,7 +28,7 @@
 }
 
 @media (max-width: 699px) {
-  .drawer {
+  .host {
     position: absolute;
     top: 0;
     left: 40px;
