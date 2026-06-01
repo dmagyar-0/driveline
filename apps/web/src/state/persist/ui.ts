@@ -12,6 +12,21 @@ import type { useSession } from "../store";
 export const UI_STORAGE_KEY = "driveline.ui.v1";
 export const UI_SCHEMA_VERSION = 1 as const;
 
+// Left settings drawer width (px). Default mirrors the historical fixed
+// 220px column; the user can drag the splitter between these bounds. The
+// max keeps the drawer from swallowing the workspace on a laptop screen.
+export const DRAWER_WIDTH_MIN = 220;
+export const DRAWER_WIDTH_MAX = 560;
+export const DRAWER_WIDTH_DEFAULT = 220;
+
+/** Clamp an arbitrary number into the drawer-width range, rounding to a
+ *  whole pixel. Non-finite input (NaN from a corrupt blob) falls back to
+ *  the default. */
+export function clampDrawerWidth(px: number): number {
+  if (!Number.isFinite(px)) return DRAWER_WIDTH_DEFAULT;
+  return Math.round(Math.min(DRAWER_WIDTH_MAX, Math.max(DRAWER_WIDTH_MIN, px)));
+}
+
 export type RailTab =
   | "sources"
   | "channels"
@@ -31,6 +46,7 @@ export interface PersistedUi {
   version: typeof UI_SCHEMA_VERSION;
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
+  drawerWidth: number;
 }
 
 function defaultStorage(): Storage | undefined {
@@ -51,10 +67,18 @@ function validate(raw: unknown): PersistedUi | null {
   const tab = raw.activeRailTab;
   if (tab !== null && !isRailTab(tab)) return null;
   if (typeof raw.railCollapsed !== "boolean") return null;
+  // `drawerWidth` was added after v1 first shipped, so a stored blob may
+  // lack it. Treat a missing/invalid value as "use the default" rather
+  // than rejecting the whole blob — that would needlessly drop the user's
+  // rail tab + collapse state. Anything present is clamped into range.
+  const drawerWidth = clampDrawerWidth(
+    typeof raw.drawerWidth === "number" ? raw.drawerWidth : DRAWER_WIDTH_DEFAULT,
+  );
   return {
     version: UI_SCHEMA_VERSION,
     activeRailTab: tab,
     railCollapsed: raw.railCollapsed,
+    drawerWidth,
   };
 }
 
@@ -93,6 +117,7 @@ export function saveUiToStorage(
 export interface UiSlice {
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
+  drawerWidth: number;
 }
 
 function snapshot(s: UiSlice): PersistedUi {
@@ -100,6 +125,7 @@ function snapshot(s: UiSlice): PersistedUi {
     version: UI_SCHEMA_VERSION,
     activeRailTab: s.activeRailTab,
     railCollapsed: s.railCollapsed,
+    drawerWidth: s.drawerWidth,
   };
 }
 
@@ -112,7 +138,8 @@ export function attachUiPersistence(
   return store.subscribe((s: UiSlice) => {
     if (
       s.activeRailTab === last.activeRailTab &&
-      s.railCollapsed === last.railCollapsed
+      s.railCollapsed === last.railCollapsed &&
+      s.drawerWidth === last.drawerWidth
     ) {
       return;
     }

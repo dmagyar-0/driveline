@@ -1,0 +1,42 @@
+/* Splitter between the settings drawer and the workspace. A 6px hit area
+ * with a 2px visible rule that lights up on hover / focus / drag. Only
+ * `opacity` animates, and it stays under the 150ms motion floor so it
+ * needs no reduced-motion fallback. Hidden on narrow viewports where the
+ * drawer overlays the workspace instead of pushing it. */
+.resizer {
+  flex: 0 0 6px;
+  align-self: stretch;
+  cursor: col-resize;
+  position: relative;
+  z-index: 4;
+  /* Keep the gesture crisp on touch / trackpad: the browser shouldn't
+   * pan or zoom while the user is dragging the splitter. */
+  touch-action: none;
+}
+
+.resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0 2px;
+  background: var(--color-border-subtle);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.resizer:hover::before,
+.resizer:focus-visible::before,
+.resizer[data-dragging="true"]::before {
+  opacity: 1;
+  background: var(--color-accent-blue);
+}
+
+.resizer:focus-visible {
+  outline: 2px solid var(--color-accent-blue);
+  outline-offset: -2px;
+}
+
+@media (max-width: 699px) {
+  .resizer {
+    display: none;
+  }
+}

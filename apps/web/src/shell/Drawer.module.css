@@ -1,6 +1,19 @@
+/* Sized wrapper: a flex row holding the drawer body plus the splitter
+ * handle. The inline `width` comes from the store (drag-resizable); the
+ * `max-width` cap keeps the drawer from overrunning the viewport when it
+ * overlays the workspace on narrow screens. */
+.host {
+  flex: 0 0 auto;
+  max-width: calc(100vw - 80px);
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  position: relative;
+}
+
 .drawer {
-  flex: 0 0 220px;
-  width: 220px;
+  flex: 1 1 auto;
+  min-width: 0;
   background: var(--color-bg-3);
   border-right: 1px solid var(--color-border-subtle);
   padding: var(--sp-6);
@@ -17,7 +30,7 @@
 }
 
 @media (max-width: 699px) {
-  .drawer {
+  .host {
     position: absolute;
     top: 0;
     left: 40px;

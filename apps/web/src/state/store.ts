@@ -21,7 +21,12 @@ import {
   loadLayoutFromStorage,
   type MapBinding,
 } from "../layout/persist";
-import { loadUiFromStorage, type RailTab } from "./persist/ui";
+import {
+  loadUiFromStorage,
+  clampDrawerWidth,
+  DRAWER_WIDTH_DEFAULT,
+  type RailTab,
+} from "./persist/ui";
 import {
   loadNamedLayoutsFromStorage,
   type NamedLayout,
@@ -179,6 +184,10 @@ export interface SessionState {
   // panel-chrome work in Phase 7.
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
+  // Width (px) of the left settings drawer. Persisted to `driveline.ui.v1`
+  // and clamped to [DRAWER_WIDTH_MIN, DRAWER_WIDTH_MAX] on every write. The
+  // splitter in `Drawer.tsx` drives this.
+  drawerWidth: number;
   selectedPanelId: string | null;
   // Named-layouts slice (Phase 4). User-saved snapshots of `layoutJson`
   // plus the binding maps; persists to `driveline.layouts.named.v1` and
@@ -288,6 +297,9 @@ export interface SessionState {
   setActiveRailTab(tab: RailTab | null): void;
   /** Hide / show the entire rail column. */
   setRailCollapsed(collapsed: boolean): void;
+  /** Resize the left settings drawer; the value is clamped to the
+   *  drawer-width bounds before it lands in the store. */
+  setDrawerWidth(px: number): void;
   /** Mark a panel as selected for the Panel drawer (Phase 7). */
   setSelectedPanelId(id: string | null): void;
   /**
@@ -458,6 +470,7 @@ export const useSession = create<SessionState>((set, get) => {
     enumBindings: hydrated?.enumBindings ?? {},
     activeRailTab: hydratedUi?.activeRailTab ?? null,
     railCollapsed: hydratedUi?.railCollapsed ?? false,
+    drawerWidth: hydratedUi?.drawerWidth ?? DRAWER_WIDTH_DEFAULT,
     selectedPanelId: null,
     namedLayouts: hydratedNamedLayouts?.layouts ?? [],
     activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
@@ -685,6 +698,12 @@ export const useSession = create<SessionState>((set, get) => {
     setRailCollapsed(collapsed) {
       if (get().railCollapsed === collapsed) return;
       set({ railCollapsed: collapsed });
+    },
+
+    setDrawerWidth(px) {
+      const next = clampDrawerWidth(px);
+      if (get().drawerWidth === next) return;
+      set({ drawerWidth: next });
     },
 
     setSelectedPanelId(id) {
