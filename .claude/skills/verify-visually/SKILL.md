@@ -1,9 +1,9 @@
 ---
-description: End-to-end verification of Driveline's comma2k19 demo path (real-world ADAS dataset, dashcam + signals across MCAP and MF4). Use when the user asks to verify the comma2k19 demo, regenerate the demo fixtures, run the `_demo-comma2k19-video.spec.ts` Playwright tests, or visualise comma2k19 dashcam + signals end-to-end. Also use when the user asks to "rebuild the fixtures", "redo the demo", or "check the dashcam + plots still render".
-allowed-tools: Bash(scripts/setup-test-env.sh*) Bash(.claude/skills/verify-comma2k19/scripts/*) Bash(pnpm *) Bash(python3 *) Bash(ls *) Bash(cat *) Bash(ffmpeg *) Bash(ffprobe *)
+description: ALWAYS use this skill whenever the user says "verify visually" (in any phrasing). End-to-end visual verification of Driveline's comma2k19 demo path (real-world ADAS dataset, dashcam + signals across MCAP and MF4): fetch the public sources, build the fixtures, run the Playwright specs, and surface the screenshots/recordings. Use when the user asks to "verify visually", verify the comma2k19 demo, regenerate the demo fixtures, run the `_demo-comma2k19-video.spec.ts` Playwright tests, or visualise comma2k19 dashcam + signals end-to-end. Also use when the user asks to "rebuild the fixtures", "redo the demo", or "check the dashcam + plots still render".
+allowed-tools: Bash(scripts/setup-test-env.sh*) Bash(.claude/skills/verify-visually/scripts/*) Bash(pnpm *) Bash(python3 *) Bash(ls *) Bash(cat *) Bash(ffmpeg *) Bash(ffprobe *)
 ---
 
-# verify-comma2k19
+# verify-visually
 
 End-to-end verification that the comma2k19 demo path still works: fetch
 the public sources, build every fixture, run the Playwright specs, and
@@ -67,7 +67,7 @@ addition; everything else is shared with `pnpm test`.
 ### 2. Fetch upstream sources (parallel, ~5–15 s warm cache)
 
 ```!
-.claude/skills/verify-comma2k19/scripts/fetch-sources.sh
+.claude/skills/verify-visually/scripts/fetch-sources.sh
 ```
 
 Downloads two files concurrently into `${DRIVELINE_DATASETS_DIR:-/tmp/datasets}`:
@@ -81,7 +81,7 @@ when an entry exists.
 ### 3. Build fixtures (parallel, ~10 s warm cache)
 
 ```!
-.claude/skills/verify-comma2k19/scripts/build-fixtures.sh
+.claude/skills/verify-visually/scripts/build-fixtures.sh
 ```
 
 12 converter runs plus the ffmpeg transcode all fire concurrently as
