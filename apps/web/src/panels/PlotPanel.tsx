@@ -22,7 +22,7 @@ import { useSession } from "../state/store";
 import type { Channel, SourceMeta, TimeRange } from "../state/store";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
-import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
+import { cursorStrokeColor, cursorXPx, nsFromXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
@@ -92,6 +92,15 @@ function lastIndexAtOrBefore(
   return ans;
 }
 
+// Compact value formatting for the live readout in each chip. Mirrors
+// TablePanel.formatValue so the two surfaces agree on how a sample reads.
+function formatValue(v: number): string {
+  if (!Number.isFinite(v)) return String(v);
+  const abs = Math.abs(v);
+  if (abs >= 1000 || (abs > 0 && abs < 0.01)) return v.toExponential(3);
+  return v.toFixed(3);
+}
+
 const EMPTY_X = new Float64Array();
 const EMPTY_Y = new Float64Array();
 const EMPTY_DATA: uPlot.AlignedData = [EMPTY_X, EMPTY_Y];
@@ -153,6 +162,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
+
+  // Bumped after each successful fetch so the chips' value-at-cursor
+  // readout recomputes when fresh data lands (the binary search reads a
+  // ref, which React can't subscribe to on its own). Mirrors
+  // TablePanel's `renderTick`.
+  const [dataEpoch, setDataEpoch] = useState(0);
 
   const channels = useMemo(() => channelMap(sources), [sources]);
   const boundChannels = useMemo(
@@ -407,6 +422,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       plot.setData(EMPTY_DATA);
       lastRangeRef.current = null;
       decodedRef.current = [];
+      setDataEpoch((n) => n + 1);
       publishSync();
       return;
     }
@@ -439,6 +455,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           channelId: c.id,
           series: decoded[i],
         }));
+        setDataEpoch((n) => n + 1);
         publishSync();
       } catch (err) {
         if (!aborted) console.error("PlotPanel fetch failed", err);
@@ -497,6 +514,101 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     };
   }, [panelId]);
 
+  // Value-at-cursor per bound channel, for the live readout in each chip.
+  // One binary search per channel against the retained raw timestamps —
+  // cheap enough to run every render (cursor scrub re-renders this panel
+  // anyway). `dataEpoch` is a hidden dependency: it bumps when a fetch
+  // swaps `decodedRef`, so the readout refreshes when new data lands.
+  void dataEpoch;
+  const valueAtCursor = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const { channelId, series } of decodedRef.current) {
+      const idx = lastIndexAtOrBefore(series.rawTsNs, cursorNs);
+      if (idx >= 0) m.set(channelId, series.ys[idx]);
+    }
+    return m;
+  }, [cursorNs, dataEpoch]);
+
+  // Drag-to-scrub on the plot. Mirrors the Transport scrubber: pointer
+  // capture so a drag that leaves the panel keeps tracking, and a single
+  // rAF-coalesced commit per frame so a fast drag never floods the cursor
+  // hot path with `setCursor` calls.
+  const pendingScrubNs = useRef<bigint | null>(null);
+  const scrubRafId = useRef<number | null>(null);
+
+  const flushScrub = useCallback(() => {
+    if (pendingScrubNs.current !== null) {
+      useSession.getState().setCursor(pendingScrubNs.current);
+      pendingScrubNs.current = null;
+    }
+    scrubRafId.current = null;
+  }, []);
+
+  const scheduleScrub = useCallback(
+    (ns: bigint) => {
+      pendingScrubNs.current = ns;
+      if (scrubRafId.current === null) {
+        scrubRafId.current = requestAnimationFrame(flushScrub);
+      }
+    },
+    [flushScrub],
+  );
+
+  // Map a pointer event to an absolute timestamp using uPlot's drawing
+  // bbox (in device pixels) so the commit lands where the overlay tick
+  // would draw it — i.e. inside the plotting area, not the axis gutter.
+  const nsFromPointer = useCallback(
+    (clientX: number): bigint | null => {
+      const plot = plotRef.current;
+      const container = containerRef.current;
+      const range = lastRangeRef.current ?? globalRange;
+      if (!plot || !container || !range) return null;
+      const rect = container.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      const leftPx = plot.bbox.left / dpr;
+      const widthPx = plot.bbox.width / dpr;
+      return nsFromXPx(clientX - rect.left - leftPx, range, widthPx);
+    },
+    [globalRange],
+  );
+
+  const onScrubPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!globalRange) return;
+    const ns = nsFromPointer(e.clientX);
+    if (ns === null) return;
+    containerRef.current?.setPointerCapture(e.pointerId);
+    scheduleScrub(ns);
+  };
+
+  const onScrubPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const container = containerRef.current;
+    if (!container || !container.hasPointerCapture(e.pointerId)) return;
+    const ns = nsFromPointer(e.clientX);
+    if (ns !== null) scheduleScrub(ns);
+  };
+
+  const onScrubPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const container = containerRef.current;
+    if (container?.hasPointerCapture(e.pointerId)) {
+      container.releasePointerCapture(e.pointerId);
+    }
+    if (scrubRafId.current !== null) {
+      cancelAnimationFrame(scrubRafId.current);
+      scrubRafId.current = null;
+    }
+    flushScrub();
+  };
+
+  // Cancel any in-flight scrub commit on unmount.
+  useEffect(() => {
+    return () => {
+      if (scrubRafId.current !== null) {
+        cancelAnimationFrame(scrubRafId.current);
+        scrubRafId.current = null;
+      }
+    };
+  }, []);
+
   const atCap = boundChannelIds.length >= MAX_PLOT_SERIES;
   const hasAnyScalar = useMemo(
     () => sources.some((s) => s.channels.some((c) => c.kind === "scalar")),
@@ -537,6 +649,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                 aria-hidden
               />
               <span className={styles.chipLabel}>{labelFor(c)}</span>
+              <span
+                className={styles.chipValue}
+                data-testid={`chip-value-${c.id}`}
+              >
+                {valueAtCursor.has(c.id)
+                  ? formatValue(valueAtCursor.get(c.id)!)
+                  : "—"}
+              </span>
               <button
                 type="button"
                 className={styles.chipRemove}
@@ -574,7 +694,23 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           onClose={() => setPickerOpen(false)}
         />
       )}
-      <div ref={containerRef} className={styles.plotArea}>
+      <div
+        ref={containerRef}
+        className={`${styles.plotArea} ${
+          globalRange ? styles.scrubbable : ""
+        }`}
+        role="slider"
+        tabIndex={globalRange ? 0 : -1}
+        aria-label="Scrub cursor on plot"
+        aria-valuemin={globalRange ? Number(globalRange.startNs) : 0}
+        aria-valuemax={globalRange ? Number(globalRange.endNs) : 0}
+        aria-valuenow={Number(cursorNs)}
+        aria-disabled={!globalRange}
+        onPointerDown={onScrubPointerDown}
+        onPointerMove={onScrubPointerMove}
+        onPointerUp={onScrubPointerUp}
+        onPointerCancel={onScrubPointerUp}
+      >
         <div ref={plotMountRef} className={styles.plotMount} />
         <canvas ref={overlayRef} className={styles.overlay} />
         {boundChannels.length === 0 && (

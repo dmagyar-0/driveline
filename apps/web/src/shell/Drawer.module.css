@@ -1,21 +1,23 @@
-/* Sized wrapper: a flex row holding the drawer body plus the splitter
- * handle. The inline `width` comes from the store (drag-resizable); the
- * `max-width` cap keeps the drawer from overrunning the viewport when it
- * overlays the workspace on narrow screens. */
+/* Column host: the active drawer (scrollable) stacked above the
+ * persistent "Add panel" footer. Width is drag-resizable — the inline
+ * `width` is driven from the store and the splitter handle is absolutely
+ * positioned on the right edge by `DrawerResizer`. The `max-width` cap
+ * keeps the drawer from overrunning the viewport when it overlays the
+ * workspace on narrow screens. `position: relative` anchors the handle. */
 .host {
   flex: 0 0 auto;
   max-width: calc(100vw - 80px);
+  background: var(--color-bg-3);
+  border-right: 1px solid var(--color-border-subtle);
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   min-height: 0;
   position: relative;
 }
 
 .drawer {
   flex: 1 1 auto;
-  min-width: 0;
-  background: var(--color-bg-3);
-  border-right: 1px solid var(--color-border-subtle);
+  min-height: 0;
   padding: var(--sp-6);
   overflow-y: auto;
   display: flex;

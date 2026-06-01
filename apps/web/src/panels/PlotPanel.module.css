@@ -55,6 +55,15 @@
   text-overflow: ellipsis;
 }
 
+.chipValue {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  color: var(--color-fg-1);
+  font-size: 0.8rem;
+  min-width: 3.5ch;
+  text-align: right;
+}
+
 .chipRemove {
   background: transparent;
   border: none;
@@ -101,6 +110,18 @@
   width: 100%;
   flex: 1;
   min-height: 0;
+}
+
+/* Drag-to-scrub affordance: only when a session is loaded. `col-resize`
+   reads as "move me left/right" without implying a window resize. */
+.scrubbable {
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.plotArea:focus-visible {
+  outline: 2px solid var(--color-accent-orange);
+  outline-offset: -2px;
 }
 
 .plotMount {

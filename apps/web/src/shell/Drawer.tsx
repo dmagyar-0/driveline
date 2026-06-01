@@ -6,16 +6,17 @@
 // has a real drawer — the stub fallthrough has been removed and the
 // final branch is an exhaustiveness check.
 
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { useSession } from "../state/store";
 import { SourcesDrawer } from "./drawers/SourcesDrawer";
 import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
 import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import { PanelDrawer } from "./drawers/PanelDrawer";
 import { EventsDrawer } from "./drawers/EventsDrawer";
+import { AddPanelMenu } from "./AddPanelMenu";
 import { DrawerResizer } from "./DrawerResizer";
-import type { RailTab } from "../state/persist/ui";
 import styles from "./Drawer.module.css";
+import type { RailTab } from "../state/persist/ui";
 
 // Shared id for the active drawer's <section role="region">. Drawers render
 // mutually exclusively so a single id is unambiguous; rail buttons reference
@@ -64,22 +65,37 @@ export function Drawer({
 
   if (activeRailTab === null) return null;
 
-  const body = renderDrawerBody(activeRailTab, {
-    ensurePlotPanel,
-    addVideoPanel,
-    addPlotPanel,
-    addScenePanel,
-    addMapPanel,
-    addTablePanel,
-    addEnumPanel,
-    resetLayout,
-  });
-
   const width = dragWidth ?? storedWidth;
 
   return (
-    <div className={styles.host} style={{ width: `${width}px` }}>
-      {body}
+    <div
+      className={styles.host}
+      data-testid="drawer-host"
+      style={{ width: `${width}px` }}
+    >
+      <DrawerBody
+        activeRailTab={activeRailTab}
+        ensurePlotPanel={ensurePlotPanel}
+        addVideoPanel={addVideoPanel}
+        addPlotPanel={addPlotPanel}
+        addScenePanel={addScenePanel}
+        addMapPanel={addMapPanel}
+        addTablePanel={addTablePanel}
+        addEnumPanel={addEnumPanel}
+        resetLayout={resetLayout}
+      />
+      {/* Persistent shortcut: add a panel from whichever drawer is open,
+          not just the Layout tab. */}
+      <AddPanelMenu
+        addVideoPanel={addVideoPanel}
+        addPlotPanel={addPlotPanel}
+        addScenePanel={addScenePanel}
+        addMapPanel={addMapPanel}
+        addTablePanel={addTablePanel}
+        addEnumPanel={addEnumPanel}
+      />
+      {/* Drag handle on the drawer's right edge. Absolutely positioned so
+          it spans the full height without disturbing the column stack. */}
       <DrawerResizer
         width={width}
         onPreview={setDragWidth}
@@ -92,22 +108,32 @@ export function Drawer({
   );
 }
 
-function renderDrawerBody(tab: RailTab, props: DrawerProps): ReactNode {
-  switch (tab) {
+function DrawerBody({
+  activeRailTab,
+  ensurePlotPanel,
+  addVideoPanel,
+  addPlotPanel,
+  addScenePanel,
+  addMapPanel,
+  addTablePanel,
+  addEnumPanel,
+  resetLayout,
+}: DrawerProps & { activeRailTab: RailTab }) {
+  switch (activeRailTab) {
     case "sources":
       return <SourcesDrawer />;
     case "channels":
-      return <ChannelsDrawer ensurePlotPanel={props.ensurePlotPanel} />;
+      return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
     case "layout":
       return (
         <LayoutDrawer
-          addVideoPanel={props.addVideoPanel}
-          addPlotPanel={props.addPlotPanel}
-          addScenePanel={props.addScenePanel}
-          addMapPanel={props.addMapPanel}
-          addTablePanel={props.addTablePanel}
-          addEnumPanel={props.addEnumPanel}
-          resetLayout={props.resetLayout}
+          addVideoPanel={addVideoPanel}
+          addPlotPanel={addPlotPanel}
+          addScenePanel={addScenePanel}
+          addMapPanel={addMapPanel}
+          addTablePanel={addTablePanel}
+          addEnumPanel={addEnumPanel}
+          resetLayout={resetLayout}
         />
       );
     case "panel":
@@ -115,7 +141,7 @@ function renderDrawerBody(tab: RailTab, props: DrawerProps): ReactNode {
     case "events":
       return <EventsDrawer />;
     default: {
-      const _exhaustive: never = tab;
+      const _exhaustive: never = activeRailTab;
       void _exhaustive;
       return null;
     }

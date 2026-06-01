@@ -5,6 +5,7 @@ import {
   __resetCursorStrokeColorCache,
   cursorStrokeColor,
   cursorXPx,
+  nsFromXPx,
 } from "./cursorOverlay";
 
 const range = { startNs: 0n, endNs: 1_000_000_000n }; // 1 s
@@ -41,6 +42,39 @@ describe("cursorXPx", () => {
     const epoch = 1_704_067_200_000_000_000n;
     const wide = { startNs: epoch, endNs: epoch + 1_000_000_000n };
     expect(cursorXPx(epoch + 500_000_000n, wide, 800)).toBeCloseTo(400, 3);
+  });
+});
+
+describe("nsFromXPx", () => {
+  it("returns null for non-positive width", () => {
+    expect(nsFromXPx(50, range, 0)).toBeNull();
+    expect(nsFromXPx(50, range, -10)).toBeNull();
+  });
+
+  it("returns null for a degenerate range", () => {
+    expect(nsFromXPx(50, { startNs: 10n, endNs: 10n }, 100)).toBeNull();
+    expect(nsFromXPx(50, { startNs: 20n, endNs: 10n }, 100)).toBeNull();
+  });
+
+  it("maps the midpoint pixel to the midpoint timestamp", () => {
+    expect(nsFromXPx(500, range, 1000)).toBe(500_000_000n);
+  });
+
+  it("clamps out-of-bounds pixels to the range endpoints", () => {
+    expect(nsFromXPx(-40, range, 1000)).toBe(range.startNs);
+    expect(nsFromXPx(1400, range, 1000)).toBe(range.endNs);
+  });
+
+  it("round-trips with cursorXPx at the midpoint", () => {
+    const ns = nsFromXPx(400, range, 800);
+    expect(ns).not.toBeNull();
+    expect(cursorXPx(ns!, range, 800)).toBeCloseTo(400, 6);
+  });
+
+  it("keeps precision for epoch-scale ns ranges", () => {
+    const epoch = 1_704_067_200_000_000_000n;
+    const wide = { startNs: epoch, endNs: epoch + 1_000_000_000n };
+    expect(nsFromXPx(400, wide, 800)).toBe(epoch + 500_000_000n);
   });
 });
 

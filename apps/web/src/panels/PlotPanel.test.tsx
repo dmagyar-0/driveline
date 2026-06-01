@@ -310,6 +310,30 @@ describe("PlotPanel", () => {
     expect(snap.sampleAtCursor[1]?.value).toBe(2);
   });
 
+  it("renders the value-at-cursor in each channel chip", async () => {
+    const { findByTestId } = render(<PlotPanel panelId="test-panel" />);
+    await waitFor(
+      () =>
+        Boolean(
+          window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+        ),
+    );
+
+    // Cursor seeded at 1.0 s → first fixture row, value 1.
+    const chipA = await findByTestId("chip-value-chan-a");
+    const chipB = await findByTestId("chip-value-chan-b");
+    expect(chipA.textContent).toBe("1.000");
+    expect(chipB.textContent).toBe("1.000");
+
+    // Move the cursor to the second row (value 2) and the chips follow.
+    await act(async () => {
+      useSession.getState().setCursor(1_010_000_000n);
+    });
+    await waitFor(() => chipA.textContent === "2.000");
+    expect(chipA.textContent).toBe("2.000");
+    expect(chipB.textContent).toBe("2.000");
+  });
+
   it("pins the x-axis to the global timeline, not the signal's data extent", async () => {
     // The fixture only covers ts 1.0–1.02 s, but the global timeline is
     // 1.0–11.0 s (e.g. a short signal offset inside a long video). Pre-fix
