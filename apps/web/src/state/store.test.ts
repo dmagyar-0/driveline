@@ -323,6 +323,95 @@ describe("session store", () => {
     expect(useSession.getState().sources).toHaveLength(0);
     expect(worker.closeLog.sort()).toEqual(["mcap:1", "mf4:2"]);
   });
+
+  it("removeSource closes one handle and keeps the others", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([
+      file("short.mcap"),
+      file("short.mf4"),
+    ]);
+    expect(useSession.getState().sources).toHaveLength(2);
+
+    await useSession.getState().removeSource("short.mcap");
+
+    const s = useSession.getState();
+    expect(s.sources.map((src) => src.id)).toEqual(["short.mf4"]);
+    // Only the mcap handle (1) is closed; the mf4 (2) stays open.
+    expect(worker.closeLog).toEqual(["mcap:1"]);
+    // Channels for the removed source are gone; the mf4 channel remains.
+    expect(s.channels.every((c) => c.sourceId === "short.mf4")).toBe(true);
+    // Global range recomputes to the surviving mf4 range.
+    expect(s.globalRange).toEqual({ startNs: 500n, endNs: 3_000n });
+  });
+
+  it("removeSource of the last source empties the session", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("only.mcap")]);
+    await useSession.getState().removeSource("only.mcap");
+
+    const s = useSession.getState();
+    expect(s.sources).toHaveLength(0);
+    expect(s.channels).toHaveLength(0);
+    expect(s.globalRange).toBeNull();
+    expect(s.cursorNs).toBe(0n);
+    expect(s.playing).toBe(false);
+  });
+
+  it("removeSource prunes panel bindings that pointed at the closed source", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([
+      file("short.mcap"),
+      file("short.mf4"),
+    ]);
+    const st = useSession.getState();
+    const mcapCh = st.channels.find((c) => c.sourceId === "short.mcap")!;
+    const mf4Ch = st.channels.find((c) => c.sourceId === "short.mf4")!;
+
+    // Bind a plot panel to both channels and an enum panel to the mcap one.
+    st.setPlotBinding("plot-1", [mcapCh.id, mf4Ch.id]);
+    st.setEnumBinding("enum-1", mcapCh.id);
+
+    await useSession.getState().removeSource("short.mcap");
+
+    const after = useSession.getState();
+    // The mcap channel is pruned from the plot; the mf4 one survives.
+    expect(after.plotBindings["plot-1"]).toEqual([mf4Ch.id]);
+    // The enum binding pointed only at the gone channel → reset to null.
+    expect(after.enumBindings["enum-1"]).toBeNull();
+  });
+
+  it("removeSource is a no-op for an unknown id", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    await useSession.getState().removeSource("does-not-exist");
+    expect(useSession.getState().sources).toHaveLength(1);
+    expect(worker.closeLog).toEqual([]);
+  });
+
+  it("removeSource clamps an out-of-range cursor into the surviving range", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    // mcap is [1000, 2000]; mp4 is [10_000, 20_000]; union → [1000, 20_000].
+    await useSession.getState().openFiles([
+      file("short.mcap"),
+      file("clip.mp4"),
+      file("clip.mp4.timestamps"),
+    ]);
+    // Park the cursor inside the mp4 tail, which only the mp4 source covers.
+    useSession.getState().setCursor(18_000n);
+    expect(useSession.getState().cursorNs).toBe(18_000n);
+
+    await useSession.getState().removeSource("clip.mp4");
+
+    const s = useSession.getState();
+    expect(s.globalRange).toEqual({ startNs: 1_000n, endNs: 2_000n });
+    // Cursor was beyond the new end → clamped down to it.
+    expect(s.cursorNs).toBe(2_000n);
+  });
 });
 
 describe("transport", () => {

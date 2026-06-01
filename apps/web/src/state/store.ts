@@ -225,6 +225,15 @@ export interface SessionState {
   /** Close every loaded wasm handle and reset to the empty session. */
   clear(): Promise<void>;
   /**
+   * Close a single source: free its wasm handle (and lazy sample cache),
+   * drop its channels, recompute `globalRange`, clamp the cursor into the
+   * shrunken range, and prune every panel binding that pointed at one of
+   * the now-gone channels. No-op on an unknown id. Serialised behind the
+   * same `pending` chain as `openFiles`/`clear` so a close can't interleave
+   * with an in-flight open.
+   */
+  removeSource(sourceId: string): Promise<void>;
+  /**
    * Test / dev seam: inject the Comlink worker proxy. Pass `null` on
    * teardown so `VideoPanel.tsx` and other consumers don't keep a handle
    * to a terminated worker across `<StrictMode>` unmount/remount.
@@ -425,6 +434,60 @@ function mp4Channels(sourceId: string, s: Mp4SidecarSummary): Channel[] {
 
 async function fileBytes(f: File): Promise<Uint8Array> {
   return new Uint8Array(await f.arrayBuffer());
+}
+
+// Binding-pruning helpers used by `removeSource`. Each returns the *same*
+// reference when nothing changed so Zustand selectors subscribed to an
+// untouched binding map don't see a spurious update.
+function pruneSingleBindings(
+  m: Record<string, string | null>,
+  gone: Set<string>,
+): Record<string, string | null> {
+  let changed = false;
+  const out: Record<string, string | null> = {};
+  for (const [panelId, channelId] of Object.entries(m)) {
+    if (channelId !== null && gone.has(channelId)) {
+      out[panelId] = null;
+      changed = true;
+    } else {
+      out[panelId] = channelId;
+    }
+  }
+  return changed ? out : m;
+}
+
+function pruneMultiBindings(
+  m: Record<string, string[]>,
+  gone: Set<string>,
+): Record<string, string[]> {
+  let changed = false;
+  const out: Record<string, string[]> = {};
+  for (const [panelId, ids] of Object.entries(m)) {
+    const kept = ids.filter((id) => !gone.has(id));
+    if (kept.length !== ids.length) changed = true;
+    out[panelId] = kept;
+  }
+  return changed ? out : m;
+}
+
+function pruneMapBindings(
+  m: Record<string, MapBinding | null>,
+  gone: Set<string>,
+): Record<string, MapBinding | null> {
+  let changed = false;
+  const out: Record<string, MapBinding | null> = {};
+  for (const [panelId, binding] of Object.entries(m)) {
+    if (
+      binding !== null &&
+      (gone.has(binding.latChannelId) || gone.has(binding.lonChannelId))
+    ) {
+      out[panelId] = null;
+      changed = true;
+    } else {
+      out[panelId] = binding;
+    }
+  }
+  return changed ? out : m;
 }
 
 export const useSession = create<SessionState>((set, get) => {
@@ -1046,6 +1109,89 @@ export const useSession = create<SessionState>((set, get) => {
           lastOpenErrors: [],
           loadedRanges: {},
           pendingFetch: {},
+        });
+      };
+      const next = pending.then(run, run);
+      pending = next.catch(() => undefined);
+      await next;
+    },
+
+    async removeSource(sourceId) {
+      const run = async () => {
+        const state = get();
+        const src = state.sources.find((s) => s.id === sourceId);
+        // Unknown id (already removed, or a stale click): nothing to do.
+        if (!src) return;
+
+        if (worker) {
+          const w = worker;
+          try {
+            if (src.kind === "mcap") await w.closeMcap(src.handle);
+            else if (src.kind === "mf4") await w.closeMf4(src.handle);
+            else await w.closeMp4Sidecar(src.handle);
+          } catch (err) {
+            // Mirror `clear()`: a failed close shouldn't strand the source
+            // in the UI, so we log and proceed with the state reset.
+            console.warn(
+              `[session.removeSource] close failed for ${src.kind}#${src.handle}`,
+              err,
+            );
+          }
+        }
+        // Drop the lazy sample cache regardless of worker presence —
+        // releases its `File` ref and detaches subscribers.
+        src.mp4Cache?.dispose();
+
+        // Re-read in case `openFiles` mutated state while the close awaited.
+        const cur = get();
+        const goneChannelIds = new Set(
+          cur.channels
+            .filter((c) => c.sourceId === sourceId)
+            .map((c) => c.id),
+        );
+
+        const nextSources = cur.sources.filter((s) => s.id !== sourceId);
+        const nextChannels = cur.channels.filter(
+          (c) => c.sourceId !== sourceId,
+        );
+        const nextRange = mergeGlobalRange(nextSources);
+        // Clamp the cursor into the (possibly shrunken) range; reset to 0
+        // when the last source goes so the empty session matches `clear()`.
+        const nextCursor = nextRange
+          ? bigMax(nextRange.startNs, bigMin(nextRange.endNs, cur.cursorNs))
+          : 0n;
+
+        // Forget per-source range/fetch bookkeeping for the closed source.
+        const loadedRanges = { ...cur.loadedRanges };
+        delete loadedRanges[sourceId];
+        const pendingFetch = { ...cur.pendingFetch };
+        delete pendingFetch[sourceId];
+
+        set({
+          sources: nextSources,
+          channels: nextChannels,
+          globalRange: nextRange,
+          cursorNs: nextCursor,
+          // Closing a source means it can no longer drive the cursor — stop
+          // playback so we don't keep ticking against a moved end-of-range.
+          playing: nextRange ? cur.playing : false,
+          videoBindings: pruneSingleBindings(
+            cur.videoBindings,
+            goneChannelIds,
+          ),
+          plotBindings: pruneMultiBindings(cur.plotBindings, goneChannelIds),
+          sceneBindings: pruneSingleBindings(
+            cur.sceneBindings,
+            goneChannelIds,
+          ),
+          mapBindings: pruneMapBindings(cur.mapBindings, goneChannelIds),
+          tableBindings: pruneMultiBindings(
+            cur.tableBindings,
+            goneChannelIds,
+          ),
+          enumBindings: pruneSingleBindings(cur.enumBindings, goneChannelIds),
+          loadedRanges,
+          pendingFetch,
         });
       };
       const next = pending.then(run, run);
