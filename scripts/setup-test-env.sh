@@ -98,6 +98,22 @@ else
   python3 sample-data/generate.py
 fi
 
+# 6b · Broken-decode mp4 fixture for decodeAwareCursor.spec.ts. Patched
+# from short.mp4 (NAL payloads XOR'd) so the container parses but every
+# decode() errors — the "decoder alive, producing nothing" state the
+# cursor-gating tests need. Gitignored like the other generated mp4s, so
+# regenerate it whenever short.mp4 exists but the broken pair doesn't.
+log "broken-decode mp4 fixture"
+if [[ -s sample-data/short.broken.mp4 && -s sample-data/short.broken.mp4.timestamps ]]; then
+  echo "already generated"
+elif [[ -s sample-data/short.mp4 ]]; then
+  python3 scripts/video/make_broken_decode_mp4.py \
+    sample-data/short.mp4 sample-data/short.broken.mp4
+  cp sample-data/short.mp4.timestamps sample-data/short.broken.mp4.timestamps
+else
+  warn "sample-data/short.mp4 missing — skipping broken-decode fixture"
+fi
+
 # 7 · Playwright's chromium. The CLI is idempotent on its own, so we
 # always run it.
 log "playwright chromium"

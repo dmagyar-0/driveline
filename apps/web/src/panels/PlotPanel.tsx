@@ -366,7 +366,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       ],
       axes: [axisOpts, axisOpts],
       cursor: { show: false },
-      legend: { show: boundChannels.length > 0 },
+      // The control bar's chips (colour swatch + label + remove) already
+      // act as this plot's legend, and the cursor is disabled so uPlot's
+      // built-in legend would only ever show static series names. Keeping
+      // it on rendered a redundant table *below* the canvas, which (since
+      // the canvas is sized to the full container height) overflowed the
+      // panel and forced a scrollbar. Disable it and let the chips own the
+      // legend role.
+      legend: { show: false },
     };
     const plot = new uPlot(opts, EMPTY_DATA, mount);
     plotRef.current = plot;
