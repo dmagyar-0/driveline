@@ -40,6 +40,11 @@ const VIDEO_NATIVE_ID = "/camera/front";
 const SPEED_NATIVE_ID = "/vehicle/speed";
 const SOURCE_NAME = "short.mcap";
 
+// Truncated 30 fps frame period (matches `sample-data/generate.py`'s
+// FRAME_NS). Used as the slack when waiting for the decoder to settle on
+// the seek target.
+const FRAME_NS = 33_333_333n;
+
 interface SessionSnapshot {
   cursorNs: string;
   playing: boolean;
@@ -322,20 +327,28 @@ test.describe("cross-panel sync (T6.1)", () => {
       expect(sample.channelId).toBe(resolvedSpeedChannelId);
       expect(BigInt(sample.tsNs)).toBeLessThanOrEqual(target);
 
-      // Wait for the blit loop to settle on a frame whose PTS is at or
-      // before the target cursor. On the real H.264 corpus `ptsNs`
-      // lands within 1-3 frames of the target depending on how close
-      // the scrubber ratio fell to a keyframe.
+      // Wait for the blit loop to actually CONVERGE on the target cursor,
+      // not merely to show some frame with `ptsNs <= target`. A bare
+      // `<= target` gate is satisfied by a stale frame mid-catch-up (right
+      // after a forward seek the decoder is still draining toward the
+      // target), so the pixel-compare below could run against a frame
+      // seconds behind the cursor. Require the gap to close to within a few
+      // frames — the decoder catches up in well under a second on this
+      // corpus. The seek lands between frame boundaries, so the settled
+      // frame's PTS is up to ~1 frame before the target; allow 3 frames of
+      // slack to stay robust on slower CI hardware.
+      const SETTLE_SLACK_NS = 3n * FRAME_NS;
       await expect
         .poll(
           async () => {
             const h = await hud(page);
-            if (!h || h.ptsNs === null) return -1;
-            return BigInt(h.ptsNs) <= target ? 1 : 0;
+            if (!h || h.ptsNs === null) return false;
+            const lag = target - BigInt(h.ptsNs);
+            return lag >= 0n && lag <= SETTLE_SLACK_NS;
           },
-          { timeout: 5_000, intervals: [33, 50, 100] },
+          { timeout: 8_000, intervals: [33, 50, 100, 200] },
         )
-        .toBe(1);
+        .toBe(true);
 
       const h = await hud(page);
       expect(h).not.toBeNull();

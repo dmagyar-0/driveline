@@ -115,6 +115,7 @@ async function pullAndFeed(): Promise<void> {
   if (session.ended) return;
   if (batch.length === 0) {
     session.ended = true;
+    await drainAtEnd(pulling);
     return;
   }
   for (const c of batch) {
@@ -352,6 +353,34 @@ function onFrame(frame: VideoFrame): void {
   }
   emitFrame(frame, ptsNs);
   void maybeRefill();
+}
+
+// End-of-stream drain. WebCodecs buffers frames inside the decoder (the
+// H.264 reorder window), so the tail of the final GOP only comes out on an
+// explicit `flush()`. And when the cursor sits at or past the last sample's
+// PTS there is never a post-target frame to trigger the held pre-target
+// frame's emit in `onFrame`, so after flushing we hand the newest
+// pre-target frame to the panel ourselves. Without this, a seek that lands
+// on (or just before) the final frame leaves the canvas frozen on the prior
+// position — the decode queue drains to empty and nothing is ever blitted.
+// Runs only once per stream, at genuine end-of-stream, so it never touches
+// the steady-state pull path.
+async function drainAtEnd(s: SessionState): Promise<void> {
+  if (s.decoder.state === "configured") {
+    try {
+      await s.decoder.flush();
+    } catch {
+      // flush() rejects if a concurrent seek reset/closed the decoder; the
+      // superseding session primes itself, so there is nothing to drain.
+    }
+  }
+  // A seek may have swapped the active session out while we awaited flush.
+  if (session !== s) return;
+  if (s.pendingPreTargetFrame) {
+    const pre = s.pendingPreTargetFrame;
+    s.pendingPreTargetFrame = null;
+    emitFrame(pre, BigInt(pre.timestamp) * 1000n);
+  }
 }
 
 async function closeInternal(): Promise<void> {
