@@ -1,0 +1,79 @@
+/* Footer host for the persistent "Add panel" control. Pinned to the
+ * bottom of the drawer host (see Drawer.module.css:.host); the drawer
+ * content above it scrolls independently. */
+
+.host {
+  flex: 0 0 auto;
+  padding: var(--sp-4) var(--sp-6);
+  border-top: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-3);
+}
+
+.trigger {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  color: var(--color-fg-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-13);
+  transition: background var(--motion-base), border-color var(--motion-base);
+}
+
+.trigger:hover {
+  background: var(--color-bg-5);
+  border-color: var(--color-border-hover);
+}
+
+.trigger:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.menu {
+  z-index: 20;
+  min-width: 9rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-1);
+}
+
+.item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--sp-3) var(--sp-4);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-3);
+  color: var(--color-fg-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-13);
+  transition: background var(--motion-base);
+}
+
+.item:hover {
+  background: var(--color-bg-5);
+}
+
+.item:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trigger,
+  .item {
+    transition: none;
+  }
+}
