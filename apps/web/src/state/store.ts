@@ -36,7 +36,7 @@ import {
   type Bookmark,
 } from "./persist/bookmarks";
 import { colorFor } from "../panels/palette";
-import { formatRelative } from "../timeline/formatTime";
+import { formatRelative, type TimeMode } from "../timeline/formatTime";
 import { mark, measure, timed } from "../perf";
 import type {
   ChannelKindWire,
@@ -146,6 +146,11 @@ export interface SessionState {
   cursorNs: bigint;
   playing: boolean;
   speed: number;
+  // Relative/absolute time display toggle, shared across the Transport
+  // readout and every PlotPanel x-axis so the two never disagree on how a
+  // timestamp reads. Per-session (not persisted) — mirrors the prior
+  // Transport-local default of "relative" on each fresh load.
+  timeMode: TimeMode;
   // Monotonic counter bumped on every user-initiated cursor change
   // (`setCursor`, plus `play()` rewinds and end-of-session jumps).
   // Playback rAF advances via `advanceCursor` and do **not** bump it.
@@ -261,6 +266,8 @@ export interface SessionState {
   pause(): void;
   /** Set playback speed; clamped to [MIN_SPEED, MAX_SPEED]. */
   setSpeed(n: number): void;
+  /** Switch the relative/absolute time display mode (Transport + plots). */
+  setTimeMode(mode: TimeMode): void;
   /** Move the cursor; clamped to `globalRange`. Pauses if at `endNs`.
    *  Bumps `seekEpoch` so the video pipeline issues a real seek even
    *  while `playing` is true. */
@@ -521,6 +528,7 @@ export const useSession = create<SessionState>((set, get) => {
     cursorNs: 0n,
     playing: false,
     speed: 1,
+    timeMode: "relative",
     seekEpoch: 0,
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
@@ -573,6 +581,11 @@ export const useSession = create<SessionState>((set, get) => {
     setSpeed(n) {
       if (!Number.isFinite(n)) return;
       set({ speed: Math.min(MAX_SPEED, Math.max(MIN_SPEED, n)) });
+    },
+
+    setTimeMode(mode) {
+      if (get().timeMode === mode) return;
+      set({ timeMode: mode });
     },
 
     setCursor(ns) {

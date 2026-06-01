@@ -26,6 +26,7 @@ import { cursorStrokeColor, cursorXPx, nsFromXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
+import { formatAxisTick } from "../timeline/formatTime";
 import styles from "./PlotPanel.module.css";
 
 interface PlotPanelProps {
@@ -181,6 +182,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
+  // Shared relative/absolute toggle (owned by the store, driven by the
+  // Transport's mode button). The x-axis tick formatter reads this so the
+  // plot's time labels match the scrubber readout's mode and format.
+  const timeMode = useSession((s) => s.timeMode);
   const storedBindings = useSession((s) => s.plotBindings[panelId]);
   const setPlotBinding = useSession((s) => s.setPlotBinding);
   const addPlotChannel = useSession((s) => s.addPlotChannel);
@@ -251,6 +256,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // a ref rather than the closed-over `globalRangeSec`.
   const globalRangeSecRef = useRef<[number, number] | null>(globalRangeSec);
   globalRangeSecRef.current = globalRangeSec;
+  // uPlot bakes the axis `values` callback in at build time, but the mode
+  // can flip without a rebuild — so the callback reads the live value
+  // through a ref rather than the closed-over `timeMode`. The effect below
+  // redraws the plot when the mode changes so labels repaint immediately.
+  const timeModeRef = useRef(timeMode);
+  timeModeRef.current = timeMode;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);
@@ -369,10 +380,26 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
     const rect = container.getBoundingClientRect();
     const { fg, grid } = axisStyle();
+    // X-axis carries the time-tick formatter so its labels track the
+    // Transport's relative/absolute mode and use the same `formatTime`
+    // helpers. Reads mode + relative origin through refs (see above) so a
+    // mode toggle repaints via `redraw()` without rebuilding the plot.
     const xAxisOpts: uPlot.Axis = {
       stroke: fg,
       ticks: { stroke: grid },
       grid: { stroke: grid },
+      values: (_u, splits) => {
+        const startSec = globalRangeSecRef.current?.[0] ?? 0;
+        return splits.map((s) =>
+          formatAxisTick(s, startSec, timeModeRef.current),
+        );
+      },
+      // Reserve more horizontal room per tick in absolute mode: the
+      // `YYYY-MM-DD HH:MM:SS.mmm` label is ~3× wider than a relative
+      // `MM:SS.mmm`, so the default spacing packs in enough ticks to
+      // overlap. A wider minimum makes uPlot pick a coarser increment.
+      space: (_u, _axisIdx, _min, _max, _dim) =>
+        timeModeRef.current === "absolute" ? 180 : 70,
     };
     // The y-axis grows its gutter to fit the widest tick (see yAxisSize)
     // so large-magnitude signals aren't truncated at the panel edge.
@@ -459,6 +486,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seriesKey]);
+
+  // Repaint axis labels when the relative/absolute mode flips. The plot
+  // instance and its data are untouched — only the tick formatter's output
+  // changes — so a `redraw` is enough; rebuilding would force a refetch.
+  // Skip the mount run: the build effect already drew with the current
+  // mode (the `values` closure reads `timeModeRef`), and redrawing a
+  // freshly-built plot whose axes haven't been laid out yet throws.
+  const prevTimeModeRef = useRef(timeMode);
+  useEffect(() => {
+    if (prevTimeModeRef.current === timeMode) return;
+    prevTimeModeRef.current = timeMode;
+    // `redraw(rebuildPaths=false, recalcAxes=true)`: skip the series-path
+    // rebuild (data is unchanged) but force `recalcAxes` so uPlot re-runs
+    // the x-axis `values` formatter and repaints the tick labels in the
+    // new mode. A bare `redraw()` re-sets the x-scale to the same min/max,
+    // which uPlot short-circuits — leaving the cached labels stale.
+    plotRef.current?.redraw(false, true);
+  }, [timeMode]);
 
   // Fetch & render on binding or range change.
   useEffect(() => {

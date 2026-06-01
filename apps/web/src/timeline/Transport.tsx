@@ -139,8 +139,9 @@ export function Transport() {
   const pendingFetch = useSession((s) => s.pendingFetch);
   const decodeWaiting = useDecodeWaiting();
 
+  const mode = useSession((s) => s.timeMode);
+
   const disabled = globalRange === null;
-  const [mode, setMode] = useState<"relative" | "absolute">("relative");
 
   const trackRef = useRef<HTMLDivElement | null>(null);
   const pendingNs = useRef<bigint | null>(null);
@@ -271,7 +272,9 @@ export function Transport() {
   };
 
   const onModeToggle = () => {
-    setMode((m) => (m === "relative" ? "absolute" : "relative"));
+    useSession
+      .getState()
+      .setTimeMode(mode === "relative" ? "absolute" : "relative");
   };
 
   const fillPct = globalRange ? percentOf(cursorNs, globalRange) : 0;
