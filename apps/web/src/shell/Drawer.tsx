@@ -6,6 +6,7 @@
 // has a real drawer — the stub fallthrough has been removed and the
 // final branch is an exhaustiveness check.
 
+import { useState } from "react";
 import { useSession } from "../state/store";
 import { SourcesDrawer } from "./drawers/SourcesDrawer";
 import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
@@ -13,6 +14,7 @@ import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import { PanelDrawer } from "./drawers/PanelDrawer";
 import { EventsDrawer } from "./drawers/EventsDrawer";
 import { AddPanelMenu } from "./AddPanelMenu";
+import { DrawerResizer } from "./DrawerResizer";
 import styles from "./Drawer.module.css";
 import type { RailTab } from "../state/persist/ui";
 
@@ -54,9 +56,23 @@ export function Drawer({
   resetLayout,
 }: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
+  const storedWidth = useSession((s) => s.drawerWidth);
+  const setDrawerWidth = useSession((s) => s.setDrawerWidth);
+  // Live width during a splitter drag. Kept local so pointermove doesn't
+  // hammer the store (and its localStorage subscriber) — the gesture
+  // commits once on pointer-up. `null` means "not dragging, use the store".
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+
   if (activeRailTab === null) return null;
+
+  const width = dragWidth ?? storedWidth;
+
   return (
-    <div className={styles.host} data-testid="drawer-host">
+    <div
+      className={styles.host}
+      data-testid="drawer-host"
+      style={{ width: `${width}px` }}
+    >
       <DrawerBody
         activeRailTab={activeRailTab}
         ensurePlotPanel={ensurePlotPanel}
@@ -77,6 +93,16 @@ export function Drawer({
         addMapPanel={addMapPanel}
         addTablePanel={addTablePanel}
         addEnumPanel={addEnumPanel}
+      />
+      {/* Drag handle on the drawer's right edge. Absolutely positioned so
+          it spans the full height without disturbing the column stack. */}
+      <DrawerResizer
+        width={width}
+        onPreview={setDragWidth}
+        onCommit={(px) => {
+          setDragWidth(null);
+          setDrawerWidth(px);
+        }}
       />
     </div>
   );

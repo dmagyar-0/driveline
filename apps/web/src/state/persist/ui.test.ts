@@ -32,6 +32,7 @@ const SAMPLE: PersistedUi = {
   version: 1,
   activeRailTab: "channels",
   railCollapsed: false,
+  drawerWidth: 320,
 };
 
 describe("ui persist", () => {
@@ -104,9 +105,51 @@ describe("ui persist", () => {
       version: 1,
       activeRailTab: null,
       railCollapsed: true,
+      drawerWidth: 220,
     };
     saveUiToStorage(p, s);
     expect(loadUiFromStorage(s)).toEqual(p);
+  });
+
+  it("defaults drawerWidth when a legacy blob omits it", () => {
+    const s = makeStorage();
+    // A v1 blob written before drawerWidth existed must still load — and
+    // keep the rail tab / collapse state — rather than being rejected.
+    s.setItem(
+      UI_STORAGE_KEY,
+      JSON.stringify({ version: 1, activeRailTab: "layout", railCollapsed: true }),
+    );
+    expect(loadUiFromStorage(s)).toEqual({
+      version: 1,
+      activeRailTab: "layout",
+      railCollapsed: true,
+      drawerWidth: 220,
+    });
+  });
+
+  it("clamps an out-of-range drawerWidth on load", () => {
+    const s = makeStorage();
+    s.setItem(
+      UI_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeRailTab: null,
+        railCollapsed: false,
+        drawerWidth: 9999,
+      }),
+    );
+    expect(loadUiFromStorage(s)?.drawerWidth).toBe(560);
+
+    s.setItem(
+      UI_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeRailTab: null,
+        railCollapsed: false,
+        drawerWidth: 10,
+      }),
+    );
+    expect(loadUiFromStorage(s)?.drawerWidth).toBe(220);
   });
 
   it.each(["sources", "channels", "layout", "panel", "events"] as RailTab[])(
@@ -117,6 +160,7 @@ describe("ui persist", () => {
         version: 1,
         activeRailTab: tab,
         railCollapsed: false,
+        drawerWidth: 220,
       };
       saveUiToStorage(p, s);
       expect(loadUiFromStorage(s)?.activeRailTab).toBe(tab);
@@ -186,7 +230,11 @@ function makeFakeStore(initial: UiSlice): FakeStore {
 }
 
 describe("attachUiPersistence", () => {
-  const initial: UiSlice = { activeRailTab: null, railCollapsed: false };
+  const initial: UiSlice = {
+    activeRailTab: null,
+    railCollapsed: false,
+    drawerWidth: 220,
+  };
 
   it("writes when activeRailTab changes", () => {
     const s = makeStorage();
@@ -196,11 +244,12 @@ describe("attachUiPersistence", () => {
       s,
     );
     expect(loadUiFromStorage(s)).toBeNull();
-    store.push({ activeRailTab: "channels", railCollapsed: false });
+    store.push({ activeRailTab: "channels", railCollapsed: false, drawerWidth: 220 });
     expect(loadUiFromStorage(s)).toEqual({
       version: 1,
       activeRailTab: "channels",
       railCollapsed: false,
+      drawerWidth: 220,
     });
     stop();
   });
@@ -212,11 +261,29 @@ describe("attachUiPersistence", () => {
       store as unknown as typeof useSession,
       s,
     );
-    store.push({ activeRailTab: null, railCollapsed: true });
+    store.push({ activeRailTab: null, railCollapsed: true, drawerWidth: 220 });
     expect(loadUiFromStorage(s)).toEqual({
       version: 1,
       activeRailTab: null,
       railCollapsed: true,
+      drawerWidth: 220,
+    });
+    stop();
+  });
+
+  it("writes when drawerWidth changes", () => {
+    const s = makeStorage();
+    const store = makeFakeStore(initial);
+    const stop = attachUiPersistence(
+      store as unknown as typeof useSession,
+      s,
+    );
+    store.push({ activeRailTab: null, railCollapsed: false, drawerWidth: 400 });
+    expect(loadUiFromStorage(s)).toEqual({
+      version: 1,
+      activeRailTab: null,
+      railCollapsed: false,
+      drawerWidth: 400,
     });
     stop();
   });
@@ -226,13 +293,14 @@ describe("attachUiPersistence", () => {
     const store = makeFakeStore({
       activeRailTab: "layout",
       railCollapsed: false,
+      drawerWidth: 220,
     });
     const stop = attachUiPersistence(
       store as unknown as typeof useSession,
       s,
     );
     // Push the same values again; persistence layer must not write.
-    store.push({ activeRailTab: "layout", railCollapsed: false });
+    store.push({ activeRailTab: "layout", railCollapsed: false, drawerWidth: 220 });
     expect(loadUiFromStorage(s)).toBeNull();
     stop();
   });
@@ -247,7 +315,7 @@ describe("attachUiPersistence", () => {
     expect(store.listenerCount()).toBe(1);
     stop();
     expect(store.listenerCount()).toBe(0);
-    store.push({ activeRailTab: "events", railCollapsed: false });
+    store.push({ activeRailTab: "events", railCollapsed: false, drawerWidth: 220 });
     expect(loadUiFromStorage(s)).toBeNull();
   });
 

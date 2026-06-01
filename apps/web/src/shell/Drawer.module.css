@@ -1,14 +1,18 @@
 /* Column host: the active drawer (scrollable) stacked above the
- * persistent "Add panel" footer. Carries the 220px width and the
- * narrow-viewport overlay behaviour that used to live on `.drawer`. */
+ * persistent "Add panel" footer. Width is drag-resizable — the inline
+ * `width` is driven from the store and the splitter handle is absolutely
+ * positioned on the right edge by `DrawerResizer`. The `max-width` cap
+ * keeps the drawer from overrunning the viewport when it overlays the
+ * workspace on narrow screens. `position: relative` anchors the handle. */
 .host {
-  flex: 0 0 220px;
-  width: 220px;
+  flex: 0 0 auto;
+  max-width: calc(100vw - 80px);
   background: var(--color-bg-3);
   border-right: 1px solid var(--color-border-subtle);
   display: flex;
   flex-direction: column;
   min-height: 0;
+  position: relative;
 }
 
 .drawer {

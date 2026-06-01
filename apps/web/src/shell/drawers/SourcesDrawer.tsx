@@ -6,8 +6,9 @@
 // `useState`; Phase 3 (Channels drawer) lifts it to the `ui` slice when
 // the channel list needs to filter by selected source.
 //
-// The 220px wrapper styling lives in `Drawer.module.css:.drawer`; this
-// module only owns the inner content.
+// The drawer wrapper styling (and the drag-resizable width) lives in
+// `Drawer.module.css:.drawer` / `.host`; this module only owns the inner
+// content.
 
 import { useRef, useState } from "react";
 import { useSession } from "../../state/store";

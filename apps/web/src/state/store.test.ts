@@ -1374,3 +1374,30 @@ describe("bookmarks (Phase 8)", () => {
     );
   });
 });
+
+describe("ui shell (drawer width)", () => {
+  it("defaults drawerWidth to 220", () => {
+    expect(useSession.getState().drawerWidth).toBe(220);
+  });
+
+  it("setDrawerWidth updates within range", () => {
+    useSession.getState().setDrawerWidth(360);
+    expect(useSession.getState().drawerWidth).toBe(360);
+    // Restore the default so later tests start clean.
+    useSession.getState().setDrawerWidth(220);
+  });
+
+  it("setDrawerWidth clamps below the min and above the max", () => {
+    useSession.getState().setDrawerWidth(10);
+    expect(useSession.getState().drawerWidth).toBe(220);
+    useSession.getState().setDrawerWidth(99999);
+    expect(useSession.getState().drawerWidth).toBe(560);
+    useSession.getState().setDrawerWidth(220);
+  });
+
+  it("setDrawerWidth rounds fractional pixels", () => {
+    useSession.getState().setDrawerWidth(301.7);
+    expect(useSession.getState().drawerWidth).toBe(302);
+    useSession.getState().setDrawerWidth(220);
+  });
+});
