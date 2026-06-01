@@ -3,6 +3,7 @@ import {
   formatDuration,
   formatRelative,
   formatAbsolute,
+  formatAxisTick,
 } from "./formatTime";
 
 describe("formatDuration", () => {
@@ -90,5 +91,35 @@ describe("formatAbsolute", () => {
 
   it("renders the unix epoch", () => {
     expect(formatAbsolute(0n)).toBe("1970-01-01 00:00:00.000");
+  });
+});
+
+describe("formatAxisTick", () => {
+  // uPlot hands tick positions as epoch seconds; the start is the
+  // session origin in epoch seconds. These mirror the Transport readout
+  // so the plot axis and the scrubber never disagree.
+  const startSec = Date.UTC(2021, 0, 2, 3, 4, 5, 0) / 1000;
+
+  it("relative mode shows the offset from the session start", () => {
+    expect(formatAxisTick(startSec, startSec, "relative")).toBe("00:00.000");
+    expect(formatAxisTick(startSec + 12.345, startSec, "relative")).toBe(
+      "00:12.345",
+    );
+    expect(formatAxisTick(startSec + 3661, startSec, "relative")).toBe(
+      "01:01:01.000",
+    );
+  });
+
+  it("relative mode clamps ticks before the start to zero", () => {
+    expect(formatAxisTick(startSec - 5, startSec, "relative")).toBe(
+      "00:00.000",
+    );
+  });
+
+  it("absolute mode shows wall-clock time, ignoring the start", () => {
+    const tickSec = Date.UTC(2021, 0, 2, 3, 4, 5, 6) / 1000;
+    expect(formatAxisTick(tickSec, startSec, "absolute")).toBe(
+      "2021-01-02 03:04:05.006",
+    );
   });
 });
