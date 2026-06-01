@@ -889,8 +889,11 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const f of buckets.mf4) {
           try {
-            const bytes = await fileBytes(f);
-            const handle = await w.openMf4(bytes);
+            // Pass the `File` itself, not its bytes: the worker copies it into
+            // OPFS (streamed) and reads channels lazily via a sync access
+            // handle, so a multi-gigabyte MF4 is never held in memory. Only
+            // plotted signals are decoded and retained.
+            const handle = await w.openMf4(f);
             const summary = await w.mf4Summary(handle);
             const id = uniqueSourceId(f.name, [...existing, ...newSources]);
             const channels = mf4Channels(id, summary);

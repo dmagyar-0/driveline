@@ -2,8 +2,9 @@ import * as Comlink from "comlink";
 import init, {
   ping as wasmPing,
   fetch_range_stub,
-  open_mf4,
+  open_mf4_ranged,
   close_mf4,
+  mf4_release_channel,
   mf4_summary,
   mf4_fetch_range,
   open_mcap,
@@ -90,6 +91,51 @@ export type {
 // Each API method awaits the init promise instead.
 const ready = init();
 
+/**
+ * Lazy-read backing for MF4 sources.
+ *
+ * MF4 decoding happens synchronously inside wasm, so we can't feed it the
+ * async `File.slice()` the mp4 path uses. Instead we copy the dropped file
+ * into the Origin Private File System (streamed — never fully in memory) and
+ * open a `FileSystemSyncAccessHandle`, the only browser primitive offering
+ * *synchronous* ranged reads. wasm calls back into `readRange` per data block,
+ * so a multi-gigabyte file is read on demand and never materialised in memory.
+ *
+ * Keyed by the wasm reader handle so `closeMf4` can release the sync handle
+ * and delete the OPFS copy.
+ */
+interface Mf4Backing {
+  access: FileSystemSyncAccessHandle;
+  fileName: string;
+}
+const mf4Backings = new Map<number, Mf4Backing>();
+const MF4_OPFS_DIR = "mf4-lazy";
+
+async function mf4OpfsDir(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory();
+  return root.getDirectoryHandle(MF4_OPFS_DIR, { create: true });
+}
+
+/**
+ * Stream `file` into a fresh OPFS entry and return a synchronous access
+ * handle plus the entry name. The copy uses a streaming pipe, so peak memory
+ * is one chunk rather than the whole file.
+ */
+async function openMf4SyncAccess(
+  file: File,
+): Promise<{ access: FileSystemSyncAccessHandle; fileName: string }> {
+  const dir = await mf4OpfsDir();
+  // Unique per source so concurrently-open files don't collide.
+  const fileName = `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2)}.mf4`;
+  const fh = await dir.getFileHandle(fileName, { create: true });
+  const writable = await fh.createWritable();
+  await file.stream().pipeTo(writable);
+  const access = await fh.createSyncAccessHandle();
+  return { access, fileName };
+}
+
 export const dataCoreApi = {
   async ping(): Promise<string> {
     await ready;
@@ -99,13 +145,56 @@ export const dataCoreApi = {
     await ready;
     return fetch_range_stub();
   },
-  async openMf4(bytes: Uint8Array): Promise<number> {
+  async openMf4(file: File): Promise<number> {
     await ready;
-    return open_mf4(bytes);
+    const { access, fileName } = await openMf4SyncAccess(file);
+    // Synchronous range read serviced from the OPFS sync handle. wasm invokes
+    // this once per data block while decoding a channel.
+    const readRange = (offset: number, length: number): Uint8Array => {
+      const buf = new Uint8Array(length);
+      const got = access.read(buf, { at: offset });
+      if (got !== length) {
+        throw new Error(
+          `mf4 readRange short read at ${offset}: wanted ${length}, got ${got}`,
+        );
+      }
+      return buf;
+    };
+    let handle: number;
+    try {
+      handle = open_mf4_ranged(readRange, file.size);
+    } catch (e) {
+      // Opening failed — don't leak the OPFS copy or the sync handle.
+      access.close();
+      try {
+        const dir = await mf4OpfsDir();
+        await dir.removeEntry(fileName);
+      } catch {
+        /* best-effort cleanup */
+      }
+      throw e;
+    }
+    mf4Backings.set(handle, { access, fileName });
+    return handle;
   },
   async closeMf4(handle: number): Promise<void> {
     await ready;
     close_mf4(handle);
+    const backing = mf4Backings.get(handle);
+    if (backing) {
+      mf4Backings.delete(handle);
+      backing.access.close();
+      try {
+        const dir = await mf4OpfsDir();
+        await dir.removeEntry(backing.fileName);
+      } catch {
+        /* best-effort: the OPFS entry may already be gone */
+      }
+    }
+  },
+  async releaseMf4Channel(handle: number, channelId: string): Promise<void> {
+    await ready;
+    mf4_release_channel(handle, channelId);
   },
   async mf4Summary(handle: number): Promise<Mf4Summary> {
     await ready;

@@ -9,13 +9,54 @@
 use std::cell::RefCell;
 
 use data_core::{
-    ChannelKind, DType, EncodedChunkIter, FetchOpts, McapReader, Mf4Reader, Mp4SidecarReader,
-    Reader, TimeRange,
+    BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunkIter, FetchOpts, McapReader,
+    MdfError, Mf4Reader, Mp4SidecarReader, Reader, TimeRange,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
 use slab::Slab;
 use wasm_bindgen::prelude::*;
+
+/// A `ByteRangeReader` whose reads are serviced by a synchronous JS callback.
+///
+/// The browser worker backs this with an OPFS `FileSystemSyncAccessHandle`
+/// (the only browser primitive offering synchronous ranged file reads), so
+/// `Mf4Reader` can decode a channel's data blocks on demand without ever
+/// copying the whole multi-gigabyte file into wasm linear memory. The callback
+/// signature is `(offset: number, length: number) => Uint8Array`.
+struct JsRangeReader {
+    read_fn: js_sys::Function,
+}
+
+impl ByteRangeReader for JsRangeReader {
+    type Error = MdfError;
+
+    fn read_range(&mut self, offset: u64, length: u64) -> Result<Vec<u8>, MdfError> {
+        let res = self
+            .read_fn
+            .call2(
+                &JsValue::NULL,
+                &JsValue::from_f64(offset as f64),
+                &JsValue::from_f64(length as f64),
+            )
+            .map_err(|e| {
+                MdfError::BlockSerializationError(format!("mf4 read_range js error: {e:?}"))
+            })?;
+        let arr = res.dyn_into::<Uint8Array>().map_err(|_| {
+            MdfError::BlockSerializationError(
+                "mf4 read_range callback did not return a Uint8Array".to_string(),
+            )
+        })?;
+        let bytes = arr.to_vec();
+        if bytes.len() as u64 != length {
+            return Err(MdfError::BlockSerializationError(format!(
+                "mf4 read_range short read at offset {offset}: wanted {length}, got {}",
+                bytes.len()
+            )));
+        }
+        Ok(bytes)
+    }
+}
 
 thread_local! {
     static READERS: RefCell<Slab<Mf4Reader>> = const { RefCell::new(Slab::new()) };
@@ -47,24 +88,52 @@ pub fn fetch_range_stub() -> Result<Uint8Array, JsError> {
     Ok(out)
 }
 
-/// Parse an MF4 blob and register an `Mf4Reader` in the thread-local slab.
-/// Returns the integer handle, used by all other `mf4_*` endpoints.
+/// Open an MF4 source that is read lazily through `read_range`, and register
+/// the resulting `Mf4Reader` in the thread-local slab. Returns the integer
+/// handle used by all other `mf4_*` endpoints.
+///
+/// `read_range` is a synchronous JS callback `(offset, length) => Uint8Array`
+/// (worker-side, backed by an OPFS sync access handle). `file_size` is the
+/// total byte length of the source, used by the index for range arithmetic.
+/// The whole file is never copied into wasm memory: only metadata blocks and
+/// the per-group time channels are read at open, and value channels stream on
+/// demand in `mf4_fetch_range`.
 #[wasm_bindgen]
-pub fn open_mf4(data: &[u8]) -> Result<u32, JsError> {
-    let reader =
-        Mf4Reader::open(data).map_err(|e| JsError::new(&format!("open mf4 failed: {e}")))?;
+pub fn open_mf4_ranged(read_fn: js_sys::Function, file_size: f64) -> Result<u32, JsError> {
+    if !(file_size.is_finite() && file_size >= 0.0) {
+        return Err(JsError::new("open mf4 failed: invalid file_size"));
+    }
+    let reader = Mf4Reader::open_ranged(
+        BoxedRangeReader::new(JsRangeReader { read_fn }),
+        file_size as u64,
+    )
+    .map_err(|e| JsError::new(&format!("open mf4 failed: {e}")))?;
     let key = READERS.with(|cell| cell.borrow_mut().insert(reader));
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the reader at `handle` and free its memory. No-op if the handle
-/// is already stale.
+/// Drop the reader at `handle` and free its memory (index, timelines, and any
+/// cached channel values). No-op if the handle is already stale. The JS caller
+/// is responsible for closing the backing OPFS sync access handle afterwards.
 #[wasm_bindgen]
 pub fn close_mf4(handle: u32) {
     READERS.with(|cell| {
         let mut slab = cell.borrow_mut();
         if slab.contains(handle as usize) {
             slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Drop the cached decoded values for one channel — call when a channel is
+/// removed from all plots so its samples no longer occupy memory. Timestamps
+/// and the index stay resident so the channel can be re-plotted cheaply.
+#[wasm_bindgen]
+pub fn mf4_release_channel(handle: u32, channel_id: &str) {
+    READERS.with(|cell| {
+        let slab = cell.borrow();
+        if let Some(reader) = slab.get(handle as usize) {
+            reader.release_channel(&channel_id.to_string());
         }
     });
 }
@@ -113,7 +182,8 @@ pub fn mf4_summary(handle: u32) -> Result<JsValue, JsError> {
                 })
                 .collect(),
         };
-        summary.serialize(&bigint_serializer())
+        summary
+            .serialize(&bigint_serializer())
             .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
     })
 }
@@ -187,7 +257,8 @@ pub fn mp4_sidecar_summary(handle: u32) -> Result<JsValue, JsError> {
                 })
                 .collect(),
         };
-        summary.serialize(&bigint_serializer())
+        summary
+            .serialize(&bigint_serializer())
             .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
     })
 }
@@ -288,7 +359,8 @@ pub fn mcap_summary(handle: u32) -> Result<JsValue, JsError> {
                 })
                 .collect(),
         };
-        summary.serialize(&bigint_serializer())
+        summary
+            .serialize(&bigint_serializer())
             .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
     })
 }
@@ -349,11 +421,7 @@ pub fn mcap_fetch_range(
 /// `from_pts_ns`. Returns a handle into `VIDEO_STREAMS`; callers must
 /// balance every successful open with `mcap_video_close`.
 #[wasm_bindgen]
-pub fn mcap_video_open(
-    handle: u32,
-    channel_id: &str,
-    from_pts_ns: i64,
-) -> Result<u32, JsError> {
+pub fn mcap_video_open(handle: u32, channel_id: &str, from_pts_ns: i64) -> Result<u32, JsError> {
     let iter = MCAP_READERS.with(|cell| -> Result<EncodedChunkIter, JsError> {
         let slab = cell.borrow();
         let reader = slab
@@ -468,8 +536,12 @@ pub fn mp4_sidecar_index(handle: u32) -> Result<JsValue, JsError> {
             .unwrap_or_default();
 
         let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &JsValue::from_str("channel_id"), &JsValue::from_str(&channel_id))
-            .map_err(|_| JsError::new("set channel_id"))?;
+        js_sys::Reflect::set(
+            &obj,
+            &JsValue::from_str("channel_id"),
+            &JsValue::from_str(&channel_id),
+        )
+        .map_err(|_| JsError::new("set channel_id"))?;
         js_sys::Reflect::set(&obj, &JsValue::from_str("pts_ns"), &pts_arr.into())
             .map_err(|_| JsError::new("set pts_ns"))?;
         js_sys::Reflect::set(&obj, &JsValue::from_str("offsets"), &off_arr.into())

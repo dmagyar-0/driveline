@@ -13,7 +13,12 @@ pub mod reader;
 pub mod types;
 
 pub use mcap::McapReader;
-pub use mf4::Mf4Reader;
+pub use mf4::{BoxedRangeReader, Mf4Reader};
+// Re-exported so out-of-crate callers (e.g. `wasm-bindings`) can implement a
+// custom byte-range source for `Mf4Reader::open_ranged` without taking a
+// direct `mf4-rs` dependency (and risking a version skew).
+pub use mf4_rs::error::MdfError;
+pub use mf4_rs::index::ByteRangeReader;
 pub use mp4_sidecar::{Mp4SampleIndex, Mp4SidecarReader};
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
 pub use types::{

@@ -1,43 +1,88 @@
-//! `Mf4Reader`: implementation of the `Reader` trait on top of `mf4-rs`.
+//! `Mf4Reader`: a lazy, range-reading MF4 adapter on top of `mf4-rs`.
 //!
-//! Covers the scalar slice of T2.2. For each channel group we resolve the
-//! master (time) channel, translate its per-sample float seconds offsets
-//! into absolute i64 nanoseconds (`start_time_ns + round(t_rel * 1e9)`),
-//! and surface every non-master channel as a `Scalar` / `Float64` Arrow
-//! column on demand.
+//! For each channel group we resolve the master (time) channel, translate its
+//! per-sample float seconds offsets into absolute i64 nanoseconds
+//! (`start_time_ns + round(t_rel * 1e9)`), and surface every non-master
+//! channel as a `Scalar` / `Float64` Arrow column on demand.
 //!
-//! Deliberate scope limits (per `docs/10-task-breakdown.md` T2.2 and the
-//! approved plan): no vector / enum / bytes channels, no compressed-
-//! block decoding (the upstream library itself does not support `##DZ`
-//! yet), no streaming `Blob.slice` reads. Those are follow-up tasks.
+//! ## Memory model
+//!
+//! The reader never holds the file bytes. It keeps only the lightweight
+//! [`MdfIndex`] (block offsets/metadata, no sample data) plus the decoded
+//! per-group timelines, and pulls sample bytes through a [`ByteRangeReader`]
+//! on demand — so a multi-gigabyte file is never materialised in memory.
+//! In the browser the reader is backed by an OPFS sync access handle
+//! (see `wasm-bindings`); native callers and tests use an in-memory
+//! [`SliceRangeReader`]. Decoded values for *plotted* channels are cached so
+//! repeated pan/zoom fetches don't re-stream the file; `release_channel`
+//! drops a channel's cache when it stops being plotted.
+//!
+//! Deliberate scope limits: no vector / enum / bytes channels, and no
+//! compressed-block (`##DZ`) or VLSD decoding (the upstream index reader
+//! itself does not support those yet). Those are follow-up tasks.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
-use mf4_rs::index::{IndexedChannelGroup, MdfIndex};
+use mf4_rs::error::MdfError;
+use mf4_rs::index::{ByteRangeReader, IndexedChannelGroup, MdfIndex, SliceRangeReader};
 
-use crate::reader::{ArrowIpc, Reader};
+use crate::reader::ArrowIpc;
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
 };
+
+/// Decoded full-channel values keyed by `(group_index, channel_index)`.
+type ValueCache = HashMap<(usize, usize), Arc<[f64]>>;
 
 /// MDF 4.1 channel type marking a master (time) channel.
 const CHANNEL_TYPE_MASTER: u8 = 2;
 /// MDF 4.1 channel type for a synthetic / virtual master.
 const CHANNEL_TYPE_VIRTUAL_MASTER: u8 = 3;
 
+/// Owned, object-safe wrapper around any [`ByteRangeReader`].
+///
+/// `mf4-rs`'s read methods are generic over `R: ByteRangeReader` (which
+/// requires a `Sized` reader), so we cannot hand them a `&mut dyn` directly.
+/// This newtype is `Sized`, implements the trait by delegating, and lets a
+/// single non-generic `Mf4Reader` hold either the in-memory slice reader
+/// (native/tests) or the JS/OPFS-backed reader (wasm) behind one boxed value.
+pub struct BoxedRangeReader(Box<dyn ByteRangeReader<Error = MdfError>>);
+
+impl BoxedRangeReader {
+    pub fn new<R: ByteRangeReader<Error = MdfError> + 'static>(reader: R) -> Self {
+        BoxedRangeReader(Box::new(reader))
+    }
+}
+
+impl ByteRangeReader for BoxedRangeReader {
+    type Error = MdfError;
+    fn read_range(&mut self, offset: u64, length: u64) -> Result<Vec<u8>, MdfError> {
+        self.0.read_range(offset, length)
+    }
+}
+
 pub struct Mf4Reader {
-    bytes: Vec<u8>,
     idx: MdfIndex,
     meta: SourceMeta,
+    /// Source of sample bytes. `RefCell` because decoding takes `&mut R` while
+    /// `fetch_range` only has `&self`. Never holds the whole file — reads are
+    /// per-data-block and dropped after each block is decoded.
+    reader: RefCell<BoxedRangeReader>,
     /// Per-CG absolute timestamps in ns-UTC. Parallel to `idx.channel_groups`.
     /// Groups that had no usable master end up with an empty vector and are
     /// absent from `channel_map` so they can never be queried.
     cg_time_ns: Vec<Vec<i64>>,
     channel_map: HashMap<ChannelId, (usize, usize)>,
+    /// Decoded full-channel values for currently-plotted channels, keyed by
+    /// `(group, channel)`. Populated on first `fetch_range` and reused for
+    /// subsequent pan/zoom so the file is not re-streamed per interaction.
+    /// Bounded to the plotted set via `release_channel` / `close`.
+    value_cache: RefCell<ValueCache>,
 }
 
 impl Mf4Reader {
@@ -69,12 +114,23 @@ impl Mf4Reader {
             })
             .collect()
     }
-}
 
-impl Reader for Mf4Reader {
-    fn open(bytes: &[u8]) -> crate::Result<Self> {
-        let owned = bytes.to_vec();
-        let idx = MdfIndex::from_bytes(owned.clone())?;
+    /// Convenience constructor used by native callers and tests: build a
+    /// reader over an in-memory byte slice. The bytes are moved into a
+    /// [`SliceRangeReader`] and not copied again.
+    pub fn open_slice(bytes: &[u8]) -> crate::Result<Self> {
+        let file_size = bytes.len() as u64;
+        Self::open_ranged(
+            BoxedRangeReader::new(SliceRangeReader::new(bytes.to_vec())),
+            file_size,
+        )
+    }
+
+    /// Build a reader that streams sample bytes through `reader`. Only the
+    /// file's metadata blocks and the per-group master (time) channels are
+    /// read here — value channels are decoded lazily on `fetch_range`.
+    pub fn open_ranged(mut reader: BoxedRangeReader, file_size: u64) -> crate::Result<Self> {
+        let idx = MdfIndex::from_range_reader(&mut reader, file_size)?;
         let start_time_ns = idx.start_time_ns.unwrap_or(0);
 
         let mut channels = Vec::new();
@@ -91,7 +147,10 @@ impl Reader for Mf4Reader {
                 continue;
             };
 
-            let t_rel = idx.read_channel_values_from_slice_as_f64(g, master_idx, &owned)?;
+            // Decode the master timeline once, via ranged reads. Master and
+            // value channels share the group's data blocks, so this streams
+            // each block, keeps only the timestamps, and discards the rest.
+            let t_rel = idx.read_channel_values_as_f64(g, master_idx, &mut reader)?;
             let abs_ns = Self::translate_abs_ns(start_time_ns, &t_rel);
 
             if let (Some(&first), Some(&last)) = (abs_ns.first(), abs_ns.last()) {
@@ -142,7 +201,6 @@ impl Reader for Mf4Reader {
         };
 
         Ok(Mf4Reader {
-            bytes: owned,
             idx,
             meta: SourceMeta {
                 id: String::new(),
@@ -150,16 +208,39 @@ impl Reader for Mf4Reader {
                 time_range,
                 channels,
             },
+            reader: RefCell::new(reader),
             cg_time_ns,
             channel_map,
+            value_cache: RefCell::new(HashMap::new()),
         })
     }
 
-    fn meta(&self) -> &SourceMeta {
+    pub fn meta(&self) -> &SourceMeta {
         &self.meta
     }
 
-    fn fetch_range(
+    /// Decode (or fetch from cache) the full value vector for `(g, c)`.
+    fn channel_values(&self, g: usize, c: usize) -> crate::Result<Arc<[f64]>> {
+        if let Some(cached) = self.value_cache.borrow().get(&(g, c)) {
+            return Ok(cached.clone());
+        }
+        let values: Arc<[f64]> = self
+            .idx
+            .read_channel_values_as_f64(g, c, &mut *self.reader.borrow_mut())?
+            .into();
+        self.value_cache.borrow_mut().insert((g, c), values.clone());
+        Ok(values)
+    }
+
+    /// Drop the cached decoded values for `channel_id`, e.g. when the channel
+    /// is removed from all plots. Timestamps and the index are retained.
+    pub fn release_channel(&self, channel_id: &ChannelId) {
+        if let Some(&(g, c)) = self.channel_map.get(channel_id) {
+            self.value_cache.borrow_mut().remove(&(g, c));
+        }
+    }
+
+    pub fn fetch_range(
         &self,
         channel_id: &ChannelId,
         range: TimeRange,
@@ -173,9 +254,7 @@ impl Reader for Mf4Reader {
         let abs_ns = &self.cg_time_ns[g];
         // Half-open lookup matching the data-model contract.
         let start_idx = abs_ns.partition_point(|&t| t < range.start_ns);
-        let end_idx = abs_ns
-            .partition_point(|&t| t < range.end_ns)
-            .max(start_idx);
+        let end_idx = abs_ns.partition_point(|&t| t < range.end_ns).max(start_idx);
         // `include_prev` is tracked separately from the in-range body so
         // the T4.3 min-max decimation path cannot absorb the leading
         // sample into a bucket.
@@ -198,9 +277,7 @@ impl Reader for Mf4Reader {
             if start_idx == end_idx && prev_idx.is_none() {
                 (Vec::new(), Vec::new())
             } else {
-                let all_values = self
-                    .idx
-                    .read_channel_values_from_slice_as_f64(g, c, &self.bytes)?;
+                let all_values = self.channel_values(g, c)?;
                 let mut ts: Vec<i64> = abs_ns[start_idx..end_idx].to_vec();
                 let mut vs: Vec<f64> = all_values[start_idx..end_idx].to_vec();
                 if let Some(p) = prev_idx {
@@ -312,7 +389,7 @@ mod tests {
     #[test]
     fn synthesises_and_reads_scalar_channel() {
         let bytes = synth_single_group();
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         assert_eq!(r.meta().kind, SourceKind::Mf4);
         // Master is hidden, only `speed` remains.
         assert_eq!(r.meta().channels.len(), 1);
@@ -330,7 +407,7 @@ mod tests {
     #[test]
     fn fetch_range_returns_expected_arrow_schema() {
         let bytes = synth_single_group();
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         let channel_id = r.meta().channels[0].id.clone();
 
         let ipc = r
@@ -372,7 +449,7 @@ mod tests {
     #[test]
     fn fetch_range_respects_time_bounds() {
         let bytes = synth_single_group();
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         let channel_id = r.meta().channels[0].id.clone();
         let base = r.meta().time_range.start_ns;
 
@@ -399,7 +476,7 @@ mod tests {
     #[test]
     fn include_prev_adds_leading_sample() {
         let bytes = synth_single_group();
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         let channel_id = r.meta().channels[0].id.clone();
         let base = r.meta().time_range.start_ns;
 
@@ -408,11 +485,7 @@ mod tests {
             end_ns: base + 70_000_000,
         };
         let ipc = r
-            .fetch_range(
-                &channel_id,
-                range,
-                FetchOpts { include_prev: true },
-            )
+            .fetch_range(&channel_id, range, FetchOpts { include_prev: true })
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 5);
@@ -428,7 +501,7 @@ mod tests {
     #[test]
     fn unknown_channel_returns_channel_not_found() {
         let bytes = synth_single_group();
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         let err = r
             .fetch_range(
                 &"99/99".to_string(),
@@ -465,7 +538,7 @@ mod tests {
         w.finalize().unwrap();
         let bytes = bytes_of(cursor);
 
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         assert!(r.meta().channels.is_empty());
         assert!(r.meta().time_range.is_empty());
     }
@@ -523,7 +596,7 @@ mod tests {
         w.finalize().unwrap();
         let bytes = bytes_of(cursor);
 
-        let r = Mf4Reader::open(&bytes).unwrap();
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
         // 2 non-master channels across 2 CGs.
         assert_eq!(r.meta().channels.len(), 2);
 
@@ -534,5 +607,4 @@ mod tests {
         assert_eq!(r.meta().time_range.start_ns, start);
         assert_eq!(r.meta().time_range.end_ns, start + 49_000_000 + 1);
     }
-
 }
