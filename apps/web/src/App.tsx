@@ -130,6 +130,9 @@ declare global {
         sampleAtCursor: Array<
           { channelId: string; tsNs: string; value: number } | null
         >;
+        // The plot's actual x-axis domain in epoch seconds (pinned to the
+        // global timeline, not the per-series data extent).
+        xScaleSec: { min: number; max: number } | null;
       } | null;
       // T6.3 — per-series min/max stats over the most recent render for
       // `signalAlignment.spec.ts`.
@@ -384,6 +387,7 @@ export function App() {
                   value: s.value,
                 },
           ),
+          xScaleSec: snap.xScaleSec,
         };
       },
       getPlotPanelSeriesStats: (panelId) => {

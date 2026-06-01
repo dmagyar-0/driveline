@@ -57,6 +57,13 @@ export interface PlotSyncSnapshot {
   // underlying signal within one sample. Empty when no render has
   // completed yet.
   seriesStats: PlotSeriesStats[];
+  // The plot's actual x-axis domain in epoch seconds, read straight from
+  // uPlot after the most recent render. The x-scale is pinned to the
+  // shared global timeline (not the per-series data extent), so this
+  // should match `globalRange`; e2e asserts the plot doesn't silently
+  // auto-fit a short signal across the full width. `null` before the
+  // first render.
+  xScaleSec: { min: number; max: number } | null;
 }
 
 declare global {
@@ -171,6 +178,27 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     }
   }, [boundChannelIds, channels, panelId, setPlotBinding, sources.length]);
 
+  // The shared global timeline in epoch seconds. The plot's x-scale is
+  // pinned to this (not the per-series data extent) so a signal that
+  // only covers part of the timeline lands in its true absolute-time
+  // position, leaving the uncovered span blank — and the cursor overlay,
+  // which already projects `cursorNs` over the global range, lines up.
+  const globalRangeSec = useMemo<[number, number] | null>(
+    () =>
+      globalRange
+        ? [
+            Number(globalRange.startNs) / 1e9,
+            Number(globalRange.endNs) / 1e9,
+          ]
+        : null,
+    [globalRange],
+  );
+  // uPlot's x-range callback runs synchronously inside `setData`, well
+  // after this render commits, so it must read the latest value through
+  // a ref rather than the closed-over `globalRangeSec`.
+  const globalRangeSecRef = useRef<[number, number] | null>(globalRangeSec);
+  globalRangeSecRef.current = globalRangeSec;
+
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
@@ -220,6 +248,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         };
       },
     );
+    const xScale = plotRef.current?.scales?.x;
+    const xScaleSec =
+      xScale && xScale.min != null && xScale.max != null
+        ? { min: xScale.min, max: xScale.max }
+        : null;
     store[panelId] = {
       cursorNs,
       boundChannelIds,
@@ -228,6 +261,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         : null,
       sampleAtCursor,
       seriesStats,
+      xScaleSec,
     };
   }, [boundChannelIds, cursorNs, panelId]);
 
@@ -304,7 +338,23 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     const opts: uPlot.Options = {
       width: Math.max(1, Math.round(rect.width)),
       height: Math.max(1, Math.round(rect.height)),
-      scales: { x: { time: true }, y: { auto: true } },
+      scales: {
+        x: {
+          time: true,
+          // Pin the x-domain to the shared global timeline. Returning an
+          // explicit range here disables uPlot's auto-fit-to-data (and
+          // its range padding), so a short signal no longer stretches to
+          // fill the panel — it occupies only its real slice of absolute
+          // time. Falls back to the data extent only before any source
+          // has set a global range.
+          range: (_u, dataMin, dataMax) => {
+            const r = globalRangeSecRef.current;
+            if (r && r[1] > r[0]) return r;
+            return [dataMin, dataMax];
+          },
+        },
+        y: { auto: true },
+      },
       series: [
         {},
         ...boundChannels.map((c) => ({
