@@ -71,12 +71,27 @@ import { PlotPanel, type PlotSyncSnapshot } from "./PlotPanel";
 import { useSession } from "../state/store";
 import type { DataCoreApi, Mf4Summary, McapSummary, Mp4SidecarSummary } from "../workerClient";
 
+import { tableFromArrays, tableToIPC } from "apache-arrow";
+
 // The canonical T1.4 scalar IPC: ts = [1.0, 1.01, 1.02] s, value = [1, 2, 3].
 const FIXTURE_PATH = resolve(
   __dirname,
   "../../../../test-fixtures/arrow_scalar.ipc",
 );
 const IPC_BYTES = new Uint8Array(readFileSync(FIXTURE_PATH));
+
+// A scalar IPC whose values are all NaN — what `seriesFromArrow` produces
+// for a channel that "has no values" (parsed_scalar_as_f64 returns NaN for
+// non-scalar samples). Same three timestamps as the canonical fixture so
+// the union x-axis lines up. `seriesFromArrow` only reads the raw backing
+// buffers, so the column logical types don't matter here.
+function nanScalarIpc(): Uint8Array {
+  const table = tableFromArrays({
+    ts: BigInt64Array.from([1_000_000_000n, 1_010_000_000n, 1_020_000_000n]),
+    value: Float64Array.from([NaN, NaN, NaN]),
+  });
+  return tableToIPC(table);
+}
 
 // Build a minimal `DataCoreApi` remote stub that satisfies the store's
 // `fetchChannelRange` call on the MCAP path. The scalar IPC fixture is
@@ -355,6 +370,65 @@ describe("PlotPanel", () => {
     // Domain spans the global range (1.0–11.0 s), not the data (1.0–1.02 s).
     expect(snap.xScaleSec!.min).toBeCloseTo(1.0, 6);
     expect(snap.xScaleSec!.max).toBeCloseTo(11.0, 6);
+  });
+
+  it("still renders a good series when another bound channel has only NaN values", async () => {
+    // Regression for the blank-plot bug: a channel that "has no values"
+    // decodes to all-NaN. uPlot's shared y-scale auto-range lets NaN
+    // through its null test, so one NaN series poisoned the scale to
+    // [NaN, NaN] and blanked *every* series — not just the empty one.
+    // `mergeSeries` now maps non-finite values to gaps. The mergeSeries
+    // unit tests assert the gap mapping directly; here we assert the panel
+    // stays operable — the good channel's chip keeps reading finite values
+    // and both series still publish — when a NaN channel is bound.
+    //
+    // (uPlot only resolves its y auto-range inside the redraw/rAF pipeline,
+    // which jsdom's stubbed canvas doesn't drive, so `yScale` stays null
+    // here; the real-browser check lives in e2e.)
+    const nanBytes = nanScalarIpc();
+    const w = {
+      ping: vi.fn().mockResolvedValue("ok"),
+      openMcap: vi.fn(),
+      mcapSummary: vi.fn(),
+      closeMcap: vi.fn(),
+      openMf4: vi.fn(),
+      mf4Summary: vi.fn(),
+      closeMf4: vi.fn(),
+      openMp4Sidecar: vi.fn(),
+      mp4SidecarSummary: vi.fn(),
+      closeMp4Sidecar: vi.fn(),
+      // chan-b lives in the source with handle 2 — feed it the NaN IPC;
+      // chan-a (handle 1) keeps the canonical [1, 2, 3] fixture.
+      mcapFetchRange: vi.fn((handle: number) =>
+        Promise.resolve(handle === 2 ? nanBytes : IPC_BYTES),
+      ),
+      mf4FetchRange: vi.fn().mockResolvedValue(IPC_BYTES),
+      fetchRangeStub: vi.fn(),
+    } as unknown as import("comlink").Remote<DataCoreApi>;
+    useSession.getState().setWorker(w);
+
+    const { findByTestId } = render(<PlotPanel panelId="test-panel" />);
+
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+
+    const snap = window.__drivelinePlotPanels!["test-panel"] as PlotSyncSnapshot;
+    // Both series publish; the good channel's stats stay finite, the NaN
+    // channel's min/max collapse to NaN (it genuinely has no values).
+    const byId = Object.fromEntries(
+      snap.seriesStats.map((s) => [s.channelId, s]),
+    );
+    expect(byId["chan-a"].min).toBe(1);
+    expect(byId["chan-a"].max).toBe(3);
+    expect(Number.isNaN(byId["chan-b"].min)).toBe(true);
+
+    // The good channel's value-at-cursor readout is unaffected by the
+    // NaN neighbour (cursor seeded at 1.0 s → first row, value 1).
+    const chipA = await findByTestId("chip-value-chan-a");
+    expect(chipA.textContent).toBe("1.000");
   });
 
   it("does not clear persisted bindings before any source loads", () => {
