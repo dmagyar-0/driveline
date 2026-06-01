@@ -37,6 +37,8 @@ interface Props {
   addMapPanel: () => void;
   /** Phase 6 · mints a table panel. */
   addTablePanel: () => void;
+  /** Mints a value panel (compact sample-at-cursor reader). */
+  addValuePanel: () => void;
   /** Phase 6 · mints an enum strip panel. */
   addEnumPanel: () => void;
   /** Resets the FlexLayout model to the default split. */
@@ -55,6 +57,7 @@ export function LayoutDrawer({
   addScenePanel,
   addMapPanel,
   addTablePanel,
+  addValuePanel,
   addEnumPanel,
   resetLayout,
 }: Props) {
@@ -219,6 +222,7 @@ export function LayoutDrawer({
               { label: "+ 3D scene", testid: "add-scene-panel", onClick: addScenePanel },
               { label: "+ map", testid: "add-map-panel", onClick: addMapPanel },
               { label: "+ table", testid: "add-table-panel", onClick: addTablePanel },
+              { label: "+ value", testid: "add-value-panel", onClick: addValuePanel },
               { label: "+ enum", testid: "add-enum-panel", onClick: addEnumPanel },
             ] as readonly AddRow[]
           ).map((row) => (

@@ -13,6 +13,7 @@ export const VIDEO_PREFIX = "video";
 export const SCENE_PREFIX = "scene";
 export const MAP_PREFIX = "map";
 export const TABLE_PREFIX = "table";
+export const VALUE_PREFIX = "value";
 export const ENUM_PREFIX = "enum";
 
 export type PanelKind =
@@ -21,6 +22,7 @@ export type PanelKind =
   | "scene"
   | "map"
   | "table"
+  | "value"
   | "enum";
 
 export function panelKindOf(id: string): PanelKind | null {
@@ -29,6 +31,7 @@ export function panelKindOf(id: string): PanelKind | null {
   if (id.startsWith(`${SCENE_PREFIX}-`)) return "scene";
   if (id.startsWith(`${MAP_PREFIX}-`)) return "map";
   if (id.startsWith(`${TABLE_PREFIX}-`)) return "table";
+  if (id.startsWith(`${VALUE_PREFIX}-`)) return "value";
   if (id.startsWith(`${ENUM_PREFIX}-`)) return "enum";
   return null;
 }
@@ -49,6 +52,8 @@ export function kindLabel(kind: PanelKind): string {
       return "MAP";
     case "table":
       return "TABLE";
+    case "value":
+      return "VALUE";
     case "enum":
       return "ENUM";
   }

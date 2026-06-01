@@ -22,6 +22,7 @@ interface Props {
   addScenePanel: () => void;
   addMapPanel: () => void;
   addTablePanel: () => void;
+  addValuePanel: () => void;
   addEnumPanel: () => void;
 }
 
@@ -37,6 +38,7 @@ export function AddPanelMenu({
   addScenePanel,
   addMapPanel,
   addTablePanel,
+  addValuePanel,
   addEnumPanel,
 }: Props) {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
@@ -52,6 +54,7 @@ export function AddPanelMenu({
     { label: "3D scene", testid: "add-panel-scene", add: addScenePanel },
     { label: "Map", testid: "add-panel-map", add: addMapPanel },
     { label: "Table", testid: "add-panel-table", add: addTablePanel },
+    { label: "Value", testid: "add-panel-value", add: addValuePanel },
     { label: "Enum", testid: "add-panel-enum", add: addEnumPanel },
   ];
 

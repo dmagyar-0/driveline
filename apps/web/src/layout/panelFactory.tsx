@@ -12,6 +12,7 @@ import { VideoPanelContainer } from "../panels/VideoPanelContainer";
 import { ScenePanel } from "../panels/ScenePanel";
 import { MapPanel } from "../panels/MapPanel";
 import { TablePanel } from "../panels/TablePanel";
+import { ValuePanel } from "../panels/ValuePanel";
 import { EnumPanel } from "../panels/EnumPanel";
 import { useSession } from "../state/store";
 import {
@@ -20,6 +21,7 @@ import {
   PANEL_COMPONENT_PLOT,
   PANEL_COMPONENT_SCENE,
   PANEL_COMPONENT_TABLE,
+  PANEL_COMPONENT_VALUE,
   PANEL_COMPONENT_VIDEO,
 } from "./defaultLayout";
 import styles from "./panelFactory.module.css";
@@ -55,6 +57,8 @@ function renderPanel(
       return <MapPanel panelId={panelId} />;
     case PANEL_COMPONENT_TABLE:
       return <TablePanel panelId={panelId} />;
+    case PANEL_COMPONENT_VALUE:
+      return <ValuePanel panelId={panelId} />;
     case PANEL_COMPONENT_ENUM:
       return <EnumPanel panelId={panelId} />;
     default:

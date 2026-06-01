@@ -19,6 +19,7 @@ function setup() {
     addScenePanel: vi.fn(),
     addMapPanel: vi.fn(),
     addTablePanel: vi.fn(),
+    addValuePanel: vi.fn(),
     addEnumPanel: vi.fn(),
   };
   render(<AddPanelMenu {...handlers} />);
@@ -49,6 +50,7 @@ describe("AddPanelMenu", () => {
       ["add-panel-scene", "addScenePanel"],
       ["add-panel-map", "addMapPanel"],
       ["add-panel-table", "addTablePanel"],
+      ["add-panel-value", "addValuePanel"],
       ["add-panel-enum", "addEnumPanel"],
     ];
     for (const [testid, fnName] of cases) {

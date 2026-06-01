@@ -41,6 +41,7 @@ import {
   PANEL_COMPONENT_PLOT,
   PANEL_COMPONENT_SCENE,
   PANEL_COMPONENT_TABLE,
+  PANEL_COMPONENT_VALUE,
   PANEL_COMPONENT_VIDEO,
   defaultLayoutModel,
 } from "./defaultLayout";
@@ -51,6 +52,7 @@ import {
   PLOT_PREFIX,
   SCENE_PREFIX,
   TABLE_PREFIX,
+  VALUE_PREFIX,
   VIDEO_PREFIX,
   kindLabel,
   panelKindOf,
@@ -63,6 +65,7 @@ export interface WorkspaceHandle {
   addScenePanel(): string | undefined;
   addMapPanel(): string | undefined;
   addTablePanel(): string | undefined;
+  addValuePanel(): string | undefined;
   addEnumPanel(): string | undefined;
   resetLayout(): void;
 }
@@ -215,6 +218,16 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
     });
   }, [addTab]);
 
+  const addValuePanel = useCallback(() => {
+    const id = newPanelId(VALUE_PREFIX);
+    return addTab({
+      type: "tab",
+      id,
+      name: "Value",
+      component: PANEL_COMPONENT_VALUE,
+    });
+  }, [addTab]);
+
   const addEnumPanel = useCallback(() => {
     const id = newPanelId(ENUM_PREFIX);
     return addTab({
@@ -338,6 +351,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
       addScenePanel,
       addMapPanel,
       addTablePanel,
+      addValuePanel,
       addEnumPanel,
       resetLayout,
     }),
@@ -347,6 +361,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
       addScenePanel,
       addMapPanel,
       addTablePanel,
+      addValuePanel,
       addEnumPanel,
       resetLayout,
     ],

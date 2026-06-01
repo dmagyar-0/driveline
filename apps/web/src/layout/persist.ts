@@ -21,7 +21,9 @@
 // Phase 8 added `plotPanelSettings` as an OPTIONAL v3 field rather than
 // bumping to v4, so users who already had saved layouts don't lose them
 // on first load with the new field. New writes always include the
-// field; old reads default it to `{}`.
+// field; old reads default it to `{}`. `valueBindings` (the Value
+// panel's per-panel channel lists) was added the same way — optional on
+// read, always written — so existing v3 layouts survive untouched.
 //
 // `attachLayoutPersistence` wires the Zustand subscribe → Storage write
 // loop; the first post-hydration fire is skipped so we don't rewrite the
@@ -50,6 +52,7 @@ export interface PersistedLayout {
   sceneBindings: Record<string, string | null>;
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
+  valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
 }
@@ -130,10 +133,13 @@ function validate(raw: unknown): PersistedLayout | null {
   if (!isMapBindingMap(raw.mapBindings)) return null;
   if (!isStringArrayMap(raw.tableBindings)) return null;
   if (!isNullableStringMap(raw.enumBindings)) return null;
-  // Optional v3 field — pre-Phase-8 payloads don't have it. Default to
-  // an empty map so older saved layouts round-trip cleanly.
+  // Optional v3 fields — payloads written before these existed don't have
+  // them. Default to an empty map so older saved layouts round-trip
+  // cleanly (same posture as `plotPanelSettings`).
   const settings = raw.plotPanelSettings ?? {};
   if (!isPlotPanelSettingsMap(settings)) return null;
+  const valueBindings = raw.valueBindings ?? {};
+  if (!isStringArrayMap(valueBindings)) return null;
   return {
     version: LAYOUT_SCHEMA_VERSION,
     layoutJson: raw.layoutJson ?? null,
@@ -143,6 +149,7 @@ function validate(raw: unknown): PersistedLayout | null {
     sceneBindings: raw.sceneBindings,
     mapBindings: raw.mapBindings,
     tableBindings: raw.tableBindings,
+    valueBindings,
     enumBindings: raw.enumBindings,
     plotPanelSettings: settings,
   };
@@ -191,6 +198,7 @@ export interface LayoutSlice {
   sceneBindings: Record<string, string | null>;
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
+  valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
 }
@@ -205,6 +213,7 @@ function snapshot(s: LayoutSlice): PersistedLayout {
     sceneBindings: s.sceneBindings,
     mapBindings: s.mapBindings,
     tableBindings: s.tableBindings,
+    valueBindings: s.valueBindings,
     enumBindings: s.enumBindings,
     plotPanelSettings: s.plotPanelSettings,
   };
@@ -229,6 +238,7 @@ export function attachLayoutPersistence(
       s.sceneBindings === last.sceneBindings &&
       s.mapBindings === last.mapBindings &&
       s.tableBindings === last.tableBindings &&
+      s.valueBindings === last.valueBindings &&
       s.enumBindings === last.enumBindings &&
       s.plotPanelSettings === last.plotPanelSettings
     ) {

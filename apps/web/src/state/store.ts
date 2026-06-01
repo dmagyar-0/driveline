@@ -178,6 +178,11 @@ export interface SessionState {
   sceneBindings: Record<string, string | null>;
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
+  // Per-Value-panel bindings. The Value panel is the compact
+  // sample-at-cursor reader (one value per bound channel); it mirrors
+  // `tableBindings`' shape but is keyed by `value-*` panel ids so the two
+  // panel kinds never share a binding list.
+  valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
   // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
   // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
@@ -300,6 +305,12 @@ export interface SessionState {
   addTableChannel(panelId: string, channelId: string): void;
   /** Remove one channel from a table panel (no-op if absent). */
   removeTableChannel(panelId: string, channelId: string): void;
+  /** Replace a value panel's bound channels wholesale (capped, deduped). */
+  setValueBinding(panelId: string, ids: string[]): void;
+  /** Append one channel to a value panel (no-op if present or at cap). */
+  addValueChannel(panelId: string, channelId: string): void;
+  /** Remove one channel from a value panel (no-op if absent). */
+  removeValueChannel(panelId: string, channelId: string): void;
   /** Bind an enum strip panel to a single channel; `null` clears. */
   setEnumBinding(panelId: string, channelId: string | null): void;
   /** Switch the rail's open drawer; pass `null` to close. */
@@ -530,6 +541,7 @@ export const useSession = create<SessionState>((set, get) => {
     sceneBindings: hydrated?.sceneBindings ?? {},
     mapBindings: hydrated?.mapBindings ?? {},
     tableBindings: hydrated?.tableBindings ?? {},
+    valueBindings: hydrated?.valueBindings ?? {},
     enumBindings: hydrated?.enumBindings ?? {},
     activeRailTab: hydratedUi?.activeRailTab ?? null,
     railCollapsed: hydratedUi?.railCollapsed ?? false,
@@ -747,6 +759,40 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
+    setValueBinding(panelId, ids) {
+      const seen = new Set<string>();
+      const next: string[] = [];
+      for (const id of ids) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        next.push(id);
+        if (next.length >= MAX_PLOT_SERIES) break;
+      }
+      set({ valueBindings: { ...get().valueBindings, [panelId]: next } });
+    },
+
+    addValueChannel(panelId, channelId) {
+      const prev = get().valueBindings;
+      const existing = prev[panelId] ?? [];
+      if (existing.includes(channelId)) return;
+      if (existing.length >= MAX_PLOT_SERIES) return;
+      set({
+        valueBindings: { ...prev, [panelId]: [...existing, channelId] },
+      });
+    },
+
+    removeValueChannel(panelId, channelId) {
+      const prev = get().valueBindings;
+      const existing = prev[panelId];
+      if (!existing || !existing.includes(channelId)) return;
+      set({
+        valueBindings: {
+          ...prev,
+          [panelId]: existing.filter((x) => x !== channelId),
+        },
+      });
+    },
+
     setEnumBinding(panelId, channelId) {
       const prev = get().enumBindings;
       if ((prev[panelId] ?? null) === channelId) return;
@@ -784,6 +830,7 @@ export const useSession = create<SessionState>((set, get) => {
         sceneBindings,
         mapBindings,
         tableBindings,
+        valueBindings,
         enumBindings,
         namedLayouts,
       } = get();
@@ -796,6 +843,7 @@ export const useSession = create<SessionState>((set, get) => {
         sceneBindings: { ...sceneBindings },
         mapBindings: { ...mapBindings },
         tableBindings: { ...tableBindings },
+        valueBindings: { ...valueBindings },
         enumBindings: { ...enumBindings },
         plotPanelSettings: { ...plotPanelSettings },
         createdAt: Date.now(),
@@ -821,6 +869,7 @@ export const useSession = create<SessionState>((set, get) => {
         sceneBindings: { ...entry.sceneBindings },
         mapBindings: { ...entry.mapBindings },
         tableBindings: { ...entry.tableBindings },
+        valueBindings: { ...(entry.valueBindings ?? {}) },
         enumBindings: { ...entry.enumBindings },
         plotPanelSettings: { ...(entry.plotPanelSettings ?? {}) },
         activeNamedLayoutId: id,
@@ -1124,6 +1173,7 @@ export const useSession = create<SessionState>((set, get) => {
           sceneBindings: {},
           mapBindings: {},
           tableBindings: {},
+          valueBindings: {},
           enumBindings: {},
           lastOpenErrors: [],
           loadedRanges: {},
@@ -1206,6 +1256,10 @@ export const useSession = create<SessionState>((set, get) => {
           mapBindings: pruneMapBindings(cur.mapBindings, goneChannelIds),
           tableBindings: pruneMultiBindings(
             cur.tableBindings,
+            goneChannelIds,
+          ),
+          valueBindings: pruneMultiBindings(
+            cur.valueBindings,
             goneChannelIds,
           ),
           enumBindings: pruneSingleBindings(cur.enumBindings, goneChannelIds),

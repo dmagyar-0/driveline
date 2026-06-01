@@ -39,6 +39,7 @@ const SAMPLE_LAYOUT: NamedLayout = {
     "map-1": { latChannelId: "/gps/lat", lonChannelId: "/gps/lon" },
   },
   tableBindings: { "table-1": ["/vehicle/speed"] },
+  valueBindings: { "value-1": ["/vehicle/rpm"] },
   enumBindings: { "enum-1": "/state/gear" },
   plotPanelSettings: { "plot-1": { gapThresholdSec: 1.5 } },
   createdAt: 1_700_000_000_000,

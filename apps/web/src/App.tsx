@@ -96,6 +96,7 @@ declare global {
       addScenePanel: () => string | undefined;
       addMapPanel: () => string | undefined;
       addTablePanel: () => string | undefined;
+      addValuePanel: () => string | undefined;
       addEnumPanel: () => string | undefined;
       resetLayout: () => void;
       // T6.1 — bind panels programmatically and read the per-panel
@@ -117,6 +118,11 @@ declare global {
       ) => void;
       addTableChannelBinding: (panelId: string, channelId: string) => void;
       removeTableChannelBinding: (
+        panelId: string,
+        channelId: string,
+      ) => void;
+      addValueChannelBinding: (panelId: string, channelId: string) => void;
+      removeValueChannelBinding: (
         panelId: string,
         channelId: string,
       ) => void;
@@ -357,6 +363,7 @@ export function App() {
       addScenePanel: () => workspaceRef.current?.addScenePanel(),
       addMapPanel: () => workspaceRef.current?.addMapPanel(),
       addTablePanel: () => workspaceRef.current?.addTablePanel(),
+      addValuePanel: () => workspaceRef.current?.addValuePanel(),
       addEnumPanel: () => workspaceRef.current?.addEnumPanel(),
       resetLayout: () => workspaceRef.current?.resetLayout(),
       setVideoChannelBinding: (panelId, channelId) =>
@@ -371,6 +378,10 @@ export function App() {
         useSession.getState().addTableChannel(panelId, channelId),
       removeTableChannelBinding: (panelId, channelId) =>
         useSession.getState().removeTableChannel(panelId, channelId),
+      addValueChannelBinding: (panelId, channelId) =>
+        useSession.getState().addValueChannel(panelId, channelId),
+      removeValueChannelBinding: (panelId, channelId) =>
+        useSession.getState().removeValueChannel(panelId, channelId),
       setEnumChannelBinding: (panelId, channelId) =>
         useSession.getState().setEnumBinding(panelId, channelId),
       getPlotPanelSync: (panelId) => {
@@ -572,6 +583,9 @@ export function App() {
   const addTablePanel = (): void => {
     workspaceRef.current?.addTablePanel();
   };
+  const addValuePanel = (): void => {
+    workspaceRef.current?.addValuePanel();
+  };
   const addEnumPanel = (): void => {
     workspaceRef.current?.addEnumPanel();
   };
@@ -592,6 +606,7 @@ export function App() {
       addScenePanel={addScenePanel}
       addMapPanel={addMapPanel}
       addTablePanel={addTablePanel}
+      addValuePanel={addValuePanel}
       addEnumPanel={addEnumPanel}
       resetLayout={resetLayout}
       transport={<Transport />}

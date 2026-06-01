@@ -1,13 +1,24 @@
 // @vitest-environment jsdom
 //
-// Phase 6 · TablePanel render tests. Asserts the empty state and the
-// row-per-binding render path. Doesn't drive the worker fetch — that
-// surface is covered by the e2e spec under apps/e2e/tests/.
+// TablePanel render tests. Asserts the empty state, the bound-channel
+// header columns, and stale-binding cleanup. The virtualised body and the
+// cursor-row highlight ride on the worker fetch, which jsdom can't run
+// (no wasm-pack output), so the merge/scroll behaviour is covered by
+// `tableModel.test.ts` plus the e2e spec.
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+vi.hoisted(() => {
+  const g = globalThis as unknown as { ResizeObserver: unknown };
+  g.ResizeObserver = class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  };
+});
 
 import { TablePanel } from "./TablePanel";
 import { useSession, type SourceMeta } from "../state/store";
@@ -64,30 +75,22 @@ describe("TablePanel", () => {
     expect(screen.getByTestId("table-empty")).toBeTruthy();
   });
 
-  it("renders one row per bound channel", () => {
+  it("renders a header column per bound channel", () => {
     seed();
     useSession.getState().addTableChannel("table-1", "/speed");
     useSession.getState().addTableChannel("table-1", "/rpm");
     render(<TablePanel panelId="table-1" />);
-    expect(screen.getByTestId("table-row-/speed")).toBeTruthy();
-    expect(screen.getByTestId("table-row-/rpm")).toBeTruthy();
-    // Cells render the em-dash placeholder until the worker fetch
-    // completes (jsdom doesn't run wasm-pack output, so fetches reject
-    // at the boundary). The component must not throw.
-    expect(screen.getByTestId("table-value-/speed").textContent).toBe("—");
+    expect(screen.getByTestId("table-panel")).toBeTruthy();
+    expect(screen.getByTestId("table-col-/speed")).toBeTruthy();
+    expect(screen.getByTestId("table-col-/rpm")).toBeTruthy();
   });
 
   it("drops bindings whose channel id no longer exists", () => {
-    // Seed a source so the cull effect runs — the gate on
-    // `sources.length > 0` exists so a fresh hydrate (channels list
-    // empty) doesn't wipe persisted bindings before the user has
-    // dropped a file.
     seed();
     useSession.setState({
       tableBindings: { "table-1": ["/ghost"] },
     });
     render(<TablePanel panelId="table-1" />);
-    // The cleanup effect filters the binding to []; empty state renders.
     expect(screen.getByTestId("table-empty")).toBeTruthy();
     expect(useSession.getState().tableBindings["table-1"]).toEqual([]);
   });
