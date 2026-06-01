@@ -26,6 +26,7 @@ import { cursorStrokeColor, cursorXPx, nsFromXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
+import { formatAxisTick } from "../timeline/formatTime";
 import styles from "./PlotPanel.module.css";
 
 interface PlotPanelProps {
@@ -139,10 +140,52 @@ function axisStyle(): { fg: string; grid: string } {
   return axisStyleCache;
 }
 
+// uPlot reserves a fixed ~50px gutter for the y-axis. Wide tick labels —
+// six-figure signal values, long decimals, or a leading minus sign —
+// overflow it and get clipped at the panel's left edge, so the axis shows
+// "00000" instead of "100000". Size the gutter to the widest formatted
+// tick instead. This is the canonical uPlot dynamic-axis recipe: measure
+// the longest label in the axis's own (pxRatio-scaled) font and add room
+// for the tick mark and gap. Converges in a single layout cycle because
+// the tick values depend only on the y-scale, not on the gutter width.
+//
+// `values` is `null` on uPlot's first sizing pass (before any ticks are
+// computed), so fall back to the default minimum then.
+export const Y_AXIS_MIN_SIZE = 50;
+export function yAxisSize(
+  self: uPlot,
+  values: string[] | null,
+  axisIdx: number,
+): number {
+  const axis = self.axes[axisIdx];
+  const tickSize =
+    axis.ticks && typeof axis.ticks.size === "number" ? axis.ticks.size : 0;
+  const gap = typeof axis.gap === "number" ? axis.gap : 0;
+  let size = tickSize + gap;
+  const longest = (values ?? []).reduce(
+    (acc, v) => (v.length > acc.length ? v : acc),
+    "",
+  );
+  if (longest !== "") {
+    // After init uPlot stores `font` as `[cssFont, pxSize, cssSize]`; the
+    // first entry already includes the devicePixelRatio multiplier, so
+    // `measureText` returns device pixels — divide back to CSS pixels.
+    const font = (axis.font as unknown as [string] | undefined)?.[0];
+    if (font) self.ctx.font = font;
+    const dpr = window.devicePixelRatio || 1;
+    size += self.ctx.measureText(longest).width / dpr;
+  }
+  return Math.ceil(Math.max(size, Y_AXIS_MIN_SIZE));
+}
+
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
+  // Shared relative/absolute toggle (owned by the store, driven by the
+  // Transport's mode button). The x-axis tick formatter reads this so the
+  // plot's time labels match the scrubber readout's mode and format.
+  const timeMode = useSession((s) => s.timeMode);
   const storedBindings = useSession((s) => s.plotBindings[panelId]);
   const setPlotBinding = useSession((s) => s.setPlotBinding);
   const addPlotChannel = useSession((s) => s.addPlotChannel);
@@ -213,6 +256,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // a ref rather than the closed-over `globalRangeSec`.
   const globalRangeSecRef = useRef<[number, number] | null>(globalRangeSec);
   globalRangeSecRef.current = globalRangeSec;
+  // uPlot bakes the axis `values` callback in at build time, but the mode
+  // can flip without a rebuild — so the callback reads the live value
+  // through a ref rather than the closed-over `timeMode`. The effect below
+  // redraws the plot when the mode changes so labels repaint immediately.
+  const timeModeRef = useRef(timeMode);
+  timeModeRef.current = timeMode;
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const plotMountRef = useRef<HTMLDivElement | null>(null);
@@ -331,10 +380,34 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
     const rect = container.getBoundingClientRect();
     const { fg, grid } = axisStyle();
-    const axisOpts: uPlot.Axis = {
+    // X-axis carries the time-tick formatter so its labels track the
+    // Transport's relative/absolute mode and use the same `formatTime`
+    // helpers. Reads mode + relative origin through refs (see above) so a
+    // mode toggle repaints via `redraw()` without rebuilding the plot.
+    const xAxisOpts: uPlot.Axis = {
       stroke: fg,
       ticks: { stroke: grid },
       grid: { stroke: grid },
+      values: (_u, splits) => {
+        const startSec = globalRangeSecRef.current?.[0] ?? 0;
+        return splits.map((s) =>
+          formatAxisTick(s, startSec, timeModeRef.current),
+        );
+      },
+      // Reserve more horizontal room per tick in absolute mode: the
+      // `YYYY-MM-DD HH:MM:SS.mmm` label is ~3× wider than a relative
+      // `MM:SS.mmm`, so the default spacing packs in enough ticks to
+      // overlap. A wider minimum makes uPlot pick a coarser increment.
+      space: (_u, _axisIdx, _min, _max, _dim) =>
+        timeModeRef.current === "absolute" ? 180 : 70,
+    };
+    // The y-axis grows its gutter to fit the widest tick (see yAxisSize)
+    // so large-magnitude signals aren't truncated at the panel edge.
+    const yAxisOpts: uPlot.Axis = {
+      stroke: fg,
+      ticks: { stroke: grid },
+      grid: { stroke: grid },
+      size: yAxisSize,
     };
     // Default mode: `mergeSeries` emits `null` at every union timestamp
     // where *this* series has no sample. With two same-rate signals on
@@ -379,7 +452,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           spanGaps,
         })),
       ],
-      axes: [axisOpts, axisOpts],
+      axes: [xAxisOpts, yAxisOpts],
       cursor: { show: false },
       // The control bar's chips (colour swatch + label + remove) already
       // act as this plot's legend, and the cursor is disabled so uPlot's
@@ -413,6 +486,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seriesKey]);
+
+  // Repaint axis labels when the relative/absolute mode flips. The plot
+  // instance and its data are untouched — only the tick formatter's output
+  // changes — so a `redraw` is enough; rebuilding would force a refetch.
+  // Skip the mount run: the build effect already drew with the current
+  // mode (the `values` closure reads `timeModeRef`), and redrawing a
+  // freshly-built plot whose axes haven't been laid out yet throws.
+  const prevTimeModeRef = useRef(timeMode);
+  useEffect(() => {
+    if (prevTimeModeRef.current === timeMode) return;
+    prevTimeModeRef.current = timeMode;
+    // `redraw(rebuildPaths=false, recalcAxes=true)`: skip the series-path
+    // rebuild (data is unchanged) but force `recalcAxes` so uPlot re-runs
+    // the x-axis `values` formatter and repaints the tick labels in the
+    // new mode. A bare `redraw()` re-sets the x-scale to the same min/max,
+    // which uPlot short-circuits — leaving the cached labels stale.
+    plotRef.current?.redraw(false, true);
+  }, [timeMode]);
 
   // Fetch & render on binding or range change.
   useEffect(() => {

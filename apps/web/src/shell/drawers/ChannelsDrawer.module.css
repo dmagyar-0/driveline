@@ -4,7 +4,12 @@
  *
  * Row / active / swatch primitives `composes:` from `_row.module.css`
  * (Phase 5a). The `[aria-disabled="true"]` overlay stays local because
- * it depends on attribute selectors on `.row` itself. */
+ * it depends on attribute selectors on `.row` itself.
+ *
+ * The list is *windowed*: the visible (collapse-aware) tree is flattened
+ * into absolutely-positioned `.vitem` rows inside a full-height `.spacer`,
+ * so only the on-screen slice is mounted. Row heights here must match the
+ * `*_H` constants in ChannelsDrawer.tsx. */
 
 .pill {
   display: inline-block;
@@ -44,19 +49,29 @@
   outline-offset: 2px;
 }
 
-.groupList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
+/* Windowed list. The drawer <aside> owns the outer column; this is the
+ * one element that actually scrolls, so the spacer below can be sized to
+ * the full virtual height while only the visible slice is mounted. */
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+/* Full-height stand-in for every (collapse-aware) row. Children are
+ * absolutely positioned at their computed `top`, so scroll height and
+ * scrollbar geometry stay correct without mounting off-screen rows. */
+.spacer {
+  position: relative;
+  width: 100%;
+}
+
+.vitem {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
 }
 
 .groupHeader {
@@ -65,6 +80,8 @@
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   padding: var(--sp-3) var(--sp-4);
   background: transparent;
   border: 0;
@@ -105,22 +122,9 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* The tree (and every nested subtree) is a flat flex column; indentation
- * comes from per-row padding driven by the `--depth` custom property the
- * drawer sets on each row/branch. Nesting <ul>s with margins would compound
- * the indent twice, so the lists themselves stay flush. */
-.tree,
-.subtree {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-
-/* Depth-based indent. `--indent-step` is the px added per tree level; the
- * base padding matches `_row.module.css` so depth 0 lines up with the other
+/* Depth-based indent shared by leaf (`.row`) and branch rows. `--depth` is
+ * set per row by the drawer; `--indent-step` is the px added per tree level
+ * and the base matches `_row.module.css` so depth 0 lines up with the other
  * drawers. */
 .row,
 .branch {
@@ -132,6 +136,8 @@
   composes: rowBase from "./_row.module.css";
   grid-template-columns: 8px 1fr auto;
   gap: var(--sp-4);
+  height: 100%;
+  box-sizing: border-box;
 }
 
 /* Branch (folder) row: chevron, label, subtree count. Mirrors the channel
@@ -140,6 +146,8 @@
   composes: rowBase from "./_row.module.css";
   grid-template-columns: 12px 1fr auto;
   gap: var(--sp-3);
+  height: 100%;
+  box-sizing: border-box;
   color: var(--color-fg-3);
 }
 
