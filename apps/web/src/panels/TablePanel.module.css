@@ -1,8 +1,9 @@
-/* Phase 6 · TablePanel styling. Hand-rolled value table — no
- * component library. Layout matches the dark wireframe palette via
- * tokens. */
+/* TablePanel styling. Hand-rolled virtualised value table — no component
+ * library. Sticky header + absolutely-positioned rows inside a tall
+ * spacer so only the visible window is in the DOM. */
 
 .panel {
+  --table-time-col: 120px;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -41,14 +42,14 @@
 }
 
 .scroll {
+  position: relative;
   flex: 1;
   overflow: auto;
-  padding: var(--sp-3);
 }
 
 .headerRow {
   display: grid;
-  grid-template-columns: 1fr 100px 100px;
+  align-items: center;
   gap: var(--sp-3);
   padding: var(--sp-2) var(--sp-3);
   border-bottom: 1px solid var(--color-border-subtle);
@@ -67,34 +68,17 @@
 }
 
 .headerCellRight {
-  text-align: right;
-}
-
-.body {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.row {
-  display: grid;
-  grid-template-columns: 1fr 100px 100px;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-3);
-  border-bottom: 1px solid var(--color-border-subtle);
-  font-size: var(--fs-13);
-}
-
-.row:hover {
-  background: var(--color-bg-3);
-}
-
-.nameCell {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: var(--sp-2);
   min-width: 0;
+}
+
+.headerName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .swatch {
@@ -104,27 +88,73 @@
   flex-shrink: 0;
 }
 
-.name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--color-fg-2);
-}
-
 .unit {
   color: var(--color-fg-5);
-  font-size: var(--fs-12);
+  text-transform: none;
+  letter-spacing: normal;
   flex-shrink: 0;
 }
 
-.valueCell,
-.tsCell {
+.rowsViewport {
+  position: relative;
+  width: 100%;
+}
+
+.row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: grid;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--fs-13);
+}
+
+.activeRow {
+  background: var(--color-bg-4, var(--color-bg-3));
+  box-shadow: inset 2px 0 0 0 var(--color-accent, currentColor);
+}
+
+.timeCell {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--color-fg-4);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.valueCell {
   text-align: right;
   font-variant-numeric: tabular-nums;
   font-family: var(--font-mono, ui-monospace, monospace);
   color: var(--color-fg-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tsCell {
-  color: var(--color-fg-4);
+/* Carried-forward (sample-and-hold) cells are muted so the raw sample
+ * cadence stays legible against the held values. */
+.carried {
+  color: var(--color-fg-5);
+}
+
+.noRows,
+.truncated {
+  margin: 0;
+  padding: var(--sp-3);
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+}
+
+.truncated {
+  position: sticky;
+  bottom: 0;
+  background: var(--color-bg-2);
+  border-top: 1px solid var(--color-border-subtle);
+  text-align: center;
 }

@@ -43,6 +43,9 @@ const SAMPLE: PersistedLayout = {
   tableBindings: {
     "table-1": ["/vehicle/speed", "/vehicle/rpm"],
   },
+  valueBindings: {
+    "value-1": ["/vehicle/speed"],
+  },
   enumBindings: { "enum-1": "/state/gear", "enum-2": null },
   plotPanelSettings: {
     "plot-1": { gapThresholdSec: 1.5 },
@@ -190,6 +193,7 @@ describe("layout persist", () => {
       sceneBindings: {},
       mapBindings: {},
       tableBindings: {},
+      valueBindings: {},
       enumBindings: {},
       plotPanelSettings: {},
     };
@@ -268,6 +272,7 @@ const EMPTY_SLICE: LayoutSlice = {
   sceneBindings: {},
   mapBindings: {},
   tableBindings: {},
+  valueBindings: {},
   enumBindings: {},
   plotPanelSettings: {},
 };

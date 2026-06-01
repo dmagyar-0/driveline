@@ -14,7 +14,8 @@
 //              one bit), and the bound channel with × to clear.
 //   - scene  → forward-compat single-channel binding (no rendering yet)
 //   - map    → lat/lon two-channel binding via two pickers
-//   - table  → multi-channel scalar binding (mirrors plot at v1)
+//   - table  → multi-channel scalar binding (raw time-series table)
+//   - value  → multi-channel scalar binding (sample-at-cursor reader)
 //   - enum   → single-channel binding for the state strip
 //
 // The drawer reads everything from the store via single-key selectors
@@ -98,6 +99,8 @@ function PanelBody({
       return <MapBody panelId={panelId} />;
     case "table":
       return <TableBody panelId={panelId} />;
+    case "value":
+      return <ValueBody panelId={panelId} />;
     case "enum":
       return <EnumBody panelId={panelId} />;
     case null:
@@ -730,6 +733,104 @@ function TableBody({ panelId }: BodyProps) {
           openPicker();
         }}
         data-testid="panel-table-add-channel"
+      >
+        + add channel…
+      </button>
+      {pickerAnchor !== null && (
+        <ChannelPicker
+          sources={sources}
+          selectedIds={ids}
+          maxSelected={MAX_PLOT_SERIES}
+          anchorRect={pickerAnchor}
+          onToggle={onToggle}
+          onClose={() => setPickerAnchor(null)}
+        />
+      )}
+    </section>
+  );
+}
+
+// Mirror of `TableBody` against the Value panel's `valueBindings` map.
+// Same multi-channel binding mechanics; only the store actions and the
+// `panel-value-*` testids differ.
+function ValueBody({ panelId }: BodyProps) {
+  const channels = useSession((st) => st.channels);
+  const sources = useSession((st) => st.sources);
+  const ids = useSession((st) => st.valueBindings[panelId] ?? EMPTY);
+
+  const addBtnRef = useRef<HTMLButtonElement | null>(null);
+  const [pickerAnchor, setPickerAnchor] = useState<DOMRect | null>(null);
+
+  const atCap = ids.length >= MAX_PLOT_SERIES;
+  const bound = ids
+    .map((id) => channels.find((c) => c.id === id))
+    .filter((c): c is Channel => c !== undefined);
+
+  const onToggle = (channelId: string) => {
+    const cur = useSession.getState().valueBindings[panelId] ?? [];
+    if (cur.includes(channelId)) {
+      useSession.getState().removeValueChannel(panelId, channelId);
+    } else {
+      useSession.getState().addValueChannel(panelId, channelId);
+    }
+  };
+
+  const onRemove = (channelId: string) =>
+    useSession.getState().removeValueChannel(panelId, channelId);
+
+  const openPicker = () => {
+    if (!addBtnRef.current) return;
+    setPickerAnchor(addBtnRef.current.getBoundingClientRect());
+  };
+
+  return (
+    <section className={s.section}>
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Channels in panel</h4>
+        <span className={s.countPill} data-testid="panel-value-count">
+          {ids.length} / {MAX_PLOT_SERIES}
+        </span>
+      </div>
+      {bound.length === 0 ? (
+        <p className={s.empty}>No channels bound. Add one below.</p>
+      ) : (
+        <ul className={s.list} data-testid="panel-value-list">
+          {bound.map((c) => (
+            <li key={c.id} className={s.rowItem}>
+              <span className={s.row}>
+                <span
+                  className={s.swatch}
+                  style={{ background: colorFor(c.id) }}
+                  aria-hidden="true"
+                />
+                <span className={s.name} title={c.name}>
+                  {labelFor(c)}
+                </span>
+              </span>
+              <button
+                type="button"
+                className={s.removeBtn}
+                onClick={() => onRemove(c.id)}
+                aria-label={`Remove ${c.name}`}
+                data-testid={`panel-value-remove-${c.id}`}
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button
+        ref={addBtnRef}
+        type="button"
+        className={s.addRow}
+        aria-disabled={atCap || undefined}
+        title={atCap ? `Panel full (${MAX_PLOT_SERIES})` : undefined}
+        onClick={() => {
+          if (atCap) return;
+          openPicker();
+        }}
+        data-testid="panel-value-add-channel"
       >
         + add channel…
       </button>

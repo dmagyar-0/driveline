@@ -25,6 +25,7 @@ const noopProps = {
   addScenePanel: () => {},
   addMapPanel: () => {},
   addTablePanel: () => {},
+  addValuePanel: () => {},
   addEnumPanel: () => {},
   resetLayout: () => {},
 };

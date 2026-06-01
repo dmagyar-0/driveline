@@ -28,9 +28,10 @@ export interface NamedLayout {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
-  // Phase 8 · added as an OPTIONAL v2 field rather than bumping the
-  // schema, so saved-layout entries created before per-panel settings
-  // existed don't get dropped on read. New writes always include it.
+  // Optional fields added without a schema bump (same posture as
+  // `layout/persist.ts`): entries saved before these existed default to
+  // an empty map on read. New writes always include them.
+  valueBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
   createdAt: number;
 }
@@ -122,12 +123,14 @@ function validateLayout(raw: unknown): NamedLayout | null {
   if (!tableBindings) return null;
   const enumBindings = validateNullableStringMap(raw.enumBindings);
   if (!enumBindings) return null;
-  // Optional Phase 8 field — entries saved before per-panel settings
-  // existed default to an empty map.
+  // Optional fields — entries saved before they existed default to an
+  // empty map.
   const plotPanelSettings = validatePlotPanelSettingsMap(
     raw.plotPanelSettings ?? {},
   );
   if (!plotPanelSettings) return null;
+  const valueBindings = validateStringArrayMap(raw.valueBindings ?? {});
+  if (!valueBindings) return null;
   return {
     id: raw.id,
     name: raw.name,
@@ -138,6 +141,7 @@ function validateLayout(raw: unknown): NamedLayout | null {
     mapBindings,
     tableBindings,
     enumBindings,
+    valueBindings,
     plotPanelSettings,
     createdAt: raw.createdAt,
   };

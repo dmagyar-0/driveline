@@ -36,6 +36,8 @@ export interface ShellProps {
   addMapPanel: () => void;
   /** Phase 6 · forwarded to the Layout drawer's `+ table` row. */
   addTablePanel: () => void;
+  /** Forwarded to the Layout drawer's `+ value` row. */
+  addValuePanel: () => void;
   /** Phase 6 · forwarded to the Layout drawer's `+ enum` row. */
   addEnumPanel: () => void;
   /** Forwarded to the Layout drawer's `Reset layout` row. */
@@ -56,6 +58,7 @@ export function Shell({
   addScenePanel,
   addMapPanel,
   addTablePanel,
+  addValuePanel,
   addEnumPanel,
   resetLayout,
   transport,
@@ -79,6 +82,7 @@ export function Shell({
           addScenePanel={addScenePanel}
           addMapPanel={addMapPanel}
           addTablePanel={addTablePanel}
+          addValuePanel={addValuePanel}
           addEnumPanel={addEnumPanel}
           resetLayout={resetLayout}
         />

@@ -39,6 +39,8 @@ export interface DrawerProps {
   addMapPanel: () => void;
   /** Phase 6 · forwarded to the Layout drawer's `+ table` row. */
   addTablePanel: () => void;
+  /** Forwarded to the Layout drawer's `+ value` row. */
+  addValuePanel: () => void;
   /** Phase 6 · forwarded to the Layout drawer's `+ enum` row. */
   addEnumPanel: () => void;
   /** Forwarded to the Layout drawer's `Reset layout` row. */
@@ -52,6 +54,7 @@ export function Drawer({
   addScenePanel,
   addMapPanel,
   addTablePanel,
+  addValuePanel,
   addEnumPanel,
   resetLayout,
 }: DrawerProps) {
@@ -81,6 +84,7 @@ export function Drawer({
         addScenePanel={addScenePanel}
         addMapPanel={addMapPanel}
         addTablePanel={addTablePanel}
+        addValuePanel={addValuePanel}
         addEnumPanel={addEnumPanel}
         resetLayout={resetLayout}
       />
@@ -92,6 +96,7 @@ export function Drawer({
         addScenePanel={addScenePanel}
         addMapPanel={addMapPanel}
         addTablePanel={addTablePanel}
+        addValuePanel={addValuePanel}
         addEnumPanel={addEnumPanel}
       />
       {/* Drag handle on the drawer's right edge. Absolutely positioned so
@@ -116,6 +121,7 @@ function DrawerBody({
   addScenePanel,
   addMapPanel,
   addTablePanel,
+  addValuePanel,
   addEnumPanel,
   resetLayout,
 }: DrawerProps & { activeRailTab: RailTab }) {
@@ -132,6 +138,7 @@ function DrawerBody({
           addScenePanel={addScenePanel}
           addMapPanel={addMapPanel}
           addTablePanel={addTablePanel}
+          addValuePanel={addValuePanel}
           addEnumPanel={addEnumPanel}
           resetLayout={resetLayout}
         />

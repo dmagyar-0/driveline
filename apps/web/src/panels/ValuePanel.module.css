@@ -1,0 +1,125 @@
+/* ValuePanel styling. Hand-rolled value reader — no component library.
+ * Two-column grid (channel · value); the per-row timestamp column was
+ * dropped when the panel was renamed from "Table" to "Value". */
+
+.panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--color-bg-2);
+  color: var(--color-fg-2);
+  overflow: hidden;
+}
+
+.empty {
+  margin: auto;
+  padding: var(--sp-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  text-align: center;
+  max-width: 320px;
+  color: var(--color-fg-5);
+}
+
+.emptyTitle {
+  margin: 0;
+  font-size: var(--fs-14);
+  font-weight: 500;
+  color: var(--color-fg-2);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+}
+
+.emptyBody {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--color-fg-5);
+  line-height: 1.5;
+}
+
+.scroll {
+  flex: 1;
+  overflow: auto;
+  padding: var(--sp-3);
+}
+
+.headerRow {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  position: sticky;
+  top: 0;
+  background: var(--color-bg-2);
+  z-index: 1;
+}
+
+.headerCell {
+  text-align: left;
+}
+
+.headerCellRight {
+  text-align: right;
+}
+
+.body {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 120px;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--color-border-subtle);
+  font-size: var(--fs-13);
+}
+
+.row:hover {
+  background: var(--color-bg-3);
+}
+
+.nameCell {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-2);
+  flex-shrink: 0;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-fg-2);
+}
+
+.unit {
+  color: var(--color-fg-5);
+  font-size: var(--fs-12);
+  flex-shrink: 0;
+}
+
+.valueCell {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--color-fg-2);
+}
