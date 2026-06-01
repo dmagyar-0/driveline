@@ -3,7 +3,14 @@
 .root {
   position: absolute;
   inset: 0;
-  z-index: 4;
+  /* Sit above FlexLayout's own chrome. The workspace stays mounted
+   * behind this overlay, and a previously configured (and persisted)
+   * multi-panel layout leaves panel dividers on screen: FlexLayout's
+   * `.flexlayout__splitter` is z-index 10 and leaks into the shared
+   * `.workMain` stacking context, so at z-index 4 the divider painted
+   * straight through this pool. Stay below the drag overlay (12) and
+   * the shortcuts scrim (100). */
+  z-index: 11;
   display: flex;
   flex-direction: column;
   align-items: center;

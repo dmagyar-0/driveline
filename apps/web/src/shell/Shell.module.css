@@ -41,7 +41,9 @@
   place-items: center;
   font-size: var(--fs-15);
   color: var(--color-fg-2);
-  z-index: 10;
+  /* Above the FirstRun empty-state pool (z-index 11) so the drop hint
+   * stays visible when files are dragged onto a sessionless workspace. */
+  z-index: 12;
 }
 
 /* Narrow viewport: drawer overlays the work area instead of pushing it
