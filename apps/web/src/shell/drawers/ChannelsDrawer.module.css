@@ -44,19 +44,29 @@
   outline-offset: 2px;
 }
 
-.groupList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
+/* Windowed list. The drawer <aside> owns the outer column; this is the
+ * one element that actually scrolls, so the spacer below can be sized to
+ * the full virtual height while only the visible slice is mounted. */
+.scrollArea {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.group {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
+/* Full-height stand-in for every (collapsed-aware) row. Children are
+ * absolutely positioned at their computed `top`, so scroll height and
+ * scrollbar geometry stay correct without mounting off-screen rows. */
+.spacer {
+  position: relative;
+  width: 100%;
+}
+
+.vitem {
+  position: absolute;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
 }
 
 .groupHeader {
@@ -65,6 +75,8 @@
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
+  height: 100%;
+  box-sizing: border-box;
   padding: var(--sp-3) var(--sp-4);
   background: transparent;
   border: 0;
@@ -105,19 +117,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-.list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-2);
-}
-
 .row {
   composes: rowBase from "./_row.module.css";
   grid-template-columns: 8px 1fr auto;
   gap: var(--sp-4);
+  height: 100%;
+  box-sizing: border-box;
 }
 
 .row[aria-disabled="true"] {
