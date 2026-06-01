@@ -21,6 +21,9 @@ export interface Mf4ChannelInfo {
   id: string;
   name: string;
   unit: string | null;
+  /** Channel-group label, used to nest MF4 channels under their group in
+   *  the Channels tree. `null` when the reader could not resolve one. */
+  group: string | null;
   sample_count: number;
   start_ns: bigint;
   end_ns: bigint;
@@ -76,7 +79,11 @@ export function toBig(n: unknown): bigint {
   return typeof n === "bigint" ? n : BigInt(n as number | string);
 }
 
-interface RawMf4Channel extends Omit<Mf4ChannelInfo, "start_ns" | "end_ns"> {
+interface RawMf4Channel
+  extends Omit<Mf4ChannelInfo, "start_ns" | "end_ns" | "group"> {
+  // serde_wasm_bindgen serialises `Option::None` as `undefined`, so the
+  // field may be absent on the wire; `normaliseMf4` coalesces it to `null`.
+  group?: string | null;
   start_ns: number | bigint;
   end_ns: number | bigint;
 }
@@ -94,6 +101,7 @@ export function normaliseMf4(raw: RawMf4Summary): Mf4Summary {
       id: c.id,
       name: c.name,
       unit: c.unit,
+      group: c.group ?? null,
       sample_count: Number(c.sample_count),
       start_ns: toBig(c.start_ns),
       end_ns: toBig(c.end_ns),

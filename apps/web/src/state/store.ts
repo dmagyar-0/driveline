@@ -78,6 +78,10 @@ export interface Channel {
   nativeId: string;
   sourceId: string;
   name: string;
+  // Optional parent group used to build the Channels tree. For MF4 this is
+  // the channel-group label; MCAP/MP4 leave it unset because their tree
+  // hierarchy comes from splitting the `name` (topic) on `/`.
+  group?: string | null;
   kind: ChannelKind;
   dtype: string | null;
   unit: string | null;
@@ -407,6 +411,7 @@ function mcapChannels(sourceId: string, s: McapSummary): Channel[] {
     nativeId: c.id,
     sourceId,
     name: c.name,
+    group: null,
     kind: c.kind,
     dtype: c.dtype,
     unit: c.unit,
@@ -423,6 +428,7 @@ function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
     nativeId: c.id,
     sourceId,
     name: c.name,
+    group: c.group,
     kind: "scalar" as const,
     dtype: "f64",
     unit: c.unit,
@@ -436,6 +442,7 @@ function mp4Channels(sourceId: string, s: Mp4SidecarSummary): Channel[] {
     nativeId: c.id,
     sourceId,
     name: c.name,
+    group: null,
     kind: "video" as const,
     dtype: null,
     unit: null,

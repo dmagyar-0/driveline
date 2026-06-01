@@ -105,7 +105,12 @@
   font-variant-numeric: tabular-nums;
 }
 
-.list {
+/* The tree (and every nested subtree) is a flat flex column; indentation
+ * comes from per-row padding driven by the `--depth` custom property the
+ * drawer sets on each row/branch. Nesting <ul>s with margins would compound
+ * the indent twice, so the lists themselves stay flush. */
+.tree,
+.subtree {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -114,10 +119,41 @@
   gap: var(--sp-2);
 }
 
+/* Depth-based indent. `--indent-step` is the px added per tree level; the
+ * base padding matches `_row.module.css` so depth 0 lines up with the other
+ * drawers. */
+.row,
+.branch {
+  --indent-step: 14px;
+  padding-left: calc(var(--sp-5) + var(--depth, 0) * var(--indent-step));
+}
+
 .row {
   composes: rowBase from "./_row.module.css";
   grid-template-columns: 8px 1fr auto;
   gap: var(--sp-4);
+}
+
+/* Branch (folder) row: chevron, label, subtree count. Mirrors the channel
+ * row chrome but with a muted label colour to keep leaves prominent. */
+.branch {
+  composes: rowBase from "./_row.module.css";
+  grid-template-columns: 12px 1fr auto;
+  gap: var(--sp-3);
+  color: var(--color-fg-3);
+}
+
+.branchName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-13);
+}
+
+.branchCount {
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
+  font-variant-numeric: tabular-nums;
 }
 
 .row[aria-disabled="true"] {

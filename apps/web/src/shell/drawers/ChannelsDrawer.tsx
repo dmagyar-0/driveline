@@ -1,10 +1,18 @@
-// Phase 3 · Channels drawer.
+// Channels drawer.
 //
-// Replaces the inline `channels` stub in `Drawer.tsx`. Reads `channels`,
-// `sources`, `selectedPanelId`, and the binding maps from the store via
-// discrete single-key selectors so a re-render only fires when one of
-// those changes. Search query and per-source collapsed state are local
+// Renders the loaded channels as a collapsible tree, one tree per source.
+// The hierarchy is derived in `channelTree.ts`:
+//   - MCAP topics split on `/` into nested levels.
+//   - MF4 channels nest under their channel-group label, then their name.
+//
+// Reads `channels`, `sources`, `selectedPanelId`, and the binding maps from
+// the store via discrete single-key selectors so a re-render only fires when
+// one of those changes. Search query and per-node collapsed state are local
 // `useState` (no store coupling).
+//
+// Search matches the full tree path (so typing a message prefix or an MF4
+// group name keeps the whole subtree) and force-expands every branch while a
+// query is active.
 //
 // Click-binding rules (from `v1-shell-integration.md` § Phase 3):
 //   - If a panel is selected and it is a plot, append the channel via
@@ -13,14 +21,17 @@
 //     `setVideoBinding` (single-channel).
 //   - If no panel is selected, call `ensurePlotPanel()` (provided by
 //     `App.tsx`) to mint one, mark it selected, then bind.
-//
-// Drag-and-drop and source-scoped filtering are explicitly deferred per
-// the integration plan.
 
 import { useState } from "react";
-import { useSession, type Channel } from "../../state/store";
+import type { CSSProperties } from "react";
+import { useSession } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { panelKindOf } from "../../layout/panelId";
+import {
+  buildChannelTree,
+  channelMatchesQuery,
+  type ChannelTreeNode,
+} from "./channelTree";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./ChannelsDrawer.module.css";
@@ -43,25 +54,28 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
   const videoBindings = useSession((st) => st.videoBindings);
 
   const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Collapsed keys. Branches default to expanded, so we only track the keys
+  // the user has explicitly collapsed. Source rows key on `src.id`; tree
+  // branches key on `${src.id}::${node.key}`.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
-  const q = query.trim().toLowerCase();
-  const matches = (c: Channel) =>
-    q === "" || c.name.toLowerCase().includes(q);
+  const queryActive = query.trim() !== "";
 
   const filteredCount = channels.reduce(
-    (n, c) => (matches(c) ? n + 1 : n),
+    (n, c) => (channelMatchesQuery(c, query) ? n + 1 : n),
     0,
   );
 
   // Hide groups whose every channel is filtered out so the user isn't
   // scrolling past empty headers under a non-matching search.
   const grouped = sources
-    .map((src) => ({
-      src,
-      rows: channels.filter((c) => c.sourceId === src.id && matches(c)),
-    }))
-    .filter((g) => g.rows.length > 0);
+    .map((src) => {
+      const rows = channels.filter(
+        (c) => c.sourceId === src.id && channelMatchesQuery(c, query),
+      );
+      return { src, tree: buildChannelTree(rows), count: rows.length };
+    })
+    .filter((g) => g.count > 0);
 
   const selectedKind =
     selectedPanelId === null ? null : panelKindOf(selectedPanelId);
@@ -96,8 +110,122 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
     }
   };
 
-  const toggleCollapse = (sourceId: string) =>
-    setCollapsed((prev) => ({ ...prev, [sourceId]: !prev[sourceId] }));
+  const isExpanded = (key: string) => queryActive || !collapsed.has(key);
+
+  const toggleCollapse = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Renders a single channel row (a tree leaf, or the "self" row of a branch
+  // that is itself a bound channel). Preserves the `channel-row-${id}` test
+  // id and binding behaviour the flat list had.
+  const renderLeaf = (
+    label: string,
+    channelId: string,
+    fullName: string,
+    dtype: string | null,
+    depth: number,
+  ) => {
+    const bound = isBound(channelId);
+    const disabled = plotFull && selectedKind === "plot" && !bound;
+    return (
+      <button
+        type="button"
+        className={`${s.row} ${bound ? s.rowActive : ""}`}
+        style={{ "--depth": depth } as CSSProperties}
+        aria-pressed={bound}
+        aria-disabled={disabled || undefined}
+        title={
+          bound
+            ? "Already bound to this panel"
+            : disabled
+              ? `Plot full (${MAX_PLOT_SERIES})`
+              : fullName
+        }
+        onClick={() => {
+          if (disabled) return;
+          onPick(channelId);
+        }}
+        data-testid={`channel-row-${channelId}`}
+      >
+        <span
+          className={s.swatch}
+          style={{ background: colorFor(channelId) }}
+          aria-hidden="true"
+        />
+        <span className={s.name}>{label}</span>
+        {dtype !== null && <span className={s.kind}>{dtype}</span>}
+      </button>
+    );
+  };
+
+  const renderNode = (
+    sourceId: string,
+    node: ChannelTreeNode,
+    depth: number,
+  ) => {
+    const isLeafOnly = node.children.length === 0 && node.channel !== null;
+    if (isLeafOnly && node.channel) {
+      return (
+        <li key={node.key} role="treeitem">
+          {renderLeaf(
+            node.label,
+            node.channel.id,
+            node.channel.name,
+            node.channel.dtype,
+            depth,
+          )}
+        </li>
+      );
+    }
+
+    const branchKey = `${sourceId}::${node.key}`;
+    const expanded = isExpanded(branchKey);
+    const childListId = `drawer-channels-node-${branchKey}`;
+    return (
+      <li key={node.key} role="treeitem" aria-expanded={expanded}>
+        <button
+          type="button"
+          className={s.branch}
+          style={{ "--depth": depth } as CSSProperties}
+          aria-expanded={expanded}
+          aria-controls={childListId}
+          onClick={() => toggleCollapse(branchKey)}
+          data-testid={`channels-branch-${branchKey}`}
+        >
+          <span className={s.chevron} aria-hidden="true">
+            {expanded ? "▾" : "▸"}
+          </span>
+          <span className={s.branchName} title={node.key}>
+            {node.label}
+          </span>
+          <span className={s.branchCount}>{node.leafCount}</span>
+        </button>
+        {expanded && (
+          <ul id={childListId} className={s.subtree} role="group">
+            {node.channel && (
+              <li role="treeitem">
+                {renderLeaf(
+                  node.label,
+                  node.channel.id,
+                  node.channel.name,
+                  node.channel.dtype,
+                  depth + 1,
+                )}
+              </li>
+            )}
+            {node.children.map((child) =>
+              renderNode(sourceId, child, depth + 1),
+            )}
+          </ul>
+        )}
+      </li>
+    );
+  };
 
   return (
     <aside
@@ -118,7 +246,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
         type="search"
         className={s.search}
         placeholder="Filter channels…"
-        aria-label="Filter channels by name"
+        aria-label="Filter channels by name or group"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         data-testid="channels-search"
@@ -130,72 +258,36 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
         <p className={s.empty}>No channels match “{query}”</p>
       ) : (
         <ul className={s.groupList} data-testid="channels-groups">
-          {grouped.map(({ src, rows }) => {
+          {grouped.map(({ src, tree, count }) => {
             const listId = `drawer-channels-list-${src.id}`;
-            const isCollapsed = collapsed[src.id] === true;
+            const expanded = isExpanded(src.id);
             return (
               <li key={src.id} className={s.group}>
                 <button
                   type="button"
                   className={s.groupHeader}
-                  aria-expanded={!isCollapsed}
+                  aria-expanded={expanded}
                   aria-controls={listId}
                   onClick={() => toggleCollapse(src.id)}
                   data-testid={`channels-group-${src.id}`}
                 >
                   <span className={s.chevron} aria-hidden="true">
-                    {isCollapsed ? "▸" : "▾"}
+                    {expanded ? "▾" : "▸"}
                   </span>
                   <span className={s.groupName} title={src.name}>
                     {src.name}
                   </span>
-                  <span className={s.groupCount}>{rows.length}</span>
+                  <span className={s.groupCount}>{count}</span>
                 </button>
-                {!isCollapsed && (
+                {expanded && (
                   <ul
                     id={listId}
-                    className={s.list}
+                    className={s.tree}
+                    role="tree"
+                    aria-label={`${src.name} channels`}
                     data-testid={`channels-list-${src.id}`}
                   >
-                    {rows.map((channel) => {
-                      const bound = isBound(channel.id);
-                      const disabled =
-                        plotFull && selectedKind === "plot" && !bound;
-                      return (
-                        <li key={channel.id}>
-                          <button
-                            type="button"
-                            className={`${s.row} ${bound ? s.rowActive : ""}`}
-                            aria-pressed={bound}
-                            aria-disabled={disabled || undefined}
-                            title={
-                              bound
-                                ? "Already bound to this panel"
-                                : disabled
-                                  ? `Plot full (${MAX_PLOT_SERIES})`
-                                  : undefined
-                            }
-                            onClick={() => {
-                              if (disabled) return;
-                              onPick(channel.id);
-                            }}
-                            data-testid={`channel-row-${channel.id}`}
-                          >
-                            <span
-                              className={s.swatch}
-                              style={{ background: colorFor(channel.id) }}
-                              aria-hidden="true"
-                            />
-                            <span className={s.name} title={channel.name}>
-                              {channel.name}
-                            </span>
-                            {channel.dtype !== null && (
-                              <span className={s.kind}>{channel.dtype}</span>
-                            )}
-                          </button>
-                        </li>
-                      );
-                    })}
+                    {tree.map((node) => renderNode(src.id, node, 0))}
                   </ul>
                 )}
               </li>
