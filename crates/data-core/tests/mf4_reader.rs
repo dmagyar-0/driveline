@@ -6,7 +6,7 @@
 use arrow_array::{Array, Float64Array, TimestampNanosecondArray};
 use arrow_ipc::reader::FileReader;
 use arrow_schema::{DataType, TimeUnit};
-use data_core::{ChannelKind, DType, FetchOpts, Mf4Reader, Reader, SourceKind, TimeRange};
+use data_core::{ChannelKind, DType, FetchOpts, Mf4Reader, SourceKind, TimeRange};
 use std::io::Cursor;
 
 const FIXTURE: &[u8] = include_bytes!("../../../test-fixtures/short.mf4");
@@ -23,7 +23,7 @@ fn fixture_matches_generator() {
 
 #[test]
 fn opens_and_describes_fixture() {
-    let r = Mf4Reader::open(FIXTURE).expect("open short.mf4");
+    let r = Mf4Reader::open_slice(FIXTURE).expect("open short.mf4");
     assert_eq!(r.meta().kind, SourceKind::Mf4);
 
     // The fixture publishes one non-master channel (`speed`); the master
@@ -42,7 +42,7 @@ fn opens_and_describes_fixture() {
 
 #[test]
 fn fetch_range_produces_contract_scalar_ipc() {
-    let r = Mf4Reader::open(FIXTURE).expect("open short.mf4");
+    let r = Mf4Reader::open_slice(FIXTURE).expect("open short.mf4");
     let ch_id = r.meta().channels[0].id.clone();
 
     let ipc = r
@@ -85,7 +85,7 @@ fn fetch_range_produces_contract_scalar_ipc() {
 
 #[test]
 fn fetch_range_bounds_are_half_open() {
-    let r = Mf4Reader::open(FIXTURE).expect("open short.mf4");
+    let r = Mf4Reader::open_slice(FIXTURE).expect("open short.mf4");
     let ch_id = r.meta().channels[0].id.clone();
     let base = r.meta().time_range.start_ns;
 

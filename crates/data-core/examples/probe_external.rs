@@ -52,7 +52,7 @@ fn main() -> ExitCode {
 }
 
 fn probe_mf4(bytes: &[u8]) -> ExitCode {
-    match Mf4Reader::open(bytes) {
+    match Mf4Reader::open_slice(bytes) {
         Err(e) => {
             println!("Mf4Reader::open FAILED: {e}");
             ExitCode::from(1)
@@ -60,7 +60,10 @@ fn probe_mf4(bytes: &[u8]) -> ExitCode {
         Ok(r) => {
             let m = r.meta();
             println!("Mf4Reader OK");
-            println!("  time_range: [{}, {})", m.time_range.start_ns, m.time_range.end_ns);
+            println!(
+                "  time_range: [{}, {})",
+                m.time_range.start_ns, m.time_range.end_ns
+            );
             println!("  channels:   {}", m.channels.len());
             for ch in m.channels.iter().take(20) {
                 println!(
@@ -74,7 +77,9 @@ fn probe_mf4(bytes: &[u8]) -> ExitCode {
             // Try one fetch on the first channel.
             if let Some(ch) = m.channels.first() {
                 match r.fetch_range(&ch.id, m.time_range, Default::default()) {
-                    Ok(buf) => println!("  fetch_range first channel: {} arrow IPC bytes", buf.len()),
+                    Ok(buf) => {
+                        println!("  fetch_range first channel: {} arrow IPC bytes", buf.len())
+                    }
                     Err(e) => println!("  fetch_range first channel FAILED: {e}"),
                 }
             }
@@ -92,7 +97,10 @@ fn probe_mcap(bytes: &[u8]) -> ExitCode {
         Ok(r) => {
             let m = r.meta();
             println!("McapReader OK");
-            println!("  time_range: [{}, {})", m.time_range.start_ns, m.time_range.end_ns);
+            println!(
+                "  time_range: [{}, {})",
+                m.time_range.start_ns, m.time_range.end_ns
+            );
             println!("  channels:   {}", m.channels.len());
             for ch in m.channels.iter().take(40) {
                 println!(

@@ -272,7 +272,11 @@ export function App() {
         return { rows: table.numRows, sum };
       },
       openMf4: async (bytes) => {
-        const handle = await dc.openMf4(bytes);
+        // The worker now ingests a `File` (copied to OPFS for lazy reads), so
+        // wrap the raw test bytes in one. Real ingestion passes the dropped
+        // `File` directly.
+        const file = new File([bytes as BlobPart], "devhook.mf4");
+        const handle = await dc.openMf4(file);
         const summary = await dc.mf4Summary(handle);
         return { handle, summary };
       },
