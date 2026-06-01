@@ -1,13 +1,13 @@
 // @vitest-environment jsdom
 //
-// ChannelsDrawer · grouping, filtering and windowing.
+// ChannelsDrawer · tree rendering, grouping, search, and windowing.
 //
-// The drawer windows its rows: only the slice intersecting the scroll
-// viewport is mounted. jsdom reports 0 for every layout measurement
-// (`clientHeight`, `scrollTop`), so we stub the scroll container's
-// `clientHeight` to a fixed viewport before asserting that (a) far fewer
-// than N rows are in the DOM for a large channel set, and (b) the count
-// pill and filter still reflect the full/ filtered totals.
+// The drawer flattens its collapse-aware tree into a windowed list: only the
+// slice intersecting the scroll viewport is mounted. jsdom reports 0 for
+// every layout measurement (`clientHeight`, `scrollTop`), so we stub the
+// scroll container's geometry to a fixed viewport before asserting. The
+// tree-building logic itself is unit-tested in `channelTree.test.ts`; this
+// file pins the drawer's rendering, interaction, and windowing contract.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -16,6 +16,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -69,6 +70,56 @@ function loadSession(sources: SourceMeta[]) {
   });
 }
 
+// --- Helpers for the tree-shape tests (named topics + MF4 groups). ---
+const range = { startNs: 0n, endNs: 1_000n };
+
+function mcapChannel(name: string): Channel {
+  return {
+    id: `mcap::${name}`,
+    nativeId: name,
+    sourceId: "demo.mcap",
+    name,
+    kind: "scalar",
+    dtype: "f64",
+    unit: null,
+    sampleCount: 3,
+    timeRange: range,
+  };
+}
+
+function mf4Channel(name: string, group: string): Channel {
+  return {
+    id: `mf4::${group}/${name}`,
+    nativeId: name,
+    sourceId: "demo.mf4",
+    name,
+    group,
+    kind: "scalar",
+    dtype: "f64",
+    unit: null,
+    sampleCount: 3,
+    timeRange: range,
+  };
+}
+
+function seedTree(channels: Channel[]) {
+  const bySource = new Map<string, Channel[]>();
+  for (const c of channels) {
+    const list = bySource.get(c.sourceId) ?? [];
+    list.push(c);
+    bySource.set(c.sourceId, list);
+  }
+  const sources: SourceMeta[] = [...bySource.entries()].map(([id, chans]) => ({
+    id,
+    kind: id.endsWith(".mf4") ? "mf4" : "mcap",
+    name: id,
+    handle: 1,
+    timeRange: range,
+    channels: chans,
+  }));
+  useSession.setState({ sources, channels, globalRange: range });
+}
+
 // ResizeObserver is not implemented in jsdom.
 beforeEach(() => {
   vi.stubGlobal(
@@ -114,7 +165,7 @@ afterEach(async () => {
   await useSession.getState().clear();
 });
 
-describe("ChannelsDrawer", () => {
+describe("ChannelsDrawer windowing", () => {
   const noop = () => null;
 
   it("shows the empty state when no channels are loaded", () => {
@@ -154,22 +205,26 @@ describe("ChannelsDrawer", () => {
     loadSession([makeSource("big.mcap", 2000)]);
     render(<ChannelsDrawer ensurePlotPanel={noop} />);
 
-    // Top of the list: the first channel is mounted, a deep one is not.
-    const firstId = qualifiedChannelId("big.mcap", "0/0");
-    const deepId = qualifiedChannelId("big.mcap", "0/1000");
-    expect(screen.queryByTestId(`channel-row-${firstId}`)).toBeTruthy();
-    expect(screen.queryByTestId(`channel-row-${deepId}`)).toBeNull();
+    // Capture the mounted window at the top of the list.
+    const before = screen
+      .getAllByTestId(/^channel-row-/)
+      .map((el) => el.getAttribute("data-testid")!);
+    expect(before.length).toBeGreaterThan(0);
 
-    // Scroll well past row 1000 (34px header + 1000×30px ≈ 30k px).
+    // Scroll well past the first viewport (34px header + ~1000×30px).
     scrollTopValue = 30_000;
     const scroller = screen.getByTestId("channels-groups");
     act(() => {
       fireEvent.scroll(scroller);
     });
 
-    // Now the deep row is windowed in and the first row is gone.
-    expect(screen.queryByTestId(`channel-row-${deepId}`)).toBeTruthy();
-    expect(screen.queryByTestId(`channel-row-${firstId}`)).toBeNull();
+    const after = new Set(
+      screen.getAllByTestId(/^channel-row-/).map((el) => el.getAttribute("data-testid")!),
+    );
+    // The window moved: the original first row unmounted…
+    expect(after.has(before[0])).toBe(false);
+    // …and at least one freshly windowed-in row is now present.
+    expect([...after].some((id) => !before.includes(id))).toBe(true);
   });
 
   it("collapsing a source hides its rows but keeps the header", () => {
@@ -182,5 +237,113 @@ describe("ChannelsDrawer", () => {
 
     expect(screen.queryAllByTestId(/^channel-row-/).length).toBe(0);
     expect(screen.getByTestId("channels-group-a.mcap")).toBeTruthy();
+  });
+});
+
+describe("ChannelsDrawer tree", () => {
+  it("nests MCAP topics into collapsible branches", () => {
+    seedTree([
+      mcapChannel("/vehicle/speed"),
+      mcapChannel("/vehicle/gps/lat"),
+      mcapChannel("/vehicle/gps/lon"),
+    ]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    // The `vehicle` branch carries all three descendants.
+    const vehicle = screen.getByTestId("channels-branch-demo.mcap::vehicle");
+    expect(vehicle.textContent).toContain("vehicle");
+    expect(vehicle.textContent).toContain("3");
+
+    // `gps` branch holds the two leaves.
+    expect(
+      screen.getByTestId("channels-branch-demo.mcap::vehicle/gps"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("channel-row-mcap::/vehicle/gps/lat"),
+    ).toBeTruthy();
+    expect(
+      screen.getByTestId("channel-row-mcap::/vehicle/gps/lon"),
+    ).toBeTruthy();
+  });
+
+  it("collapses a branch and hides its descendants", () => {
+    seedTree([mcapChannel("/vehicle/gps/lat")]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    expect(
+      screen.getByTestId("channel-row-mcap::/vehicle/gps/lat"),
+    ).toBeTruthy();
+    fireEvent.click(screen.getByTestId("channels-branch-demo.mcap::vehicle"));
+    expect(
+      screen.queryByTestId("channel-row-mcap::/vehicle/gps/lat"),
+    ).toBeNull();
+  });
+
+  it("groups MF4 channels under their channel-group label", () => {
+    seedTree([
+      mf4Channel("vehicle_speed", "speed @100Hz"),
+      mf4Channel("imu_accel", "imu @1kHz"),
+    ]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    const speedGroup = screen.getByTestId(
+      "channels-branch-demo.mf4::speed @100Hz",
+    );
+    expect(within(speedGroup).getByText("speed @100Hz")).toBeTruthy();
+    expect(
+      screen.getByTestId("channel-row-mf4::speed @100Hz/vehicle_speed"),
+    ).toBeTruthy();
+  });
+
+  it("filters by query and force-expands matching branches", async () => {
+    seedTree([
+      mcapChannel("/vehicle/gps/lat"),
+      mcapChannel("/vehicle/speed"),
+      mcapChannel("/imu/accel"),
+    ]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("channels-search"), {
+        target: { value: "gps" },
+      });
+    });
+
+    expect(screen.getByTestId("channels-count-pill").textContent).toBe("1");
+    expect(
+      screen.getByTestId("channel-row-mcap::/vehicle/gps/lat"),
+    ).toBeTruthy();
+    expect(
+      screen.queryByTestId("channel-row-mcap::/vehicle/speed"),
+    ).toBeNull();
+    expect(screen.queryByTestId("channel-row-mcap::/imu/accel")).toBeNull();
+  });
+
+  it("matches an MF4 group name in search", async () => {
+    seedTree([
+      mf4Channel("vehicle_speed", "Powertrain"),
+      mf4Channel("imu_accel", "Inertial"),
+    ]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("channels-search"), {
+        target: { value: "powertrain" },
+      });
+    });
+    expect(screen.getByTestId("channels-count-pill").textContent).toBe("1");
+    expect(
+      screen.getByTestId("channel-row-mf4::Powertrain/vehicle_speed"),
+    ).toBeTruthy();
+  });
+
+  it("binds a channel to a freshly minted plot panel on leaf click", () => {
+    seedTree([mcapChannel("/vehicle/speed")]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    fireEvent.click(screen.getByTestId("channel-row-mcap::/vehicle/speed"));
+    expect(useSession.getState().plotBindings["plot-1"]).toEqual([
+      "mcap::/vehicle/speed",
+    ]);
   });
 });

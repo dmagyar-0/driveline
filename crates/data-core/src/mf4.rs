@@ -219,6 +219,24 @@ impl Mf4Reader {
         &self.meta
     }
 
+    /// Human-readable label for the channel group that owns `channel_id`
+    /// (`{group}/{channel}`). Prefers the MDF channel-group name, then its
+    /// comment, then a positional `Group {g}` fallback so MF4 channels can
+    /// always be nested under a named group in the UI. Returns `None` only
+    /// for an unknown id.
+    pub fn group_label(&self, channel_id: &ChannelId) -> Option<String> {
+        let &(g, _c) = self.channel_map.get(channel_id)?;
+        let cg = self.idx.channel_groups.get(g)?;
+        let non_empty = |s: &String| !s.trim().is_empty();
+        Some(
+            cg.name
+                .clone()
+                .filter(&non_empty)
+                .or_else(|| cg.comment.clone().filter(&non_empty))
+                .unwrap_or_else(|| format!("Group {g}")),
+        )
+    }
+
     /// Decode (or fetch from cache) the full value vector for `(g, c)`.
     fn channel_values(&self, g: usize, c: usize) -> crate::Result<Arc<[f64]>> {
         if let Some(cached) = self.value_cache.borrow().get(&(g, c)) {
@@ -398,6 +416,11 @@ mod tests {
         assert_eq!(ch.kind, ChannelKind::Scalar);
         assert_eq!(ch.dtype, Some(DType::F64));
         assert_eq!(ch.sample_count, 10);
+
+        // The writer leaves this group unnamed, so `group_label` falls back
+        // to the positional `Group {g}` so the UI can still nest it.
+        assert_eq!(r.group_label(&ch.id), Some("Group 0".to_string()));
+        assert_eq!(r.group_label(&"9/9".to_string()), None);
 
         // Default MDF header abs_time is 2h in ns; the exact value doesn't
         // matter, only that all samples are within [start, end).

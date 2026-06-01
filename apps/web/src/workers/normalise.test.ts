@@ -99,6 +99,35 @@ describe("normaliseMf4", () => {
     expect(s.start_ns).toBe(1_700_000_000_000_000_000n);
     expect(s.channels[0].end_ns).toBe(1_700_000_000_000_000_500n);
   });
+
+  it("forwards the channel-group label and defaults a missing one to null", () => {
+    const raw: RawMf4Summary = {
+      start_ns: 0,
+      end_ns: 1,
+      channels: [
+        {
+          id: "0/speed",
+          name: "speed",
+          unit: null,
+          group: "Powertrain",
+          sample_count: 1,
+          start_ns: 0,
+          end_ns: 1,
+        },
+        {
+          id: "1/rpm",
+          name: "rpm",
+          unit: null,
+          sample_count: 1,
+          start_ns: 0,
+          end_ns: 1,
+        },
+      ],
+    };
+    const s = normaliseMf4(raw);
+    expect(s.channels[0].group).toBe("Powertrain");
+    expect(s.channels[1].group).toBeNull();
+  });
 });
 
 describe("normaliseMcap", () => {

@@ -143,6 +143,9 @@ struct ChannelInfo {
     id: String,
     name: String,
     unit: Option<String>,
+    /// Channel-group label this channel belongs to, so the UI can nest
+    /// MF4 channels under their group. `None` only if the id is unknown.
+    group: Option<String>,
     sample_count: u64,
     start_ns: i64,
     end_ns: i64,
@@ -156,8 +159,9 @@ struct Mf4Summary {
 }
 
 /// Return the reader's `SourceMeta` as a plain JS object: `{ start_ns,
-/// end_ns, channels: [{ id, name, unit, sample_count, start_ns, end_ns }] }`.
-/// JS callers parse this with standard property access; no Arrow bytes here.
+/// end_ns, channels: [{ id, name, unit, group, sample_count, start_ns,
+/// end_ns }] }`. JS callers parse this with standard property access; no
+/// Arrow bytes here.
 #[wasm_bindgen]
 pub fn mf4_summary(handle: u32) -> Result<JsValue, JsError> {
     READERS.with(|cell| {
@@ -176,6 +180,7 @@ pub fn mf4_summary(handle: u32) -> Result<JsValue, JsError> {
                     id: c.id.clone(),
                     name: c.name.clone(),
                     unit: c.unit.clone(),
+                    group: reader.group_label(&c.id),
                     sample_count: c.sample_count,
                     start_ns: c.time_range.start_ns,
                     end_ns: c.time_range.end_ns,

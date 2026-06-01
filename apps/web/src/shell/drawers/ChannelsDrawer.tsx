@@ -1,10 +1,18 @@
-// Phase 3 · Channels drawer.
+// Channels drawer.
 //
-// Replaces the inline `channels` stub in `Drawer.tsx`. Reads `channels`,
-// `sources`, `selectedPanelId`, and the binding maps from the store via
-// discrete single-key selectors so a re-render only fires when one of
-// those changes. Search query and per-source collapsed state are local
+// Renders the loaded channels as a collapsible tree, one tree per source.
+// The hierarchy is derived in `channelTree.ts`:
+//   - MCAP topics split on `/` into nested levels.
+//   - MF4 channels nest under their channel-group label, then their name.
+//
+// Reads `channels`, `sources`, `selectedPanelId`, and the binding maps from
+// the store via discrete single-key selectors so a re-render only fires when
+// one of those changes. Search query and per-node collapsed state are local
 // `useState` (no store coupling).
+//
+// Search matches the full tree path (so typing a message prefix or an MF4
+// group name keeps the whole subtree) and force-expands every branch while a
+// query is active.
 //
 // Click-binding rules (from `v1-shell-integration.md` § Phase 3):
 //   - If a panel is selected and it is a plot, append the channel via
@@ -14,15 +22,11 @@
 //   - If no panel is selected, call `ensurePlotPanel()` (provided by
 //     `App.tsx`) to mint one, mark it selected, then bind.
 //
-// Drag-and-drop and source-scoped filtering are explicitly deferred per
-// the integration plan.
-//
-// Performance (10k+ channels): the visible rows are *windowed* — only the
-// slice intersecting the scroll viewport (plus a small overscan) is
-// mounted, so the DOM stays O(viewport) instead of O(channels). Grouping
-// reads `SourceMeta.channels` directly rather than re-filtering the flat
-// `channels` array per source, and the search query is run through
-// `useDeferredValue` so typing never blocks on the filter pass.
+// Performance (10k+ channels): the visible tree is *flattened* into a single
+// positioned list (collapse-aware) and then *windowed* — only the slice
+// intersecting the scroll viewport (plus a small overscan) is mounted, so the
+// DOM stays O(viewport) instead of O(channels). The search query runs through
+// `useDeferredValue` so typing never blocks on the filter + rebuild pass.
 
 import {
   useCallback,
@@ -31,14 +35,16 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react";
-import {
-  useSession,
-  type Channel,
-  type SourceMeta,
-} from "../../state/store";
+import { useSession, type Channel, type SourceMeta } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { panelKindOf } from "../../layout/panelId";
+import {
+  buildChannelTree,
+  channelMatchesQuery,
+  type ChannelTreeNode,
+} from "./channelTree";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./ChannelsDrawer.module.css";
@@ -49,6 +55,7 @@ const HEADING_ID = "drawer-channels-h";
 // the CSS forces on `.vitem` wrappers (see ChannelsDrawer.module.css) so
 // the cumulative offsets line up with what the browser actually lays out.
 const SOURCE_HEADER_H = 34;
+const BRANCH_ROW_H = 30;
 const CHANNEL_ROW_H = 30;
 // Extra rows rendered above/below the viewport so a fast scroll doesn't
 // flash blank before the next frame fills in.
@@ -56,7 +63,14 @@ const OVERSCAN = 8;
 
 type Row =
   | { type: "header"; src: SourceMeta; count: number }
-  | { type: "row"; channel: Channel };
+  | {
+      type: "branch";
+      sourceId: string;
+      node: ChannelTreeNode;
+      depth: number;
+      expanded: boolean;
+    }
+  | { type: "leaf"; channel: Channel; label: string; depth: number };
 
 interface Props {
   /** Returns the id of an existing or newly-created plot panel, or
@@ -88,55 +102,94 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
   const videoBindings = useSession((st) => st.videoBindings);
 
   const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  // Collapsed keys. Branches default to expanded, so we only track the keys
+  // the user has explicitly collapsed. Source rows key on `src.id`; tree
+  // branches key on `${src.id}::${node.key}`.
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
   // The input stays responsive (it tracks `query`), while the expensive
-  // filter/window work below keys off the deferred value so a burst of
+  // filter/tree/window work below keys off the deferred value so a burst of
   // keystrokes doesn't queue a render per character.
   const deferredQuery = useDeferredValue(query);
   const q = deferredQuery.trim().toLowerCase();
+  const queryActive = q !== "";
 
-  // Group by source straight off `SourceMeta.channels` — it already holds
-  // the per-source list, so there's no need to scan the flat `channels`
-  // array once per source (that was O(sources × channels)).
+  const isExpanded = useCallback(
+    (key: string) => queryActive || !collapsed.has(key),
+    [queryActive, collapsed],
+  );
+
+  // Per source: the filtered channel set and its tree. Filtering matches the
+  // full tree path (topic segments + MF4 group), so a group/message name
+  // keeps its whole subtree.
   const groups = useMemo(() => {
-    const out: { src: SourceMeta; rows: Channel[] }[] = [];
+    const out: { src: SourceMeta; tree: ChannelTreeNode[]; count: number }[] =
+      [];
     for (const src of sources) {
-      const rows =
-        q === ""
-          ? src.channels
-          : src.channels.filter((c) => c.name.toLowerCase().includes(q));
-      if (rows.length > 0) out.push({ src, rows });
+      const rows = queryActive
+        ? src.channels.filter((c) => channelMatchesQuery(c, deferredQuery))
+        : src.channels;
+      if (rows.length > 0) {
+        out.push({ src, tree: buildChannelTree(rows), count: rows.length });
+      }
     }
     return out;
-  }, [sources, q]);
+  }, [sources, deferredQuery, queryActive]);
 
   const filteredCount = useMemo(
-    () => groups.reduce((n, g) => n + g.rows.length, 0),
+    () => groups.reduce((n, g) => n + g.count, 0),
     [groups],
   );
 
-  // Flatten the visible (non-collapsed) tree into a single positioned list
+  // Flatten the visible (collapse-aware) tree into a single positioned list
   // plus a prefix-sum of tops. Both are O(visible rows) and only recompute
-  // when the groups or collapsed set change — not on scroll.
+  // when the groups, collapsed set, or search state change — not on scroll.
   const { items, offsets, totalHeight } = useMemo(() => {
     const items: Row[] = [];
     const offsets: number[] = [0];
     let top = 0;
-    for (const { src, rows } of groups) {
-      items.push({ type: "header", src, count: rows.length });
-      top += SOURCE_HEADER_H;
+    const push = (row: Row, h: number) => {
+      items.push(row);
+      top += h;
       offsets.push(top);
-      if (collapsed[src.id] !== true) {
-        for (const channel of rows) {
-          items.push({ type: "row", channel });
-          top += CHANNEL_ROW_H;
-          offsets.push(top);
+    };
+
+    const walk = (sourceId: string, nodes: ChannelTreeNode[], depth: number) => {
+      for (const node of nodes) {
+        if (node.children.length === 0 && node.channel !== null) {
+          push(
+            { type: "leaf", channel: node.channel, label: node.label, depth },
+            CHANNEL_ROW_H,
+          );
+          continue;
+        }
+        const expanded = isExpanded(`${sourceId}::${node.key}`);
+        push({ type: "branch", sourceId, node, depth, expanded }, BRANCH_ROW_H);
+        if (expanded) {
+          // A branch that is itself a bound channel (a topic that is also a
+          // prefix of deeper topics) renders its own row first.
+          if (node.channel !== null) {
+            push(
+              {
+                type: "leaf",
+                channel: node.channel,
+                label: node.label,
+                depth: depth + 1,
+              },
+              CHANNEL_ROW_H,
+            );
+          }
+          walk(sourceId, node.children, depth + 1);
         }
       }
+    };
+
+    for (const { src, tree, count } of groups) {
+      push({ type: "header", src, count }, SOURCE_HEADER_H);
+      if (isExpanded(src.id)) walk(src.id, tree, 0);
     }
     return { items, offsets, totalHeight: top };
-  }, [groups, collapsed]);
+  }, [groups, isExpanded]);
 
   const selectedKind =
     selectedPanelId === null ? null : panelKindOf(selectedPanelId);
@@ -171,8 +224,13 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
     }
   };
 
-  const toggleCollapse = (sourceId: string) =>
-    setCollapsed((prev) => ({ ...prev, [sourceId]: !prev[sourceId] }));
+  const toggleCollapse = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // --- Windowing: track the scroll container's scrollTop + height. ---
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -245,7 +303,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
         type="search"
         className={s.search}
         placeholder="Filter channels…"
-        aria-label="Filter channels by name"
+        aria-label="Filter channels by name or group"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         data-testid="channels-search"
@@ -262,18 +320,15 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
           onScroll={onScroll}
           data-testid="channels-groups"
         >
-          <div
-            className={s.spacer}
-            style={{ height: totalHeight }}
-            role="list"
-          >
+          <div className={s.spacer} style={{ height: totalHeight }} role="list">
             {visible.map((item, i) => {
               const index = start + i;
               const top = offsets[index];
+
               if (item.type === "header") {
                 const { src, count } = item;
                 const listId = `drawer-channels-list-${src.id}`;
-                const isCollapsed = collapsed[src.id] === true;
+                const expanded = isExpanded(src.id);
                 return (
                   <div
                     key={`h-${src.id}`}
@@ -284,13 +339,13 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                     <button
                       type="button"
                       className={s.groupHeader}
-                      aria-expanded={!isCollapsed}
+                      aria-expanded={expanded}
                       aria-controls={listId}
                       onClick={() => toggleCollapse(src.id)}
                       data-testid={`channels-group-${src.id}`}
                     >
                       <span className={s.chevron} aria-hidden="true">
-                        {isCollapsed ? "▸" : "▾"}
+                        {expanded ? "▾" : "▸"}
                       </span>
                       <span className={s.groupName} title={src.name}>
                         {src.name}
@@ -301,10 +356,39 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                 );
               }
 
-              const { channel } = item;
+              if (item.type === "branch") {
+                const { sourceId, node, depth, expanded } = item;
+                const branchKey = `${sourceId}::${node.key}`;
+                return (
+                  <div
+                    key={`b-${branchKey}`}
+                    className={s.vitem}
+                    style={{ top, height: BRANCH_ROW_H }}
+                    role="listitem"
+                  >
+                    <button
+                      type="button"
+                      className={s.branch}
+                      style={{ "--depth": depth } as CSSProperties}
+                      aria-expanded={expanded}
+                      onClick={() => toggleCollapse(branchKey)}
+                      data-testid={`channels-branch-${branchKey}`}
+                    >
+                      <span className={s.chevron} aria-hidden="true">
+                        {expanded ? "▾" : "▸"}
+                      </span>
+                      <span className={s.branchName} title={node.key}>
+                        {node.label}
+                      </span>
+                      <span className={s.branchCount}>{node.leafCount}</span>
+                    </button>
+                  </div>
+                );
+              }
+
+              const { channel, label, depth } = item;
               const bound = isBound(channel.id);
-              const disabled =
-                plotFull && selectedKind === "plot" && !bound;
+              const disabled = plotFull && selectedKind === "plot" && !bound;
               return (
                 <div
                   key={channel.id}
@@ -315,6 +399,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                   <button
                     type="button"
                     className={`${s.row} ${bound ? s.rowActive : ""}`}
+                    style={{ "--depth": depth } as CSSProperties}
                     aria-pressed={bound}
                     aria-disabled={disabled || undefined}
                     title={
@@ -322,7 +407,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                         ? "Already bound to this panel"
                         : disabled
                           ? `Plot full (${MAX_PLOT_SERIES})`
-                          : undefined
+                          : channel.name
                     }
                     onClick={() => {
                       if (disabled) return;
@@ -335,9 +420,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                       style={{ background: colorFor(channel.id) }}
                       aria-hidden="true"
                     />
-                    <span className={s.name} title={channel.name}>
-                      {channel.name}
-                    </span>
+                    <span className={s.name}>{label}</span>
                     {channel.dtype !== null && (
                       <span className={s.kind}>{channel.dtype}</span>
                     )}

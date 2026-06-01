@@ -46,6 +46,7 @@ function defaultSummaries(): Summaries {
           id: "0/1",
           name: "speed",
           unit: null,
+          group: "Powertrain",
           sample_count: 10,
           start_ns: 500n,
           end_ns: 3_000n,
