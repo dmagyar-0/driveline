@@ -310,6 +310,29 @@ describe("PlotPanel", () => {
     expect(snap.sampleAtCursor[1]?.value).toBe(2);
   });
 
+  it("pins the x-axis to the global timeline, not the signal's data extent", async () => {
+    // The fixture only covers ts 1.0–1.02 s, but the global timeline is
+    // 1.0–11.0 s (e.g. a short signal offset inside a long video). Pre-fix
+    // uPlot auto-fit the x-axis to the 20 ms data extent, so a 20 ms
+    // signal stretched across the whole panel and the empty 10 s had no
+    // blank region. The x-scale must instead span the full global range.
+    useSession.setState({
+      globalRange: { startNs: 1_000_000_000n, endNs: 11_000_000_000n },
+    });
+    render(<PlotPanel panelId="test-panel" />);
+
+    await waitFor(() => {
+      const snap = window.__drivelinePlotPanels?.["test-panel"];
+      return Boolean(snap && snap.xScaleSec);
+    });
+
+    const snap = window.__drivelinePlotPanels!["test-panel"] as PlotSyncSnapshot;
+    expect(snap.xScaleSec).not.toBeNull();
+    // Domain spans the global range (1.0–11.0 s), not the data (1.0–1.02 s).
+    expect(snap.xScaleSec!.min).toBeCloseTo(1.0, 6);
+    expect(snap.xScaleSec!.max).toBeCloseTo(11.0, 6);
+  });
+
   it("does not clear persisted bindings before any source loads", () => {
     // Pre-fix this would wipe the bindings on hydrate; with the
     // `sources.length > 0` gate persisted bindings survive until the
