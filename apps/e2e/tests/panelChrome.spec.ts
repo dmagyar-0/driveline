@@ -18,6 +18,12 @@ declare global {
     __drivelineDevHooks?: {
       resetLayout: () => void;
       clearSession: () => Promise<void>;
+      openFiles: (
+        descs: { name: string; bytes: Uint8Array }[],
+      ) => Promise<{
+        opened: string[];
+        errors: { name: string; reason: string }[];
+      }>;
       setActiveRailTab: (tab: string | null) => void;
       getActiveRailTab: () => string | null;
       setSelectedPanelId: (id: string | null) => void;
@@ -29,6 +35,18 @@ declare global {
 
 const VIDEO_PANEL_ID = "video-1";
 const PLOT_PANEL_ID = "plot-1";
+
+// FlexLayout renders hidden, off-screen "drag stamp" copies of every tab
+// button (under `.flexlayout__layout_tab_stamps`, positioned at
+// top:-10000px) so it can show a drag-preview rectangle. Those stamps run
+// our `onRenderTab` content too, so each `tab-*` testid resolves to BOTH
+// the real on-screen tab and its stamp — doubling every count and breaking
+// strict-mode clicks. Scope chrome lookups to the real tabset strip
+// (`.flexlayout__tabset`), which never contains the stamps, so the tests
+// see exactly one element per visible tab.
+function tabChrome(page: Page, testId: string) {
+  return page.locator(`.flexlayout__tabset [data-testid="${testId}"]`);
+}
 
 async function getLayout(page: Page): Promise<string> {
   return await page.evaluate(() =>
@@ -43,6 +61,23 @@ test.describe("Per-panel chrome (Phase 7)", () => {
       "workers ready",
     );
     await page.evaluate(() => window.__drivelineDevHooks!.resetLayout());
+
+    // Load a minimal session so the FirstRun splash (an opaque, full-screen
+    // overlay shown while `sources.length === 0`) is dismissed. Without a
+    // session it sits on top of the workspace and intercepts every pointer
+    // event, so the tab-chrome clicks below would never reach their target.
+    // Any source dismisses it; `short.mf4` is the smallest fixture.
+    const load = await page.evaluate(async () => {
+      const r = await fetch("/sample-data/short.mf4");
+      if (!r.ok) throw new Error(`fetch mf4: ${r.status}`);
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      return await window.__drivelineDevHooks!.openFiles([
+        { name: "short.mf4", bytes },
+      ]);
+    });
+    expect(load.errors).toEqual([]);
+    await expect(page.getByTestId("first-run")).toHaveCount(0);
+
     // The default layout's two panels are Video (`video-1`) and Plot
     // (`plot-1`), each in its own tabset.
     await expect(page.getByTestId(`panel-body-${VIDEO_PANEL_ID}`)).toBeVisible();
@@ -56,7 +91,7 @@ test.describe("Per-panel chrome (Phase 7)", () => {
   });
 
   test("each tab renders its kind badge", async ({ page }) => {
-    const badges = page.getByTestId("tab-kind-badge");
+    const badges = tabChrome(page, "tab-kind-badge");
     // Two default panels → two badges, one VIDEO and one PLOT.
     await expect(badges).toHaveCount(2);
     const labels = await badges.allInnerTexts();
@@ -74,7 +109,7 @@ test.describe("Per-panel chrome (Phase 7)", () => {
 
     // Click the first settings icon (the one for the video tab — the
     // default layout puts video on the left).
-    await page.getByTestId("tab-settings").first().click();
+    await tabChrome(page, "tab-settings").first().click();
 
     await expect
       .poll(() =>
@@ -95,11 +130,11 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     await page.evaluate(() =>
       window.__drivelineDevHooks!.setSelectedPanelId(null),
     );
-    await page.getByTestId(`panel-body-${PLOT_PANEL_ID}`).click({
-      // Click the body itself, not the tab strip; FlexLayout puts the
-      // tab strip outside the body wrapper.
-      position: { x: 10, y: 40 },
-    });
+    // `panel-body-*` is a `display: contents` wrapper (panelFactory.module.css)
+    // so it has no box of its own to click. Click the rendered plot content
+    // inside it — its pointerdown bubbles up through the contents box to the
+    // wrapper's click-to-select handler. Aim low to clear the control bar.
+    await page.getByTestId("plot-panel").click({ position: { x: 30, y: 160 } });
     await expect
       .poll(() =>
         page.evaluate(() =>
@@ -113,25 +148,33 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     const before = await getLayout(page);
     expect(before).not.toContain('"maximized"');
 
-    // Two tabs → two maximize buttons. Click the first (video tabset).
-    await page.getByTestId("tab-maximize").first().click();
+    // Two tabs → two maximize buttons. Maximizing one tabset hides the
+    // other, so filter to whatever is on-screen and re-resolve before each
+    // click (a bare `.first()` would land on the now-hidden tabset's button
+    // for the restore click).
+    const maximize = tabChrome(page, "tab-maximize").filter({ visible: true });
+    await maximize.first().click();
     await expect
       .poll(async () => (await getLayout(page)).includes('"maximized":true'))
       .toBe(true);
 
     // Click again to restore.
-    await page.getByTestId("tab-maximize").first().click();
+    await maximize.first().click();
     await expect
       .poll(async () => !(await getLayout(page)).includes('"maximized":true'))
       .toBe(true);
   });
 
   test("close removes the tab from the layout", async ({ page }) => {
-    expect(await getLayout(page)).toContain(`"id":"${PLOT_PANEL_ID}"`);
+    // `getLayoutJson()` is null until FlexLayout's model first changes
+    // (`resetLayout` writes null and the default model is only synced back
+    // on the next `onModelChange`), so assert the tab's presence via the DOM
+    // rather than the persisted layout json.
+    await expect(page.getByTestId(`panel-body-${PLOT_PANEL_ID}`)).toHaveCount(1);
 
     // The plot tab is the second of the two; locate by panel-body
     // anchor and walk to its tab close button.
-    const closes = page.getByTestId("tab-close");
+    const closes = tabChrome(page, "tab-close");
     await expect(closes).toHaveCount(2);
     // Click the close on whichever tab is the plot one — we identify it
     // by clicking each settings icon in turn and checking which selects
@@ -148,7 +191,7 @@ test.describe("Per-panel chrome (Phase 7)", () => {
   });
 
   test("collapse icon is rendered as disabled chrome", async ({ page }) => {
-    const collapses = page.getByTestId("tab-collapse");
+    const collapses = tabChrome(page, "tab-collapse");
     await expect(collapses).toHaveCount(2);
     // The disabled button advertises its state for assistive tech and
     // is removed from tab order — assert both contracts.
