@@ -66,6 +66,45 @@ describe("mergeSeries", () => {
     expect(out.ys[1]).toEqual([100, 200]);
   });
 
+  it("maps non-finite samples to null so they can't poison uPlot's y-scale", () => {
+    // A channel that "has no values" decodes to NaN (parsed_scalar_as_f64
+    // returns NaN for non-scalar samples). uPlot's shared y-scale
+    // auto-range seeds min/max from the first non-null value and lets
+    // NaN through its `!= null` test, so one NaN series collapses the
+    // whole scale to [NaN, NaN] and blanks every series. mergeSeries must
+    // emit `null` (a gap) for any non-finite value instead.
+    const good = mk([1, 2, 3], [10, 20, 30]);
+    const bad = mk([1, 2, 3], [NaN, NaN, NaN]);
+    const out = mergeSeries([good, bad]);
+    expect(Array.from(out.xs)).toEqual([1, 2, 3]);
+    expect(out.ys[0]).toEqual([10, 20, 30]);
+    expect(out.ys[1]).toEqual([null, null, null]);
+  });
+
+  it("maps ±Infinity to null too (Infinity poisons Math.max)", () => {
+    const a = mk([1, 2], [Number.POSITIVE_INFINITY, 5]);
+    const b = mk([1, 2], [Number.NEGATIVE_INFINITY, 6]);
+    const out = mergeSeries([a, b]);
+    expect(out.ys[0]).toEqual([null, 5]);
+    expect(out.ys[1]).toEqual([null, 6]);
+  });
+
+  it("sanitises non-finite values on the single-series fast path", () => {
+    // The single-input passthrough returns the y array directly; a NaN
+    // there would still poison a lone series' scale and blank it.
+    const out = mergeSeries([mk([1, 2, 3], [NaN, 2, 3])]);
+    expect(Array.from(out.xs)).toEqual([1, 2, 3]);
+    expect(out.ys[0]).toEqual([null, 2, 3]);
+  });
+
+  it("keeps the zero-copy single-series fast path when all values finite", () => {
+    // Regression guard: the NaN sanitisation must not allocate for the
+    // common all-finite case — it should hand uPlot the same typed array.
+    const s = mk([1, 2, 3], [10, 20, 30]);
+    const out = mergeSeries([s]);
+    expect(out.ys[0]).toBe(s.ys);
+  });
+
   it("merges three series with partial overlap into a single union", () => {
     // k = 3 exercises the k-way merge cursor loop that k = 2 can
     // collapse to a single interleave. Union timestamps are
@@ -194,6 +233,18 @@ describe("mergeSeries · gap-threshold mode (Phase 8)", () => {
     expect(Array.from(out.xs)).toEqual([0, 1, 2]);
     expect(out.ys[0]).toEqual([null, null, null]);
     expect(out.ys[1]).toEqual([10, 11, 12]);
+  });
+
+  it("emits null for a non-finite held value in step-hold mode", () => {
+    // Step-hold carries the last sample forward; a NaN sample must not be
+    // held (it would poison uPlot's y-scale and blank every series), so
+    // both its own slot and the held slots read as gaps.
+    const a = mk([0, 1, 2], [NaN, NaN, NaN]);
+    const b = mk([0.5, 1.5], [10, 11]);
+    const out = mergeSeries([a, b], 5);
+    expect(out.ys[0].every((v) => v === null)).toBe(true);
+    // The finite neighbour still step-holds normally.
+    expect(out.ys[1].some((v) => v === 10 || v === 11)).toBe(true);
   });
 
   it("pre-allocates enough buffer for a series with many consecutive gaps", () => {

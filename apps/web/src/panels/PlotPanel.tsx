@@ -64,6 +64,14 @@ export interface PlotSyncSnapshot {
   // auto-fit a short signal across the full width. `null` before the
   // first render.
   xScaleSec: { min: number; max: number } | null;
+  // The plot's resolved y-axis domain, read straight from uPlot after
+  // the most recent render. A series whose samples decode to NaN/±Inf
+  // would poison uPlot's shared auto-range to `[NaN, NaN]` and blank
+  // every series; `mergeSeries` maps non-finite values to gaps so this
+  // stays finite. e2e asserts `Number.isFinite(yScale.{min,max})` to
+  // catch a regression of that blanking bug. `null` before the first
+  // render or when no series carries a finite sample.
+  yScale: { min: number; max: number } | null;
 }
 
 declare global {
@@ -268,6 +276,13 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       xScale && xScale.min != null && xScale.max != null
         ? { min: xScale.min, max: xScale.max }
         : null;
+    // Report the raw resolved min/max (including a NaN poison) so callers
+    // can assert finiteness rather than have it masked into a `null`.
+    const yScaleObj = plotRef.current?.scales?.y;
+    const yScale =
+      yScaleObj && yScaleObj.min != null && yScaleObj.max != null
+        ? { min: yScaleObj.min, max: yScaleObj.max }
+        : null;
     store[panelId] = {
       cursorNs,
       boundChannelIds,
@@ -277,6 +292,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       sampleAtCursor,
       seriesStats,
       xScaleSec,
+      yScale,
     };
   }, [boundChannelIds, cursorNs, panelId]);
 

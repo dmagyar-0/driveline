@@ -134,6 +134,10 @@ declare global {
         // The plot's actual x-axis domain in epoch seconds (pinned to the
         // global timeline, not the per-series data extent).
         xScaleSec: { min: number; max: number } | null;
+        // The plot's resolved y-axis domain. Finite even when a bound
+        // channel has only NaN/±Inf samples — a regression of the
+        // blank-plot bug would surface here as NaN.
+        yScale: { min: number; max: number } | null;
       } | null;
       // T6.3 — per-series min/max stats over the most recent render for
       // `signalAlignment.spec.ts`.
@@ -396,6 +400,7 @@ export function App() {
                 },
           ),
           xScaleSec: snap.xScaleSec,
+          yScale: snap.yScale,
         };
       },
       getPlotPanelSeriesStats: (panelId) => {

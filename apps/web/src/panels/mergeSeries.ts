@@ -41,6 +41,32 @@ const EMPTY: AlignedSeries = {
   ys: [],
 };
 
+// uPlot's shared y-scale auto-range seeds its min/max from the first
+// non-null sample and combines every series on the scale via
+// `Math.min`/`Math.max` (see `accScale`/`getMinMax` in uplot's source).
+// Its null test is `v != null`, which lets `NaN` through — so a single
+// non-finite value (a `NaN` from an unparseable sample, or ±Infinity)
+// poisons the scale to `[NaN, NaN]` and blanks *every* series, not just
+// the offending one. Mapping non-finite values to `null` makes uPlot
+// treat them as gaps (skipped by the range scan) instead of poison.
+function finiteOrNull(ys: Float64Array): YSeries {
+  let hasNonFinite = false;
+  for (let i = 0; i < ys.length; i++) {
+    if (!Number.isFinite(ys[i])) {
+      hasNonFinite = true;
+      break;
+    }
+  }
+  // Common case — every sample is finite: hand uPlot the zero-copy array.
+  if (!hasNonFinite) return ys;
+  const out: (number | null)[] = new Array(ys.length);
+  for (let i = 0; i < ys.length; i++) {
+    const v = ys[i];
+    out[i] = Number.isFinite(v) ? v : null;
+  }
+  return out;
+}
+
 export function mergeSeries(
   inputs: PlotSeries[],
   gapThresholdSec: number | null = null,
@@ -55,7 +81,7 @@ export function mergeSeries(
     gapThresholdSec <= 0
   ) {
     if (inputs.length === 1) {
-      return { xs: inputs[0].xs, ys: [inputs[0].ys] };
+      return { xs: inputs[0].xs, ys: [finiteOrNull(inputs[0].ys)] };
     }
     return mergeUnion(inputs);
   }
@@ -95,7 +121,8 @@ function mergeUnion(inputs: PlotSeries[]): AlignedSeries {
     for (let i = 0; i < k; i++) {
       const c = cursors[i];
       if (c < inputs[i].xs.length && inputs[i].xs[c] === minX) {
-        outYs[i][outN] = inputs[i].ys[c];
+        const v = inputs[i].ys[c];
+        outYs[i][outN] = Number.isFinite(v) ? v : null;
         cursors[i] = c + 1;
       }
     }
@@ -229,7 +256,10 @@ function mergeStepHold(
       } else if (ux - lastX > threshold) {
         out[i] = null;
       } else {
-        out[i] = lastY;
+        // A non-finite held value would poison uPlot's shared y-scale
+        // (see `finiteOrNull`); a `NaN` sample means "no value", so it
+        // reads as a gap rather than a step-held poison.
+        out[i] = Number.isFinite(lastY) ? lastY : null;
       }
     }
     return out;
