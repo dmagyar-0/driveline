@@ -139,6 +139,44 @@ function axisStyle(): { fg: string; grid: string } {
   return axisStyleCache;
 }
 
+// uPlot reserves a fixed ~50px gutter for the y-axis. Wide tick labels —
+// six-figure signal values, long decimals, or a leading minus sign —
+// overflow it and get clipped at the panel's left edge, so the axis shows
+// "00000" instead of "100000". Size the gutter to the widest formatted
+// tick instead. This is the canonical uPlot dynamic-axis recipe: measure
+// the longest label in the axis's own (pxRatio-scaled) font and add room
+// for the tick mark and gap. Converges in a single layout cycle because
+// the tick values depend only on the y-scale, not on the gutter width.
+//
+// `values` is `null` on uPlot's first sizing pass (before any ticks are
+// computed), so fall back to the default minimum then.
+export const Y_AXIS_MIN_SIZE = 50;
+export function yAxisSize(
+  self: uPlot,
+  values: string[] | null,
+  axisIdx: number,
+): number {
+  const axis = self.axes[axisIdx];
+  const tickSize =
+    axis.ticks && typeof axis.ticks.size === "number" ? axis.ticks.size : 0;
+  const gap = typeof axis.gap === "number" ? axis.gap : 0;
+  let size = tickSize + gap;
+  const longest = (values ?? []).reduce(
+    (acc, v) => (v.length > acc.length ? v : acc),
+    "",
+  );
+  if (longest !== "") {
+    // After init uPlot stores `font` as `[cssFont, pxSize, cssSize]`; the
+    // first entry already includes the devicePixelRatio multiplier, so
+    // `measureText` returns device pixels — divide back to CSS pixels.
+    const font = (axis.font as unknown as [string] | undefined)?.[0];
+    if (font) self.ctx.font = font;
+    const dpr = window.devicePixelRatio || 1;
+    size += self.ctx.measureText(longest).width / dpr;
+  }
+  return Math.ceil(Math.max(size, Y_AXIS_MIN_SIZE));
+}
+
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -331,10 +369,18 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
     const rect = container.getBoundingClientRect();
     const { fg, grid } = axisStyle();
-    const axisOpts: uPlot.Axis = {
+    const xAxisOpts: uPlot.Axis = {
       stroke: fg,
       ticks: { stroke: grid },
       grid: { stroke: grid },
+    };
+    // The y-axis grows its gutter to fit the widest tick (see yAxisSize)
+    // so large-magnitude signals aren't truncated at the panel edge.
+    const yAxisOpts: uPlot.Axis = {
+      stroke: fg,
+      ticks: { stroke: grid },
+      grid: { stroke: grid },
+      size: yAxisSize,
     };
     // Default mode: `mergeSeries` emits `null` at every union timestamp
     // where *this* series has no sample. With two same-rate signals on
@@ -379,7 +425,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           spanGaps,
         })),
       ],
-      axes: [axisOpts, axisOpts],
+      axes: [xAxisOpts, yAxisOpts],
       cursor: { show: false },
       // The control bar's chips (colour swatch + label + remove) already
       // act as this plot's legend, and the cursor is disabled so uPlot's
