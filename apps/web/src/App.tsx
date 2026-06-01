@@ -61,6 +61,7 @@ declare global {
       ) => Promise<Mf4FetchResult>;
       openFiles: (files: DevFileDesc[]) => Promise<OpenResult>;
       clearSession: () => Promise<void>;
+      removeSource: (sourceId: string) => Promise<void>;
       videoLastBlitPtsNs: () => bigint | null;
       // T5.2 — serialised HUD snapshot so Playwright can assert seek
       // settles without pixel compare. BigInt → string for `page.evaluate`.
@@ -315,6 +316,9 @@ export function App() {
       },
       clearSession: async () => {
         await useSession.getState().clear();
+      },
+      removeSource: async (sourceId) => {
+        await useSession.getState().removeSource(sourceId);
       },
       videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
       videoHudStats: () => {

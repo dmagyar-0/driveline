@@ -30,6 +30,7 @@ export function SourcesDrawer() {
   const sources = useSession((st) => st.sources);
   const globalRange = useSession((st) => st.globalRange);
   const openFiles = useSession((st) => st.openFiles);
+  const removeSource = useSession((st) => st.removeSource);
   const errors = useSession((st) => st.lastOpenErrors);
   const dismissOpenErrors = useSession((st) => st.dismissOpenErrors);
 
@@ -38,6 +39,13 @@ export function SourcesDrawer() {
 
   const toggleSelect = (id: string) =>
     setSelectedId((prev) => (prev === id ? null : id));
+
+  const onCloseClick = (id: string) => {
+    // Drop any local selection pointing at the row we're about to remove
+    // so the drawer doesn't keep a highlight on a gone source.
+    setSelectedId((prev) => (prev === id ? null : prev));
+    void removeSource(id);
+  };
 
   const onRowKeyDown = (
     e: React.KeyboardEvent<HTMLButtonElement>,
@@ -79,7 +87,7 @@ export function SourcesDrawer() {
         {sources.map((src) => {
           const active = selectedId === src.id;
           return (
-            <li key={src.id}>
+            <li key={src.id} className={s.rowWrap}>
               <button
                 type="button"
                 className={`${s.row} ${active ? s.rowActive : ""}`}
@@ -97,6 +105,16 @@ export function SourcesDrawer() {
                   {src.name}
                 </span>
                 <span className={s.kind}>{kindLabel(src.kind)}</span>
+              </button>
+              <button
+                type="button"
+                className={s.closeBtn}
+                onClick={() => onCloseClick(src.id)}
+                aria-label={`Close ${src.name}`}
+                title={`Close ${src.name}`}
+                data-testid={`source-close-${src.id}`}
+              >
+                ×
               </button>
             </li>
           );

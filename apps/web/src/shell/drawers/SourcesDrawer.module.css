@@ -24,10 +24,57 @@
   gap: var(--sp-2);
 }
 
+.rowWrap {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
 .row {
   composes: rowBase from "./_row.module.css";
   grid-template-columns: 8px 1fr auto;
   gap: var(--sp-4);
+  flex: 1;
+  min-width: 0;
+}
+
+/* Per-source close affordance. Muted by default so the row reads as a
+ * selectable item first; brightens on hover of the row or on its own
+ * focus so keyboard users can always reach it. */
+.closeBtn {
+  flex: none;
+  background: transparent;
+  border: 0;
+  color: var(--color-fg-6);
+  cursor: pointer;
+  font-size: var(--fs-14);
+  line-height: 1;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-3);
+  opacity: 0;
+  transition: opacity var(--motion-base), background var(--motion-base),
+    color var(--motion-base);
+}
+
+.rowWrap:hover .closeBtn,
+.closeBtn:focus-visible {
+  opacity: 1;
+}
+
+.closeBtn:hover {
+  background: var(--color-bg-4);
+  color: var(--color-fg-2);
+}
+
+.closeBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .closeBtn {
+    transition: none;
+  }
 }
 
 .rowActive {
