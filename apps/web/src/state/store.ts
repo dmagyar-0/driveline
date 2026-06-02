@@ -15,7 +15,7 @@
 
 import type { Remote } from "comlink";
 import { create } from "zustand";
-import { bucketFiles, type BucketError } from "./bucket";
+import { bucketFiles, classifyUrl, type BucketError } from "./bucket";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import {
   loadLayoutFromStorage,
@@ -292,6 +292,15 @@ export interface SessionState {
   pendingFetch: Record<string, PendingFetch | null>;
   /** Drives a drop batch through bucket → per-source open → merge. */
   openFiles(files: File[]): Promise<OpenResult>;
+  /**
+   * Open a single `.mcap`/`.mf4` from a URL. MCAP fetches the full body;
+   * MF4 reads lazily over HTTP range requests through its index, so a large
+   * remote MF4 is never fully downloaded. Shares the same `pending` serialise
+   * chain and source-merge path as `openFiles`. Errors (bad URL, unsupported
+   * type, network/CORS, no range support) surface via the returned
+   * `OpenResult` and `lastOpenErrors`.
+   */
+  openUrl(url: string): Promise<OpenResult>;
   /** Clear `lastOpenErrors` (used by the Sources drawer dismiss). */
   dismissOpenErrors(): void;
   /** Close every loaded wasm handle and reset to the empty session. */
@@ -618,6 +627,39 @@ export const useSession = create<SessionState>((set, get) => {
   const hydratedUi = loadUiFromStorage();
   const hydratedNamedLayouts = loadNamedLayoutsFromStorage();
   const hydratedBookmarks = loadBookmarksFromStorage();
+
+  // Merge a freshly-opened batch of sources into the store and record any
+  // errors. Shared by `openFiles` (drop / picker) and `openUrl` so both
+  // paths seed the cursor and widen `globalRange` identically.
+  const commitOpenedSources = (
+    newSources: SourceMeta[],
+    errors: BucketError[],
+  ): void => {
+    if (newSources.length > 0) {
+      const allSources = [...get().sources, ...newSources];
+      const allChannels = allSources.flatMap((s) => s.channels);
+      const newRange = mergeGlobalRange(allSources);
+      const prevCursor = get().cursorNs;
+      // Seed / reseat the cursor so it is always inside `globalRange`. On the
+      // first successful open, `cursorNs` is still the 0n default; on later
+      // opens, leave it alone unless it now falls outside the (possibly
+      // widened) union range.
+      const nextCursor =
+        newRange &&
+        (prevCursor < newRange.startNs || prevCursor > newRange.endNs)
+          ? newRange.startNs
+          : prevCursor;
+      set({
+        sources: allSources,
+        channels: allChannels,
+        globalRange: newRange,
+        cursorNs: nextCursor,
+        lastOpenErrors: errors,
+      });
+    } else {
+      set({ lastOpenErrors: errors });
+    }
+  };
 
   return {
     sources: [],
@@ -1278,37 +1320,70 @@ export const useSession = create<SessionState>((set, get) => {
           }
         }
 
-        if (newSources.length > 0) {
-          const allSources = [...get().sources, ...newSources];
-          const allChannels = allSources.flatMap((s) => s.channels);
-          const newRange = mergeGlobalRange(allSources);
-          const prevCursor = get().cursorNs;
-          // Seed / reseat the cursor so it is always inside `globalRange`.
-          // On the first successful drop, `cursorNs` is still the 0n
-          // default; on later drops, leave it alone unless it now falls
-          // outside the (possibly widened) union range.
-          const nextCursor =
-            newRange &&
-            (prevCursor < newRange.startNs || prevCursor > newRange.endNs)
-              ? newRange.startNs
-              : prevCursor;
-          set({
-            sources: allSources,
-            channels: allChannels,
-            globalRange: newRange,
-            cursorNs: nextCursor,
-            lastOpenErrors: errors,
-          });
-        } else {
-          set({ lastOpenErrors: errors });
-        }
-
+        commitOpenedSources(newSources, errors);
         return { opened, errors };
       });
 
       const next = pending.then(run, run);
       // Keep the chain alive even if `run` throws so the next caller still
       // queues behind it rather than racing.
+      pending = next.catch(() => undefined);
+      return next;
+    },
+
+    async openUrl(url) {
+      const run = (): Promise<OpenResult> =>
+        timed("open", async () => {
+          if (!worker) throw new Error("session store: worker not initialised");
+          const w = worker;
+
+          const trimmed = url.trim();
+          const opened: string[] = [];
+          const errors: BucketError[] = [];
+          const newSources: SourceMeta[] = [];
+          const existing = get().sources;
+
+          try {
+            const { kind, name } = classifyUrl(trimmed);
+            // MF4 reads lazily over HTTP ranges via its index; MCAP fetches
+            // the whole body. Both end up as ordinary in-store sources, so
+            // close / removeSource / fetch-range all work unchanged.
+            const handle =
+              kind === "mcap"
+                ? await w.openMcapUrl(trimmed)
+                : await w.openMf4Url(trimmed);
+            const id = uniqueSourceId(name, [...existing, ...newSources]);
+            if (kind === "mcap") {
+              const summary = await w.mcapSummary(handle);
+              newSources.push({
+                id,
+                kind: "mcap",
+                name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels: mcapChannels(id, summary),
+              });
+            } else {
+              const summary = await w.mf4Summary(handle);
+              newSources.push({
+                id,
+                kind: "mf4",
+                name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels: mf4Channels(id, summary),
+              });
+            }
+            opened.push(name);
+          } catch (e) {
+            errors.push({ name: trimmed, reason: String(e) });
+          }
+
+          commitOpenedSources(newSources, errors);
+          return { opened, errors };
+        });
+
+      const next = pending.then(run, run);
       pending = next.catch(() => undefined);
       return next;
     },

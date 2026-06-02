@@ -9,6 +9,7 @@
 
 import { useRef } from "react";
 import { useSession } from "../state/store";
+import { UrlLoad } from "./UrlLoad";
 import styles from "./FirstRun.module.css";
 
 export function FirstRun() {
@@ -71,7 +72,10 @@ export function FirstRun() {
         <code className={styles.code}>.mf4</code>, or{" "}
         <code className={styles.code}>.mp4</code>{" "}
         <code className={styles.code}>(+ .mp4.timestamps)</code> files anywhere
-        to load a session. Files never leave the tab.
+        to load a session — or paste a URL to a{" "}
+        <code className={styles.code}>.mcap</code> /{" "}
+        <code className={styles.code}>.mf4</code> below. Local files never leave
+        the tab.
       </p>
 
       <div className={styles.chips}>
@@ -89,6 +93,13 @@ export function FirstRun() {
         <UploadIcon />
         <span>Load files…</span>
       </button>
+
+      <div className={styles.urlRow}>
+        <span className={styles.orRule} aria-hidden="true" />
+        <span className={styles.orText}>or load from URL</span>
+        <span className={styles.orRule} aria-hidden="true" />
+      </div>
+      <UrlLoad variant="firstrun" />
 
       <p className={styles.kbd}>
         <kbd>Space</kbd> play · <kbd>←</kbd> <kbd>→</kbd> step ·{" "}

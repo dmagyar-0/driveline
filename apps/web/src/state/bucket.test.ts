@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bucketFiles } from "./bucket";
+import { bucketFiles, classifyUrl, urlBasename } from "./bucket";
 
 function f(name: string): File {
   return new File([new Uint8Array(0)], name);
@@ -81,5 +81,65 @@ describe("bucketFiles", () => {
     expect(r.errors).toEqual([
       { name: "b.mp4", reason: "missing sidecar b.mp4.timestamps" },
     ]);
+  });
+});
+
+describe("urlBasename", () => {
+  it("uses the last path segment", () => {
+    expect(urlBasename("https://host.example/drives/2018-08-02.mf4")).toBe(
+      "2018-08-02.mf4",
+    );
+  });
+
+  it("ignores query strings and fragments", () => {
+    expect(
+      urlBasename("https://host.example/logs/run.mcap?token=abc#t=5"),
+    ).toBe("run.mcap");
+  });
+
+  it("percent-decodes the segment", () => {
+    expect(urlBasename("https://host.example/a%20b/my%20log.mf4")).toBe(
+      "my log.mf4",
+    );
+  });
+
+  it("falls back to the host when there is no path", () => {
+    expect(urlBasename("https://host.example")).toBe("host.example");
+  });
+
+  it("returns the raw string for an unparseable input", () => {
+    expect(urlBasename("not a url")).toBe("not a url");
+  });
+});
+
+describe("classifyUrl", () => {
+  it("classifies an .mcap URL", () => {
+    expect(classifyUrl("https://host.example/run.mcap")).toEqual({
+      kind: "mcap",
+      name: "run.mcap",
+    });
+  });
+
+  it("classifies an .mf4 URL case-insensitively", () => {
+    expect(classifyUrl("https://host.example/SENSOR.MF4")).toEqual({
+      kind: "mf4",
+      name: "SENSOR.MF4",
+    });
+  });
+
+  it("trims surrounding whitespace", () => {
+    expect(classifyUrl("  https://host.example/run.mcap  ").kind).toBe("mcap");
+  });
+
+  it("rejects a non-http(s) scheme", () => {
+    expect(() => classifyUrl("ftp://host.example/run.mcap")).toThrow(
+      /http/i,
+    );
+  });
+
+  it("rejects an unsupported extension", () => {
+    expect(() => classifyUrl("https://host.example/clip.mp4")).toThrow(
+      /\.mcap or \.mf4/,
+    );
   });
 });

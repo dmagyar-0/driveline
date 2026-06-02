@@ -61,6 +61,7 @@ declare global {
         includePrev: boolean,
       ) => Promise<Mf4FetchResult>;
       openFiles: (files: DevFileDesc[]) => Promise<OpenResult>;
+      openUrl: (url: string) => Promise<OpenResult>;
       clearSession: () => Promise<void>;
       removeSource: (sourceId: string) => Promise<void>;
       videoLastBlitPtsNs: () => bigint | null;
@@ -341,6 +342,9 @@ export function App() {
           (d) => new File([d.bytes as BlobPart], d.name),
         );
         return await useSession.getState().openFiles(files);
+      },
+      openUrl: async (url) => {
+        return await useSession.getState().openUrl(url);
       },
       clearSession: async () => {
         await useSession.getState().clear();
