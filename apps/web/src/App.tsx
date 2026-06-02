@@ -11,6 +11,7 @@ import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { getReadinessSnapshot } from "./panels/videoReadiness";
+import { hasChannelDrag } from "./panels/channelDrag";
 import { isCursorGated, startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
@@ -566,7 +567,11 @@ export function App() {
   // tied to the App component.
   useEffect(() => startPlaybackLoop(useSession), []);
 
+  // A channel drag (drawer → plot panel) is handled by the target panel.
+  // Ignore it at the shell level so it never trips the file-drop overlay or
+  // gets mistaken for a session load — the shell only loads dropped *files*.
   const onDrop = async (e: React.DragEvent<HTMLElement>) => {
+    if (hasChannelDrag(e.dataTransfer)) return;
     e.preventDefault();
     setDragActive(false);
     const files = Array.from(e.dataTransfer?.files ?? []);
@@ -575,10 +580,12 @@ export function App() {
   };
 
   const onDragOver = (e: React.DragEvent<HTMLElement>) => {
+    if (hasChannelDrag(e.dataTransfer)) return;
     e.preventDefault();
     setDragActive(true);
   };
   const onDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    if (hasChannelDrag(e.dataTransfer)) return;
     e.preventDefault();
     setDragActive(false);
   };

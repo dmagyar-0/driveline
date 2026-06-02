@@ -39,6 +39,7 @@ import {
 } from "react";
 import { useSession, type Channel, type SourceMeta } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
+import { setChannelDragData } from "../../panels/channelDrag";
 import { panelKindOf } from "../../layout/panelId";
 import {
   buildChannelTree,
@@ -224,6 +225,21 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
     }
   };
 
+  // Drag a channel onto a plot panel to bind it there. Only scalar channels
+  // can land on a plot (the sole drop target today), so only scalar rows are
+  // `draggable`; this guard is belt-and-braces for anything that slips
+  // through. The drop side (PlotPanel) re-validates against the live store.
+  const onDragStartChannel = (
+    e: React.DragEvent<HTMLButtonElement>,
+    channel: Channel,
+  ) => {
+    if (channel.kind !== "scalar") {
+      e.preventDefault();
+      return;
+    }
+    setChannelDragData(e.dataTransfer, channel.id);
+  };
+
   const toggleCollapse = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -402,6 +418,8 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                     style={{ "--depth": depth } as CSSProperties}
                     aria-pressed={bound}
                     aria-disabled={disabled || undefined}
+                    draggable={channel.kind === "scalar"}
+                    onDragStart={(e) => onDragStartChannel(e, channel)}
                     title={
                       bound
                         ? "Already bound to this panel"
