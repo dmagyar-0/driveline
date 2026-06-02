@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta } from "../state/store";
+import { effectiveUnit } from "../state/units";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { colorFor, MAX_PLOT_SERIES } from "./palette";
 import styles from "./ValuePanel.module.css";
@@ -58,6 +59,7 @@ function findChannel(
 
 export function ValuePanel({ panelId }: ValuePanelProps) {
   const sources = useSession((s) => s.sources);
+  const unitOverrides = useSession((s) => s.unitOverrides);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
   const storedBindings = useSession((s) => s.valueBindings[panelId]);
@@ -192,8 +194,10 @@ export function ValuePanel({ panelId }: ValuePanelProps) {
                   <span className={styles.name} title={channel.name}>
                     {channel.name}
                   </span>
-                  {channel.unit && (
-                    <span className={styles.unit}>{channel.unit}</span>
+                  {effectiveUnit(channel, unitOverrides) && (
+                    <span className={styles.unit}>
+                      {effectiveUnit(channel, unitOverrides)}
+                    </span>
                   )}
                 </span>
                 <span

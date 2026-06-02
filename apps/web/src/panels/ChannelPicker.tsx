@@ -6,7 +6,9 @@
 // search. Both are post-MVP per docs/06-ui-and-panels.md:13-14.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Channel, SourceMeta } from "../state/store";
+import type { SourceMeta } from "../state/store";
+import { useSession } from "../state/store";
+import { channelLabel } from "../state/units";
 import { colorFor } from "./palette";
 import styles from "./ChannelPicker.module.css";
 
@@ -19,10 +21,6 @@ interface Props {
   onClose: () => void;
 }
 
-function labelFor(c: Channel): string {
-  return c.unit ? `${c.name} (${c.unit})` : c.name;
-}
-
 export function ChannelPicker({
   sources,
   selectedIds,
@@ -31,6 +29,7 @@ export function ChannelPicker({
   onToggle,
   onClose,
 }: Props) {
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
   const atCap = selectedIds.length >= maxSelected;
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -155,7 +154,7 @@ export function ChannelPicker({
                           aria-hidden
                         />
                         <span className={styles.channelName}>
-                          {labelFor(c)}
+                          {channelLabel(c, unitOverrides)}
                         </span>
                       </label>
                     </li>

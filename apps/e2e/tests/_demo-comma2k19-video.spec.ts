@@ -439,8 +439,10 @@ test.describe("comma2k19 dashcam + CAN", () => {
     ];
 
     // Plot 2 — steering wheel angle (MCAP, deg) and yaw-rate gyro
-    // (MF4, rad/s), one each per segment. uPlot drops a second y-axis
-    // for the differing units.
+    // (MF4, rad/s), one each per segment. The two units no longer
+    // auto-split onto separate axes; we assign the gyro series to a
+    // second y-axis explicitly below so the differing scales stay
+    // readable.
     const plot2Ids = [
       pick(/seg4_at240s\.mcap/, "/vehicle/steering_angle"),
       pick(/seg7_at420s\.mcap/, "/vehicle/steering_angle"),
@@ -449,14 +451,25 @@ test.describe("comma2k19 dashcam + CAN", () => {
       pick(/seg7_at420s\.mf4/, "IMU_Gyro_Z"),
       pick(/seg10_at600s\.mf4/, "IMU_Gyro_Z"),
     ];
+    // The gyro ids (last three) go on the right-hand axis (index 1).
+    const plot2Axis2Ids = plot2Ids.slice(3);
 
     await page.evaluate(
-      ({ a, b }: { a: string[]; b: string[] }) => {
+      ({
+        a,
+        b,
+        b2,
+      }: {
+        a: string[];
+        b: string[];
+        b2: string[];
+      }) => {
         const h = window.__drivelineDevHooks!;
         for (const id of a) h.addPlotChannelBinding("plot-1", id);
         for (const id of b) h.addPlotChannelBinding("plot-2", id);
+        for (const id of b2) h.setPlotChannelAxis("plot-2", id, 1);
       },
-      { a: plot1Ids, b: plot2Ids },
+      { a: plot1Ids, b: plot2Ids, b2: plot2Axis2Ids },
     );
 
     await waitForPlotSeries(page, "plot-1", 6);
