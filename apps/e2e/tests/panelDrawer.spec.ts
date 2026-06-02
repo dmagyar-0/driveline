@@ -214,6 +214,6 @@ test.describe("Panel drawer (Phase 5)", () => {
     await expect(
       page.getByTestId(`panel-plot-remove-${channelId}`),
     ).toHaveCount(0);
-    await expect(page.getByTestId("panel-plot-count")).toHaveText("0 / 8");
+    await expect(page.getByTestId("panel-plot-count")).toHaveText("0 / 16");
   });
 });

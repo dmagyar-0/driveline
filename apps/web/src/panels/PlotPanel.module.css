@@ -144,3 +144,50 @@
   color: var(--color-fg-6);
   font-size: 0.9rem;
 }
+
+/* P3 · floating hover tooltip. Positioned absolutely within `.plotArea`
+   via inline left/top (pointer-relative). Never intercepts the pointer so
+   it can't break the hover it's reporting. */
+.tooltip {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  max-width: 16rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  font-size: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.tooltipSwatch {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.tooltipLabel {
+  color: var(--color-fg-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.tooltipValue {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  color: var(--color-fg-1);
+  margin-left: auto;
+}

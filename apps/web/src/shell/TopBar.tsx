@@ -10,10 +10,11 @@
 // specs (smoke, sourcesDrawer, videoSeek, …) — it must read exactly
 // `workers ready` / `workers initialising`. Don't rename or retext it.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { SourceKind } from "../state/store";
 import { formatRelative } from "../timeline/formatTime";
+import { getShareUrl } from "../state/urlState";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import styles from "./TopBar.module.css";
 
@@ -34,6 +35,32 @@ export function TopBar({ ready }: TopBarProps) {
   const startNs = useSession((s) => s.globalRange?.startNs ?? null);
   const sources = useSession((s) => s.sources);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Copy a shareable deep-link to the clipboard. Feature-detects
+  // `navigator.clipboard` so this no-ops gracefully in environments that
+  // don't expose it (insecure origins, older browsers, the test runner).
+  const onCopyLink = async () => {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(getShareUrl());
+      setCopied(true);
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+      copyTimer.current = setTimeout(() => setCopied(false), 1600);
+    } catch {
+      // Clipboard write can reject (permissions / no user gesture); leave
+      // the button in its idle state rather than surfacing an error.
+    }
+  };
+
+  // Clear the pending "Copied!" reset timer if the bar unmounts mid-flash.
+  useEffect(
+    () => () => {
+      if (copyTimer.current !== null) clearTimeout(copyTimer.current);
+    },
+    [],
+  );
 
   const sourceCount = sources.length;
   const hasSession = sourceCount > 0;
@@ -99,6 +126,19 @@ export function TopBar({ ready }: TopBarProps) {
 
       <button
         type="button"
+        className={styles.shareBtn}
+        onClick={onCopyLink}
+        aria-label={copied ? "Link copied to clipboard" : "Copy shareable link"}
+        title="Copy shareable link"
+        data-testid="copy-share-link"
+        data-copied={copied ? "true" : "false"}
+      >
+        <LinkIcon />
+        <span className={styles.shareLabel}>{copied ? "Copied!" : "Copy link"}</span>
+      </button>
+
+      <button
+        type="button"
         className={styles.iconBtn}
         onClick={() => setShowShortcuts(true)}
         aria-label="Keyboard shortcuts"
@@ -112,6 +152,25 @@ export function TopBar({ ready }: TopBarProps) {
         <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />
       )}
     </header>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
   );
 }
 

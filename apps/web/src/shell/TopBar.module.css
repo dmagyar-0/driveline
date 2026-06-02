@@ -117,6 +117,51 @@
   color: var(--color-fg-4);
 }
 
+/* ---- share / copy-link button ---- */
+.shareBtn {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 0 var(--sp-4);
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  color: var(--color-fg-4);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  flex: 0 0 auto;
+  font-size: var(--fs-12);
+  transition:
+    color var(--motion-base),
+    background var(--motion-base),
+    border-color var(--motion-base);
+}
+
+.shareBtn:hover {
+  color: var(--color-fg-2);
+  background: var(--color-bg-4);
+}
+
+.shareBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.shareBtn[data-copied="true"] {
+  color: var(--plot-3);
+  border-color: var(--plot-3);
+}
+
+.shareLabel {
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shareBtn {
+    transition: none;
+  }
+}
+
 /* ---- topbar icon button ---- */
 .iconBtn {
   width: 30px;

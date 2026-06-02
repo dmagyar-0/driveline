@@ -120,9 +120,30 @@ export interface OpenResult {
 }
 
 /**
- * Per-plot-panel display settings. Currently a single field; the shape
- * is an object so future settings (axis pinning, log/linear, smoothing)
- * can land without bumping the persistence schema.
+ * Per-series transform (P7 · derived channels). Imported from the panel
+ * layer so the store can persist the choice; the maths lives in
+ * `panels/transforms.ts`.
+ */
+export type PlotTransform =
+  | { kind: "none" }
+  | { kind: "abs" }
+  | { kind: "derivative" }
+  | { kind: "scale"; mul: number; add: number };
+
+/**
+ * How a plot panel groups its series onto y-axes (P1).
+ * - `"shared"` — every series shares one auto-ranged `"y"` scale (the
+ *   pre-P1 behaviour).
+ * - `"byUnit"` — series are grouped by `channel.unit`; each distinct unit
+ *   gets its own auto-ranged scale + axis, so a 0–1 signal and a 0–10000
+ *   signal stay individually readable. Default.
+ */
+export type PlotYAxisMode = "shared" | "byUnit";
+
+/**
+ * Per-plot-panel display settings. The shape is an object so future
+ * settings (axis pinning, log/linear, smoothing) can land without
+ * bumping the persistence schema.
  *
  * `gapThresholdSec === null` preserves the spanGaps:true behavior PR
  * #83 shipped — alignment artifacts span and any real channel-loss
@@ -130,13 +151,23 @@ export interface OpenResult {
  * the panel to step-hold mode with explicit gaps for any inter-sample
  * dx exceeding the threshold; see `mergeSeries` for the rendering
  * contract.
+ *
+ * `yAxisMode` and `transforms` are OPTIONAL (additive — payloads written
+ * before P1/P7 omit them). Readers default via
+ * `DEFAULT_PLOT_PANEL_SETTINGS`; the persistence validators tolerate the
+ * extra keys, so they round-trip without a schema bump.
  */
 export interface PlotPanelSettings {
   gapThresholdSec: number | null;
+  yAxisMode?: PlotYAxisMode;
+  // Keyed by channel id. Absent / `{ kind: "none" }` means pass-through.
+  transforms?: Record<string, PlotTransform>;
 }
 
 export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
   gapThresholdSec: null,
+  yAxisMode: "byUnit",
+  transforms: {},
 };
 
 export interface SessionState {
@@ -163,6 +194,13 @@ export interface SessionState {
   // seek target — subscribe to this rather than to `cursorNs` so a
   // 60 Hz playback tick does not look like a seek.
   seekEpoch: number;
+  // P3 · shared cross-panel hover crosshair. Distinct from `cursorNs`
+  // (which drives playback + video seeks): hovering a plot publishes the
+  // pointed-at timestamp here so EVERY plot panel can draw a secondary
+  // dashed crosshair at the same instant (the Grafana shared-crosshair
+  // pattern) without moving the playback cursor or issuing a seek. `null`
+  // when no plot is being hovered. Not persisted — purely ephemeral UI.
+  hoverNs: bigint | null;
   // Layout + bindings slice (T6.2). `layoutJson` is the opaque FlexLayout
   // model (`Model.toJson()` output); the binding maps are keyed by the
   // FlexLayout tab id so a closed-and-reopened panel can reclaim its
@@ -306,6 +344,29 @@ export interface SessionState {
    * reload preserves the choice.
    */
   setPlotGapThreshold(panelId: string, sec: number | null): void;
+  /**
+   * Set a plot panel's y-axis grouping mode (P1). `"shared"` puts every
+   * series on one `"y"` scale; `"byUnit"` groups by `channel.unit`.
+   * Persists through the layout adapter like the other plot settings.
+   */
+  setPlotYAxisMode(panelId: string, mode: PlotYAxisMode): void;
+  /**
+   * Set (or clear) a per-series transform (P7 · derived channels). A
+   * `{ kind: "none" }` transform is stored as a deletion so a default
+   * panel keeps an empty `transforms` map. Persists through the layout
+   * adapter.
+   */
+  setPlotChannelTransform(
+    panelId: string,
+    channelId: string,
+    transform: PlotTransform,
+  ): void;
+  /**
+   * P3 · publish the shared hover timestamp (or `null` to clear). Called
+   * from a plot's rAF-coalesced hover handler — not the cursor hot path,
+   * and never triggers a seek.
+   */
+  setHoverNs(ns: bigint | null): void;
   /** Bind a 3D scene panel to a single channel; `null` clears. */
   setSceneBinding(panelId: string, channelId: string | null): void;
   /** Bind a map panel to lat/lon channels; pass `null` to clear. */
@@ -548,6 +609,7 @@ export const useSession = create<SessionState>((set, get) => {
     speed: 1,
     timeMode: "relative",
     seekEpoch: 0,
+    hoverNs: null,
     layoutJson: hydrated?.layoutJson ?? null,
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
@@ -706,19 +768,74 @@ export const useSession = create<SessionState>((set, get) => {
 
     setPlotGapThreshold(panelId, sec) {
       const prev = get().plotPanelSettings;
-      const existing = prev[panelId] ?? DEFAULT_PLOT_PANEL_SETTINGS;
+      // Spread only the panel's *actual* prior settings (not the full
+      // defaults) so an untouched panel keeps a minimal `{ gapThresholdSec }`
+      // payload — yAxisMode / transforms stay absent until the user sets
+      // them, and readers default via `?? "byUnit"` / `?? {}`.
+      const existing = prev[panelId];
       // Normalise: any non-finite or non-positive value collapses to
       // null (the "off" state), so the persistence layer doesn't have
       // to defend against -Infinity / NaN coming from a numeric input.
       const normalised: number | null =
         sec !== null && Number.isFinite(sec) && sec > 0 ? sec : null;
-      if (existing.gapThresholdSec === normalised) return;
+      if ((existing?.gapThresholdSec ?? null) === normalised) return;
       set({
         plotPanelSettings: {
           ...prev,
           [panelId]: { ...existing, gapThresholdSec: normalised },
         },
       });
+    },
+
+    setPlotYAxisMode(panelId, mode) {
+      const prev = get().plotPanelSettings;
+      const existing = prev[panelId];
+      const current =
+        existing?.yAxisMode ?? DEFAULT_PLOT_PANEL_SETTINGS.yAxisMode;
+      if (current === mode) return;
+      set({
+        plotPanelSettings: {
+          ...prev,
+          [panelId]: {
+            ...existing,
+            gapThresholdSec: existing?.gapThresholdSec ?? null,
+            yAxisMode: mode,
+          },
+        },
+      });
+    },
+
+    setPlotChannelTransform(panelId, channelId, transform) {
+      const prev = get().plotPanelSettings;
+      const existing = prev[panelId];
+      const nextTransforms: Record<string, PlotTransform> = {
+        ...(existing?.transforms ?? {}),
+      };
+      // Store "none" as a deletion so a default panel keeps an empty map
+      // (and `transformKey` produces the same seriesKey it did pre-P7).
+      if (transform.kind === "none") {
+        if (!(channelId in nextTransforms)) return;
+        delete nextTransforms[channelId];
+      } else {
+        nextTransforms[channelId] = transform;
+      }
+      set({
+        plotPanelSettings: {
+          ...prev,
+          [panelId]: {
+            ...existing,
+            gapThresholdSec: existing?.gapThresholdSec ?? null,
+            transforms: nextTransforms,
+          },
+        },
+      });
+    },
+
+    setHoverNs(ns) {
+      // Cheap identity short-circuit so a hover that resolves to the same
+      // ns (e.g. two rAF ticks inside one pixel) doesn't churn subscribers.
+      if (get().hoverNs === ns) return;
+      set({ hoverNs: ns });
     },
 
     setSceneBinding(panelId, channelId) {
@@ -1186,6 +1303,7 @@ export const useSession = create<SessionState>((set, get) => {
           playing: false,
           speed: 1,
           seekEpoch: 0,
+          hoverNs: null,
           videoBindings: {},
           plotBindings: {},
           plotPanelSettings: {},

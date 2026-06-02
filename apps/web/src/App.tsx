@@ -19,6 +19,7 @@ import { attachLayoutPersistence } from "./layout/persist";
 import { attachUiPersistence } from "./state/persist/ui";
 import { attachNamedLayoutsPersistence } from "./state/persist/namedLayouts";
 import { attachBookmarksPersistence } from "./state/persist/bookmarks";
+import { attachUrlState } from "./state/urlState";
 import { installPerfHooks } from "./perf";
 import { Shell } from "./shell/Shell";
 
@@ -269,6 +270,11 @@ export function App() {
     // Phase 8 — persist `bookmarks` to `driveline.bookmarks.v1`.
     // Bookmarks outlive a session (same posture as `namedLayouts`).
     const detachBookmarksPersistence = attachBookmarksPersistence(useSession);
+    // Shareable deep-link URL state. Attached AFTER the localStorage
+    // persistence so a `#v=...` fragment wins over hydrated storage: it
+    // applies the shared view on mount, then keeps the URL fragment current
+    // (debounced) as the session evolves.
+    const detachUrlState = attachUrlState();
 
     window.__drivelineDevHooks = {
       ping: async () => await dc.ping(),
@@ -527,6 +533,7 @@ export function App() {
       detachUiPersistence();
       detachNamedLayoutsPersistence();
       detachBookmarksPersistence();
+      detachUrlState();
       delete window.__drivelineDevHooks;
       useSession.getState().setWorker(null);
       dataCore.current = null;
