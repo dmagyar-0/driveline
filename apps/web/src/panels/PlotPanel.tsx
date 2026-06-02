@@ -25,6 +25,7 @@ import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
 import { cursorStrokeColor, cursorXPx, nsFromXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
+import { getChannelDragData, hasChannelDrag } from "./channelDrag";
 import { applyTransform, transformKey, type Transform } from "./transforms";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
@@ -254,6 +255,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
+  // True while a channel is dragged over this plot's area — drives the
+  // drop-target highlight. Distinct from the scrub pointer path: native
+  // drag events never fire pointermove, so the cursor hot path is untouched.
+  const [dragOver, setDragOver] = useState(false);
 
   // Bumped after each successful fetch so the chips' value-at-cursor
   // readout recomputes when fresh data lands (the binary search reads a
@@ -1004,6 +1009,41 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     removePlotChannel(panelId, id);
   };
 
+  // --- Drag-and-drop: accept a channel dragged from the Channels drawer. ---
+  // `addPlotChannel` already dedupes and enforces MAX_PLOT_SERIES, so the
+  // drop handler only has to gate on channel kind (plots render scalars).
+  const onChannelDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasChannelDrag(e.dataTransfer)) return;
+    // At capacity there's nowhere to put it: refuse the drop (no
+    // preventDefault ⇒ the browser won't fire `drop`) and show "no-drop".
+    if (atCap) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    // preventDefault marks this element as a valid drop target.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (!dragOver) setDragOver(true);
+  };
+
+  const onChannelDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    // dragleave also fires when crossing into child nodes (plot mount,
+    // overlay canvas, tooltip); only clear when the pointer truly exits.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setDragOver(false);
+  };
+
+  const onChannelDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasChannelDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    setDragOver(false);
+    const id = getChannelDragData(e.dataTransfer);
+    if (id === null) return;
+    const channel = channels.get(id);
+    if (!channel || channel.kind !== "scalar") return;
+    addPlotChannel(panelId, id);
+  };
+
   return (
     <section className={styles.panel} data-testid="plot-panel">
       <div className={styles.controls}>
@@ -1065,7 +1105,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         ref={containerRef}
         className={`${styles.plotArea} ${
           globalRange ? styles.scrubbable : ""
-        }`}
+        } ${dragOver ? styles.dragOver : ""}`}
         role="slider"
         tabIndex={globalRange ? 0 : -1}
         aria-label="Scrub cursor on plot"
@@ -1078,9 +1118,21 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         onPointerUp={onScrubPointerUp}
         onPointerCancel={onScrubPointerUp}
         onPointerLeave={clearHover}
+        onDragOver={onChannelDragOver}
+        onDragLeave={onChannelDragLeave}
+        onDrop={onChannelDrop}
       >
         <div ref={plotMountRef} className={styles.plotMount} />
         <canvas ref={overlayRef} className={styles.overlay} />
+        {dragOver && (
+          <div
+            className={styles.dropHint}
+            data-testid="plot-drop-hint"
+            aria-hidden
+          >
+            Release to add channel
+          </div>
+        )}
         {tooltip !== null && boundChannels.length > 0 && (
           <div
             className={styles.tooltip}

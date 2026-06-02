@@ -62,12 +62,13 @@ vi.hoisted(() => {
   };
 });
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 
 // React 19 RTL requires this flag so `act(...)` wrappers don't log
 // "environment not configured" noise.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 import { PlotPanel, type PlotSyncSnapshot } from "./PlotPanel";
+import { CHANNEL_DND_MIME } from "./channelDrag";
 import { useSession } from "../state/store";
 import type { DataCoreApi, Mf4Summary, McapSummary, Mp4SidecarSummary } from "../workerClient";
 
@@ -178,6 +179,19 @@ function seedSession(): void {
   });
 }
 
+// A DataTransfer carrying a channel id, as the Channels drawer would stamp
+// it. `getData` honours the protected-mode contract (it returns the id),
+// which is what the `drop` handler reads; `types` is what `dragover` reads.
+function channelDataTransfer(channelId: string): DataTransfer {
+  return {
+    types: [CHANNEL_DND_MIME],
+    dropEffect: "",
+    effectAllowed: "",
+    getData: (t: string) => (t === CHANNEL_DND_MIME ? channelId : ""),
+    setData: () => {},
+  } as unknown as DataTransfer;
+}
+
 function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now();
@@ -264,7 +278,70 @@ describe("PlotPanel", () => {
     cleanup();
     if (window.__drivelinePlotPanels) {
       delete window.__drivelinePlotPanels["test-panel"];
+      delete window.__drivelinePlotPanels["drop-panel"];
     }
+  });
+
+  it("binds a channel dragged from the drawer onto the plot", () => {
+    // Fresh panel id with no existing bindings (seedSession only binds
+    // "test-panel"), so the drop is the only thing that can populate it.
+    render(<PlotPanel panelId="drop-panel" />);
+    const area = screen.getByRole("slider");
+
+    const dataTransfer = channelDataTransfer("chan-a");
+    // dragover marks the panel as a valid target and shows the hint…
+    fireEvent.dragOver(area, { dataTransfer });
+    expect(screen.getByTestId("plot-drop-hint")).toBeTruthy();
+    // …and drop binds the channel and clears the hint.
+    fireEvent.drop(area, { dataTransfer });
+
+    expect(useSession.getState().plotBindings["drop-panel"]).toEqual([
+      "chan-a",
+    ]);
+    expect(screen.queryByTestId("plot-drop-hint")).toBeNull();
+  });
+
+  it("ignores a dropped non-scalar (e.g. video) channel", () => {
+    useSession.setState((st) => ({
+      sources: [
+        ...st.sources,
+        {
+          id: "src-v",
+          kind: "mp4+sidecar",
+          name: "cam.mp4",
+          handle: 9,
+          timeRange: { startNs: 1_000_000_000n, endNs: 1_020_000_000n },
+          channels: [
+            {
+              id: "vid",
+              nativeId: "vid",
+              sourceId: "src-v",
+              name: "camera",
+              kind: "video",
+              dtype: null,
+              unit: null,
+              sampleCount: 0,
+              timeRange: { startNs: 1_000_000_000n, endNs: 1_020_000_000n },
+            },
+          ],
+        },
+      ],
+    }));
+    render(<PlotPanel panelId="drop-panel" />);
+    const area = screen.getByRole("slider");
+
+    fireEvent.drop(area, { dataTransfer: channelDataTransfer("vid") });
+
+    expect(useSession.getState().plotBindings["drop-panel"]).toBeUndefined();
+  });
+
+  it("ignores a drop whose channel id is unknown", () => {
+    render(<PlotPanel panelId="drop-panel" />);
+    const area = screen.getByRole("slider");
+
+    fireEvent.drop(area, { dataTransfer: channelDataTransfer("nope") });
+
+    expect(useSession.getState().plotBindings["drop-panel"]).toBeUndefined();
   });
 
   it("publishes both bound series to __drivelinePlotPanels and computes min/max", async () => {

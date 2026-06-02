@@ -35,6 +35,7 @@
   /* ---------- Color: accent (functional) ---------- */
   --color-accent-orange: #f97316; /* selected tab, splitter drag, brand */
   --color-accent-orange-hover: #fb8c46; /* primary CTA hover (brand) */
+  --color-accent-orange-tint: rgba(249, 115, 22, 0.12); /* drop-target wash */
   --color-accent-blue:   #2a6df4; /* focus ring, scrubber fill, selection */
   --color-accent-blue-tint: rgba(42, 109, 244, 0.06);
   --color-accent-green-glow: rgba(16, 185, 129, 0.14); /* worker-ok dot halo */
