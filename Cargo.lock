@@ -524,8 +524,8 @@ dependencies = [
 
 [[package]]
 name = "mf4-rs"
-version = "1.7.8"
-source = "git+https://github.com/dmagyar-0/mf4-rs?rev=4dd1b138aea2cbd48162344d3ca463410aa88727#4dd1b138aea2cbd48162344d3ca463410aa88727"
+version = "2.0.0"
+source = "git+https://github.com/dmagyar-0/mf4-rs?rev=ddbad6f1067f6b172b31c80fa03b091329df0c76#ddbad6f1067f6b172b31c80fa03b091329df0c76"
 dependencies = [
  "byteorder",
  "memmap2",

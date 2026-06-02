@@ -66,6 +66,17 @@ impl ByteRangeReader for BoxedRangeReader {
     }
 }
 
+/// Lets us hand a borrowed `BoxedRangeReader` to `MdfIndex::open`, which takes
+/// the reader *by value*. `mf4-rs` v2's only public value-read path is the
+/// owned-reader `MdfReader`, but we keep a single long-lived `BoxedRangeReader`
+/// in a `RefCell`; reading by `&mut` here avoids moving it in and out per call.
+impl ByteRangeReader for &mut BoxedRangeReader {
+    type Error = MdfError;
+    fn read_range(&mut self, offset: u64, length: u64) -> Result<Vec<u8>, MdfError> {
+        (**self).read_range(offset, length)
+    }
+}
+
 pub struct Mf4Reader {
     idx: MdfIndex,
     meta: SourceMeta,
@@ -133,10 +144,37 @@ impl Mf4Reader {
         let idx = MdfIndex::from_range_reader(&mut reader, file_size)?;
         let start_time_ns = idx.start_time_ns.unwrap_or(0);
 
+        // `mf4-rs` v2 dropped index-based value reads from its public surface;
+        // the only public path is name-based (`MdfReader::values_f64` /
+        // `signal`), which resolves a name to the *first* matching
+        // `(group, channel)` across the file. To keep our positional `{g}/{c}`
+        // ChannelIds addressing the right samples we expose only non-master
+        // channels whose name is globally unique — anything unnamed or
+        // duplicated can't be addressed unambiguously through the new API. Real
+        // Driveline MF4 files (comma2k19, the signal generators) name every
+        // value channel uniquely, so nothing is dropped in practice; only the
+        // per-group master time channels share a name, and those are read
+        // implicitly via `signal` (which resolves the master by index).
+        let mut name_counts: HashMap<&str, usize> = HashMap::new();
+        for group in &idx.channel_groups {
+            for ch in &group.channels {
+                if let Some(name) = ch.name.as_deref() {
+                    *name_counts.entry(name).or_insert(0) += 1;
+                }
+            }
+        }
+        let is_unique = |name: &str| name_counts.get(name).copied() == Some(1);
+
         let mut channels = Vec::new();
         let mut channel_map = HashMap::new();
         let mut cg_time_ns: Vec<Vec<i64>> = Vec::with_capacity(idx.channel_groups.len());
         let mut range: Option<(i64, i64)> = None;
+
+        // Bind the index to the byte source so we can decode per-group
+        // timelines. `signal(name)` returns a channel's values paired with its
+        // group's master axis (resolved internally by index), so we recover the
+        // timeline without addressing the master channel by its non-unique name.
+        let mut mdf = idx.open(&mut reader);
 
         for (g, group) in idx.channel_groups.iter().enumerate() {
             let Some(master_idx) = Self::master_index(group) else {
@@ -147,10 +185,25 @@ impl Mf4Reader {
                 continue;
             };
 
-            // Decode the master timeline once, via ranged reads. Master and
-            // value channels share the group's data blocks, so this streams
-            // each block, keeps only the timestamps, and discards the rest.
-            let t_rel = idx.read_channel_values_as_f64(g, master_idx, &mut reader)?;
+            // A uniquely-named, non-master channel we can both expose and use
+            // as this group's timeline probe. Without one the group has no
+            // addressable data, so skip it (empty timeline keeps indices
+            // aligned with `idx.channel_groups`).
+            let probe = group
+                .channels
+                .iter()
+                .enumerate()
+                .find(|&(c, ch)| c != master_idx && ch.name.as_deref().is_some_and(is_unique));
+            let Some((_, probe_ch)) = probe else {
+                cg_time_ns.push(Vec::new());
+                continue;
+            };
+            let probe_name = probe_ch.name.as_deref().expect("probe channel is named");
+
+            // Decode the master timeline once, via the probe channel's signal.
+            // Master and value channels share the group's data blocks, so this
+            // streams each block and keeps only the timestamps.
+            let t_rel = mdf.signal(probe_name)?.timestamps;
             let abs_ns = Self::translate_abs_ns(start_time_ns, &t_rel);
 
             if let (Some(&first), Some(&last)) = (abs_ns.first(), abs_ns.last()) {
@@ -168,8 +221,12 @@ impl Mf4Reader {
                 if c == master_idx {
                     continue;
                 }
+                // Only addressable (uniquely-named) channels are exposed; the
+                // rest can't be read back through the name-based API.
+                let Some(name) = ch.name.as_deref().filter(|n| is_unique(n)) else {
+                    continue;
+                };
                 let id = Self::channel_id(g, c);
-                let name = ch.name.clone().unwrap_or_else(|| format!("ch_{g}_{c}"));
                 let time_range = match (abs_ns.first(), abs_ns.last()) {
                     (Some(&a), Some(&b)) => TimeRange {
                         start_ns: a,
@@ -180,7 +237,7 @@ impl Mf4Reader {
                 channels.push(Channel {
                     id: id.clone(),
                     source_id: String::new(),
-                    name,
+                    name: name.to_string(),
                     kind: ChannelKind::Scalar,
                     dtype: Some(DType::F64),
                     unit: ch.unit.clone(),
@@ -191,6 +248,7 @@ impl Mf4Reader {
             }
             cg_time_ns.push(abs_ns);
         }
+        drop(mdf);
 
         let time_range = match range {
             Some((lo, hi)) => TimeRange {
@@ -242,10 +300,18 @@ impl Mf4Reader {
         if let Some(cached) = self.value_cache.borrow().get(&(g, c)) {
             return Ok(cached.clone());
         }
-        let values: Arc<[f64]> = self
-            .idx
-            .read_channel_values_as_f64(g, c, &mut *self.reader.borrow_mut())?
-            .into();
+        // Only uniquely-named channels are ever inserted into `channel_map`
+        // (see `open_ranged`), so the name both exists and resolves back to
+        // `(g, c)` through the name-based reader.
+        let name = self.idx.channel_groups[g].channels[c]
+            .name
+            .as_deref()
+            .ok_or_else(|| crate::Error::ChannelNotFound(Self::channel_id(g, c)))?;
+        let values: Arc<[f64]> = {
+            let mut guard = self.reader.borrow_mut();
+            let mut mdf = self.idx.open(&mut *guard);
+            mdf.values_f64(name)?.into()
+        };
         self.value_cache.borrow_mut().insert((g, c), values.clone());
         Ok(values)
     }
@@ -629,5 +695,88 @@ mod tests {
         let start = r.idx.start_time_ns.unwrap_or(0) as i64;
         assert_eq!(r.meta().time_range.start_ns, start);
         assert_eq!(r.meta().time_range.end_ns, start + 49_000_000 + 1);
+    }
+
+    #[test]
+    fn reads_correct_group_when_masters_share_a_name() {
+        // Two groups whose master channels are *both* named "Time" (the common
+        // case for per-CG time bases). `mf4-rs` v2 reads values by name, so
+        // this guards that each value channel still resolves to *its own*
+        // group's samples and timeline rather than the first "Time" match.
+        let (mut w, cursor) = new_writer();
+        w.init_mdf_file().unwrap();
+
+        let cg1 = w.add_channel_group(None, |_| {}).unwrap();
+        let t1 = w
+            .add_channel(&cg1, None, |ch| {
+                ch.data_type = Mf4DataType::FloatLE;
+                ch.name = Some("Time".into());
+                ch.bit_count = 64;
+            })
+            .unwrap();
+        w.set_time_channel(&t1).unwrap();
+        w.add_channel(&cg1, Some(&t1), |ch| {
+            ch.data_type = Mf4DataType::FloatLE;
+            ch.name = Some("speed".into());
+            ch.bit_count = 64;
+        })
+        .unwrap();
+
+        let cg2 = w.add_channel_group(None, |_| {}).unwrap();
+        let t2 = w
+            .add_channel(&cg2, None, |ch| {
+                ch.data_type = Mf4DataType::FloatLE;
+                ch.name = Some("Time".into());
+                ch.bit_count = 64;
+            })
+            .unwrap();
+        w.set_time_channel(&t2).unwrap();
+        w.add_channel(&cg2, Some(&t2), |ch| {
+            ch.data_type = Mf4DataType::FloatLE;
+            ch.name = Some("rpm".into());
+            ch.bit_count = 64;
+        })
+        .unwrap();
+
+        // Distinct lengths and values so a wrong-group read can't accidentally
+        // look correct.
+        w.start_data_block_for_cg(&cg1, 0).unwrap();
+        w.write_columns_f64(&cg1, &[&[0.0, 0.01, 0.02], &[10.0, 11.0, 12.0]])
+            .unwrap();
+        w.finish_data_block(&cg1).unwrap();
+
+        w.start_data_block_for_cg(&cg2, 0).unwrap();
+        w.write_columns_f64(&cg2, &[&[0.0, 0.001], &[100.0, 200.0]])
+            .unwrap();
+        w.finish_data_block(&cg2).unwrap();
+        w.finalize().unwrap();
+        let bytes = bytes_of(cursor);
+
+        let r = Mf4Reader::open_slice(&bytes).unwrap();
+        let by_name = |name: &str| {
+            r.meta()
+                .channels
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("missing channel {name}"))
+                .id
+                .clone()
+        };
+
+        let speed_vals = |id| {
+            let ipc = r.fetch_range(id, r.meta().time_range, FetchOpts::default()).unwrap();
+            let batch = parse_ipc(&ipc);
+            let col = batch
+                .column(1)
+                .as_any()
+                .downcast_ref::<Float64Array>()
+                .unwrap();
+            (0..col.len()).map(|i| col.value(i)).collect::<Vec<_>>()
+        };
+
+        let speed_id = by_name("speed");
+        let rpm_id = by_name("rpm");
+        assert_eq!(speed_vals(&speed_id), vec![10.0, 11.0, 12.0]);
+        assert_eq!(speed_vals(&rpm_id), vec![100.0, 200.0]);
     }
 }
