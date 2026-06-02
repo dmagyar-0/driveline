@@ -76,7 +76,7 @@
 
 .groupHeader {
   display: grid;
-  grid-template-columns: 12px 1fr auto;
+  grid-template-columns: 16px 1fr auto;
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
@@ -105,10 +105,31 @@
   outline-offset: -2px;
 }
 
+/* Disclosure chevron (SVG, `currentColor` stroke). Sits in the 16px first
+ * track of `.groupHeader` / `.branch`, centred, pointing right while
+ * collapsed. The parent button's `aria-expanded` drives the rotation, so the
+ * markup is a single static glyph and orientation has one source of truth.
+ * `--color-fg-4` lifts it well clear of the old muted `--color-fg-5`; row
+ * hover/focus brightens it to full body contrast. */
 .chevron {
-  color: var(--color-fg-5);
-  font-size: var(--fs-11);
-  line-height: 1;
+  width: 14px;
+  height: 14px;
+  justify-self: center;
+  color: var(--color-fg-4);
+  transform: rotate(0deg);
+  transition: transform var(--motion-base);
+}
+
+.groupHeader[aria-expanded="true"] .chevron,
+.branch[aria-expanded="true"] .chevron {
+  transform: rotate(90deg);
+}
+
+.groupHeader:hover .chevron,
+.groupHeader:focus-visible .chevron,
+.branch:hover .chevron,
+.branch:focus-visible .chevron {
+  color: var(--color-fg-2);
 }
 
 .groupName {
@@ -144,7 +165,7 @@
  * row chrome but with a muted label colour to keep leaves prominent. */
 .branch {
   composes: rowBase from "./_row.module.css";
-  grid-template-columns: 12px 1fr auto;
+  grid-template-columns: 16px 1fr auto;
   gap: var(--sp-3);
   height: 100%;
   box-sizing: border-box;
@@ -205,7 +226,8 @@
 
 @media (prefers-reduced-motion: reduce) {
   .groupHeader,
-  .search {
+  .search,
+  .chevron {
     transition: none;
   }
 }
