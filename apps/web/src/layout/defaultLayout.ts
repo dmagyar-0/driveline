@@ -28,7 +28,10 @@ export type PanelComponent =
 
 export const defaultLayoutModel: IJsonModel = {
   global: {
-    tabEnableClose: true,
+    // Tabs close via the custom ✕ in Workspace's `onRenderTab`; FlexLayout's
+    // own trailing close would be a duplicate, so keep it off. (Enforced for
+    // every loaded layout in `buildModel`, not just this default.)
+    tabEnableClose: false,
     tabEnableRename: false,
     splitterSize: 4,
     borderEnableAutoHide: true,

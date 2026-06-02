@@ -80,8 +80,17 @@ function newPanelId(prefix: string): string {
 
 function buildModel(json: unknown | null): Model {
   const source = (json as IJsonModel | null) ?? defaultLayoutModel;
+  // Our tab chrome (`onRenderTab`) draws a single custom close button, so
+  // FlexLayout's own trailing ✕ must stay off — otherwise every tab shows
+  // two close buttons. Force it off for *whatever* layout we load (the
+  // default, a layout persisted from before this change, or one injected by
+  // a dev hook / e2e spec) instead of trusting each source's `global`.
+  const normalized: IJsonModel = {
+    ...source,
+    global: { ...source.global, tabEnableClose: false },
+  };
   try {
-    return Model.fromJson(source);
+    return Model.fromJson(normalized);
   } catch {
     // Malformed stored layout — fall back to the default so the app still
     // boots. Persistence will rewrite on the next mutation.
@@ -243,12 +252,14 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
   }, [setLayoutJson]);
 
   // Phase 7 · Custom tab chrome. Replace FlexLayout's stock tab content
-  // with grip + name + kind badge + four-icon cluster (settings,
-  // collapse [disabled], maximize, close). The cluster is **always**
-  // rendered (no hover/selection predicate) per the wireframe and the
-  // frontend skill's "thing disappears when status changes" trap.
-  // Settings click flips the rail to the Panel drawer for the clicked
-  // tab; maximize/close dispatch stock FlexLayout actions.
+  // with grip + name + kind badge + a three-icon cluster (settings,
+  // maximize, close). The cluster is **always** rendered (no hover /
+  // selection predicate) per the wireframe and the frontend skill's
+  // "thing disappears when status changes" trap. Settings click flips the
+  // rail to the Panel drawer for the clicked tab; maximize/close dispatch
+  // stock FlexLayout actions. FlexLayout's own trailing close button is
+  // suppressed in `buildModel` (tabEnableClose:false) so this ✕ is the
+  // only one on the tab.
   const onRenderTab = useCallback(
     (node: TabNode, renderValues: ITabRenderValues) => {
       const panelId = node.getId();
@@ -289,19 +300,6 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
             </button>
             <button
               type="button"
-              className={`${styles.tabActionBtn} ${styles.tabActionDisabled}`}
-              aria-label="Collapse panel — coming soon"
-              aria-disabled="true"
-              tabIndex={-1}
-              title="Collapse — coming in a later phase"
-              data-testid="tab-collapse"
-              onPointerDown={stopPointer}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <CollapseIcon />
-            </button>
-            <button
-              type="button"
               className={styles.tabActionBtn}
               aria-label="Maximize panel"
               data-testid="tab-maximize"
@@ -316,7 +314,7 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
             </button>
             <button
               type="button"
-              className={styles.tabActionBtn}
+              className={`${styles.tabActionBtn} ${styles.tabActionClose}`}
               aria-label="Close panel"
               data-testid="tab-close"
               onPointerDown={stopPointer}
@@ -422,23 +420,17 @@ function GripIcon() {
 }
 
 function SettingsIcon() {
+  // Sliders / "adjustments". A multi-tooth gear collapses into a fuzzy
+  // asterisk at this 12px size; two sliders with knobs stay legible and
+  // still read as "configure".
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none"
       stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
       strokeLinejoin="round" aria-hidden="true">
-      <circle cx="8" cy="8" r="2" />
-      <path d="M8 1.5v2M8 12.5v2M14.5 8h-2M3.5 8h-2M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4M12.6 12.6l-1.4-1.4M4.8 4.8L3.4 3.4" />
-    </svg>
-  );
-}
-
-function CollapseIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 16 16" fill="none"
-      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"
-      strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 6l5-3 5 3" />
-      <path d="M3 13h10" />
+      <path d="M2.5 5.5H8M12 5.5h1.5" />
+      <circle cx="10" cy="5.5" r="1.7" />
+      <path d="M2.5 10.5H4M8 10.5h5.5" />
+      <circle cx="6" cy="10.5" r="1.7" />
     </svg>
   );
 }
