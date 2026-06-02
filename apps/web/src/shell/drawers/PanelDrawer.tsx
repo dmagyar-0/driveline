@@ -24,9 +24,16 @@
 // owns it).
 
 import { useEffect, useRef, useState } from "react";
-import { useSession, type Channel, type SourceMeta } from "../../state/store";
+import {
+  useSession,
+  type Channel,
+  type PlotTransform,
+  type PlotYAxisMode,
+  type SourceMeta,
+} from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { ChannelPicker } from "../../panels/ChannelPicker";
+import type { PlotSeriesStats, PlotSyncSnapshot } from "../../panels/PlotPanel";
 import {
   kindLabel,
   panelKindOf,
@@ -174,26 +181,29 @@ function PlotBody({ panelId }: BodyProps) {
         ) : (
           <ul className={s.list} data-testid="panel-plot-list">
             {bound.map((c) => (
-              <li key={c.id} className={s.rowItem}>
-                <span className={s.row}>
-                  <span
-                    className={s.swatch}
-                    style={{ background: colorFor(c.id) }}
-                    aria-hidden="true"
-                  />
-                  <span className={s.name} title={c.name}>
-                    {labelFor(c)}
+              <li key={c.id} className={s.plotRowItem}>
+                <div className={s.rowItem}>
+                  <span className={s.row}>
+                    <span
+                      className={s.swatch}
+                      style={{ background: colorFor(c.id) }}
+                      aria-hidden="true"
+                    />
+                    <span className={s.name} title={c.name}>
+                      {labelFor(c)}
+                    </span>
                   </span>
-                </span>
-                <button
-                  type="button"
-                  className={s.removeBtn}
-                  onClick={() => onRemove(c.id)}
-                  aria-label={`Remove ${c.name}`}
-                  data-testid={`panel-plot-remove-${c.id}`}
-                >
-                  ×
-                </button>
+                  <button
+                    type="button"
+                    className={s.removeBtn}
+                    onClick={() => onRemove(c.id)}
+                    aria-label={`Remove ${c.name}`}
+                    data-testid={`panel-plot-remove-${c.id}`}
+                  >
+                    ×
+                  </button>
+                </div>
+                <PlotTransformPicker panelId={panelId} channelId={c.id} />
               </li>
             ))}
           </ul>
@@ -223,9 +233,280 @@ function PlotBody({ panelId }: BodyProps) {
           />
         )}
       </section>
+      <PlotYAxisModeControl panelId={panelId} />
+      <PlotSeriesStatsSection panelId={panelId} bound={bound} />
       <PlotGapThresholdControl panelId={panelId} />
     </>
   );
+}
+
+/**
+ * P1 · y-axis grouping toggle. A two-option segmented control that flips
+ * `setPlotYAxisMode`. "By unit" (default) gives each distinct channel unit
+ * its own scale/axis; "Shared" puts every series on one auto-ranged scale.
+ */
+function PlotYAxisModeControl({ panelId }: BodyProps) {
+  const mode = useSession(
+    (st) => st.plotPanelSettings[panelId]?.yAxisMode ?? "byUnit",
+  );
+  const setMode = (next: PlotYAxisMode) =>
+    useSession.getState().setPlotYAxisMode(panelId, next);
+
+  const options: Array<{ value: PlotYAxisMode; label: string }> = [
+    { value: "shared", label: "Shared" },
+    { value: "byUnit", label: "By unit" },
+  ];
+
+  return (
+    <section className={s.section} data-testid="panel-plot-yaxis-section">
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Y-axis</h4>
+      </div>
+      <div
+        className={s.segmented}
+        role="radiogroup"
+        aria-label="Y-axis grouping"
+      >
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={mode === opt.value}
+            className={`${s.segment} ${mode === opt.value ? s.segmentOn : ""}`}
+            onClick={() => setMode(opt.value)}
+            data-testid={`panel-plot-yaxis-${opt.value}`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <p className={s.gapHelp}>
+        {mode === "byUnit"
+          ? "Each channel unit gets its own y-axis so unlike-scaled signals stay readable."
+          : "Every series shares one auto-ranged y-axis."}
+      </p>
+    </section>
+  );
+}
+
+/**
+ * P7 · per-series transform picker. A small `<select>` (none / abs /
+ * derivative / scale) with an inline mul+add pair when "scale" is chosen.
+ * Round-trips through `setPlotChannelTransform`; "none" clears the entry.
+ */
+function PlotTransformPicker({
+  panelId,
+  channelId,
+}: {
+  panelId: string;
+  channelId: string;
+}) {
+  const transform = useSession(
+    (st) => st.plotPanelSettings[panelId]?.transforms?.[channelId],
+  );
+  const kind = transform?.kind ?? "none";
+  const mul = transform?.kind === "scale" ? transform.mul : 1;
+  const add = transform?.kind === "scale" ? transform.add : 0;
+
+  const setTransform = (t: PlotTransform) =>
+    useSession.getState().setPlotChannelTransform(panelId, channelId, t);
+
+  const onKindChange = (next: string) => {
+    switch (next) {
+      case "abs":
+        setTransform({ kind: "abs" });
+        break;
+      case "derivative":
+        setTransform({ kind: "derivative" });
+        break;
+      case "scale":
+        // Seed with an identity affine so the plot doesn't jump until the
+        // user edits mul/add.
+        setTransform({ kind: "scale", mul, add });
+        break;
+      default:
+        setTransform({ kind: "none" });
+    }
+  };
+
+  return (
+    <div className={s.transformRow}>
+      <label className={s.transformLabel}>
+        <span className={s.transformLabelText}>Transform</span>
+        <select
+          className={s.transformSelect}
+          value={kind}
+          onChange={(e) => onKindChange(e.target.value)}
+          data-testid={`panel-plot-transform-${channelId}`}
+        >
+          <option value="none">None</option>
+          <option value="abs">Absolute |x|</option>
+          <option value="derivative">Derivative d/dt</option>
+          <option value="scale">Scale (y·m + b)</option>
+        </select>
+      </label>
+      {kind === "scale" && (
+        <div className={s.transformScale} data-testid={`panel-plot-scale-${channelId}`}>
+          <label className={s.transformScaleField}>
+            <span>×</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="any"
+              className={s.transformScaleInput}
+              value={mul}
+              onChange={(e) => {
+                const v = Number.parseFloat(e.target.value);
+                setTransform({
+                  kind: "scale",
+                  mul: Number.isFinite(v) ? v : 0,
+                  add,
+                });
+              }}
+              data-testid={`panel-plot-scale-mul-${channelId}`}
+            />
+          </label>
+          <label className={s.transformScaleField}>
+            <span>+</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="any"
+              className={s.transformScaleInput}
+              value={add}
+              onChange={(e) => {
+                const v = Number.parseFloat(e.target.value);
+                setTransform({
+                  kind: "scale",
+                  mul,
+                  add: Number.isFinite(v) ? v : 0,
+                });
+              }}
+              data-testid={`panel-plot-scale-add-${channelId}`}
+            />
+          </label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Compact value formatting for the stats block. Mirrors PlotPanel's
+// `formatValue` so the drawer and the chips agree on how a number reads.
+function formatStat(v: number): string {
+  if (!Number.isFinite(v)) return "—";
+  const abs = Math.abs(v);
+  if (abs >= 1000 || (abs > 0 && abs < 0.01)) return v.toExponential(3);
+  return v.toFixed(3);
+}
+
+/**
+ * P4 · per-series statistics block. Reads the rAF-published plot sync
+ * snapshot (`window.__drivelinePlotPanels[panelId]`) — the same surface
+ * the e2e specs assert on — and renders min / max / mean / current-at-
+ * cursor for each bound channel. Polled at 250ms (the `useDecoderCodec`
+ * cadence) plus re-read on cursor change so the "current" column tracks
+ * the scrubber; kept off the hot path (no per-frame work here).
+ */
+function PlotSeriesStatsSection({
+  panelId,
+  bound,
+}: {
+  panelId: string;
+  bound: Channel[];
+}) {
+  const cursorNs = useSession((st) => st.cursorNs);
+  const snap = usePlotSyncSnapshot(panelId, cursorNs);
+
+  if (bound.length === 0) return null;
+
+  const statsById = new Map<string, PlotSeriesStats>();
+  for (const stat of snap?.seriesStats ?? []) statsById.set(stat.channelId, stat);
+  const currentById = new Map<string, number>();
+  for (const sample of snap?.sampleAtCursor ?? []) {
+    if (sample) currentById.set(sample.channelId, sample.value);
+  }
+
+  return (
+    <section className={s.section} data-testid="panel-plot-stats-section">
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Statistics</h4>
+      </div>
+      <table className={s.statsTable} data-testid="panel-plot-stats">
+        <thead>
+          <tr>
+            <th scope="col" className={s.statsChannelCol}>
+              Channel
+            </th>
+            <th scope="col">min</th>
+            <th scope="col">max</th>
+            <th scope="col">mean</th>
+            <th scope="col">cur</th>
+          </tr>
+        </thead>
+        <tbody>
+          {bound.map((c) => {
+            const stat = statsById.get(c.id);
+            const cur = currentById.get(c.id);
+            return (
+              <tr key={c.id} data-testid={`panel-plot-stats-${c.id}`}>
+                <th scope="row" className={s.statsChannel}>
+                  <span
+                    className={s.statsSwatch}
+                    style={{ background: colorFor(c.id) }}
+                    aria-hidden="true"
+                  />
+                  <span className={s.name} title={c.name}>
+                    {c.name}
+                    {c.unit ? ` (${c.unit})` : ""}
+                  </span>
+                </th>
+                <td className={s.statsNum}>
+                  {stat ? formatStat(stat.min) : "—"}
+                </td>
+                <td className={s.statsNum}>
+                  {stat ? formatStat(stat.max) : "—"}
+                </td>
+                <td className={s.statsNum}>
+                  {stat ? formatStat(stat.mean) : "—"}
+                </td>
+                <td className={s.statsNum}>
+                  {cur === undefined ? "—" : formatStat(cur)}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// Poll the rAF-published plot sync snapshot. Re-reads on a 250ms interval
+// (matches `useDecoderCodec`) and whenever the cursor changes (so the
+// "current" column tracks the scrubber). The snapshot lives on `window`,
+// not the store, so React can't subscribe to it directly. Returns a fresh
+// reference only when the underlying object identity changes.
+function usePlotSyncSnapshot(
+  panelId: string,
+  cursorNs: bigint,
+): PlotSyncSnapshot | undefined {
+  const [snap, setSnap] = useState(
+    () => window.__drivelinePlotPanels?.[panelId],
+  );
+  useEffect(() => {
+    const read = () => {
+      const next = window.__drivelinePlotPanels?.[panelId];
+      setSnap((prev) => (prev === next ? prev : next));
+    };
+    read();
+    const id = window.setInterval(read, 250);
+    return () => window.clearInterval(id);
+    // `cursorNs` re-runs the effect so the "current" column refreshes on a
+    // scrub without waiting for the next poll tick.
+  }, [panelId, cursorNs]);
+  return snap;
 }
 
 /**

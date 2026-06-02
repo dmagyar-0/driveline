@@ -268,10 +268,172 @@
   line-height: 1.4;
 }
 
+/* P7 · a bound-channel row that stacks its transform picker beneath the
+   name/remove row. */
+.plotRowItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.transformRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding-left: calc(8px + var(--sp-4));
+}
+
+.transformLabel {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.transformLabelText {
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+}
+
+.transformSelect {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-bg-3);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  font: inherit;
+  font-size: var(--fs-13);
+}
+
+.transformSelect:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-accent-orange);
+}
+
+.transformScale {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+
+.transformScaleField {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+}
+
+.transformScaleInput {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-bg-3);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  font: inherit;
+  font-size: var(--fs-13);
+  font-variant-numeric: tabular-nums;
+}
+
+.transformScaleInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 1px;
+  border-color: var(--color-accent-orange);
+}
+
+/* P1 · segmented two-option control for the y-axis mode. */
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+  padding: var(--sp-2);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+}
+
+.segment {
+  padding: var(--sp-2) var(--sp-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-3);
+  color: var(--color-fg-4);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-13);
+  transition: background var(--motion-base), color var(--motion-base);
+}
+
+.segment:hover {
+  color: var(--color-fg-2);
+}
+
+.segment:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.segmentOn {
+  background: var(--color-bg-5);
+  color: var(--color-accent-orange);
+}
+
+/* P4 · per-series statistics table. */
+.statsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+
+.statsTable th,
+.statsTable td {
+  padding: var(--sp-2) var(--sp-2);
+  text-align: right;
+}
+
+.statsTable thead th {
+  color: var(--color-fg-5);
+  font-weight: 500;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.statsChannelCol,
+.statsChannel {
+  text-align: left;
+}
+
+.statsChannel {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-weight: 400;
+  color: var(--color-fg-3);
+  max-width: 12rem;
+}
+
+.statsSwatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.statsNum {
+  color: var(--color-fg-2);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .removeBtn,
   .addRow,
-  .toggle {
+  .toggle,
+  .segment {
     transition: none;
   }
 }

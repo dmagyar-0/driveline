@@ -14,6 +14,7 @@ import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 
 import { PanelDrawer } from "./PanelDrawer";
 import { useSession } from "../../state/store";
+import { MAX_PLOT_SERIES } from "../../panels/palette";
 
 function seed(): void {
   useSession.setState({
@@ -108,7 +109,7 @@ describe("PanelDrawer", () => {
     expect(name.textContent).toBe("Speed");
     expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("PLOT");
     expect(screen.getByTestId("panel-plot-count").textContent).toBe(
-      "1 / 8",
+      `1 / ${MAX_PLOT_SERIES}`,
     );
     expect(screen.getByTestId("panel-plot-remove-chan-a")).toBeTruthy();
   });
@@ -202,7 +203,7 @@ describe("PanelDrawer", () => {
     render(<PanelDrawer />);
     expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("TABLE");
     expect(screen.getByTestId("panel-table-count").textContent).toBe(
-      "1 / 8",
+      `1 / ${MAX_PLOT_SERIES}`,
     );
     fireEvent.click(screen.getByTestId("panel-table-remove-chan-a"));
     expect(useSession.getState().tableBindings["table-1"]).toEqual([]);

@@ -7,6 +7,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Remote } from "comlink";
 import { MAX_SPEED, MIN_SPEED, useSession } from "./store";
+import { MAX_PLOT_SERIES } from "../panels/palette";
 import type {
   DataCoreApi,
   McapSummary,
@@ -780,21 +781,14 @@ describe("layout + bindings (T6.2)", () => {
 
   it("addPlotChannel appends, dedupes, and caps at MAX_PLOT_SERIES", () => {
     const store = useSession.getState();
-    for (let i = 0; i < 10; i++) {
-      store.addPlotChannel("plot-1", `/ch/${i}`);
-    }
+    const ids = Array.from(
+      { length: MAX_PLOT_SERIES + 2 },
+      (_, i) => `/ch/${i}`,
+    );
+    for (const id of ids) store.addPlotChannel("plot-1", id);
     const bound = useSession.getState().plotBindings["plot-1"];
-    expect(bound).toHaveLength(8);
-    expect(bound).toEqual([
-      "/ch/0",
-      "/ch/1",
-      "/ch/2",
-      "/ch/3",
-      "/ch/4",
-      "/ch/5",
-      "/ch/6",
-      "/ch/7",
-    ]);
+    expect(bound).toHaveLength(MAX_PLOT_SERIES);
+    expect(bound).toEqual(ids.slice(0, MAX_PLOT_SERIES));
     // dedupe: adding an existing id is a no-op
     store.addPlotChannel("plot-1", "/ch/0");
     expect(useSession.getState().plotBindings["plot-1"]).toEqual(bound);
@@ -816,30 +810,16 @@ describe("layout + bindings (T6.2)", () => {
   });
 
   it("setPlotBinding dedupes and caps the input", () => {
-    useSession
-      .getState()
-      .setPlotBinding("plot-1", [
-        "/a",
-        "/a",
-        "/b",
-        "/c",
-        "/d",
-        "/e",
-        "/f",
-        "/g",
-        "/h",
-        "/i",
-      ]);
-    expect(useSession.getState().plotBindings["plot-1"]).toEqual([
-      "/a",
-      "/b",
-      "/c",
-      "/d",
-      "/e",
-      "/f",
-      "/g",
-      "/h",
-    ]);
+    // A leading duplicate (deduped) plus more distinct ids than the cap so
+    // the cap actually trims the tail.
+    const distinct = Array.from(
+      { length: MAX_PLOT_SERIES + 3 },
+      (_, i) => `/c${i}`,
+    );
+    useSession.getState().setPlotBinding("plot-1", [distinct[0], ...distinct]);
+    expect(useSession.getState().plotBindings["plot-1"]).toEqual(
+      distinct.slice(0, MAX_PLOT_SERIES),
+    );
   });
 
   it("bindings on different plot panels are independent", () => {
@@ -940,6 +920,62 @@ describe("layout + bindings (T6.2)", () => {
     // Object identity preserved on no-op so the persist subscriber
     // doesn't re-stringify and write.
     expect(useSession.getState().plotPanelSettings).toBe(before);
+  });
+
+  it("setPlotYAxisMode toggles between shared and byUnit (P1)", () => {
+    // Default is byUnit (read via DEFAULT_PLOT_PANEL_SETTINGS), so the
+    // first meaningful write flips to shared.
+    useSession.getState().setPlotYAxisMode("plot-1", "shared");
+    expect(useSession.getState().plotPanelSettings["plot-1"]).toEqual({
+      gapThresholdSec: null,
+      yAxisMode: "shared",
+    });
+    useSession.getState().setPlotYAxisMode("plot-1", "byUnit");
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].yAxisMode,
+    ).toBe("byUnit");
+    // No-op when unchanged: identity preserved.
+    const before = useSession.getState().plotPanelSettings;
+    useSession.getState().setPlotYAxisMode("plot-1", "byUnit");
+    expect(useSession.getState().plotPanelSettings).toBe(before);
+  });
+
+  it("setPlotChannelTransform stores and clears per-channel (P7)", () => {
+    useSession
+      .getState()
+      .setPlotChannelTransform("plot-1", "/speed", {
+        kind: "scale",
+        mul: 3.6,
+        add: 0,
+      });
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].transforms,
+    ).toEqual({ "/speed": { kind: "scale", mul: 3.6, add: 0 } });
+    // A second channel coexists.
+    useSession
+      .getState()
+      .setPlotChannelTransform("plot-1", "/accel", { kind: "abs" });
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].transforms,
+    ).toEqual({
+      "/speed": { kind: "scale", mul: 3.6, add: 0 },
+      "/accel": { kind: "abs" },
+    });
+    // "none" deletes the entry rather than storing a no-op transform.
+    useSession
+      .getState()
+      .setPlotChannelTransform("plot-1", "/speed", { kind: "none" });
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].transforms,
+    ).toEqual({ "/accel": { kind: "abs" } });
+  });
+
+  it("setHoverNs publishes and clears the shared hover (P3)", () => {
+    expect(useSession.getState().hoverNs).toBeNull();
+    useSession.getState().setHoverNs(123_456n);
+    expect(useSession.getState().hoverNs).toBe(123_456n);
+    useSession.getState().setHoverNs(null);
+    expect(useSession.getState().hoverNs).toBeNull();
   });
 
   it("setVideoHudOn sets per-panel without touching siblings", () => {
@@ -1218,16 +1254,19 @@ describe("Phase 6 panel bindings", () => {
     expect(useSession.getState().mapBindings).toBe(before);
   });
 
-  it("addTableChannel dedupes and caps at MAX_PLOT_SERIES (8)", () => {
-    const ids = Array.from({ length: 10 }, (_, i) => `/c${i}`);
+  it("addTableChannel dedupes and caps at MAX_PLOT_SERIES", () => {
+    const ids = Array.from(
+      { length: MAX_PLOT_SERIES + 2 },
+      (_, i) => `/c${i}`,
+    );
     for (const id of ids) useSession.getState().addTableChannel("table-1", id);
     expect(useSession.getState().tableBindings["table-1"]).toEqual(
-      ids.slice(0, 8),
+      ids.slice(0, MAX_PLOT_SERIES),
     );
     // Duplicate add is a no-op.
     useSession.getState().addTableChannel("table-1", "/c0");
     expect(useSession.getState().tableBindings["table-1"]).toEqual(
-      ids.slice(0, 8),
+      ids.slice(0, MAX_PLOT_SERIES),
     );
   });
 
