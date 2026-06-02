@@ -32,7 +32,7 @@ export interface ViewState {
     map: Record<string, MapBinding | null>;
     table: Record<string, string[]>;
     value: Record<string, string[]>;
-    enum: Record<string, string | null>;
+    enum: Record<string, string[]>;
     scene: Record<string, string | null>;
   };
   cursorNs: string;
@@ -106,7 +106,7 @@ export function decodeViewState(str: string): ViewState | null {
         map: asRecord<MapBinding | null>(b.map),
         table: asRecord<string[]>(b.table),
         value: asRecord<string[]>(b.value),
-        enum: asRecord<string | null>(b.enum),
+        enum: asRecord<string[]>(b.enum),
         scene: asRecord<string | null>(b.scene),
       },
       cursorNs: normalisedCursor,
@@ -200,8 +200,8 @@ function applyBindings(state: ViewState): void {
   for (const [panelId, ids] of Object.entries(state.bindings.value)) {
     store.setValueBinding(panelId, ids);
   }
-  for (const [panelId, id] of Object.entries(state.bindings.enum)) {
-    store.setEnumBinding(panelId, id);
+  for (const [panelId, ids] of Object.entries(state.bindings.enum)) {
+    store.setEnumBinding(panelId, ids);
   }
   for (const [panelId, id] of Object.entries(state.bindings.scene)) {
     store.setSceneBinding(panelId, id);

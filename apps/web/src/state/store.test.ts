@@ -374,15 +374,15 @@ describe("session store", () => {
 
     // Bind a plot panel to both channels and an enum panel to the mcap one.
     st.setPlotBinding("plot-1", [mcapCh.id, mf4Ch.id]);
-    st.setEnumBinding("enum-1", mcapCh.id);
+    st.setEnumBinding("enum-1", [mcapCh.id]);
 
     await useSession.getState().removeSource("short.mcap");
 
     const after = useSession.getState();
     // The mcap channel is pruned from the plot; the mf4 one survives.
     expect(after.plotBindings["plot-1"]).toEqual([mf4Ch.id]);
-    // The enum binding pointed only at the gone channel → reset to null.
-    expect(after.enumBindings["enum-1"]).toBeNull();
+    // The enum binding pointed only at the gone channel → pruned to empty.
+    expect(after.enumBindings["enum-1"]).toEqual([]);
   });
 
   it("removeSource is a no-op for an unknown id", async () => {
@@ -846,7 +846,7 @@ describe("layout + bindings (T6.2)", () => {
       lonChannelId: "/gps/lon",
     });
     useSession.getState().addTableChannel("table-1", "/a");
-    useSession.getState().setEnumBinding("enum-1", "/state");
+    useSession.getState().setEnumBinding("enum-1", ["/state"]);
     useSession.getState().setPlotGapThreshold("plot-1", 1.5);
 
     await useSession.getState().clear();
@@ -1146,7 +1146,7 @@ describe("named layouts (Phase 4)", () => {
       lonChannelId: "/gps/lon",
     });
     useSession.getState().addTableChannel("table-1", "/a");
-    useSession.getState().setEnumBinding("enum-1", "/state");
+    useSession.getState().setEnumBinding("enum-1", ["/state"]);
 
     const id = useSession.getState().saveCurrentLayoutAs("phase6");
 
@@ -1154,7 +1154,7 @@ describe("named layouts (Phase 4)", () => {
     useSession.getState().setSceneBinding("scene-1", null);
     useSession.getState().setMapBinding("map-1", null);
     useSession.getState().removeTableChannel("table-1", "/a");
-    useSession.getState().setEnumBinding("enum-1", null);
+    useSession.getState().setEnumBinding("enum-1", []);
 
     useSession.getState().restoreNamedLayout(id);
     const s = useSession.getState();
@@ -1163,7 +1163,7 @@ describe("named layouts (Phase 4)", () => {
       "map-1": { latChannelId: "/gps/lat", lonChannelId: "/gps/lon" },
     });
     expect(s.tableBindings).toEqual({ "table-1": ["/a"] });
-    expect(s.enumBindings).toEqual({ "enum-1": "/state" });
+    expect(s.enumBindings).toEqual({ "enum-1": ["/state"] });
   });
 
   it("saveCurrentLayoutAs snapshots plotPanelSettings (Phase 8)", () => {
@@ -1311,13 +1311,29 @@ describe("Phase 6 panel bindings", () => {
     ]);
   });
 
-  it("setEnumBinding sets and clears", () => {
-    useSession.getState().setEnumBinding("enum-1", "/state");
-    expect(useSession.getState().enumBindings).toEqual({
-      "enum-1": "/state",
-    });
-    useSession.getState().setEnumBinding("enum-1", null);
-    expect(useSession.getState().enumBindings).toEqual({ "enum-1": null });
+  it("setEnumBinding dedupes and caps wholesale replace", () => {
+    useSession
+      .getState()
+      .setEnumBinding("enum-1", ["/a", "/a", "/b", "/c"]);
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual([
+      "/a",
+      "/b",
+      "/c",
+    ]);
+  });
+
+  it("addEnumChannel appends and dedupes; removeEnumChannel filters", () => {
+    useSession.getState().addEnumChannel("enum-1", "/a");
+    useSession.getState().addEnumChannel("enum-1", "/b");
+    // Duplicate add is a no-op.
+    useSession.getState().addEnumChannel("enum-1", "/a");
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual(["/a", "/b"]);
+    useSession.getState().removeEnumChannel("enum-1", "/a");
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual(["/b"]);
+    // Removing an absent id is a no-op (same reference back).
+    const before = useSession.getState().enumBindings;
+    useSession.getState().removeEnumChannel("enum-1", "/ghost");
+    expect(useSession.getState().enumBindings).toBe(before);
   });
 });
 

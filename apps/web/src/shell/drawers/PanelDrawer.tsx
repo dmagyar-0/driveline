@@ -16,7 +16,7 @@
 //   - map    → lat/lon two-channel binding via two pickers
 //   - table  → multi-channel scalar binding (raw time-series table)
 //   - value  → multi-channel scalar binding (sample-at-cursor reader)
-//   - enum   → single-channel binding for the state strip
+//   - enum   → multi-channel scalar binding (one state strip per channel)
 //
 // The drawer reads everything from the store via single-key selectors
 // and from the rAF-published `__drivelineVideoHud` snapshot for the
@@ -1191,21 +1191,35 @@ function ValueBody({ panelId }: BodyProps) {
   );
 }
 
+// Mirror of `TableBody`/`ValueBody` against the Enum panel's
+// `enumBindings` map: multi-channel scalar binding, one state strip per
+// bound channel. Only the store actions and the `panel-enum-*` testids
+// differ.
 function EnumBody({ panelId }: BodyProps) {
+  const channels = useSession((st) => st.channels);
   const sources = useSession((st) => st.sources);
   const unitOverrides = useSession((st) => st.unitOverrides);
-  const bindingId = useSession((st) => st.enumBindings[panelId] ?? null);
-  const setEnumBinding = useSession((st) => st.setEnumBinding);
+  const ids = useSession((st) => st.enumBindings[panelId] ?? EMPTY);
 
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
   const [pickerAnchor, setPickerAnchor] = useState<DOMRect | null>(null);
 
-  const boundChannel = bindingId ? findChannel(sources, bindingId) : null;
+  const atCap = ids.length >= MAX_PLOT_SERIES;
+  const bound = ids
+    .map((id) => channels.find((c) => c.id === id))
+    .filter((c): c is Channel => c !== undefined);
 
   const onToggle = (channelId: string) => {
-    setEnumBinding(panelId, bindingId === channelId ? null : channelId);
-    setPickerAnchor(null);
+    const cur = useSession.getState().enumBindings[panelId] ?? [];
+    if (cur.includes(channelId)) {
+      useSession.getState().removeEnumChannel(panelId, channelId);
+    } else {
+      useSession.getState().addEnumChannel(panelId, channelId);
+    }
   };
+
+  const onRemove = (channelId: string) =>
+    useSession.getState().removeEnumChannel(panelId, channelId);
 
   const openPicker = () => {
     if (!addBtnRef.current) return;
@@ -1214,48 +1228,60 @@ function EnumBody({ panelId }: BodyProps) {
 
   return (
     <section className={s.section}>
-      <h4 className={s.sectionTitle}>Bound channel</h4>
-      {boundChannel === null ? (
-        <p className={s.empty}>No channel bound. Add one below.</p>
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Channels in panel</h4>
+        <span className={s.countPill} data-testid="panel-enum-count">
+          {ids.length} / {MAX_PLOT_SERIES}
+        </span>
+      </div>
+      {bound.length === 0 ? (
+        <p className={s.empty}>No channels bound. Add one below.</p>
       ) : (
         <ul className={s.list} data-testid="panel-enum-list">
-          <li className={s.rowItem}>
-            <span className={s.row}>
-              <span
-                className={s.swatch}
-                style={{ background: colorFor(boundChannel.id) }}
-                aria-hidden="true"
-              />
-              <span className={s.name} title={boundChannel.name}>
-                {channelLabel(boundChannel, unitOverrides)}
+          {bound.map((c) => (
+            <li key={c.id} className={s.rowItem}>
+              <span className={s.row}>
+                <span
+                  className={s.swatch}
+                  style={{ background: colorFor(c.id) }}
+                  aria-hidden="true"
+                />
+                <span className={s.name} title={c.name}>
+                  {channelLabel(c, unitOverrides)}
+                </span>
               </span>
-            </span>
-            <button
-              type="button"
-              className={s.removeBtn}
-              onClick={() => setEnumBinding(panelId, null)}
-              aria-label={`Remove ${boundChannel.name}`}
-              data-testid={`panel-enum-remove-${boundChannel.id}`}
-            >
-              ×
-            </button>
-          </li>
+              <button
+                type="button"
+                className={s.removeBtn}
+                onClick={() => onRemove(c.id)}
+                aria-label={`Remove ${c.name}`}
+                data-testid={`panel-enum-remove-${c.id}`}
+              >
+                ×
+              </button>
+            </li>
+          ))}
         </ul>
       )}
       <button
         ref={addBtnRef}
         type="button"
         className={s.addRow}
-        onClick={openPicker}
+        aria-disabled={atCap || undefined}
+        title={atCap ? `Panel full (${MAX_PLOT_SERIES})` : undefined}
+        onClick={() => {
+          if (atCap) return;
+          openPicker();
+        }}
         data-testid="panel-enum-add-channel"
       >
-        + bind channel…
+        + add channel…
       </button>
       {pickerAnchor !== null && (
         <ChannelPicker
           sources={sources}
-          selectedIds={bindingId ? [bindingId] : []}
-          maxSelected={1}
+          selectedIds={ids}
+          maxSelected={MAX_PLOT_SERIES}
           anchorRect={pickerAnchor}
           onToggle={onToggle}
           onClose={() => setPickerAnchor(null)}

@@ -139,9 +139,10 @@ declare global {
         panelId: string,
         channelId: string,
       ) => void;
-      setEnumChannelBinding: (
+      addEnumChannelBinding: (panelId: string, channelId: string) => void;
+      removeEnumChannelBinding: (
         panelId: string,
-        channelId: string | null,
+        channelId: string,
       ) => void;
       getPlotPanelSync: (panelId: string) => {
         cursorNs: string;
@@ -408,8 +409,10 @@ export function App() {
         useSession.getState().addValueChannel(panelId, channelId),
       removeValueChannelBinding: (panelId, channelId) =>
         useSession.getState().removeValueChannel(panelId, channelId),
-      setEnumChannelBinding: (panelId, channelId) =>
-        useSession.getState().setEnumBinding(panelId, channelId),
+      addEnumChannelBinding: (panelId, channelId) =>
+        useSession.getState().addEnumChannel(panelId, channelId),
+      removeEnumChannelBinding: (panelId, channelId) =>
+        useSession.getState().removeEnumChannel(panelId, channelId),
       getPlotPanelSync: (panelId) => {
         const snap: PlotSyncSnapshot | undefined =
           window.__drivelinePlotPanels?.[panelId];
