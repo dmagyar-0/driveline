@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta } from "../state/store";
+import { effectiveUnit } from "../state/units";
 import { seriesFromArrow } from "./seriesFromArrow";
 import { colorFor, MAX_PLOT_SERIES } from "./palette";
 import { formatRelative } from "../timeline/formatTime";
@@ -59,6 +60,7 @@ function formatValue(v: number): string {
 
 export function TablePanel({ panelId }: TablePanelProps) {
   const sources = useSession((s) => s.sources);
+  const unitOverrides = useSession((s) => s.unitOverrides);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
   const storedBindings = useSession((s) => s.tableBindings[panelId]);
@@ -274,7 +276,11 @@ export function TablePanel({ panelId }: TablePanelProps) {
                   aria-hidden="true"
                 />
                 <span className={styles.headerName}>{col.name}</span>
-                {col.unit && <span className={styles.unit}>{col.unit}</span>}
+                {effectiveUnit(col, unitOverrides) && (
+                  <span className={styles.unit}>
+                    {effectiveUnit(col, unitOverrides)}
+                  </span>
+                )}
               </span>
             ))}
           </div>

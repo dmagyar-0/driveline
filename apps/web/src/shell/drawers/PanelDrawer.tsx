@@ -25,12 +25,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  MAX_PLOT_Y_AXES,
   useSession,
   type Channel,
   type PlotTransform,
-  type PlotYAxisMode,
   type SourceMeta,
 } from "../../state/store";
+import { channelLabel } from "../../state/units";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { ChannelPicker } from "../../panels/ChannelPicker";
 import type { PlotSeriesStats, PlotSyncSnapshot } from "../../panels/PlotPanel";
@@ -141,6 +142,7 @@ function PlotBody({ panelId }: BodyProps) {
   const channels = useSession((st) => st.channels);
   const sources = useSession((st) => st.sources);
   const ids = useSession((st) => st.plotBindings[panelId] ?? EMPTY);
+  const unitOverrides = useSession((st) => st.unitOverrides);
 
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
   const [pickerAnchor, setPickerAnchor] = useState<DOMRect | null>(null);
@@ -190,7 +192,7 @@ function PlotBody({ panelId }: BodyProps) {
                       aria-hidden="true"
                     />
                     <span className={s.name} title={c.name}>
-                      {labelFor(c)}
+                      {channelLabel(c, unitOverrides)}
                     </span>
                   </span>
                   <button
@@ -203,6 +205,8 @@ function PlotBody({ panelId }: BodyProps) {
                     ×
                   </button>
                 </div>
+                <PlotChannelAxisPicker panelId={panelId} channelId={c.id} />
+                <PlotChannelUnitInput channel={c} />
                 <PlotTransformPicker panelId={panelId} channelId={c.id} />
               </li>
             ))}
@@ -233,7 +237,6 @@ function PlotBody({ panelId }: BodyProps) {
           />
         )}
       </section>
-      <PlotYAxisModeControl panelId={panelId} />
       <PlotSeriesStatsSection panelId={panelId} bound={bound} />
       <PlotGapThresholdControl panelId={panelId} />
     </>
@@ -241,52 +244,107 @@ function PlotBody({ panelId }: BodyProps) {
 }
 
 /**
- * P1 · y-axis grouping toggle. A two-option segmented control that flips
- * `setPlotYAxisMode`. "By unit" (default) gives each distinct channel unit
- * its own scale/axis; "Shared" puts every series on one auto-ranged scale.
+ * Per-series y-axis assignment. A small `<select>` (Axis 1…N) that maps
+ * the channel to a 0-based y-axis via `setPlotChannelAxis`. Units no longer
+ * drive grouping; this is the explicit control. Default is Axis 1 (the
+ * shared left scale).
  */
-function PlotYAxisModeControl({ panelId }: BodyProps) {
-  const mode = useSession(
-    (st) => st.plotPanelSettings[panelId]?.yAxisMode ?? "byUnit",
+function PlotChannelAxisPicker({
+  panelId,
+  channelId,
+}: {
+  panelId: string;
+  channelId: string;
+}) {
+  const axis = useSession(
+    (st) => st.plotPanelSettings[panelId]?.axisAssignments?.[channelId] ?? 0,
   );
-  const setMode = (next: PlotYAxisMode) =>
-    useSession.getState().setPlotYAxisMode(panelId, next);
-
-  const options: Array<{ value: PlotYAxisMode; label: string }> = [
-    { value: "shared", label: "Shared" },
-    { value: "byUnit", label: "By unit" },
-  ];
+  const onChange = (next: number) =>
+    useSession.getState().setPlotChannelAxis(panelId, channelId, next);
 
   return (
-    <section className={s.section} data-testid="panel-plot-yaxis-section">
-      <div className={s.sectionHeader}>
-        <h4 className={s.sectionTitle}>Y-axis</h4>
-      </div>
-      <div
-        className={s.segmented}
-        role="radiogroup"
-        aria-label="Y-axis grouping"
-      >
-        {options.map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            role="radio"
-            aria-checked={mode === opt.value}
-            className={`${s.segment} ${mode === opt.value ? s.segmentOn : ""}`}
-            onClick={() => setMode(opt.value)}
-            data-testid={`panel-plot-yaxis-${opt.value}`}
-          >
-            {opt.label}
-          </button>
-        ))}
-      </div>
-      <p className={s.gapHelp}>
-        {mode === "byUnit"
-          ? "Each channel unit gets its own y-axis so unlike-scaled signals stay readable."
-          : "Every series shares one auto-ranged y-axis."}
-      </p>
-    </section>
+    <div className={s.transformRow}>
+      <label className={s.transformLabel}>
+        <span className={s.transformLabelText}>Y-axis</span>
+        <select
+          className={s.transformSelect}
+          value={axis}
+          onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
+          data-testid={`panel-plot-axis-${channelId}`}
+        >
+          {Array.from({ length: MAX_PLOT_Y_AXES }, (_, i) => (
+            <option key={i} value={i}>
+              Axis {i + 1}
+            </option>
+          ))}
+        </select>
+      </label>
+    </div>
+  );
+}
+
+/**
+ * Per-series unit override. The unit is inferred from the file but often
+ * missing or wrong, so this text input lets the user correct it. The
+ * override is GLOBAL per channel (see `setChannelUnit`), so it also updates
+ * the table / value panels. The placeholder shows the inferred unit; an
+ * empty input means "no unit". A reset button clears the override.
+ */
+function PlotChannelUnitInput({ channel }: { channel: Channel }) {
+  const override = useSession((st) => st.unitOverrides[channel.id]);
+  const hasOverride = override !== undefined;
+  // Local draft so a partially-typed value doesn't churn the store on every
+  // keystroke; commit on blur / Enter. Re-seed when the store value changes
+  // out from under us (e.g. a reset or a restored layout).
+  const [draft, setDraft] = useState(override ?? channel.unit ?? "");
+  const lastSeenRef = useRef<string | undefined>(override);
+  useEffect(() => {
+    if (lastSeenRef.current !== override) {
+      lastSeenRef.current = override;
+      setDraft(override ?? channel.unit ?? "");
+    }
+  }, [override, channel.unit]);
+
+  const commit = () => useSession.getState().setChannelUnit(channel.id, draft);
+  const reset = () => {
+    useSession.getState().setChannelUnit(channel.id, null);
+    setDraft(channel.unit ?? "");
+  };
+
+  return (
+    <div className={s.transformRow}>
+      <label className={s.transformLabel}>
+        <span className={s.transformLabelText}>Unit</span>
+        <input
+          type="text"
+          className={s.transformSelect}
+          value={draft}
+          placeholder={channel.unit ?? "none"}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commit();
+              (e.currentTarget as HTMLInputElement).blur();
+            }
+          }}
+          data-testid={`panel-plot-unit-${channel.id}`}
+        />
+      </label>
+      {hasOverride && (
+        <button
+          type="button"
+          className={s.removeBtn}
+          onClick={reset}
+          aria-label={`Reset unit for ${channel.name}`}
+          title="Reset to file-inferred unit"
+          data-testid={`panel-plot-unit-reset-${channel.id}`}
+        >
+          ↺
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -417,6 +475,7 @@ function PlotSeriesStatsSection({
   bound: Channel[];
 }) {
   const cursorNs = useSession((st) => st.cursorNs);
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const snap = usePlotSyncSnapshot(panelId, cursorNs);
 
   if (bound.length === 0) return null;
@@ -458,8 +517,7 @@ function PlotSeriesStatsSection({
                     aria-hidden="true"
                   />
                   <span className={s.name} title={c.name}>
-                    {c.name}
-                    {c.unit ? ` (${c.unit})` : ""}
+                    {channelLabel(c, unitOverrides)}
                   </span>
                 </th>
                 <td className={s.statsNum}>
@@ -701,6 +759,7 @@ function VideoBody({ panelId }: BodyProps) {
 
 function SceneBody({ panelId }: BodyProps) {
   const sources = useSession((st) => st.sources);
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const bindingId = useSession((st) => st.sceneBindings[panelId] ?? null);
   const setSceneBinding = useSession((st) => st.setSceneBinding);
 
@@ -741,7 +800,7 @@ function SceneBody({ panelId }: BodyProps) {
                   aria-hidden="true"
                 />
                 <span className={s.name} title={boundChannel.name}>
-                  {labelFor(boundChannel)}
+                  {channelLabel(boundChannel, unitOverrides)}
                 </span>
               </span>
               <button
@@ -782,6 +841,7 @@ function SceneBody({ panelId }: BodyProps) {
 
 function MapBody({ panelId }: BodyProps) {
   const sources = useSession((st) => st.sources);
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const binding = useSession((st) => st.mapBindings[panelId] ?? null);
   const setMapBinding = useSession((st) => st.setMapBinding);
 
@@ -838,7 +898,7 @@ function MapBody({ panelId }: BodyProps) {
                   aria-hidden="true"
                 />
                 <span className={s.name} title={latChannel.name}>
-                  {labelFor(latChannel)}
+                  {channelLabel(latChannel, unitOverrides)}
                 </span>
               </span>
               <button
@@ -891,7 +951,7 @@ function MapBody({ panelId }: BodyProps) {
                   aria-hidden="true"
                 />
                 <span className={s.name} title={lonChannel.name}>
-                  {labelFor(lonChannel)}
+                  {channelLabel(lonChannel, unitOverrides)}
                 </span>
               </span>
               <button
@@ -939,6 +999,7 @@ function MapBody({ panelId }: BodyProps) {
 function TableBody({ panelId }: BodyProps) {
   const channels = useSession((st) => st.channels);
   const sources = useSession((st) => st.sources);
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const ids = useSession((st) => st.tableBindings[panelId] ?? EMPTY);
 
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -987,7 +1048,7 @@ function TableBody({ panelId }: BodyProps) {
                   aria-hidden="true"
                 />
                 <span className={s.name} title={c.name}>
-                  {labelFor(c)}
+                  {channelLabel(c, unitOverrides)}
                 </span>
               </span>
               <button
@@ -1037,6 +1098,7 @@ function TableBody({ panelId }: BodyProps) {
 function ValueBody({ panelId }: BodyProps) {
   const channels = useSession((st) => st.channels);
   const sources = useSession((st) => st.sources);
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const ids = useSession((st) => st.valueBindings[panelId] ?? EMPTY);
 
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -1085,7 +1147,7 @@ function ValueBody({ panelId }: BodyProps) {
                   aria-hidden="true"
                 />
                 <span className={s.name} title={c.name}>
-                  {labelFor(c)}
+                  {channelLabel(c, unitOverrides)}
                 </span>
               </span>
               <button
@@ -1131,6 +1193,7 @@ function ValueBody({ panelId }: BodyProps) {
 
 function EnumBody({ panelId }: BodyProps) {
   const sources = useSession((st) => st.sources);
+  const unitOverrides = useSession((st) => st.unitOverrides);
   const bindingId = useSession((st) => st.enumBindings[panelId] ?? null);
   const setEnumBinding = useSession((st) => st.setEnumBinding);
 
@@ -1164,7 +1227,7 @@ function EnumBody({ panelId }: BodyProps) {
                 aria-hidden="true"
               />
               <span className={s.name} title={boundChannel.name}>
-                {labelFor(boundChannel)}
+                {channelLabel(boundChannel, unitOverrides)}
               </span>
             </span>
             <button
@@ -1203,10 +1266,6 @@ function EnumBody({ panelId }: BodyProps) {
 }
 
 const EMPTY: readonly string[] = Object.freeze([]);
-
-function labelFor(c: Channel): string {
-  return c.unit ? `${c.name} (${c.unit})` : c.name;
-}
 
 function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
   for (const src of sources) {

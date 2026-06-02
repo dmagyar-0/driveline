@@ -922,22 +922,42 @@ describe("layout + bindings (T6.2)", () => {
     expect(useSession.getState().plotPanelSettings).toBe(before);
   });
 
-  it("setPlotYAxisMode toggles between shared and byUnit (P1)", () => {
-    // Default is byUnit (read via DEFAULT_PLOT_PANEL_SETTINGS), so the
-    // first meaningful write flips to shared.
-    useSession.getState().setPlotYAxisMode("plot-1", "shared");
+  it("setPlotChannelAxis assigns, clamps, and clears per-channel", () => {
+    // Axis 0 is the default; assigning a non-zero axis records it.
+    useSession.getState().setPlotChannelAxis("plot-1", "/speed", 1);
     expect(useSession.getState().plotPanelSettings["plot-1"]).toEqual({
       gapThresholdSec: null,
-      yAxisMode: "shared",
+      axisAssignments: { "/speed": 1 },
     });
-    useSession.getState().setPlotYAxisMode("plot-1", "byUnit");
+    // Out-of-range clamps to MAX_PLOT_Y_AXES - 1 (3).
+    useSession.getState().setPlotChannelAxis("plot-1", "/rpm", 99);
     expect(
-      useSession.getState().plotPanelSettings["plot-1"].yAxisMode,
-    ).toBe("byUnit");
+      useSession.getState().plotPanelSettings["plot-1"].axisAssignments,
+    ).toEqual({ "/speed": 1, "/rpm": 3 });
+    // Assigning back to axis 0 deletes the entry (0 is the default).
+    useSession.getState().setPlotChannelAxis("plot-1", "/speed", 0);
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"].axisAssignments,
+    ).toEqual({ "/rpm": 3 });
     // No-op when unchanged: identity preserved.
     const before = useSession.getState().plotPanelSettings;
-    useSession.getState().setPlotYAxisMode("plot-1", "byUnit");
+    useSession.getState().setPlotChannelAxis("plot-1", "/rpm", 3);
     expect(useSession.getState().plotPanelSettings).toBe(before);
+  });
+
+  it("setChannelUnit overrides globally and reverts on null", () => {
+    useSession.getState().setChannelUnit("/speed", "km/h");
+    expect(useSession.getState().unitOverrides).toEqual({ "/speed": "km/h" });
+    // Empty string is a valid override meaning "explicitly no unit".
+    useSession.getState().setChannelUnit("/speed", "");
+    expect(useSession.getState().unitOverrides["/speed"]).toBe("");
+    // No-op when unchanged: identity preserved.
+    const before = useSession.getState().unitOverrides;
+    useSession.getState().setChannelUnit("/speed", "");
+    expect(useSession.getState().unitOverrides).toBe(before);
+    // null reverts to the file-inferred unit (deletes the entry).
+    useSession.getState().setChannelUnit("/speed", null);
+    expect("/speed" in useSession.getState().unitOverrides).toBe(false);
   });
 
   it("setPlotChannelTransform stores and clears per-channel (P7)", () => {

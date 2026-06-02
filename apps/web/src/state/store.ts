@@ -131,14 +131,12 @@ export type PlotTransform =
   | { kind: "scale"; mul: number; add: number };
 
 /**
- * How a plot panel groups its series onto y-axes (P1).
- * - `"shared"` — every series shares one auto-ranged `"y"` scale (the
- *   pre-P1 behaviour).
- * - `"byUnit"` — series are grouped by `channel.unit`; each distinct unit
- *   gets its own auto-ranged scale + axis, so a 0–1 signal and a 0–10000
- *   signal stay individually readable. Default.
+ * The most y-axes a single plot panel can split its series across. Axis
+ * indices are 0-based and clamped to `[0, MAX_PLOT_Y_AXES - 1]`; index 0
+ * is the canonical left scale `"y"` (the e2e plot-sync specs read it), the
+ * rest render on the right.
  */
-export type PlotYAxisMode = "shared" | "byUnit";
+export const MAX_PLOT_Y_AXES = 4;
 
 /**
  * Per-plot-panel display settings. The shape is an object so future
@@ -152,21 +150,28 @@ export type PlotYAxisMode = "shared" | "byUnit";
  * dx exceeding the threshold; see `mergeSeries` for the rendering
  * contract.
  *
- * `yAxisMode` and `transforms` are OPTIONAL (additive — payloads written
- * before P1/P7 omit them). Readers default via
+ * `axisAssignments` maps a bound channel id → the 0-based y-axis it should
+ * render on. Units no longer drive y-axis grouping; the user assigns axes
+ * explicitly here. Absent / out-of-range entries default to axis 0, so a
+ * panel that never touches the setting keeps every series on one shared
+ * scale.
+ *
+ * `axisAssignments` and `transforms` are OPTIONAL (additive — payloads
+ * written before they existed omit them). Readers default via
  * `DEFAULT_PLOT_PANEL_SETTINGS`; the persistence validators tolerate the
  * extra keys, so they round-trip without a schema bump.
  */
 export interface PlotPanelSettings {
   gapThresholdSec: number | null;
-  yAxisMode?: PlotYAxisMode;
+  // Keyed by channel id → 0-based y-axis index. Absent ⇒ axis 0.
+  axisAssignments?: Record<string, number>;
   // Keyed by channel id. Absent / `{ kind: "none" }` means pass-through.
   transforms?: Record<string, PlotTransform>;
 }
 
 export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
   gapThresholdSec: null,
-  yAxisMode: "byUnit",
+  axisAssignments: {},
   transforms: {},
 };
 
@@ -214,6 +219,12 @@ export interface SessionState {
   // gap-threshold choice. Round-trips through the layout adapter and
   // named-layout snapshots so reload restores it.
   plotPanelSettings: Record<string, PlotPanelSettings>;
+  // Global per-channel unit overrides, keyed by channel id. A signal's
+  // unit is inferred from the file on load but is often missing or wrong,
+  // so the user can override it; the override applies everywhere that
+  // channel is shown. An empty string means "explicitly no unit"; an
+  // absent entry falls back to `channel.unit`. See `state/units.ts`.
+  unitOverrides: Record<string, string>;
   // Per-video-panel HUD overlay bit (Phase 5). Lifted out of
   // `VideoPanel` local state so the Panel drawer can flip it from outside
   // the panel. Persisted via the layout adapter (schema v2). Default
@@ -345,11 +356,19 @@ export interface SessionState {
    */
   setPlotGapThreshold(panelId: string, sec: number | null): void;
   /**
-   * Set a plot panel's y-axis grouping mode (P1). `"shared"` puts every
-   * series on one `"y"` scale; `"byUnit"` groups by `channel.unit`.
-   * Persists through the layout adapter like the other plot settings.
+   * Assign a bound channel to a 0-based y-axis within a plot panel. The
+   * index is clamped to `[0, MAX_PLOT_Y_AXES - 1]`; axis 0 is the shared
+   * default, so assigning a channel to 0 clears its entry. Persists through
+   * the layout adapter like the other plot settings.
    */
-  setPlotYAxisMode(panelId: string, mode: PlotYAxisMode): void;
+  setPlotChannelAxis(panelId: string, channelId: string, axis: number): void;
+  /**
+   * Override a channel's unit globally (keyed by channel id). Pass a string
+   * to set the override (`""` means "explicitly no unit"); pass `null` to
+   * clear it and fall back to the file-inferred unit. Persists through the
+   * layout adapter.
+   */
+  setChannelUnit(channelId: string, unit: string | null): void;
   /**
    * Set (or clear) a per-series transform (P7 · derived channels). A
    * `{ kind: "none" }` transform is stored as a deletion so a default
@@ -614,6 +633,7 @@ export const useSession = create<SessionState>((set, get) => {
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
     plotPanelSettings: hydrated?.plotPanelSettings ?? {},
+    unitOverrides: hydrated?.unitOverrides ?? {},
     videoHudOn: hydrated?.videoHudOn ?? {},
     sceneBindings: hydrated?.sceneBindings ?? {},
     mapBindings: hydrated?.mapBindings ?? {},
@@ -770,8 +790,8 @@ export const useSession = create<SessionState>((set, get) => {
       const prev = get().plotPanelSettings;
       // Spread only the panel's *actual* prior settings (not the full
       // defaults) so an untouched panel keeps a minimal `{ gapThresholdSec }`
-      // payload — yAxisMode / transforms stay absent until the user sets
-      // them, and readers default via `?? "byUnit"` / `?? {}`.
+      // payload — axisAssignments / transforms stay absent until the user
+      // sets them, and readers default via `?? {}`.
       const existing = prev[panelId];
       // Normalise: any non-finite or non-positive value collapses to
       // null (the "off" state), so the persistence layer doesn't have
@@ -787,22 +807,50 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
-    setPlotYAxisMode(panelId, mode) {
+    setPlotChannelAxis(panelId, channelId, axis) {
       const prev = get().plotPanelSettings;
       const existing = prev[panelId];
-      const current =
-        existing?.yAxisMode ?? DEFAULT_PLOT_PANEL_SETTINGS.yAxisMode;
-      if (current === mode) return;
+      // Clamp into the renderable range; non-finite input collapses to 0.
+      const clamped =
+        Number.isFinite(axis) && axis > 0
+          ? Math.min(Math.floor(axis), MAX_PLOT_Y_AXES - 1)
+          : 0;
+      const nextAssignments: Record<string, number> = {
+        ...(existing?.axisAssignments ?? {}),
+      };
+      // Axis 0 is the default, so store it as a deletion to keep an
+      // untouched panel's map empty (mirrors the transforms "none" posture).
+      if (clamped === 0) {
+        if (!(channelId in nextAssignments)) return;
+        delete nextAssignments[channelId];
+      } else {
+        if (nextAssignments[channelId] === clamped) return;
+        nextAssignments[channelId] = clamped;
+      }
       set({
         plotPanelSettings: {
           ...prev,
           [panelId]: {
             ...existing,
             gapThresholdSec: existing?.gapThresholdSec ?? null,
-            yAxisMode: mode,
+            axisAssignments: nextAssignments,
           },
         },
       });
+    },
+
+    setChannelUnit(channelId, unit) {
+      const prev = get().unitOverrides;
+      if (unit === null) {
+        // Revert to the file-inferred unit.
+        if (!(channelId in prev)) return;
+        const next = { ...prev };
+        delete next[channelId];
+        set({ unitOverrides: next });
+        return;
+      }
+      if (prev[channelId] === unit) return;
+      set({ unitOverrides: { ...prev, [channelId]: unit } });
     },
 
     setPlotChannelTransform(panelId, channelId, transform) {
@@ -1307,6 +1355,7 @@ export const useSession = create<SessionState>((set, get) => {
           videoBindings: {},
           plotBindings: {},
           plotPanelSettings: {},
+          unitOverrides: {},
           videoHudOn: {},
           sceneBindings: {},
           mapBindings: {},

@@ -41,6 +41,8 @@ export interface MapBinding {
 
 export interface PlotPanelSettingsLite {
   gapThresholdSec: number | null;
+  // Per-channel-id → 0-based y-axis index. Optional (additive field).
+  axisAssignments?: Record<string, number>;
 }
 
 export interface PersistedLayout {
@@ -55,6 +57,8 @@ export interface PersistedLayout {
   valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
+  // Global per-channel unit overrides, keyed by channel id.
+  unitOverrides: Record<string, string>;
 }
 
 function defaultStorage(): Storage | undefined {
@@ -102,6 +106,23 @@ function isMapBindingMap(
   return true;
 }
 
+function isStringMap(v: unknown): v is Record<string, string> {
+  if (!isPlainObject(v)) return false;
+  for (const k of Object.keys(v)) {
+    if (typeof v[k] !== "string") return false;
+  }
+  return true;
+}
+
+function isAxisAssignmentMap(v: unknown): v is Record<string, number> {
+  if (!isPlainObject(v)) return false;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (typeof x !== "number" || !Number.isInteger(x) || x < 0) return false;
+  }
+  return true;
+}
+
 function isPlotPanelSettingsMap(
   v: unknown,
 ): v is Record<string, PlotPanelSettingsLite> {
@@ -114,6 +135,10 @@ function isPlotPanelSettingsMap(
     // store would just normalise away anyway. The store's setter
     // already guards on write; this guards on read.
     if (t !== null && (typeof t !== "number" || !Number.isFinite(t))) {
+      return false;
+    }
+    // Optional, additive field — only validate when present.
+    if (x.axisAssignments !== undefined && !isAxisAssignmentMap(x.axisAssignments)) {
       return false;
     }
   }
@@ -140,6 +165,8 @@ function validate(raw: unknown): PersistedLayout | null {
   if (!isPlotPanelSettingsMap(settings)) return null;
   const valueBindings = raw.valueBindings ?? {};
   if (!isStringArrayMap(valueBindings)) return null;
+  const unitOverrides = raw.unitOverrides ?? {};
+  if (!isStringMap(unitOverrides)) return null;
   return {
     version: LAYOUT_SCHEMA_VERSION,
     layoutJson: raw.layoutJson ?? null,
@@ -152,6 +179,7 @@ function validate(raw: unknown): PersistedLayout | null {
     valueBindings,
     enumBindings: raw.enumBindings,
     plotPanelSettings: settings,
+    unitOverrides,
   };
 }
 
@@ -201,6 +229,7 @@ export interface LayoutSlice {
   valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string | null>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
+  unitOverrides: Record<string, string>;
 }
 
 function snapshot(s: LayoutSlice): PersistedLayout {
@@ -216,6 +245,7 @@ function snapshot(s: LayoutSlice): PersistedLayout {
     valueBindings: s.valueBindings,
     enumBindings: s.enumBindings,
     plotPanelSettings: s.plotPanelSettings,
+    unitOverrides: s.unitOverrides,
   };
 }
 
@@ -240,7 +270,8 @@ export function attachLayoutPersistence(
       s.tableBindings === last.tableBindings &&
       s.valueBindings === last.valueBindings &&
       s.enumBindings === last.enumBindings &&
-      s.plotPanelSettings === last.plotPanelSettings
+      s.plotPanelSettings === last.plotPanelSettings &&
+      s.unitOverrides === last.unitOverrides
     ) {
       return;
     }

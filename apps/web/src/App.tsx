@@ -108,6 +108,18 @@ declare global {
         channelId: string | null,
       ) => void;
       addPlotChannelBinding: (panelId: string, channelId: string) => void;
+      // Assign a bound channel to a 0-based y-axis within a plot panel.
+      setPlotChannelAxis: (
+        panelId: string,
+        channelId: string,
+        axis: number,
+      ) => void;
+      // Override a channel's unit globally (or `null` to revert to the
+      // file-inferred unit).
+      setChannelUnitOverride: (
+        channelId: string,
+        unit: string | null,
+      ) => void;
       // Phase 6 — bind new panel kinds programmatically from e2e.
       setSceneChannelBinding: (
         panelId: string,
@@ -380,6 +392,10 @@ export function App() {
         useSession.getState().setVideoBinding(panelId, channelId),
       addPlotChannelBinding: (panelId, channelId) =>
         useSession.getState().addPlotChannel(panelId, channelId),
+      setPlotChannelAxis: (panelId, channelId, axis) =>
+        useSession.getState().setPlotChannelAxis(panelId, channelId, axis),
+      setChannelUnitOverride: (channelId, unit) =>
+        useSession.getState().setChannelUnit(channelId, unit),
       setSceneChannelBinding: (panelId, channelId) =>
         useSession.getState().setSceneBinding(panelId, channelId),
       setMapChannelBinding: (panelId, binding) =>

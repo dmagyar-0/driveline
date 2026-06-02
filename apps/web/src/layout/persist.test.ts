@@ -48,9 +48,10 @@ const SAMPLE: PersistedLayout = {
   },
   enumBindings: { "enum-1": "/state/gear", "enum-2": null },
   plotPanelSettings: {
-    "plot-1": { gapThresholdSec: 1.5 },
+    "plot-1": { gapThresholdSec: 1.5, axisAssignments: { "/vehicle/rpm": 1 } },
     "plot-2": { gapThresholdSec: null },
   },
+  unitOverrides: { "/vehicle/speed": "km/h", "/vehicle/rpm": "" },
 };
 
 describe("layout persist", () => {
@@ -196,9 +197,34 @@ describe("layout persist", () => {
       valueBindings: {},
       enumBindings: {},
       plotPanelSettings: {},
+      unitOverrides: {},
     };
     saveLayoutToStorage(payload, s);
     expect(loadLayoutFromStorage(s)).toEqual(payload);
+  });
+
+  it("treats a missing unitOverrides as an empty map (backwards compat)", () => {
+    const s = makeStorage();
+    // A payload written before unitOverrides existed must still load, with
+    // the field defaulting to an empty map.
+    s.setItem(
+      "driveline.layout.v3",
+      JSON.stringify({
+        version: 3,
+        layoutJson: null,
+        videoBindings: {},
+        plotBindings: {},
+        videoHudOn: {},
+        sceneBindings: {},
+        mapBindings: {},
+        tableBindings: {},
+        valueBindings: {},
+        enumBindings: {},
+        plotPanelSettings: {},
+        // unitOverrides intentionally absent
+      }),
+    );
+    expect(loadLayoutFromStorage(s)?.unitOverrides).toEqual({});
   });
 
   it("treats a missing plotPanelSettings as an empty map (Phase 8 backwards compat)", () => {
@@ -275,6 +301,7 @@ const EMPTY_SLICE: LayoutSlice = {
   valueBindings: {},
   enumBindings: {},
   plotPanelSettings: {},
+  unitOverrides: {},
 };
 
 describe("attachLayoutPersistence", () => {
@@ -394,6 +421,23 @@ describe("attachLayoutPersistence", () => {
     const loaded = loadLayoutFromStorage(s);
     expect(loaded?.plotPanelSettings).toEqual({
       "plot-1": { gapThresholdSec: 2 },
+    });
+    stop();
+  });
+
+  it("writes when unitOverrides changes ref", () => {
+    const s = makeStorage();
+    const store = makeFakeStore(EMPTY_SLICE);
+    const stop = attachLayoutPersistence(
+      store as unknown as typeof useSession,
+      s,
+    );
+    store.push({
+      ...EMPTY_SLICE,
+      unitOverrides: { "/vehicle/speed": "km/h" },
+    });
+    expect(loadLayoutFromStorage(s)?.unitOverrides).toEqual({
+      "/vehicle/speed": "km/h",
     });
     stop();
   });
