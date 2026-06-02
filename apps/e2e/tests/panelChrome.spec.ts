@@ -190,12 +190,19 @@ test.describe("Per-panel chrome (Phase 7)", () => {
     ).toHaveCount(0);
   });
 
-  test("collapse icon is rendered as disabled chrome", async ({ page }) => {
-    const collapses = tabChrome(page, "tab-collapse");
-    await expect(collapses).toHaveCount(2);
-    // The disabled button advertises its state for assistive tech and
-    // is removed from tab order — assert both contracts.
-    await expect(collapses.first()).toHaveAttribute("aria-disabled", "true");
-    await expect(collapses.first()).toHaveAttribute("tabindex", "-1");
+  test("each tab shows exactly one close button (no duplicate stock ✕)", async ({
+    page,
+  }) => {
+    // `onRenderTab` draws one custom close per tab → two for the default
+    // Video + Plot layout.
+    await expect(tabChrome(page, "tab-close")).toHaveCount(2);
+    // FlexLayout otherwise appends its own trailing close
+    // (`flexlayout__tab_button_trailing`) whenever `tabEnableClose` is on,
+    // which used to render a second ✕. `buildModel` forces
+    // `tabEnableClose:false` for every loaded layout, so no tab carries the
+    // stock button.
+    await expect(
+      page.locator(".flexlayout__tabset .flexlayout__tab_button_trailing"),
+    ).toHaveCount(0);
   });
 });
