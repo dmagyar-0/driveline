@@ -39,6 +39,7 @@ import {
 } from "react";
 import { useSession, type Channel, type SourceMeta } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
+import { setChannelDragData } from "../../panels/channelDrag";
 import { panelKindOf } from "../../layout/panelId";
 import {
   buildChannelTree,
@@ -78,6 +79,30 @@ interface Props {
    *  mounted). The drawer calls this when the user clicks a channel
    *  while no panel is selected. */
   ensurePlotPanel: () => string | null;
+}
+
+// Disclosure chevron for source-header and branch rows. The glyph points
+// right when collapsed and the CSS rotates it to point down when the parent
+// button reports `aria-expanded="true"` (see ChannelsDrawer.module.css).
+// Driving orientation off the button's aria state keeps a single source of
+// truth and lets the rotation animate as a cheap `transform`. Stroked SVG
+// (matching the icon convention in `Rail.tsx`) reads far more clearly at this
+// size than the Unicode triangle glyphs it replaces.
+function Chevron() {
+  return (
+    <svg
+      className={s.chevron}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
 }
 
 // Largest index whose item *top* sits at or before `scrollTop`. `offsets`
@@ -224,6 +249,21 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
     }
   };
 
+  // Drag a channel onto a plot panel to bind it there. Only scalar channels
+  // can land on a plot (the sole drop target today), so only scalar rows are
+  // `draggable`; this guard is belt-and-braces for anything that slips
+  // through. The drop side (PlotPanel) re-validates against the live store.
+  const onDragStartChannel = (
+    e: React.DragEvent<HTMLButtonElement>,
+    channel: Channel,
+  ) => {
+    if (channel.kind !== "scalar") {
+      e.preventDefault();
+      return;
+    }
+    setChannelDragData(e.dataTransfer, channel.id);
+  };
+
   const toggleCollapse = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -344,9 +384,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                       onClick={() => toggleCollapse(src.id)}
                       data-testid={`channels-group-${src.id}`}
                     >
-                      <span className={s.chevron} aria-hidden="true">
-                        {expanded ? "▾" : "▸"}
-                      </span>
+                      <Chevron />
                       <span className={s.groupName} title={src.name}>
                         {src.name}
                       </span>
@@ -374,9 +412,7 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                       onClick={() => toggleCollapse(branchKey)}
                       data-testid={`channels-branch-${branchKey}`}
                     >
-                      <span className={s.chevron} aria-hidden="true">
-                        {expanded ? "▾" : "▸"}
-                      </span>
+                      <Chevron />
                       <span className={s.branchName} title={node.key}>
                         {node.label}
                       </span>
@@ -402,6 +438,8 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
                     style={{ "--depth": depth } as CSSProperties}
                     aria-pressed={bound}
                     aria-disabled={disabled || undefined}
+                    draggable={channel.kind === "scalar"}
+                    onDragStart={(e) => onDragStartChannel(e, channel)}
                     title={
                       bound
                         ? "Already bound to this panel"
