@@ -44,6 +44,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io::SeekFrom;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow_array::{
@@ -137,6 +138,19 @@ pub struct McapVideoCursor {
     done: bool,
 }
 
+/// How many decompressed chunk record buffers to keep resident. Bounds memory
+/// to a handful of recently-touched chunks so a video re-seek or a fetch over
+/// an already-touched window doesn't re-range-read and re-decompress, without
+/// holding the whole file.
+const CHUNK_CACHE_CAP: usize = 8;
+
+/// How many parsed per-(segment, channel) sample runs to keep resident. A
+/// dense dashboard refetches many channels over the same window on every seek;
+/// caching the parsed samples turns those repeats into a slice instead of
+/// re-parsing every message's JSON. FIFO-bounded so panning over a long file
+/// can't grow unbounded.
+const VALUE_CACHE_CAP: usize = 256;
+
 pub struct McapReader {
     /// Source of record bytes. `RefCell` because reads take `&mut R` while the
     /// public methods only have `&self`. Never holds the whole file.
@@ -146,6 +160,13 @@ pub struct McapReader {
     channels: HashMap<ChannelId, ChannelMeta>,
     /// Decodable segments, sorted by `start_time`.
     segments: Vec<Segment>,
+    /// FIFO cache of decompressed chunk record buffers, keyed by segment index.
+    /// Feeds both video decode (re-seek locality) and signal parsing.
+    chunk_cache: RefCell<VecDeque<(usize, Rc<Vec<u8>>)>>,
+    /// FIFO cache of parsed signal samples, keyed by `(segment index, mcap
+    /// channel id)`. Time-sorted within each entry. Makes repeated pan/seek
+    /// fetches over the same window cheap (no re-parse).
+    value_cache: RefCell<VecDeque<((usize, u16), Rc<Vec<(i64, ParsedValue)>>)>>,
 }
 
 impl McapReader {
@@ -345,6 +366,8 @@ impl McapReader {
             },
             channels: channel_meta,
             segments,
+            chunk_cache: RefCell::new(VecDeque::new()),
+            value_cache: RefCell::new(VecDeque::new()),
         })
     }
 
@@ -352,10 +375,65 @@ impl McapReader {
         &self.meta
     }
 
-    /// Read+decompress segment `idx`'s record bytes.
-    fn read_segment(&self, idx: usize) -> crate::Result<Vec<u8>> {
+    /// Read+decompress segment `idx`'s record bytes, serving from (and
+    /// populating) the bounded chunk cache so a re-touch is a cheap clone.
+    fn read_segment(&self, idx: usize) -> crate::Result<Rc<Vec<u8>>> {
+        let cached = self
+            .chunk_cache
+            .borrow()
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, b)| b.clone());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
         let seg = self.segments[idx].clone();
-        read_segment_bytes(&mut self.reader.borrow_mut(), &seg)
+        let buf = Rc::new(read_segment_bytes(&mut self.reader.borrow_mut(), &seg)?);
+        let mut cache = self.chunk_cache.borrow_mut();
+        cache.push_back((idx, buf.clone()));
+        while cache.len() > CHUNK_CACHE_CAP {
+            cache.pop_front();
+        }
+        Ok(buf)
+    }
+
+    /// Parsed signal samples for one channel within one segment, time-sorted,
+    /// served from (and populating) the bounded value cache. Repeated fetches
+    /// over the same window reuse this instead of re-parsing message JSON.
+    fn parsed_for(
+        &self,
+        seg_idx: usize,
+        mcap_id: u16,
+        kind: ChannelKind,
+    ) -> crate::Result<Rc<Vec<(i64, ParsedValue)>>> {
+        let key = (seg_idx, mcap_id);
+        let cached = self
+            .value_cache
+            .borrow()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.clone());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
+        let buf = self.read_segment(seg_idx)?;
+        let mut samples: Vec<(i64, ParsedValue)> = Vec::new();
+        for_each_message(buf.as_slice(), |cid, log_time, payload| {
+            if cid != mcap_id {
+                return;
+            }
+            if let Some(v) = parse_value(kind, payload) {
+                samples.push((log_time, v));
+            }
+        });
+        samples.sort_by_key(|s| s.0);
+        let samples = Rc::new(samples);
+        let mut cache = self.value_cache.borrow_mut();
+        cache.push_back((key, samples.clone()));
+        while cache.len() > VALUE_CACHE_CAP {
+            cache.pop_front();
+        }
+        Ok(samples)
     }
 
     pub fn fetch_range(
@@ -400,24 +478,20 @@ impl McapReader {
         }
         idxs.sort_unstable();
 
-        // Decode the selected segments and collect this channel's samples.
-        let mut pairs: Vec<(i64, ParsedValue)> = Vec::new();
+        // Pull the selected segments' parsed samples (cached) and merge into a
+        // single time-sorted view. The `Rc`s are held in `seg_parsed` so the
+        // borrowed refs in `merged` stay valid.
+        let mut seg_parsed: Vec<Rc<Vec<(i64, ParsedValue)>>> = Vec::with_capacity(idxs.len());
         for i in idxs {
-            let buf = self.read_segment(i)?;
-            for_each_message(&buf, |cid, log_time, payload| {
-                if cid != mcap_id {
-                    return;
-                }
-                if let Some(v) = parse_value(cm.kind, payload) {
-                    pairs.push((log_time, v));
-                }
-            });
+            seg_parsed.push(self.parsed_for(i, mcap_id, cm.kind)?);
         }
-        pairs.sort_by_key(|p| p.0);
+        let mut merged: Vec<(i64, &ParsedValue)> = seg_parsed
+            .iter()
+            .flat_map(|s| s.iter().map(|(t, v)| (*t, v)))
+            .collect();
+        merged.sort_by_key(|r| r.0);
 
-        let timestamps: Vec<i64> = pairs.iter().map(|p| p.0).collect();
-        let values: Vec<ParsedValue> = pairs.into_iter().map(|p| p.1).collect();
-
+        let timestamps: Vec<i64> = merged.iter().map(|r| r.0).collect();
         let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
         let end_idx = timestamps
             .partition_point(|&t| t < range.end_ns)
@@ -428,19 +502,19 @@ impl McapReader {
             start_idx
         };
 
+        let ts_slice = &timestamps[lo..end_idx];
+        let val_refs: Vec<&ParsedValue> = merged[lo..end_idx].iter().map(|r| r.1).collect();
+
         match cm.kind {
             ChannelKind::Scalar => {
-                let vals: Vec<f64> = values[lo..end_idx]
-                    .iter()
-                    .map(parsed_scalar_as_f64)
-                    .collect();
-                build_scalar_ipc_raw(&timestamps[lo..end_idx], &vals)
+                let vals: Vec<f64> = val_refs.iter().map(|v| parsed_scalar_as_f64(v)).collect();
+                build_scalar_ipc_raw(ts_slice, &vals)
             }
             ChannelKind::Vector => {
                 let n = if cm.vector_len > 0 { cm.vector_len } else { 3 };
-                build_vector_ipc(&timestamps[lo..end_idx], &values[lo..end_idx], n)
+                build_vector_ipc(ts_slice, &val_refs, n)
             }
-            ChannelKind::Enum => build_enum_ipc(&timestamps[lo..end_idx], &values[lo..end_idx]),
+            ChannelKind::Enum => build_enum_ipc(ts_slice, &val_refs),
             ChannelKind::Video | ChannelKind::Bytes => unreachable!("guarded above"),
         }
     }
@@ -582,7 +656,7 @@ impl McapReader {
     ) -> crate::Result<Vec<EncodedChunk>> {
         let buf = self.read_segment(seg_idx)?;
         let mut out: Vec<EncodedChunk> = Vec::new();
-        for_each_message(&buf, |cid, log_time, payload| {
+        for_each_message(buf.as_slice(), |cid, log_time, payload| {
             if cid != mcap_id {
                 return;
             }
@@ -926,7 +1000,7 @@ fn build_scalar_ipc_raw(timestamps: &[i64], values: &[f64]) -> crate::Result<Arr
 
 fn build_vector_ipc(
     timestamps: &[i64],
-    values: &[ParsedValue],
+    values: &[&ParsedValue],
     n: usize,
 ) -> crate::Result<ArrowIpc> {
     let schema = vector_schema(n);
@@ -947,7 +1021,7 @@ fn build_vector_ipc(
     write_ipc(schema, batch)
 }
 
-fn build_enum_ipc(timestamps: &[i64], values: &[ParsedValue]) -> crate::Result<ArrowIpc> {
+fn build_enum_ipc(timestamps: &[i64], values: &[&ParsedValue]) -> crate::Result<ArrowIpc> {
     let schema = enum_schema();
     let ts = TimestampNanosecondArray::from(timestamps.to_vec()).with_timezone("UTC");
     let codes: Vec<i32> = values
