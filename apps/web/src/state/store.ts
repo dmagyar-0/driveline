@@ -1226,8 +1226,10 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const f of buckets.mcap) {
           try {
-            const bytes = await fileBytes(f);
-            const handle = await w.openMcap(bytes);
+            // Pass the `File` itself, not its bytes: the worker copies it into
+            // OPFS (streamed) and reads the summary + chunks lazily via a sync
+            // access handle, so a multi-gigabyte MCAP is never held in memory.
+            const handle = await w.openMcap(f);
             const summary = await w.mcapSummary(handle);
             const id = uniqueSourceId(f.name, [...existing, ...newSources]);
             const channels = mcapChannels(id, summary);

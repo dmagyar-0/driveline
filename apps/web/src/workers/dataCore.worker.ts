@@ -8,6 +8,7 @@ import init, {
   mf4_summary,
   mf4_fetch_range,
   open_mcap,
+  open_mcap_ranged,
   close_mcap,
   mcap_summary,
   mcap_fetch_range,
@@ -117,6 +118,43 @@ async function mf4OpfsDir(): Promise<FileSystemDirectoryHandle> {
 }
 
 /**
+ * Lazy-read backing for dropped MCAP sources — same shape as `Mf4Backing`.
+ * MCAP decoding is synchronous inside wasm, so a dropped `.mcap` is streamed
+ * into OPFS and read through a `FileSystemSyncAccessHandle`; only the summary
+ * is read at open and chunks stream on demand, so a multi-gigabyte file is
+ * never held in memory. Keyed by the wasm reader handle.
+ */
+interface McapBacking {
+  access: FileSystemSyncAccessHandle;
+  fileName: string;
+}
+const mcapBackings = new Map<number, McapBacking>();
+const MCAP_OPFS_DIR = "mcap-lazy";
+
+async function mcapOpfsDir(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory();
+  return root.getDirectoryHandle(MCAP_OPFS_DIR, { create: true });
+}
+
+/**
+ * Stream `file` into a fresh OPFS entry under `mcap-lazy` and return a
+ * synchronous access handle plus the entry name.
+ */
+async function openMcapSyncAccess(
+  file: File,
+): Promise<{ access: FileSystemSyncAccessHandle; fileName: string }> {
+  const dir = await mcapOpfsDir();
+  const fileName = `${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2)}.mcap`;
+  const fh = await dir.getFileHandle(fileName, { create: true });
+  const writable = await fh.createWritable();
+  await file.stream().pipeTo(writable);
+  const access = await fh.createSyncAccessHandle();
+  return { access, fileName };
+}
+
+/**
  * Stream `file` into a fresh OPFS entry and return a synchronous access
  * handle plus the entry name. The copy uses a streaming pipe, so peak memory
  * is one chunk rather than the whole file.
@@ -137,24 +175,26 @@ async function openMf4SyncAccess(
 }
 
 /**
- * Probe a remote MF4 over HTTP and return its total byte length.
+ * Probe a remote file over HTTP and return its total byte length.
  *
- * MF4 decoding is synchronous inside wasm, so the lazy ranged path needs a
- * *synchronous* reader (the OPFS path uses a sync access handle). For a URL we
- * use synchronous `XMLHttpRequest` — permitted inside a Worker — issuing
- * `Range` requests. This probe asks for a single byte and reads the total size
- * out of the `Content-Range` header, which doubles as a check that the server
- * actually honours range requests (status 206). A server that ignores `Range`
- * (200, whole body) can't back a lazy reader, so we fail loudly here.
+ * Both the MF4 and MCAP readers decode synchronously inside wasm, so the lazy
+ * ranged path needs a *synchronous* reader (the OPFS path uses a sync access
+ * handle). For a URL we use synchronous `XMLHttpRequest` — permitted inside a
+ * Worker — issuing `Range` requests. This probe asks for a single byte and
+ * reads the total size out of the `Content-Range` header, which doubles as a
+ * check that the server actually honours range requests (status 206). A server
+ * that ignores `Range` (200, whole body) can't back a lazy reader, so we fail
+ * loudly here; the MCAP caller catches this and falls back to a whole-body
+ * fetch.
  */
-function mf4UrlProbeSize(url: string): number {
+function urlProbeSize(url: string): number {
   const xhr = new XMLHttpRequest();
   xhr.open("GET", url, false); // synchronous — only legal off the main thread
   xhr.setRequestHeader("Range", "bytes=0-0");
   xhr.send();
   if (xhr.status !== 206) {
     throw new Error(
-      `MF4 URL does not support HTTP range requests ` +
+      `URL does not support HTTP range requests ` +
         `(got status ${xhr.status}, expected 206). The server must send ` +
         `'Accept-Ranges: bytes' and honour the Range header.`,
     );
@@ -164,7 +204,7 @@ function mf4UrlProbeSize(url: string): number {
   const total = contentRange?.split("/")[1];
   if (!total || total === "*" || !Number.isFinite(Number(total))) {
     throw new Error(
-      `MF4 URL range response missing a usable total size ` +
+      `URL range response missing a usable total size ` +
         `(Content-Range: ${contentRange ?? "<none>"}).`,
     );
   }
@@ -173,23 +213,18 @@ function mf4UrlProbeSize(url: string): number {
 
 /**
  * Synchronous ranged read against `url`, used as the wasm `readRange`
- * callback for a URL-backed MF4. wasm invokes this once per data block while
- * decoding a channel, so only the bytes actually plotted are ever fetched.
+ * callback for a URL-backed source. wasm invokes this once per data block /
+ * chunk while decoding, so only the bytes actually plotted (or the video
+ * chunks actually played) are ever fetched.
  */
-function mf4UrlReadRange(
-  url: string,
-  offset: number,
-  length: number,
-): Uint8Array {
+function urlReadRange(url: string, offset: number, length: number): Uint8Array {
   const xhr = new XMLHttpRequest();
   xhr.open("GET", url, false);
   xhr.responseType = "arraybuffer"; // allowed for sync XHR inside a Worker
   xhr.setRequestHeader("Range", `bytes=${offset}-${offset + length - 1}`);
   xhr.send();
   if (xhr.status !== 206 && xhr.status !== 200) {
-    throw new Error(
-      `mf4 url readRange failed at ${offset}: status ${xhr.status}`,
-    );
+    throw new Error(`url readRange failed at ${offset}: status ${xhr.status}`);
   }
   let buf = new Uint8Array(xhr.response as ArrayBuffer);
   // A non-conforming server may answer a Range with the whole body (200);
@@ -199,7 +234,7 @@ function mf4UrlReadRange(
   }
   if (buf.length !== length) {
     throw new Error(
-      `mf4 url short read at ${offset}: wanted ${length}, got ${buf.length}`,
+      `url short read at ${offset}: wanted ${length}, got ${buf.length}`,
     );
   }
   return buf;
@@ -257,9 +292,9 @@ export const dataCoreApi = {
    */
   async openMf4Url(url: string): Promise<number> {
     await ready;
-    const fileSize = mf4UrlProbeSize(url);
+    const fileSize = urlProbeSize(url);
     const readRange = (offset: number, length: number): Uint8Array =>
-      mf4UrlReadRange(url, offset, length);
+      urlReadRange(url, offset, length);
     return open_mf4_ranged(readRange, fileSize);
   },
   async closeMf4(handle: number): Promise<void> {
@@ -295,27 +330,81 @@ export const dataCoreApi = {
     await ready;
     return mf4_fetch_range(handle, channelId, startNs, endNs, includePrev);
   },
-  async openMcap(bytes: Uint8Array): Promise<number> {
+  /**
+   * Open a dropped `.mcap` lazily. Like the MF4 path, the file is streamed
+   * into OPFS and read through a sync access handle: only the summary is read
+   * at open, and channel samples / video chunks stream on demand, so a
+   * multi-gigabyte recording is never materialised in wasm memory.
+   */
+  async openMcap(file: File): Promise<number> {
     await ready;
-    return open_mcap(bytes);
+    const { access, fileName } = await openMcapSyncAccess(file);
+    const readRange = (offset: number, length: number): Uint8Array => {
+      const buf = new Uint8Array(length);
+      const got = access.read(buf, { at: offset });
+      if (got !== length) {
+        throw new Error(
+          `mcap readRange short read at ${offset}: wanted ${length}, got ${got}`,
+        );
+      }
+      return buf;
+    };
+    let handle: number;
+    try {
+      handle = open_mcap_ranged(readRange, file.size);
+    } catch (e) {
+      // Opening failed — don't leak the OPFS copy or the sync handle.
+      access.close();
+      try {
+        const dir = await mcapOpfsDir();
+        await dir.removeEntry(fileName);
+      } catch {
+        /* best-effort cleanup */
+      }
+      throw e;
+    }
+    mcapBackings.set(handle, { access, fileName });
+    return handle;
   },
   /**
-   * Open an MCAP from a URL. MCAP has no ranged/lazy reader — the whole file
-   * is parsed into wasm memory at open time — so this fetches the full body
-   * up front, the same shape as a dropped `.mcap` (just sourced over HTTP).
+   * Open an MCAP straight from a URL, reading it lazily over HTTP range
+   * requests — no full download, no OPFS copy. Falls back to a whole-body
+   * fetch + in-memory open when the server does not honour `Range` (a lazy
+   * reader is impossible without range support). The range path registers
+   * nothing in `mcapBackings`; the fallback path also has no handle to
+   * release, so `closeMcap` is a no-op for both URL shapes.
    */
   async openMcapUrl(url: string): Promise<number> {
     await ready;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`fetch ${url} failed: ${res.status} ${res.statusText}`);
+    let fileSize: number;
+    try {
+      fileSize = urlProbeSize(url);
+    } catch {
+      // Range unsupported (or probe failed): fetch the whole body once.
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error(`fetch ${url} failed: ${res.status} ${res.statusText}`);
+      }
+      return open_mcap(new Uint8Array(await res.arrayBuffer()));
     }
-    const bytes = new Uint8Array(await res.arrayBuffer());
-    return open_mcap(bytes);
+    const readRange = (offset: number, length: number): Uint8Array =>
+      urlReadRange(url, offset, length);
+    return open_mcap_ranged(readRange, fileSize);
   },
   async closeMcap(handle: number): Promise<void> {
     await ready;
     close_mcap(handle);
+    const backing = mcapBackings.get(handle);
+    if (backing) {
+      mcapBackings.delete(handle);
+      backing.access.close();
+      try {
+        const dir = await mcapOpfsDir();
+        await dir.removeEntry(backing.fileName);
+      } catch {
+        /* best-effort: the OPFS entry may already be gone */
+      }
+    }
   },
   async mcapSummary(handle: number): Promise<McapSummary> {
     await ready;

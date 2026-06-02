@@ -10,7 +10,7 @@
 //!   cargo run -p data-core --example probe_external -- <kind> <path>
 //!   kind = mf4 | mcap
 
-use data_core::{McapReader, Mf4Reader, Reader};
+use data_core::{McapReader, Mf4Reader};
 use std::env;
 use std::fs;
 use std::process::ExitCode;

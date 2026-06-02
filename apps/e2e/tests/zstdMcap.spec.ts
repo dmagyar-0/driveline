@@ -1,8 +1,9 @@
 // Visual proof that driveline can read a zstd-compressed MCAP. Real-world
 // MCAP files (Foxglove's testdata, ROS 2 default storage) almost always
-// use chunk-level zstd compression. Before the `predecompress_zstd_chunks`
-// pre-pass landed in `crates/data-core/src/mcap.rs`, those files errored
-// at open with `Unsupported compression format \`zstd\``.
+// use chunk-level zstd compression. The lazy ranged `McapReader` in
+// `crates/data-core/src/mcap.rs` decodes those chunks on demand with the
+// pure-Rust `ruzstd` decoder, so they open and plot without pulling in the
+// C `zstd-sys` library the wasm target can't link.
 //
 // This spec loads `sample-data/short.zstd.mcap` — same four-channel
 // corpus as `short.mcap`, just with `CompressionType.ZSTD` chunks per

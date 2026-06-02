@@ -12,7 +12,7 @@ pub mod noop;
 pub mod reader;
 pub mod types;
 
-pub use mcap::McapReader;
+pub use mcap::{McapReader, McapVideoCursor};
 pub use mf4::{BoxedRangeReader, Mf4Reader};
 // Re-exported so out-of-crate callers (e.g. `wasm-bindings`) can implement a
 // custom byte-range source for `Mf4Reader::open_ranged` without taking a
