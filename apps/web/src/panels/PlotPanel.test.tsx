@@ -62,7 +62,7 @@ vi.hoisted(() => {
   };
 });
 
-import { act, cleanup, render } from "@testing-library/react";
+import { act, cleanup, fireEvent, render } from "@testing-library/react";
 
 // React 19 RTL requires this flag so `act(...)` wrappers don't log
 // "environment not configured" noise.
@@ -429,6 +429,85 @@ describe("PlotPanel", () => {
     // NaN neighbour (cursor seeded at 1.0 s → first row, value 1).
     const chipA = await findByTestId("chip-value-chan-a");
     expect(chipA.textContent).toBe("1.000");
+  });
+
+  it("offers the Stack toggle only with ≥2 axes and flips the panel setting", async () => {
+    const { queryByTestId, findByTestId } = render(
+      <PlotPanel panelId="test-panel" />,
+    );
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+
+    // Both channels default to axis 0 → a single axis in use → no toggle.
+    expect(queryByTestId("plot-stack-axes")).toBeNull();
+
+    // Move chan-b onto a second axis → the toggle appears, off by default.
+    await act(async () => {
+      useSession.getState().setPlotChannelAxis("test-panel", "chan-b", 1);
+    });
+    const btn = await findByTestId("plot-stack-axes");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    expect(
+      useSession.getState().plotPanelSettings["test-panel"]?.stackAxes ?? false,
+    ).toBe(false);
+
+    // Clicking the button stacks the axes (drives the store action).
+    await act(async () => {
+      fireEvent.click(btn);
+    });
+    expect(
+      useSession.getState().plotPanelSettings["test-panel"]?.stackAxes,
+    ).toBe(true);
+    expect(
+      (await findByTestId("plot-stack-axes")).getAttribute("aria-pressed"),
+    ).toBe("true");
+
+    // Toggling off clears the flag (stored as a deletion → minimal payload).
+    await act(async () => {
+      fireEvent.click(await findByTestId("plot-stack-axes"));
+    });
+    expect(
+      useSession.getState().plotPanelSettings["test-panel"]?.stackAxes ?? false,
+    ).toBe(false);
+  });
+
+  it("remaps axis 0 into the top band when stacking is enabled", async () => {
+    render(<PlotPanel panelId="test-panel" />);
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+
+    // chan-a stays on axis 0 (scale "y", read by the sync snapshot); chan-b
+    // moves to axis 1 so two axes carry data, then stacking is enabled.
+    await act(async () => {
+      useSession.getState().setPlotChannelAxis("test-panel", "chan-b", 1);
+      useSession.getState().setPlotStackAxes("test-panel", true);
+    });
+
+    // The banded `range` callback resolves scale "y" synchronously inside
+    // setData (like the x-scale), so yScale is readable without a redraw.
+    await waitFor(() =>
+      Boolean(window.__drivelinePlotPanels?.["test-panel"]?.yScale),
+    );
+    const snap = window.__drivelinePlotPanels![
+      "test-panel"
+    ] as PlotSyncSnapshot;
+    const yScale = snap.yScale!;
+    expect(Number.isFinite(yScale.min)).toBe(true);
+    expect(Number.isFinite(yScale.max)).toBe(true);
+
+    // axis 0 data is [1, 3]; stacked into the TOP half it occupies the upper
+    // band — the scale extends well below the data and the data max sits near
+    // the top of the plot (uPlot maps min→bottom, max→top).
+    const frac = (v: number) => (v - yScale.min) / (yScale.max - yScale.min);
+    expect(yScale.min).toBeLessThan(1);
+    expect(frac(3)).toBeGreaterThan(0.85);
+    expect(frac(1)).toBeGreaterThan(0.5);
   });
 
   it("does not clear persisted bindings before any source loads", () => {

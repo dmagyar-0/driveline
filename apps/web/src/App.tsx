@@ -114,6 +114,8 @@ declare global {
         channelId: string,
         axis: number,
       ) => void;
+      // Stack a plot panel's in-use y-axes into vertical bands (or overlay).
+      setPlotStackAxes: (panelId: string, on: boolean) => void;
       // Override a channel's unit globally (or `null` to revert to the
       // file-inferred unit).
       setChannelUnitOverride: (
@@ -394,6 +396,8 @@ export function App() {
         useSession.getState().addPlotChannel(panelId, channelId),
       setPlotChannelAxis: (panelId, channelId, axis) =>
         useSession.getState().setPlotChannelAxis(panelId, channelId, axis),
+      setPlotStackAxes: (panelId, on) =>
+        useSession.getState().setPlotStackAxes(panelId, on),
       setChannelUnitOverride: (channelId, unit) =>
         useSession.getState().setChannelUnit(channelId, unit),
       setSceneChannelBinding: (panelId, channelId) =>

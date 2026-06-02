@@ -43,6 +43,8 @@ export interface PlotPanelSettingsLite {
   gapThresholdSec: number | null;
   // Per-channel-id → 0-based y-axis index. Optional (additive field).
   axisAssignments?: Record<string, number>;
+  // Stack the in-use y-axes into vertical bands. Optional (additive field).
+  stackAxes?: boolean;
 }
 
 export interface PersistedLayout {
@@ -139,6 +141,9 @@ function isPlotPanelSettingsMap(
     }
     // Optional, additive field — only validate when present.
     if (x.axisAssignments !== undefined && !isAxisAssignmentMap(x.axisAssignments)) {
+      return false;
+    }
+    if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {
       return false;
     }
   }

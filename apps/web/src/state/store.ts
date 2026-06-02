@@ -156,8 +156,15 @@ export const MAX_PLOT_Y_AXES = 4;
  * panel that never touches the setting keeps every series on one shared
  * scale.
  *
- * `axisAssignments` and `transforms` are OPTIONAL (additive — payloads
- * written before they existed omit them). Readers default via
+ * `stackAxes` (default `false`) stacks the per-axis scales into vertical
+ * bands instead of overlaying them across the full plot height: each
+ * y-axis in use is remapped so its samples occupy their own horizontal
+ * lane (lowest axis index on top), so signals on different axes can be
+ * read at once without overlapping. Only takes effect when ≥2 axes carry
+ * data; the per-band maths lives in `PlotPanel.stackedBandRange`.
+ *
+ * `axisAssignments`, `transforms`, and `stackAxes` are OPTIONAL (additive
+ * — payloads written before they existed omit them). Readers default via
  * `DEFAULT_PLOT_PANEL_SETTINGS`; the persistence validators tolerate the
  * extra keys, so they round-trip without a schema bump.
  */
@@ -167,12 +174,15 @@ export interface PlotPanelSettings {
   axisAssignments?: Record<string, number>;
   // Keyed by channel id. Absent / `{ kind: "none" }` means pass-through.
   transforms?: Record<string, PlotTransform>;
+  // Stack the in-use y-axes into vertical bands. Absent ⇒ `false` (overlay).
+  stackAxes?: boolean;
 }
 
 export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
   gapThresholdSec: null,
   axisAssignments: {},
   transforms: {},
+  stackAxes: false,
 };
 
 export interface SessionState {
@@ -362,6 +372,13 @@ export interface SessionState {
    * the layout adapter like the other plot settings.
    */
   setPlotChannelAxis(panelId: string, channelId: string, axis: number): void;
+  /**
+   * Toggle stacking of a plot panel's in-use y-axes into vertical bands.
+   * `false` (the default) is stored as a deletion so an untouched panel
+   * keeps a minimal settings payload. Persists through the layout adapter
+   * like the other plot settings; only has a visible effect with ≥2 axes.
+   */
+  setPlotStackAxes(panelId: string, on: boolean): void;
   /**
    * Override a channel's unit globally (keyed by channel id). Pass a string
    * to set the override (`""` means "explicitly no unit"); pass `null` to
@@ -837,6 +854,23 @@ export const useSession = create<SessionState>((set, get) => {
           },
         },
       });
+    },
+
+    setPlotStackAxes(panelId, on) {
+      const prev = get().plotPanelSettings;
+      const existing = prev[panelId];
+      if ((existing?.stackAxes ?? false) === on) return;
+      // Spread the panel's prior settings so axisAssignments / transforms /
+      // gapThreshold survive. `false` is stored as a deletion (mirrors the
+      // axis / transform "default" posture) so an untouched panel keeps a
+      // minimal payload.
+      const next: PlotPanelSettings = {
+        ...existing,
+        gapThresholdSec: existing?.gapThresholdSec ?? null,
+      };
+      if (on) next.stackAxes = true;
+      else delete next.stackAxes;
+      set({ plotPanelSettings: { ...prev, [panelId]: next } });
     },
 
     setChannelUnit(channelId, unit) {

@@ -945,6 +945,33 @@ describe("layout + bindings (T6.2)", () => {
     expect(useSession.getState().plotPanelSettings).toBe(before);
   });
 
+  it("setPlotStackAxes toggles, clears, and preserves sibling settings", () => {
+    const store = useSession.getState();
+    // Enabling records the flag alongside the default gapThreshold.
+    store.setPlotStackAxes("plot-1", true);
+    expect(useSession.getState().plotPanelSettings["plot-1"]).toEqual({
+      gapThresholdSec: null,
+      stackAxes: true,
+    });
+    // A sibling setting (axis assignment) coexists without clobbering it.
+    store.setPlotChannelAxis("plot-1", "/rpm", 2);
+    expect(useSession.getState().plotPanelSettings["plot-1"]).toEqual({
+      gapThresholdSec: null,
+      stackAxes: true,
+      axisAssignments: { "/rpm": 2 },
+    });
+    // Disabling deletes the flag (minimal payload) but keeps the sibling.
+    store.setPlotStackAxes("plot-1", false);
+    expect(useSession.getState().plotPanelSettings["plot-1"]).toEqual({
+      gapThresholdSec: null,
+      axisAssignments: { "/rpm": 2 },
+    });
+    // No-op when unchanged: identity preserved so persist doesn't re-write.
+    const before = useSession.getState().plotPanelSettings;
+    store.setPlotStackAxes("plot-1", false);
+    expect(useSession.getState().plotPanelSettings).toBe(before);
+  });
+
   it("setChannelUnit overrides globally and reverts on null", () => {
     useSession.getState().setChannelUnit("/speed", "km/h");
     expect(useSession.getState().unitOverrides).toEqual({ "/speed": "km/h" });

@@ -209,6 +209,53 @@ export function yAxisSize(
   return Math.ceil(Math.max(size, Y_AXIS_MIN_SIZE));
 }
 
+// Vertical gap reserved at the top and bottom of each band when axes are
+// stacked, as a fraction of the band height. Keeps adjacent signals from
+// touching so the lanes read as distinct.
+export const STACK_BAND_GAP = 0.08;
+
+// Stacked-axes layout. When the user stacks a panel's y-axes, each axis in
+// use gets remapped so its samples occupy a horizontal band instead of the
+// full plot height — letting several signals of different magnitudes be read
+// at once without overlapping. uPlot maps a scale's [min, max] across the
+// full height (min → bottom, max → top), so returning a span *wider* than
+// the data compresses the data into a slice of that height; offsetting the
+// span then slides the slice to the target band.
+//
+// `slot` is the band's 0-based position FROM THE TOP (slot 0 = topmost),
+// `count` the number of stacked bands. Falls back to a unit span when the
+// data extent is missing or degenerate (flat / non-finite) so the returned
+// range is always finite and can't blank the plot.
+export function stackedBandRange(
+  dataMin: number,
+  dataMax: number,
+  slot: number,
+  count: number,
+): [number, number] {
+  const n = Math.max(1, Math.floor(count));
+  const s = Math.min(Math.max(0, Math.floor(slot)), n - 1);
+  let lo = Number.isFinite(dataMin) ? dataMin : 0;
+  let hi = Number.isFinite(dataMax) ? dataMax : 1;
+  if (!(hi > lo)) {
+    // Flat or inverted extent: synthesize a span around the value so the
+    // line sits centred in its band rather than dividing by zero.
+    const mid = Number.isFinite((lo + hi) / 2) ? (lo + hi) / 2 : 0;
+    const half = Math.max(Math.abs(mid) * 0.05, 0.5);
+    lo = mid - half;
+    hi = mid + half;
+  }
+  const bandFrac = 1 / n;
+  const gap = STACK_BAND_GAP * bandFrac;
+  // Normalised band edges measured from the BOTTOM (uPlot's 0..1 y space);
+  // slot 0 is the topmost band, so it claims the highest normalised range.
+  const normHi = 1 - s * bandFrac - gap;
+  const normLo = 1 - (s + 1) * bandFrac + gap;
+  const innerFrac = normHi - normLo; // bandFrac * (1 - 2 * STACK_BAND_GAP)
+  const fullSpan = (hi - lo) / innerFrac;
+  const scaleMin = lo - normLo * fullSpan;
+  return [scaleMin, scaleMin + fullSpan];
+}
+
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -221,6 +268,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const setPlotBinding = useSession((s) => s.setPlotBinding);
   const addPlotChannel = useSession((s) => s.addPlotChannel);
   const removePlotChannel = useSession((s) => s.removePlotChannel);
+  const setPlotStackAxes = useSession((s) => s.setPlotStackAxes);
   // Gap threshold mode comes from per-panel settings (Phase 8). `null`
   // is the default and pairs with `spanGaps:true`; a positive number
   // pairs with `spanGaps:false` and explicit gap markers in mergeSeries.
@@ -232,6 +280,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // settings. Absent entries default to axis 0 (the shared scale).
   const axisAssignments = useSession(
     (s) => s.plotPanelSettings[panelId]?.axisAssignments,
+  );
+  // When on, the in-use y-axes are remapped into stacked vertical bands
+  // (see `stackedBandRange`) so signals on different axes don't overlap.
+  // Only has a visible effect when ≥2 axes carry data.
+  const stackAxes = useSession(
+    (s) => s.plotPanelSettings[panelId]?.stackAxes ?? false,
   );
   // Global per-channel unit overrides. Drives the chip/series labels and
   // the axis-label "all signals share a unit" check below.
@@ -294,6 +348,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     () => boundChannels.map((c) => scaleKeyForAxis(axisOf(c.id))),
     [boundChannels, axisOf],
   );
+
+  // How many distinct y-axes actually carry a bound channel. Drives the
+  // "Stack" toggle's visibility (offered only with ≥2 axes) and gates the
+  // band remap in the build effect — stacking a single axis is a no-op.
+  const usedAxisCount = useMemo(() => {
+    const used = new Set<number>();
+    for (const c of boundChannels) used.add(axisOf(c.id));
+    return used.size;
+  }, [boundChannels, axisOf]);
 
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user
@@ -472,7 +535,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     .map((c) => effectiveUnit(c, unitOverrides) ?? "")
     .join(",")}::t=${boundChannelIds
     .map((id) => transformKey(transformFor(id)))
-    .join(",")}`;
+    .join(",")}::s=${stackAxes ? "1" : "0"}`;
   useEffect(() => {
     const mount = plotMountRef.current;
     const container = containerRef.current;
@@ -533,8 +596,30 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       return shared ? shared : undefined;
     };
 
+    // Default: each axis auto-ranges to its own data and draws across the
+    // full plot height (axes overlay). Stacked: each axis that carries data
+    // is remapped into its own horizontal band, lowest index on top, so the
+    // signals don't overlap. `dataAxisOrder` excludes the always-present
+    // axis 0 when nothing sits on it, so an empty forced axis never reserves
+    // a band. Stacking is a no-op below two data-bearing axes.
+    const dataAxisOrder = [
+      ...new Set(boundChannels.map((c) => axisOf(c.id))),
+    ].sort((a, b) => a - b);
+    const stacking = stackAxes && dataAxisOrder.length >= 2;
     const yScales: uPlot.Scales = {};
     for (const key of groupOrder) yScales[key] = { auto: true };
+    if (stacking) {
+      const bandCount = dataAxisOrder.length;
+      dataAxisOrder.forEach((axisIdx, slot) => {
+        yScales[scaleKeyForAxis(axisIdx)] = {
+          // uPlot passes the data extent for this scale; remap it into the
+          // band. (Like the x-scale `range` below, this runs synchronously
+          // inside `setData`, so the resolved scale is readable immediately.)
+          range: (_u, dMin, dMax) =>
+            stackedBandRange(dMin, dMax, slot, bandCount),
+        };
+      });
+    }
 
     const yAxes: uPlot.Axis[] = axisOrder.map((axisIdx, idx) => {
       const onLeft = idx === 0;
@@ -1036,6 +1121,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
             </span>
           ))}
         </div>
+        {usedAxisCount >= 2 && (
+          <button
+            type="button"
+            className={`${styles.stackBtn} ${
+              stackAxes ? styles.stackBtnOn : ""
+            }`}
+            aria-pressed={stackAxes}
+            onClick={() => setPlotStackAxes(panelId, !stackAxes)}
+            data-testid="plot-stack-axes"
+            title={
+              stackAxes
+                ? "Unstack axes — overlay all signals across the full height"
+                : "Stack axes — give each y-axis its own vertical band"
+            }
+          >
+            Stack
+          </button>
+        )}
         <button
           ref={addBtnRef}
           type="button"
