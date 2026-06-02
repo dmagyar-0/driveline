@@ -238,8 +238,47 @@ function PlotBody({ panelId }: BodyProps) {
         )}
       </section>
       <PlotSeriesStatsSection panelId={panelId} bound={bound} />
+      <PlotStackAxesControl panelId={panelId} />
       <PlotGapThresholdControl panelId={panelId} />
     </>
+  );
+}
+
+/**
+ * Stacked-axes toggle. Mirrors the in-panel "Stack" button (both flip the
+ * one `stackAxes` bit via `setPlotStackAxes`), surfaced here next to the
+ * other plot display settings. Only takes visible effect once two or more
+ * y-axes carry data — the help text says so rather than hiding the control,
+ * matching the always-shown gap-threshold toggle below.
+ */
+function PlotStackAxesControl({ panelId }: BodyProps) {
+  const stackAxes = useSession(
+    (st) => st.plotPanelSettings[panelId]?.stackAxes ?? false,
+  );
+  return (
+    <section className={s.section} data-testid="panel-plot-stack-section">
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Stack axes</h4>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={stackAxes}
+        className={`${s.toggle} ${stackAxes ? s.toggleOn : ""}`}
+        onClick={() =>
+          useSession.getState().setPlotStackAxes(panelId, !stackAxes)
+        }
+        data-testid="panel-plot-stack-toggle"
+      >
+        <span>Separate axes into bands</span>
+        <span className={s.toggleState}>{stackAxes ? "on" : "off"}</span>
+      </button>
+      <p className={s.gapHelp}>
+        {stackAxes
+          ? "Each y-axis gets its own vertical band (lowest axis on top). Takes effect with 2+ axes in use."
+          : "Off: all axes overlay across the full plot height."}
+      </p>
+    </section>
   );
 }
 

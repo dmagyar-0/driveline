@@ -28,7 +28,7 @@ vi.hoisted(() => {
     }) as unknown as MediaQueryList;
 });
 
-import { STACK_BAND_GAP, stackedBandRange } from "./PlotPanel";
+import { STACK_BAND_GAP, bandTickFilter, stackedBandRange } from "./PlotPanel";
 
 // uPlot maps a scale's [min, max] across the full plot height with min at
 // the bottom (0) and max at the top (1). This is the normalised vertical
@@ -98,5 +98,31 @@ describe("stackedBandRange", () => {
     // slot 5 with 2 bands clamps to the bottom band; slot -1 to the top.
     expect(stackedBandRange(0, 1, 5, 2)).toEqual(stackedBandRange(0, 1, 1, 2));
     expect(stackedBandRange(0, 1, -1, 2)).toEqual(stackedBandRange(0, 1, 0, 2));
+  });
+});
+
+describe("bandTickFilter", () => {
+  it("nulls out splits outside the band's data extent (inclusive bounds)", () => {
+    // Scale expanded to [-3, 2] but data only spans [-1, 1]: the ticks at
+    // -3 and 2 sit in empty space and are hidden; -1, 0, 1 stay.
+    expect(bandTickFilter([-3, -2, -1, 0, 1, 2], [-1, 1])).toEqual([
+      null,
+      null,
+      -1,
+      0,
+      1,
+      null,
+    ]);
+  });
+
+  it("keeps every split when the extent is null (degenerate / unknown)", () => {
+    const splits = [-3, -2, -1, 0, 1];
+    expect(bandTickFilter(splits, null)).toBe(splits);
+  });
+
+  it("falls back to all splits rather than blanking the axis", () => {
+    // No split lands inside the band → keep them all so the band still
+    // shows a label instead of an empty gutter.
+    expect(bandTickFilter([10, 20, 30], [-1, 1])).toEqual([10, 20, 30]);
   });
 });

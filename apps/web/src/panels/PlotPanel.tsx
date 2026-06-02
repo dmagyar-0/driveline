@@ -256,6 +256,22 @@ export function stackedBandRange(
   return [scaleMin, scaleMin + fullSpan];
 }
 
+// Tick/grid filter for a stacked band. Keeps only the split values inside the
+// band's data extent `[lo, hi]` (replacing the rest with `null`, which uPlot
+// hides), so a banded axis doesn't paint ticks across the empty space its
+// expanded scale spans. A `null` extent (degenerate or not-yet-resolved data)
+// or a filter that would blank the axis entirely falls back to the original
+// splits so a band never loses every label.
+export function bandTickFilter(
+  splits: number[],
+  extent: [number, number] | null,
+): (number | null)[] {
+  if (!extent) return splits;
+  const [lo, hi] = extent;
+  const kept = splits.map((v) => (v >= lo && v <= hi ? v : null));
+  return kept.some((v) => v !== null) ? kept : splits;
+}
+
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -606,17 +622,29 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       ...new Set(boundChannels.map((c) => axisOf(c.id))),
     ].sort((a, b) => a - b);
     const stacking = stackAxes && dataAxisOrder.length >= 2;
+    const bandCount = dataAxisOrder.length;
+    // Data extent per banded scale, recorded by the `range` callback and read
+    // by each axis's tick/grid `filter` so an axis only labels (and grids) its
+    // own band — without this, the expanded scale paints ticks all through the
+    // empty space outside the band. Persists across redraws within this plot;
+    // a rebuild gets a fresh map.
+    const bandExtent = new Map<string, [number, number] | null>();
     const yScales: uPlot.Scales = {};
     for (const key of groupOrder) yScales[key] = { auto: true };
     if (stacking) {
-      const bandCount = dataAxisOrder.length;
       dataAxisOrder.forEach((axisIdx, slot) => {
-        yScales[scaleKeyForAxis(axisIdx)] = {
-          // uPlot passes the data extent for this scale; remap it into the
-          // band. (Like the x-scale `range` below, this runs synchronously
-          // inside `setData`, so the resolved scale is readable immediately.)
-          range: (_u, dMin, dMax) =>
-            stackedBandRange(dMin, dMax, slot, bandCount),
+        const key = scaleKeyForAxis(axisIdx);
+        yScales[key] = {
+          // uPlot passes the data extent for this scale; record it for the
+          // band filter, then remap it into the band. (Like the x-scale
+          // `range` below, this runs synchronously inside `setData`, so the
+          // resolved scale is readable immediately.)
+          range: (_u, dMin, dMax) => {
+            const lo = Number.isFinite(dMin) ? dMin : 0;
+            const hi = Number.isFinite(dMax) ? dMax : 1;
+            bandExtent.set(key, hi > lo ? [lo, hi] : null);
+            return stackedBandRange(dMin, dMax, slot, bandCount);
+          },
         };
       });
     }
@@ -624,20 +652,37 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     const yAxes: uPlot.Axis[] = axisOrder.map((axisIdx, idx) => {
       const onLeft = idx === 0;
       const rendered = idx < MAX_RENDERED_Y_AXES;
+      const key = scaleKeyForAxis(axisIdx);
+      const isBanded = stacking && dataAxisOrder.includes(axisIdx);
       const axis: uPlot.Axis = {
-        scale: scaleKeyForAxis(axisIdx),
+        scale: key,
         side: onLeft ? 3 : 1, // uPlot sides: 3 = left, 1 = right
         stroke: fg,
         ticks: { stroke: grid },
-        // Only the primary (left) axis paints the horizontal grid; extra
-        // axes would overpaint it with their own (misaligned) gridlines.
-        grid: onLeft ? { stroke: grid } : { show: false },
+        // Overlaid: only the primary (left) axis paints the horizontal grid;
+        // extra axes would overpaint it with their own (misaligned) lines.
+        // Stacked: each banded axis owns a disjoint vertical slice, so every
+        // band paints its own grid (confined to its band by the filter below)
+        // and the empty forced axis paints none.
+        grid: stacking
+          ? isBanded
+            ? { stroke: grid }
+            : { show: false }
+          : onLeft
+            ? { stroke: grid }
+            : { show: false },
         size: yAxisSize,
         label: sharedUnitFor(axisIdx),
         // Axes past the render cap still own a scale (data stays ranged)
         // but hide their axis so the gutters don't stack up.
         show: rendered,
       };
+      if (isBanded) {
+        // Drop ticks/gridlines that fall in the expanded scale's empty space
+        // outside this band's data extent.
+        axis.filter = (_self, splits) =>
+          bandTickFilter(splits, bandExtent.get(key) ?? null);
+      }
       return axis;
     });
     // Default mode: `mergeSeries` emits `null` at every union timestamp
