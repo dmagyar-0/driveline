@@ -39,6 +39,17 @@ const SOURCE: SourceMeta = {
       sampleCount: 5,
       timeRange: { startNs: 0n, endNs: 1_000_000_000n },
     },
+    {
+      id: "/state/mode",
+      nativeId: "/state/mode",
+      sourceId: "src-a",
+      name: "mode",
+      kind: "scalar",
+      dtype: "f64",
+      unit: null,
+      sampleCount: 5,
+      timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+    },
   ],
 };
 
@@ -64,11 +75,24 @@ describe("EnumPanel", () => {
 
   it("shows the channel name when bound", () => {
     seed();
-    useSession.getState().setEnumBinding("enum-1", "/state/gear");
+    useSession.getState().setEnumBinding("enum-1", ["/state/gear"]);
     render(<EnumPanel panelId="enum-1" />);
     expect(screen.getByTestId("enum-channel-name").textContent).toBe(
       "gear",
     );
+  });
+
+  it("renders one lane per bound channel", () => {
+    seed();
+    useSession
+      .getState()
+      .setEnumBinding("enum-1", ["/state/gear", "/state/mode"]);
+    render(<EnumPanel panelId="enum-1" />);
+    const lanes = screen.getAllByTestId("enum-lane");
+    expect(lanes).toHaveLength(2);
+    expect(
+      screen.getAllByTestId("enum-channel-name").map((n) => n.textContent),
+    ).toEqual(["gear", "mode"]);
   });
 
   it("clears the binding when the bound channel disappears", () => {
@@ -78,12 +102,12 @@ describe("EnumPanel", () => {
     // dropped a file.
     seed();
     useSession.setState({
-      enumBindings: { "enum-1": "/ghost" },
+      enumBindings: { "enum-1": ["/ghost"] },
     });
     render(<EnumPanel panelId="enum-1" />);
     // The cleanup effect drops the orphaned binding; empty state renders.
     expect(screen.getByTestId("enum-empty")).toBeTruthy();
-    expect(useSession.getState().enumBindings["enum-1"]).toBeNull();
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual([]);
   });
 
   it("does not clear a persisted binding before any source loads", () => {
@@ -94,9 +118,11 @@ describe("EnumPanel", () => {
       sources: [],
       channels: [],
       globalRange: null,
-      enumBindings: { "enum-1": "/persisted" },
+      enumBindings: { "enum-1": ["/persisted"] },
     });
     render(<EnumPanel panelId="enum-1" />);
-    expect(useSession.getState().enumBindings["enum-1"]).toBe("/persisted");
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual([
+      "/persisted",
+    ]);
   });
 });

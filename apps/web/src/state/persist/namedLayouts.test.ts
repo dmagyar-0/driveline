@@ -40,7 +40,7 @@ const SAMPLE_LAYOUT: NamedLayout = {
   },
   tableBindings: { "table-1": ["/vehicle/speed"] },
   valueBindings: { "value-1": ["/vehicle/rpm"] },
-  enumBindings: { "enum-1": "/state/gear" },
+  enumBindings: { "enum-1": ["/state/gear"] },
   plotPanelSettings: { "plot-1": { gapThresholdSec: 1.5 } },
   createdAt: 1_700_000_000_000,
 };
@@ -239,6 +239,38 @@ describe("namedLayouts persist", () => {
     );
     const loaded = loadNamedLayoutsFromStorage(s);
     expect(loaded?.layouts[0].plotPanelSettings).toEqual({});
+  });
+
+  it("migrates legacy single-channel enumBindings to arrays on read", () => {
+    // A named layout saved before the enum panel went multi-channel must
+    // still restore, coercing the old channel-or-null shape to a list.
+    const s = makeStorage();
+    s.setItem(
+      NAMED_LAYOUTS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        layouts: [
+          {
+            id: "x",
+            name: "x",
+            layoutJson: null,
+            videoBindings: {},
+            plotBindings: {},
+            sceneBindings: {},
+            mapBindings: {},
+            tableBindings: {},
+            enumBindings: { "enum-1": "/state/gear", "enum-2": null },
+            createdAt: 0,
+          },
+        ],
+        activeNamedLayoutId: null,
+      }),
+    );
+    const loaded = loadNamedLayoutsFromStorage(s);
+    expect(loaded?.layouts[0].enumBindings).toEqual({
+      "enum-1": ["/state/gear"],
+      "enum-2": [],
+    });
   });
 });
 

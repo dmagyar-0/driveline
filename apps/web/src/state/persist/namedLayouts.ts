@@ -14,6 +14,7 @@
 
 import type { useSession } from "../store";
 import type { MapBinding, PlotPanelSettingsLite } from "../../layout/persist";
+import { coerceEnumBindings } from "../../layout/persist";
 
 export const NAMED_LAYOUTS_STORAGE_KEY = "driveline.layouts.named.v2";
 export const NAMED_LAYOUTS_SCHEMA_VERSION = 2 as const;
@@ -27,7 +28,9 @@ export interface NamedLayout {
   sceneBindings: Record<string, string | null>;
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
-  enumBindings: Record<string, string | null>;
+  // Multi-channel (one state strip per bound channel). Legacy single-string
+  // entries are migrated on read by `coerceEnumBindings`.
+  enumBindings: Record<string, string[]>;
   // Optional fields added without a schema bump (same posture as
   // `layout/persist.ts`): entries saved before these existed default to
   // an empty map on read. New writes always include them.
@@ -121,7 +124,9 @@ function validateLayout(raw: unknown): NamedLayout | null {
   if (!mapBindings) return null;
   const tableBindings = validateStringArrayMap(raw.tableBindings);
   if (!tableBindings) return null;
-  const enumBindings = validateNullableStringMap(raw.enumBindings);
+  // Migrated single→multi on read (see `coerceEnumBindings`) so layouts
+  // saved before the enum panel went multi-channel still restore.
+  const enumBindings = coerceEnumBindings(raw.enumBindings);
   if (!enumBindings) return null;
   // Optional fields — entries saved before they existed default to an
   // empty map.

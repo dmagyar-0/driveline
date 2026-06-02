@@ -209,13 +209,16 @@ describe("PanelDrawer", () => {
     expect(useSession.getState().tableBindings["table-1"]).toEqual([]);
   });
 
-  it("renders the enum body with the bound channel and clears via ×", () => {
+  it("renders the enum body and remove fires removeEnumChannel", () => {
     useSession.getState().setSelectedPanelId("enum-1");
-    useSession.getState().setEnumBinding("enum-1", "chan-a");
+    useSession.getState().addEnumChannel("enum-1", "chan-a");
     render(<PanelDrawer />);
     expect(screen.getByTestId("drawer-panel-kind").textContent).toBe("ENUM");
+    expect(screen.getByTestId("panel-enum-count").textContent).toBe(
+      `1 / ${MAX_PLOT_SERIES}`,
+    );
     fireEvent.click(screen.getByTestId("panel-enum-remove-chan-a"));
-    expect(useSession.getState().enumBindings["enum-1"]).toBeNull();
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual([]);
   });
 
   it("falls back to UnknownKind for an unrecognised id prefix", () => {

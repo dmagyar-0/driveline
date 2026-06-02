@@ -38,10 +38,7 @@ declare global {
         binding: MapBinding | null,
       ) => void;
       addTableChannelBinding: (panelId: string, channelId: string) => void;
-      setEnumChannelBinding: (
-        panelId: string,
-        channelId: string | null,
-      ) => void;
+      addEnumChannelBinding: (panelId: string, channelId: string) => void;
       setActiveRailTab: (tab: string | null) => void;
       setSelectedPanelId: (id: string | null) => void;
       getLayoutJson: () => string;
@@ -187,7 +184,7 @@ test.describe("Panel kinds (Phase 6)", () => {
 
     await page.evaluate(
       ([panelId, id]) =>
-        window.__drivelineDevHooks!.setEnumChannelBinding(panelId, id),
+        window.__drivelineDevHooks!.addEnumChannelBinding(panelId, id),
       [enumId!, channelId!],
     );
 
