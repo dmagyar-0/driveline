@@ -1,19 +1,20 @@
-// Phase 1 · Top bar — brand + session identity + right-aligned meta.
+// Phase 1 · Top bar — brand + session identity + right-aligned actions.
 //
-// Redesign (claude.ai/design handoff): a 48px instrument bar with the
-// brand mark + wordmark, a session block (source count + source-kind
-// chips) that appears once files are loaded, and a right cluster with
-// the live cursor clock, a worker-status dot, and a keyboard-shortcuts
-// button.
+// A 48px instrument bar with the brand mark + wordmark, a session block
+// (source count + source-kind chips) that appears once files are loaded,
+// and a right cluster with the copy-link and keyboard-shortcuts buttons.
 //
-// The `data-testid="worker-status"` span text is load-bearing for 8 e2e
-// specs (smoke, sourcesDrawer, videoSeek, …) — it must read exactly
-// `workers ready` / `workers initialising`. Don't rename or retext it.
+// The live cursor clock and "workers ready" status dot that used to sit
+// at the right were removed as diagnostic clutter — the live cursor time
+// is already shown in the Transport readout. The
+// `data-testid="worker-status"` span is kept in the DOM but visually
+// hidden, because its text is load-bearing for the e2e suite (~22 specs
+// gate on it). It must still read exactly `workers ready` /
+// `workers initialising` — don't rename or retext it.
 
 import { useEffect, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { SourceKind } from "../state/store";
-import { formatRelative } from "../timeline/formatTime";
 import { getShareUrl } from "../state/urlState";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
 import styles from "./TopBar.module.css";
@@ -29,10 +30,8 @@ function kindLabel(k: SourceKind): "MCAP" | "MF4" | "MP4+TS" {
 }
 
 export function TopBar({ ready }: TopBarProps) {
-  // Single-key selectors only (frontend skill). cursorNs ticks every
-  // rAF during playback — keep its subscriber narrow.
-  const cursorNs = useSession((s) => s.cursorNs);
-  const startNs = useSession((s) => s.globalRange?.startNs ?? null);
+  // Single-key selector (frontend skill). The bar no longer subscribes to
+  // cursorNs, so it doesn't re-render every rAF during playback.
   const sources = useSession((s) => s.sources);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -103,26 +102,20 @@ export function TopBar({ ready }: TopBarProps) {
 
       <div className={styles.spacer} />
 
-      <div className={styles.meta}>
-        {startNs !== null && (
-          <span
-            className={`${styles.clock} tabular`}
-            data-testid="topbar-clock"
-          >
-            {formatRelative(cursorNs, startNs)}
-          </span>
-        )}
-        <span className={styles.status}>
-          <span
-            className={styles.statusDot}
-            data-ok={ready ? "true" : "false"}
-            aria-hidden="true"
-          />
-          <span className={styles.workerStatus} data-testid="worker-status">
-            {ready ? "workers ready" : "workers initialising"}
-          </span>
-        </span>
-      </div>
+      {/*
+        Worker-readiness signal — kept in the DOM but visually hidden. ~22
+        e2e specs gate on `worker-status` reading exactly `workers ready` /
+        `workers initialising`, and Playwright's `toHaveText` matches
+        textContent regardless of visibility. `aria-hidden` because it's now
+        purely a test hook, not user-facing chrome.
+      */}
+      <span
+        className={styles.workerStatus}
+        data-testid="worker-status"
+        aria-hidden="true"
+      >
+        {ready ? "workers ready" : "workers initialising"}
+      </span>
 
       <button
         type="button"

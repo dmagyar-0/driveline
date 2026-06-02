@@ -79,42 +79,22 @@
   flex: 1 1 auto;
 }
 
-/* ---- right-aligned meta ---- */
-.meta {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-5);
-  font-family: var(--font-mono);
-  font-size: var(--fs-12);
-  color: var(--color-fg-5);
-  flex: 0 0 auto;
-}
-
-.clock {
-  color: var(--color-fg-3);
-  font-variant-numeric: tabular-nums;
-}
-
-.status {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--sp-4);
-}
-
-.statusDot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-fg-6);
-}
-
-.statusDot[data-ok="true"] {
-  background: var(--plot-3);
-  box-shadow: 0 0 0 3px var(--color-accent-green-glow);
-}
-
+/* ---- worker-readiness test gate (visually hidden) ----
+   The top bar used to show a live cursor clock + a "workers ready" status
+   dot in a right-aligned meta cluster here. Both were diagnostic clutter —
+   the cursor time already lives in the Transport readout. The status text
+   stays in the DOM but off-screen because ~22 e2e specs gate on the
+   `worker-status` text; this is the standard visually-hidden pattern used
+   by SourcesDrawer / FirstRun (`.hiddenInput`). */
 .workerStatus {
-  color: var(--color-fg-4);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  padding: 0;
+  margin: -1px;
+  border: 0;
 }
 
 /* ---- share / copy-link button ---- */
