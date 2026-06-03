@@ -105,6 +105,43 @@
   font-size: 0.75rem;
 }
 
+/* "Stack" toggle: surfaced only when ≥2 y-axes carry data. Shares the
+   add-button silhouette but reads as a toggle — the pressed state is a
+   filled accent (not colour alone: the fill + border swap signal it) and
+   `aria-pressed` carries the state for assistive tech. */
+.stackBtn {
+  background: var(--color-bg-2);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  padding: 0.25rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.stackBtn:hover {
+  background: var(--color-bg-5);
+}
+
+.stackBtn:focus-visible {
+  outline: 2px solid var(--color-accent-orange);
+  outline-offset: 2px;
+}
+
+.stackBtnOn {
+  background: var(--color-accent-orange);
+  border-color: var(--color-accent-orange);
+  color: var(--color-bg-1);
+}
+
+.stackBtnOn:hover {
+  background: var(--color-accent-orange-hover);
+}
+
 .plotArea {
   position: relative;
   width: 100%;

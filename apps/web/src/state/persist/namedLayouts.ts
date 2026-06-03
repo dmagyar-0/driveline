@@ -103,6 +103,9 @@ function validatePlotPanelSettingsMap(
     if (t !== null && (typeof t !== "number" || !Number.isFinite(t))) {
       return null;
     }
+    if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {
+      return null;
+    }
   }
   return v as Record<string, PlotPanelSettingsLite>;
 }

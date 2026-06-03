@@ -48,7 +48,11 @@ const SAMPLE: PersistedLayout = {
   },
   enumBindings: { "enum-1": ["/state/gear"], "enum-2": [] },
   plotPanelSettings: {
-    "plot-1": { gapThresholdSec: 1.5, axisAssignments: { "/vehicle/rpm": 1 } },
+    "plot-1": {
+      gapThresholdSec: 1.5,
+      axisAssignments: { "/vehicle/rpm": 1 },
+      stackAxes: true,
+    },
     "plot-2": { gapThresholdSec: null },
   },
   unitOverrides: { "/vehicle/speed": "km/h", "/vehicle/rpm": "" },
@@ -287,6 +291,20 @@ describe("layout persist", () => {
         ...SAMPLE,
         plotPanelSettings: {
           "plot-1": { gapThresholdSec: "not a number" },
+        },
+      }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when plotPanelSettings.stackAxes is not a boolean", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        ...SAMPLE,
+        plotPanelSettings: {
+          "plot-1": { gapThresholdSec: null, stackAxes: "yes" },
         },
       }),
     );

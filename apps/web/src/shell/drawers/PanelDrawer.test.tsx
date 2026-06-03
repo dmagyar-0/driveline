@@ -315,4 +315,37 @@ describe("PanelDrawer", () => {
       ).toBe(2);
     });
   });
+
+  describe("plot stack-axes", () => {
+    it("renders the stack toggle off by default", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      render(<PanelDrawer />);
+      expect(screen.getByTestId("panel-plot-stack-section")).toBeTruthy();
+      const toggle = screen.getByTestId("panel-plot-stack-toggle");
+      expect(toggle.getAttribute("aria-checked")).toBe("false");
+    });
+
+    it("toggling on sets stackAxes and reflects aria-checked", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      render(<PanelDrawer />);
+      const toggle = screen.getByTestId("panel-plot-stack-toggle");
+      fireEvent.click(toggle);
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.stackAxes,
+      ).toBe(true);
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("toggling off clears the flag", () => {
+      useSession.getState().setSelectedPanelId("plot-1");
+      useSession.getState().setPlotStackAxes("plot-1", true);
+      render(<PanelDrawer />);
+      const toggle = screen.getByTestId("panel-plot-stack-toggle");
+      expect(toggle.getAttribute("aria-checked")).toBe("true");
+      fireEvent.click(toggle);
+      expect(
+        useSession.getState().plotPanelSettings["plot-1"]?.stackAxes ?? false,
+      ).toBe(false);
+    });
+  });
 });
