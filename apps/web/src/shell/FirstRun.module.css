@@ -91,6 +91,28 @@
   outline-offset: var(--focus-offset);
 }
 
+.urlRow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  max-width: 440px;
+}
+
+.orRule {
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-subtle);
+}
+
+.orText {
+  flex: none;
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-6);
+}
+
 .kbd {
   display: flex;
   align-items: center;

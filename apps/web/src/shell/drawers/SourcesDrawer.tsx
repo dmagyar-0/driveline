@@ -13,6 +13,7 @@
 import { useRef, useState } from "react";
 import { useSession } from "../../state/store";
 import type { SourceKind } from "../../state/store";
+import { UrlLoad } from "../UrlLoad";
 import { colorFor } from "../../panels/palette";
 import { formatAbsolute, formatDuration } from "../../timeline/formatTime";
 import drawerStyles from "../Drawer.module.css";
@@ -139,6 +140,8 @@ export function SourcesDrawer() {
         aria-hidden="true"
         tabIndex={-1}
       />
+
+      <UrlLoad variant="drawer" />
 
       {errors.length > 0 ? (
         <section

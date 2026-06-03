@@ -1,41 +1,50 @@
-//! `McapReader`: implementation of the `Reader` trait on top of the
-//! [`mcap`](https://crates.io/crates/mcap) crate.
+//! `McapReader`: a lazy, range-reading MCAP adapter on top of the
+//! [`mcap`](https://crates.io/crates/mcap) crate's sans-IO primitives.
 //!
-//! Scope for T2.1 (`docs/10-task-breakdown.md:126` and the approved plan):
+//! ## Memory model
 //!
-//! - Parse the MCAP summary (schemas + channel list).
-//! - Infer `ChannelKind` / `DType` from schema metadata per
-//!   `docs/04-reader-abstraction.md:86-94`.
-//! - Build a keyframe index for video channels (H.264 Annex-B scan).
-//! - Implement `fetch_range` for `Scalar`, `Vector`, and `Enum` channels,
-//!   producing Arrow IPC bytes matching the contract in
-//!   `docs/03-data-model.md:100-120`.
+//! The reader never holds the whole file. At open it drives the sans-IO
+//! [`SummaryReader`] over a [`ByteRangeReader`] to pull just the summary
+//! section (schemas, channel list, chunk index, statistics) — no message
+//! payloads. `fetch_range` then range-reads only the chunks overlapping the
+//! requested `[start, end)`, decompresses them (zstd via the pure-Rust
+//! `ruzstd`, so the wasm build needs no C `zstd-sys`), and extracts the
+//! requested channel's samples. Video streams the same way through a
+//! [`McapVideoCursor`] that pulls chunks on demand from a seek keyframe
+//! forward, so a multi-gigabyte remote MCAP is read incrementally and never
+//! fully materialised.
 //!
-//! Deliberate omissions: `video_stream` belongs to T5.1. `Bytes`
-//! channels are surfaced in the channel list but `fetch_range` returns
-//! `UnsupportedKind` for them — schema-aware decoding is post-MVP.
+//! In the browser the reader is backed by an OPFS sync access handle or an
+//! HTTP-range XHR (see `wasm-bindings`); native callers and tests use an
+//! in-memory [`SliceRangeReader`] via [`McapReader::open`].
 //!
-//! Real-world MCAPs (Foxglove's `testdata/mcap/demo.mcap`, ROS 2's
-//! default rosbag2 storage, …) almost always use chunk-level zstd
-//! compression. `predecompress_zstd_chunks` rewrites those chunks into
-//! `compression = ""` chunks before the upstream reader sees them, so
-//! such files now open and list their channels. Channels carrying
-//! `ros1msg` / `ros2idl` / `protobuf` payloads (e.g. `std_msgs/String`
-//! in the Foxglove demo) still surface as `Bytes` — adding decoders
-//! for those wire formats is a separate post-MVP task tracked in
-//! `docs/04-reader-abstraction.md`.
+//! ## Compression
 //!
-//! The JSON payload shapes accepted here are the ones produced by
-//! `fixtures::short_mcap_bytes()` (which in turn mirrors the fixture
-//! spec in `docs/spike-T0.3-sample-corpus.md:65-104`):
+//! Chunks are decompressed here rather than through the upstream
+//! `IndexedReader` (whose decompression is gated behind the `mcap` crate's
+//! `zstd`/`lz4` cargo features, which the wasm target deliberately keeps off).
+//! `compression = ""` and `"zstd"` are supported on every target; `"lz4"`
+//! surfaces [`McapError::UnsupportedCompression`] (the project's build never
+//! enabled lz4 on any target).
 //!
-//! - `foxglove.Float64` → `{"value": <number>}` (or `{"data": …}` for
-//!   older Foxglove SDK output).
+//! ## Channel kinds & payloads
+//!
+//! `infer_channel_kind` maps an MCAP schema name + encoding onto a Driveline
+//! `ChannelKind`. The JSON payload shapes accepted are the ones produced by
+//! `fixtures::short_mcap_bytes()`:
+//!
+//! - `foxglove.Float64` → `{"value": <number>}` (or `{"data": …}`).
 //! - `foxglove.Vector3` → `{"x": <f64>, "y": <f64>, "z": <f64>}`.
 //! - `driveline.ControlMode` → `{"value": <int>}`.
 //! - `foxglove.CompressedVideo` → `{"data": "<base64 Annex-B>", …}`.
+//!
+//! Channels carrying `ros1msg` / `ros2idl` / `protobuf` payloads still surface
+//! as `Bytes`; `fetch_range` returns `UnsupportedKind` for them.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::io::SeekFrom;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use arrow_array::{
@@ -44,64 +53,753 @@ use arrow_array::{
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use base64::Engine as _;
+use mcap::sans_io::summary_reader::{SummaryReadEvent, SummaryReader, SummaryReaderOptions};
+use mcap::McapError;
+use mf4_rs::index::{ByteRangeReader, SliceRangeReader};
 
-use crate::reader::{ArrowIpc, EncodedChunkIter, Reader};
+use crate::mf4::BoxedRangeReader;
+use crate::reader::{ArrowIpc, EncodedChunkIter};
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceKind, SourceMeta,
     TimeRange,
 };
 
-pub struct McapReader {
-    _bytes: Vec<u8>,
-    meta: SourceMeta,
-    channel_data: HashMap<ChannelId, ChannelData>,
-    /// Populated for `Video` channels only. Exposed for the future
-    /// `video_stream` (T5.1); `fetch_range` does not read this.
+/// MCAP file magic — opens and closes every well-formed file.
+const MCAP_MAGIC: &[u8] = b"\x89MCAP0\r\n";
+
+/// Bytes occupied by the footer record plus the trailing end magic:
+/// 1 opcode + 8 length + 8 summary_start + 8 summary_offset_start +
+/// 4 summary_crc + 8 end magic.
+const FOOTER_AND_END_MAGIC: u64 = 1 + 8 + 8 + 8 + 4 + 8;
+
+/// Serialized length of an MCAP `MessageHeader`: channel_id(2) + sequence(4) +
+/// log_time(8) + publish_time(8).
+const MESSAGE_HEADER_LEN: usize = 2 + 4 + 8 + 8;
+
+/// Per-channel routing metadata resolved from the summary. Keyed by topic
+/// (the public `ChannelId`).
+struct ChannelMeta {
+    kind: ChannelKind,
     #[allow(dead_code)]
-    pub(crate) keyframe_index: HashMap<ChannelId, Vec<KeyframeEntry>>,
+    dtype: Option<DType>,
+    /// MCAP channel id used to filter messages within a decoded chunk.
+    mcap_id: u16,
+    /// Element count per sample for `Vector` channels (3 for Vector3); 0 otherwise.
+    vector_len: usize,
 }
 
-struct ChannelData {
-    timestamps: Vec<i64>,
-    values: Vec<ParsedValue>,
-    /// Element count per sample for `Vector` channels (e.g. 3 for Vector3).
-    /// `None` for non-vector kinds.
-    vector_len: Option<usize>,
-    /// Per-sample Annex-B bytes + keyframe flag for `Video` channels. Parallel
-    /// to `timestamps`. `None` for non-video kinds. Populated at open time so
-    /// `video_stream` can serve chunks without rescanning the MCAP; the
-    /// backing `mcap` crate's `MessageStream` does not surface file offsets,
-    /// so buffering is the simplest correct approach for MVP.
-    video_samples: Option<Vec<VideoSample>>,
-}
-
+/// A decodable run of records: either one chunk (chunked file) or the whole
+/// data section (unchunked file). `start_time`/`end_time` are the inclusive
+/// min/max message `log_time` covered (i64::MIN/MAX for the unchunked
+/// catch-all, which is always selected).
 #[derive(Clone)]
-struct VideoSample {
-    bytes: Vec<u8>,
-    is_keyframe: bool,
+struct Segment {
+    /// File offset of the (possibly compressed) record bytes.
+    data_offset: u64,
+    /// Length of the record bytes at `data_offset`.
+    compressed_size: u64,
+    /// Decompressed length (used to size the output buffer).
+    uncompressed_size: u64,
+    /// MCAP compression string: `""`, `"zstd"`, or unsupported.
+    compression: String,
+    start_time: i64,
+    end_time: i64,
+    /// Channel ids known to be present (from the chunk's message-index keys).
+    /// Empty means "unknown — assume all channels present".
+    channel_ids: Vec<u16>,
 }
 
+impl Segment {
+    fn has_channel(&self, mcap_id: u16) -> bool {
+        self.channel_ids.is_empty() || self.channel_ids.contains(&mcap_id)
+    }
+}
+
+/// A decoded scalar/vector/enum value, paired with a timestamp during a fetch.
 enum ParsedValue {
     Scalar(f64),
     Vector(Vec<f64>),
     Enum(i32),
-    /// For `Bytes` channels: the opaque payload. Kept for a future schema
-    /// decoder; `fetch_range` returns `UnsupportedKind` for now.
-    Raw(#[allow(dead_code)] Vec<u8>),
-    /// For `Video` channels: timestamp-only placeholder so `sample_count`
-    /// and per-channel `time_range` stay consistent with the message scan.
-    None,
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct KeyframeEntry {
-    pub pts_ns: i64,
-    /// Reserved for future `video_stream` (T5.1). Currently unset (0);
-    /// the `mcap` crate's `MessageStream` does not surface raw message
-    /// byte offsets, and re-scanning the file to recover them is a
-    /// T5.1 concern, not a T2.1 one.
-    #[allow(dead_code)]
-    pub byte_offset: usize,
+/// Stateful, bounded cursor over a video channel. Holds only owned data (no
+/// reference to the reader or its byte source), so it can live in a
+/// thread-local slab on the wasm side and be advanced one batch at a time via
+/// [`McapReader::video_pull`].
+pub struct McapVideoCursor {
+    mcap_id: u16,
+    /// Indices into `McapReader::segments` that bear this video channel, in
+    /// time order.
+    chunk_order: Vec<usize>,
+    /// Position in `chunk_order` of the next segment to decode.
+    next: usize,
+    /// Decoded-but-not-yet-yielded chunks from already-decoded segments.
+    pending: VecDeque<EncodedChunk>,
+    done: bool,
+}
+
+/// How many decompressed chunk record buffers to keep resident. Bounds memory
+/// to a handful of recently-touched chunks so a video re-seek or a fetch over
+/// an already-touched window doesn't re-range-read and re-decompress, without
+/// holding the whole file.
+const CHUNK_CACHE_CAP: usize = 8;
+
+/// How many parsed per-(segment, channel) sample runs to keep resident. A
+/// dense dashboard refetches many channels over the same window on every seek;
+/// caching the parsed samples turns those repeats into a slice instead of
+/// re-parsing every message's JSON. FIFO-bounded so panning over a long file
+/// can't grow unbounded.
+const VALUE_CACHE_CAP: usize = 256;
+
+pub struct McapReader {
+    /// Source of record bytes. `RefCell` because reads take `&mut R` while the
+    /// public methods only have `&self`. Never holds the whole file.
+    reader: RefCell<BoxedRangeReader>,
+    meta: SourceMeta,
+    /// Topic → routing metadata.
+    channels: HashMap<ChannelId, ChannelMeta>,
+    /// Decodable segments, sorted by `start_time`.
+    segments: Vec<Segment>,
+    /// FIFO cache of decompressed chunk record buffers, keyed by segment index.
+    /// Feeds both video decode (re-seek locality) and signal parsing.
+    chunk_cache: RefCell<VecDeque<(usize, Rc<Vec<u8>>)>>,
+    /// FIFO cache of parsed signal samples, keyed by `(segment index, mcap
+    /// channel id)`. Time-sorted within each entry. Makes repeated pan/seek
+    /// fetches over the same window cheap (no re-parse).
+    value_cache: RefCell<VecDeque<((usize, u16), Rc<Vec<(i64, ParsedValue)>>)>>,
+}
+
+impl McapReader {
+    /// Open an in-memory MCAP blob. Used by native callers and tests; the
+    /// bytes are moved into a [`SliceRangeReader`] and read lazily (only the
+    /// summary at open, payloads on demand) exactly like the ranged path.
+    pub fn open(bytes: &[u8]) -> crate::Result<Self> {
+        let file_size = bytes.len() as u64;
+        Self::open_ranged(
+            BoxedRangeReader::new(SliceRangeReader::new(bytes.to_vec())),
+            file_size,
+        )
+    }
+
+    /// Build a reader that streams record bytes through `reader`. Only the
+    /// summary section is read here; message payloads are pulled on demand in
+    /// `fetch_range` / `video_pull`.
+    pub fn open_ranged(mut reader: BoxedRangeReader, file_size: u64) -> crate::Result<Self> {
+        let summary = read_summary(&mut reader, file_size)?;
+
+        // Resolve per-channel routing metadata in a deterministic order.
+        let mut ids: Vec<u16> = summary.channels.keys().copied().collect();
+        ids.sort_unstable();
+
+        let mut channel_meta: HashMap<ChannelId, ChannelMeta> = HashMap::with_capacity(ids.len());
+        for &id in &ids {
+            let ch = &summary.channels[&id];
+            let (kind, dtype) = match ch.schema.as_deref() {
+                Some(s) => infer_channel_kind(&s.name, &s.encoding),
+                None => (ChannelKind::Bytes, None),
+            };
+            let vector_len = if kind == ChannelKind::Vector { 3 } else { 0 };
+            channel_meta.insert(
+                ch.topic.clone(),
+                ChannelMeta {
+                    kind,
+                    dtype,
+                    mcap_id: id,
+                    vector_len,
+                },
+            );
+        }
+
+        let chunked = !summary.chunk_indexes.is_empty();
+
+        // Build the segment list.
+        let mut segments: Vec<Segment> = Vec::new();
+        if chunked {
+            for ci in &summary.chunk_indexes {
+                let data_offset = ci.compressed_data_offset()?;
+                segments.push(Segment {
+                    data_offset,
+                    compressed_size: ci.compressed_size,
+                    uncompressed_size: ci.uncompressed_size,
+                    compression: ci.compression.clone(),
+                    start_time: ci.message_start_time as i64,
+                    end_time: ci.message_end_time as i64,
+                    channel_ids: ci.message_index_offsets.keys().copied().collect(),
+                });
+            }
+            segments.sort_by_key(|s| s.start_time);
+        } else {
+            // Unchunked: one catch-all segment spanning the data section
+            // [magic, summary_start). The footer holds `summary_start`.
+            let summary_start = read_footer_summary_start(&mut reader, file_size)?;
+            let data_start = MCAP_MAGIC.len() as u64;
+            let len = summary_start.saturating_sub(data_start);
+            segments.push(Segment {
+                data_offset: data_start,
+                compressed_size: len,
+                uncompressed_size: len,
+                compression: String::new(),
+                start_time: i64::MIN,
+                end_time: i64::MAX,
+                channel_ids: Vec::new(),
+            });
+        }
+
+        // Per-channel sample counts and (where available) exact time ranges.
+        let mut counts: HashMap<u16, u64> = HashMap::new();
+        let mut ranges: HashMap<u16, (i64, i64)> = HashMap::new();
+        if chunked {
+            // Counts come from the summary statistics; exact per-channel
+            // ranges are not carried in the summary, so chunked channels fall
+            // back to the file-global range below.
+            if let Some(stats) = &summary.stats {
+                for (&id, &c) in &stats.channel_message_counts {
+                    counts.insert(id, c);
+                }
+            }
+        } else {
+            // Unchunked files have no index granularity, so we scan the single
+            // data segment once to recover exact counts and ranges. Unchunked
+            // MCAPs are small in practice (real-world writers chunk).
+            let buf = read_segment_bytes(&mut reader, &segments[0])?;
+            for_each_message(&buf, |cid, log_time, _payload| {
+                *counts.entry(cid).or_insert(0) += 1;
+                let r = ranges.entry(cid).or_insert((log_time, log_time));
+                if log_time < r.0 {
+                    r.0 = log_time;
+                }
+                if log_time > r.1 {
+                    r.1 = log_time;
+                }
+            });
+        }
+
+        // File-global range.
+        let global: Option<(i64, i64)> = if chunked {
+            let from_stats = summary
+                .stats
+                .as_ref()
+                .filter(|s| s.message_count > 0)
+                .map(|s| {
+                    (
+                        s.message_start_time as i64,
+                        (s.message_end_time as i64).saturating_add(1),
+                    )
+                });
+            from_stats.or_else(|| {
+                let lo = summary
+                    .chunk_indexes
+                    .iter()
+                    .map(|c| c.message_start_time as i64)
+                    .min();
+                let hi = summary
+                    .chunk_indexes
+                    .iter()
+                    .map(|c| c.message_end_time as i64)
+                    .max();
+                match (lo, hi) {
+                    (Some(lo), Some(hi)) => Some((lo, hi.saturating_add(1))),
+                    _ => None,
+                }
+            })
+        } else {
+            let lo = ranges.values().map(|r| r.0).min();
+            let hi = ranges.values().map(|r| r.1).max();
+            match (lo, hi) {
+                (Some(lo), Some(hi)) => Some((lo, hi.saturating_add(1))),
+                _ => None,
+            }
+        };
+
+        // Public channel list.
+        let mut channels: Vec<Channel> = Vec::with_capacity(ids.len());
+        for &id in &ids {
+            let ch = &summary.channels[&id];
+            let topic = ch.topic.clone();
+            let cm = &channel_meta[&topic];
+            let sample_count = counts.get(&id).copied().unwrap_or(0);
+            let time_range = if sample_count == 0 {
+                TimeRange::empty()
+            } else if let Some(&(lo, hi)) = ranges.get(&id) {
+                TimeRange {
+                    start_ns: lo,
+                    end_ns: hi.saturating_add(1),
+                }
+            } else {
+                // Chunked approximation: the summary has no per-channel range,
+                // so report the file-global span.
+                match global {
+                    Some((lo, hi)) => TimeRange {
+                        start_ns: lo,
+                        end_ns: hi,
+                    },
+                    None => TimeRange::empty(),
+                }
+            };
+            channels.push(Channel {
+                id: topic,
+                source_id: String::new(),
+                name: ch.topic.clone(),
+                kind: cm.kind,
+                dtype: cm.dtype,
+                unit: ch.metadata.get("unit").cloned(),
+                sample_count,
+                time_range,
+            });
+        }
+
+        let time_range = match global {
+            Some((lo, hi)) => TimeRange {
+                start_ns: lo,
+                end_ns: hi,
+            },
+            None => TimeRange::empty(),
+        };
+
+        Ok(McapReader {
+            reader: RefCell::new(reader),
+            meta: SourceMeta {
+                id: String::new(),
+                kind: SourceKind::Mcap,
+                time_range,
+                channels,
+            },
+            channels: channel_meta,
+            segments,
+            chunk_cache: RefCell::new(VecDeque::new()),
+            value_cache: RefCell::new(VecDeque::new()),
+        })
+    }
+
+    pub fn meta(&self) -> &SourceMeta {
+        &self.meta
+    }
+
+    /// Read+decompress segment `idx`'s record bytes, serving from (and
+    /// populating) the bounded chunk cache so a re-touch is a cheap clone.
+    fn read_segment(&self, idx: usize) -> crate::Result<Rc<Vec<u8>>> {
+        let cached = self
+            .chunk_cache
+            .borrow()
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, b)| b.clone());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
+        let seg = self.segments[idx].clone();
+        let buf = Rc::new(read_segment_bytes(&mut self.reader.borrow_mut(), &seg)?);
+        let mut cache = self.chunk_cache.borrow_mut();
+        cache.push_back((idx, buf.clone()));
+        while cache.len() > CHUNK_CACHE_CAP {
+            cache.pop_front();
+        }
+        Ok(buf)
+    }
+
+    /// Parsed signal samples for one channel within one segment, time-sorted,
+    /// served from (and populating) the bounded value cache. Repeated fetches
+    /// over the same window reuse this instead of re-parsing message JSON.
+    fn parsed_for(
+        &self,
+        seg_idx: usize,
+        mcap_id: u16,
+        kind: ChannelKind,
+    ) -> crate::Result<Rc<Vec<(i64, ParsedValue)>>> {
+        let key = (seg_idx, mcap_id);
+        let cached = self
+            .value_cache
+            .borrow()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.clone());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
+        let buf = self.read_segment(seg_idx)?;
+        let mut samples: Vec<(i64, ParsedValue)> = Vec::new();
+        for_each_message(buf.as_slice(), |cid, log_time, payload| {
+            if cid != mcap_id {
+                return;
+            }
+            if let Some(v) = parse_value(kind, payload) {
+                samples.push((log_time, v));
+            }
+        });
+        samples.sort_by_key(|s| s.0);
+        let samples = Rc::new(samples);
+        let mut cache = self.value_cache.borrow_mut();
+        cache.push_back((key, samples.clone()));
+        while cache.len() > VALUE_CACHE_CAP {
+            cache.pop_front();
+        }
+        Ok(samples)
+    }
+
+    pub fn fetch_range(
+        &self,
+        channel_id: &ChannelId,
+        range: TimeRange,
+        opts: FetchOpts,
+    ) -> crate::Result<ArrowIpc> {
+        let cm = self
+            .channels
+            .get(channel_id)
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+
+        if matches!(cm.kind, ChannelKind::Video | ChannelKind::Bytes) {
+            return Err(crate::Error::UnsupportedKind);
+        }
+        let mcap_id = cm.mcap_id;
+
+        // Select the segments overlapping [start, end). When `include_prev`
+        // is set we also pull the latest preceding segment so a step-hold
+        // renderer's leading sample (strictly before `start`) is available.
+        let mut idxs: Vec<usize> = (0..self.segments.len())
+            .filter(|&i| {
+                let s = &self.segments[i];
+                s.end_time >= range.start_ns
+                    && s.start_time < range.end_ns
+                    && s.has_channel(mcap_id)
+            })
+            .collect();
+        if opts.include_prev {
+            if let Some(prev) = (0..self.segments.len())
+                .filter(|&i| {
+                    let s = &self.segments[i];
+                    s.start_time < range.start_ns && s.has_channel(mcap_id)
+                })
+                .max_by_key(|&i| self.segments[i].start_time)
+            {
+                if !idxs.contains(&prev) {
+                    idxs.push(prev);
+                }
+            }
+        }
+        idxs.sort_unstable();
+
+        // Pull the selected segments' parsed samples (cached) and merge into a
+        // single time-sorted view. The `Rc`s are held in `seg_parsed` so the
+        // borrowed refs in `merged` stay valid.
+        let mut seg_parsed: Vec<Rc<Vec<(i64, ParsedValue)>>> = Vec::with_capacity(idxs.len());
+        for i in idxs {
+            seg_parsed.push(self.parsed_for(i, mcap_id, cm.kind)?);
+        }
+        let mut merged: Vec<(i64, &ParsedValue)> = seg_parsed
+            .iter()
+            .flat_map(|s| s.iter().map(|(t, v)| (*t, v)))
+            .collect();
+        merged.sort_by_key(|r| r.0);
+
+        let timestamps: Vec<i64> = merged.iter().map(|r| r.0).collect();
+        let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
+        let end_idx = timestamps
+            .partition_point(|&t| t < range.end_ns)
+            .max(start_idx);
+        let lo = if opts.include_prev && start_idx > 0 {
+            start_idx - 1
+        } else {
+            start_idx
+        };
+
+        let ts_slice = &timestamps[lo..end_idx];
+        let val_refs: Vec<&ParsedValue> = merged[lo..end_idx].iter().map(|r| r.1).collect();
+
+        match cm.kind {
+            ChannelKind::Scalar => {
+                let vals: Vec<f64> = val_refs.iter().map(|v| parsed_scalar_as_f64(v)).collect();
+                build_scalar_ipc_raw(ts_slice, &vals)
+            }
+            ChannelKind::Vector => {
+                let n = if cm.vector_len > 0 { cm.vector_len } else { 3 };
+                build_vector_ipc(ts_slice, &val_refs, n)
+            }
+            ChannelKind::Enum => build_enum_ipc(ts_slice, &val_refs),
+            ChannelKind::Video | ChannelKind::Bytes => unreachable!("guarded above"),
+        }
+    }
+
+    /// Open a bounded, lazy video cursor, snapping to the keyframe at or
+    /// before `from_pts_ns`. Only the chunk(s) needed to locate that keyframe
+    /// are decoded here; subsequent chunks stream on demand via
+    /// [`Self::video_pull`].
+    pub fn open_video_cursor(
+        &self,
+        channel_id: &ChannelId,
+        from_pts_ns: i64,
+    ) -> crate::Result<McapVideoCursor> {
+        let cm = self
+            .channels
+            .get(channel_id)
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+        if cm.kind != ChannelKind::Video {
+            return Err(crate::Error::UnsupportedKind);
+        }
+        let mcap_id = cm.mcap_id;
+
+        let chunk_order: Vec<usize> = (0..self.segments.len())
+            .filter(|&i| self.segments[i].has_channel(mcap_id))
+            .collect();
+
+        let mut cursor = McapVideoCursor {
+            mcap_id,
+            chunk_order,
+            next: 0,
+            pending: VecDeque::new(),
+            done: false,
+        };
+
+        // Walk candidate segments (those that could start at/before the
+        // target) newest-first, looking for the latest keyframe <= from_pts.
+        let candidates: Vec<usize> = cursor
+            .chunk_order
+            .iter()
+            .enumerate()
+            .filter(|&(_, &si)| self.segments[si].start_time <= from_pts_ns)
+            .map(|(pos, _)| pos)
+            .collect();
+
+        let mut found = false;
+        for &pos in candidates.iter().rev() {
+            let samples = self.decode_video_samples(cursor.chunk_order[pos], mcap_id)?;
+            if let Some(kf) = samples
+                .iter()
+                .rposition(|c| c.is_keyframe && c.pts_ns <= from_pts_ns)
+            {
+                let start_pts = samples[kf].pts_ns;
+                cursor.pending = samples
+                    .into_iter()
+                    .filter(|c| c.pts_ns >= start_pts)
+                    .collect();
+                cursor.next = pos + 1;
+                found = true;
+                break;
+            }
+        }
+
+        // No keyframe at/before the target (target precedes every keyframe, or
+        // the earlier chunks carry none): start at the first keyframe overall
+        // so callers always get a decodable prefix.
+        if !found {
+            for pos in 0..cursor.chunk_order.len() {
+                let samples = self.decode_video_samples(cursor.chunk_order[pos], mcap_id)?;
+                if let Some(kf) = samples.iter().position(|c| c.is_keyframe) {
+                    let start_pts = samples[kf].pts_ns;
+                    cursor.pending = samples
+                        .into_iter()
+                        .filter(|c| c.pts_ns >= start_pts)
+                        .collect();
+                    cursor.next = pos + 1;
+                    found = true;
+                    break;
+                }
+            }
+        }
+
+        if !found {
+            cursor.done = true;
+        }
+        Ok(cursor)
+    }
+
+    /// Pull up to `max_n` encoded access units, decoding further chunks only
+    /// as needed. An empty result means end-of-stream.
+    pub fn video_pull(
+        &self,
+        cursor: &mut McapVideoCursor,
+        max_n: usize,
+    ) -> crate::Result<Vec<EncodedChunk>> {
+        let mut out = Vec::new();
+        while out.len() < max_n {
+            if let Some(c) = cursor.pending.pop_front() {
+                out.push(c);
+                continue;
+            }
+            if cursor.done || cursor.next >= cursor.chunk_order.len() {
+                cursor.done = true;
+                break;
+            }
+            let si = cursor.chunk_order[cursor.next];
+            cursor.next += 1;
+            let samples = self.decode_video_samples(si, cursor.mcap_id)?;
+            cursor.pending.extend(samples);
+        }
+        Ok(out)
+    }
+
+    /// Convenience for native callers and tests: fully materialise a video
+    /// stream from the snapped keyframe forward. The wasm path uses the
+    /// bounded cursor (`open_video_cursor` + `video_pull`) instead.
+    pub fn video_stream(
+        &self,
+        channel_id: &ChannelId,
+        from_pts_ns: i64,
+    ) -> crate::Result<EncodedChunkIter> {
+        let mut cursor = self.open_video_cursor(channel_id, from_pts_ns)?;
+        let mut all: Vec<EncodedChunk> = Vec::new();
+        loop {
+            let batch = self.video_pull(&mut cursor, 256)?;
+            if batch.is_empty() {
+                break;
+            }
+            all.extend(batch);
+        }
+        Ok(Box::new(all.into_iter()))
+    }
+
+    /// Decode a segment and return its video-channel access units (Annex-B),
+    /// sorted by pts.
+    fn decode_video_samples(
+        &self,
+        seg_idx: usize,
+        mcap_id: u16,
+    ) -> crate::Result<Vec<EncodedChunk>> {
+        let buf = self.read_segment(seg_idx)?;
+        let mut out: Vec<EncodedChunk> = Vec::new();
+        for_each_message(buf.as_slice(), |cid, log_time, payload| {
+            if cid != mcap_id {
+                return;
+            }
+            let annex_b =
+                extract_video_bytes_from_json(payload).unwrap_or_else(|| payload.to_vec());
+            let is_keyframe = is_keyframe(&annex_b);
+            out.push(EncodedChunk {
+                pts_ns: log_time,
+                is_keyframe,
+                data: annex_b,
+            });
+        });
+        out.sort_by_key(|c| c.pts_ns);
+        Ok(out)
+    }
+}
+
+/// Drive the sans-IO [`SummaryReader`] over `reader` to pull the summary
+/// section. `file_size` is supplied so the reader seeks directly to the footer
+/// rather than relying on a seek-to-end probe.
+fn read_summary(reader: &mut BoxedRangeReader, file_size: u64) -> crate::Result<mcap::Summary> {
+    let mut sr =
+        SummaryReader::new_with_options(SummaryReaderOptions::default().with_file_size(file_size));
+    let mut pos: u64 = 0;
+    while let Some(event) = sr.next_event() {
+        match event? {
+            SummaryReadEvent::SeekRequest(to) => {
+                pos = match to {
+                    SeekFrom::Start(p) => p,
+                    SeekFrom::End(e) => (file_size as i64 + e).max(0) as u64,
+                    SeekFrom::Current(c) => (pos as i64 + c).max(0) as u64,
+                };
+                sr.notify_seeked(pos);
+            }
+            SummaryReadEvent::ReadRequest(n) => {
+                let want = (n as u64).min(file_size.saturating_sub(pos));
+                if want == 0 {
+                    sr.notify_read(0);
+                    continue;
+                }
+                let bytes = reader.read_range(pos, want)?;
+                let dst = sr.insert(want as usize);
+                dst[..bytes.len()].copy_from_slice(&bytes);
+                sr.notify_read(bytes.len());
+                pos += bytes.len() as u64;
+            }
+        }
+    }
+    sr.finish().ok_or(crate::Error::McapMissingSummary)
+}
+
+/// Read the footer at the tail of the file and return its `summary_start`
+/// offset. Only used for unchunked files (to bound the data section).
+fn read_footer_summary_start(reader: &mut BoxedRangeReader, file_size: u64) -> crate::Result<u64> {
+    if file_size < FOOTER_AND_END_MAGIC {
+        return Err(crate::Error::McapMissingSummary);
+    }
+    let buf = reader.read_range(file_size - FOOTER_AND_END_MAGIC, FOOTER_AND_END_MAGIC)?;
+    // [op:1][len:8][summary_start:8][summary_offset_start:8][crc:4][magic:8]
+    let summary_start = u64::from_le_bytes(buf[9..17].try_into().expect("8-byte slice"));
+    Ok(summary_start)
+}
+
+/// Read a segment's bytes through `reader` and decompress them.
+fn read_segment_bytes(reader: &mut BoxedRangeReader, seg: &Segment) -> crate::Result<Vec<u8>> {
+    if seg.compressed_size == 0 {
+        return Ok(Vec::new());
+    }
+    let comp = reader.read_range(seg.data_offset, seg.compressed_size)?;
+    decompress_records(&seg.compression, comp, seg.uncompressed_size as usize)
+}
+
+/// Decompress a chunk's record stream. zstd uses the pure-Rust `ruzstd`
+/// decoder so the wasm build needs no C `zstd-sys`.
+fn decompress_records(
+    compression: &str,
+    compressed: Vec<u8>,
+    uncompressed_size: usize,
+) -> crate::Result<Vec<u8>> {
+    match compression {
+        "" => Ok(compressed),
+        "zstd" => {
+            use std::io::Read;
+            let mut decoder =
+                ruzstd::StreamingDecoder::new(compressed.as_slice()).map_err(|e| {
+                    crate::Error::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("ruzstd init failed: {e:?}"),
+                    ))
+                })?;
+            let mut out = Vec::with_capacity(uncompressed_size.max(compressed.len()));
+            decoder.read_to_end(&mut out)?;
+            Ok(out)
+        }
+        other => Err(crate::Error::Mcap(McapError::UnsupportedCompression(
+            other.to_string(),
+        ))),
+    }
+}
+
+/// Walk a decompressed record stream, invoking `f(channel_id, log_time,
+/// payload)` for every `Message` record. Non-message records are skipped; a
+/// `DataEnd` record or a truncated tail stops the walk.
+fn for_each_message(buf: &[u8], mut f: impl FnMut(u16, i64, &[u8])) {
+    use mcap::records::op;
+    let mut off = 0usize;
+    while off + 9 <= buf.len() {
+        let opcode = buf[off];
+        let len =
+            u64::from_le_bytes(buf[off + 1..off + 9].try_into().expect("8-byte slice")) as usize;
+        let body_start = off + 9;
+        let Some(body_end) = body_start.checked_add(len) else {
+            break;
+        };
+        if body_end > buf.len() {
+            break;
+        }
+        if opcode == op::DATA_END {
+            break;
+        }
+        if opcode == op::MESSAGE {
+            let body = &buf[body_start..body_end];
+            if body.len() >= MESSAGE_HEADER_LEN {
+                let channel_id = u16::from_le_bytes([body[0], body[1]]);
+                let log_time =
+                    u64::from_le_bytes(body[6..14].try_into().expect("8-byte slice")) as i64;
+                f(channel_id, log_time, &body[MESSAGE_HEADER_LEN..]);
+            }
+        }
+        off = body_end;
+    }
+}
+
+/// Parse a message payload into a `ParsedValue` for the given channel kind.
+fn parse_value(kind: ChannelKind, payload: &[u8]) -> Option<ParsedValue> {
+    match kind {
+        ChannelKind::Scalar => parse_scalar_json(payload).map(ParsedValue::Scalar),
+        ChannelKind::Vector => {
+            parse_vector3_json(payload).map(|(x, y, z)| ParsedValue::Vector(vec![x, y, z]))
+        }
+        ChannelKind::Enum => parse_enum_json(payload).map(ParsedValue::Enum),
+        _ => None,
+    }
 }
 
 /// Infer the Driveline `ChannelKind` (and optional `DType`) from an MCAP
@@ -214,7 +912,7 @@ fn is_keyframe(annex_b: &[u8]) -> bool {
         }
         let nal_type = annex_b[sc_end] & 0x1F;
         match nal_type {
-            5 | 7 => return true, // IDR slice or SPS
+            5 | 7 => return true,          // IDR slice or SPS
             1 | 2 | 3 | 4 => return false, // Non-IDR VCL slice
             _ => {}                        // AUD (9), PPS (8), SEI (6), etc. — keep scanning.
         }
@@ -239,502 +937,6 @@ fn find_start_code(data: &[u8], from: usize) -> Option<usize> {
         i += 1;
     }
     None
-}
-
-/// MCAP file magic — opens and closes every well-formed file. Defined
-/// in the MCAP spec; reproduced here so `predecompress_zstd_chunks` can
-/// verify it without going through the upstream crate.
-const MCAP_MAGIC: &[u8] = b"\x89MCAP0\r\n";
-
-/// Pre-pass that rewrites zstd-compressed chunks into uncompressed
-/// chunks so the upstream `mcap` crate's reader can consume them
-/// regardless of whether its `zstd` cargo feature is enabled — which
-/// matters on `wasm32-unknown-unknown`, where the C `zstd-sys`
-/// dependency doesn't link.
-///
-/// Each zstd chunk's records body is decompressed with `ruzstd` (pure
-/// Rust) and re-emitted with `compression = ""`. The chunk's
-/// `uncompressed_crc` is taken over uncompressed records, so it stays
-/// valid across the rewrite. The footer's `summary_start` and
-/// `summary_offset_start` are bumped by the cumulative byte delta so
-/// `Summary::read` still locates the summary section.
-///
-/// # Precondition
-///
-/// **The output is only safe to feed to a linear reader (e.g.
-/// `mcap::MessageStream`) — never an indexed reader.** Stale byte
-/// offsets inside `ChunkIndex`, `SummaryOffset`, and `MessageIndex`
-/// records are *not* rewritten: chunks shift by the compression delta,
-/// but the records that reference them still hold the original
-/// pre-rewrite offsets. `McapReader::open` consumes the buffer via
-/// `MessageStream` (see `mcap.rs` `open()` impl) which ignores all of
-/// these, so the staleness is invisible *today*. Swapping in any
-/// indexed reader (`mcap::IndexedReader`, etc.) requires either
-/// rewriting these offsets or stripping op-0x07 / 0x08 / 0x0E records
-/// here first. The `SAFETY` comment at the call site echoes this
-/// precondition so a future refactor can't miss it.
-fn predecompress_zstd_chunks(input: Vec<u8>) -> crate::Result<Vec<u8>> {
-    use std::io::Read;
-
-    const OP_CHUNK: u8 = 0x06;
-    const OP_FOOTER: u8 = 0x02;
-
-    if input.len() < MCAP_MAGIC.len() * 2 || !input.starts_with(MCAP_MAGIC) {
-        return Ok(input);
-    }
-
-    let body_end = input.len() - MCAP_MAGIC.len();
-    // Compressed → uncompressed rewrite always grows; pre-allocating
-    // double the input avoids the guaranteed realloc inside the chunk
-    // rewrite loop. Worst case (no chunks) we waste `input.len()` bytes
-    // briefly until the function returns; both fixtures and real-world
-    // MCAPs see this offset by the larger output anyway.
-    let mut out: Vec<u8> = Vec::with_capacity(input.len().saturating_mul(2));
-    out.extend_from_slice(MCAP_MAGIC);
-
-    let mut total_delta: i64 = 0;
-    let mut cursor = MCAP_MAGIC.len();
-
-    while cursor + 9 <= body_end {
-        let op = input[cursor];
-        let len = u64::from_le_bytes(
-            input[cursor + 1..cursor + 9].try_into().expect("9-byte slice"),
-        ) as usize;
-        let record_start = cursor + 9;
-        let record_end = record_start + len;
-        if record_end > body_end {
-            // Malformed; let the upstream reader produce the canonical error.
-            return Ok(input);
-        }
-        let body = &input[record_start..record_end];
-
-        // Chunk record: 8 start_time + 8 end_time + 8 uncomp_size + 4
-        // uncomp_crc + u32 compression-string length + compression bytes
-        // + u64 records_size + records_size bytes of (possibly compressed)
-        // record stream.
-        if op == OP_CHUNK && body.len() >= 32 {
-            let comp_len = u32::from_le_bytes(
-                body[28..32].try_into().expect("4-byte slice"),
-            ) as usize;
-            if 32 + comp_len + 8 <= body.len() {
-                let comp = &body[32..32 + comp_len];
-                if comp == b"zstd" {
-                    let rs_off = 32 + comp_len;
-                    let records_size = u64::from_le_bytes(
-                        body[rs_off..rs_off + 8].try_into().expect("8-byte slice"),
-                    ) as usize;
-                    let data_off = rs_off + 8;
-                    if data_off + records_size <= body.len() {
-                        let compressed = &body[data_off..data_off + records_size];
-                        let mut decoder =
-                            ruzstd::StreamingDecoder::new(compressed).map_err(|e| {
-                                crate::Error::Io(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    format!("ruzstd init failed: {e:?}"),
-                                ))
-                            })?;
-                        let mut decompressed: Vec<u8> = Vec::with_capacity(records_size * 2);
-                        decoder.read_to_end(&mut decompressed)?;
-
-                        // Rewrite chunk body: keep the first 28 bytes
-                        // (start/end/uncomp_size/uncomp_crc — uncomp_crc is
-                        // taken over uncompressed records and is
-                        // unchanged), set compression to empty, and inline
-                        // the now-uncompressed records.
-                        let mut new_body =
-                            Vec::with_capacity(28 + 4 + 8 + decompressed.len());
-                        new_body.extend_from_slice(&body[0..28]);
-                        new_body.extend_from_slice(&0u32.to_le_bytes());
-                        new_body.extend_from_slice(&(decompressed.len() as u64).to_le_bytes());
-                        new_body.extend_from_slice(&decompressed);
-
-                        let new_len = new_body.len();
-                        out.push(op);
-                        out.extend_from_slice(&(new_len as u64).to_le_bytes());
-                        out.extend_from_slice(&new_body);
-                        total_delta += new_len as i64 - len as i64;
-                        cursor = record_end;
-                        continue;
-                    }
-                }
-            }
-        }
-
-        if op == OP_FOOTER && total_delta != 0 && body.len() >= 20 {
-            // Footer body: u64 summary_start, u64 summary_offset_start,
-            // u32 summary_crc.
-            let mut new_body = body.to_vec();
-            let summary_start = u64::from_le_bytes(
-                body[0..8].try_into().expect("8-byte slice"),
-            );
-            let summary_offset_start = u64::from_le_bytes(
-                body[8..16].try_into().expect("8-byte slice"),
-            );
-            if summary_start != 0 {
-                let shifted = summary_start as i64 + total_delta;
-                new_body[0..8].copy_from_slice(&(shifted as u64).to_le_bytes());
-            }
-            if summary_offset_start != 0 {
-                let shifted = summary_offset_start as i64 + total_delta;
-                new_body[8..16].copy_from_slice(&(shifted as u64).to_le_bytes());
-            }
-            // `summary_crc` is not validated by the SansIo SummaryReader,
-            // so we leave it as-is.
-            out.push(op);
-            out.extend_from_slice(&(new_body.len() as u64).to_le_bytes());
-            out.extend_from_slice(&new_body);
-            cursor = record_end;
-            continue;
-        }
-
-        out.push(op);
-        out.extend_from_slice(&(len as u64).to_le_bytes());
-        out.extend_from_slice(body);
-        cursor = record_end;
-    }
-
-    out.extend_from_slice(&input[body_end..]);
-    Ok(out)
-}
-
-impl Reader for McapReader {
-    fn open(bytes: &[u8]) -> crate::Result<Self> {
-        let owned = predecompress_zstd_chunks(bytes.to_vec())?;
-
-        // Step 1: summary section — schemas + channel list, no message body scan.
-        let summary =
-            ::mcap::Summary::read(&owned)?.ok_or(crate::Error::McapMissingSummary)?;
-
-        // Pre-compute per-mcap-channel-id metadata so the message scan is cheap.
-        let mut channel_meta: HashMap<u16, (ChannelKind, Option<DType>, String)> =
-            HashMap::with_capacity(summary.channels.len());
-        for (&mcap_ch_id, ch) in &summary.channels {
-            let (kind, dtype) = match ch.schema.as_deref() {
-                Some(s) => infer_channel_kind(&s.name, &s.encoding),
-                None => (ChannelKind::Bytes, None),
-            };
-            channel_meta.insert(mcap_ch_id, (kind, dtype, ch.topic.clone()));
-        }
-
-        // Step 2: linear message scan — fills channel_data and keyframe_index.
-        let mut channel_data: HashMap<ChannelId, ChannelData> = HashMap::new();
-        let mut keyframe_index: HashMap<ChannelId, Vec<KeyframeEntry>> = HashMap::new();
-
-        // SAFETY: `predecompress_zstd_chunks` does not rewrite stale byte
-        // offsets inside `MessageIndex` / `ChunkIndex` / `SummaryOffset`
-        // records — a linear `MessageStream` is required. If this is ever
-        // swapped for an indexed reader, the predecompress pre-pass must
-        // also strip or rewrite those offsets first.
-        let stream = ::mcap::MessageStream::new(&owned)?;
-        for msg_result in stream {
-            let msg = msg_result?;
-            let Some((kind, _dtype, topic)) = channel_meta.get(&msg.channel.id) else {
-                continue;
-            };
-            let log_time = msg.log_time as i64;
-            let channel_id: ChannelId = topic.clone();
-            let entry = channel_data
-                .entry(channel_id.clone())
-                .or_insert_with(|| ChannelData {
-                    timestamps: Vec::new(),
-                    values: Vec::new(),
-                    vector_len: None,
-                    video_samples: None,
-                });
-
-            match kind {
-                ChannelKind::Scalar => {
-                    if let Some(v) = parse_scalar_json(&msg.data) {
-                        entry.timestamps.push(log_time);
-                        entry.values.push(ParsedValue::Scalar(v));
-                    }
-                }
-                ChannelKind::Vector => {
-                    if let Some((x, y, z)) = parse_vector3_json(&msg.data) {
-                        entry.vector_len = Some(3);
-                        entry.timestamps.push(log_time);
-                        entry.values.push(ParsedValue::Vector(vec![x, y, z]));
-                    }
-                }
-                ChannelKind::Enum => {
-                    if let Some(code) = parse_enum_json(&msg.data) {
-                        entry.timestamps.push(log_time);
-                        entry.values.push(ParsedValue::Enum(code));
-                    }
-                }
-                ChannelKind::Video => {
-                    let annex_b = extract_video_bytes_from_json(&msg.data)
-                        .unwrap_or_else(|| msg.data.to_vec());
-                    let keyframe = is_keyframe(&annex_b);
-                    if keyframe {
-                        keyframe_index
-                            .entry(channel_id.clone())
-                            .or_default()
-                            .push(KeyframeEntry {
-                                pts_ns: log_time,
-                                byte_offset: 0,
-                            });
-                    }
-                    entry.timestamps.push(log_time);
-                    entry.values.push(ParsedValue::None);
-                    entry
-                        .video_samples
-                        .get_or_insert_with(Vec::new)
-                        .push(VideoSample {
-                            bytes: annex_b,
-                            is_keyframe: keyframe,
-                        });
-                }
-                ChannelKind::Bytes => {
-                    entry.timestamps.push(log_time);
-                    entry.values.push(ParsedValue::Raw(msg.data.to_vec()));
-                }
-            }
-        }
-
-        // Some MCAP writers interleave messages across channels; guard against
-        // the possibility of out-of-order per-channel timestamps by sorting.
-        for cd in channel_data.values_mut() {
-            if cd.timestamps.windows(2).any(|w| w[0] > w[1]) {
-                let mut pairs: Vec<(i64, usize)> = cd
-                    .timestamps
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .map(|(i, t)| (t, i))
-                    .collect();
-                pairs.sort_by_key(|p| p.0);
-                let mut new_ts = Vec::with_capacity(pairs.len());
-                let mut new_vals = Vec::with_capacity(pairs.len());
-                let mut values = std::mem::take(&mut cd.values);
-                let mut video_in = cd.video_samples.take();
-                let mut new_video: Option<Vec<VideoSample>> =
-                    video_in.as_ref().map(|v| Vec::with_capacity(v.len()));
-                for (t, orig_idx) in pairs {
-                    new_ts.push(t);
-                    // Swap-remove style: replace with a cheap sentinel so we can reuse.
-                    let v = std::mem::replace(&mut values[orig_idx], ParsedValue::None);
-                    new_vals.push(v);
-                    if let (Some(src), Some(dst)) = (video_in.as_mut(), new_video.as_mut()) {
-                        let sample = std::mem::replace(
-                            &mut src[orig_idx],
-                            VideoSample {
-                                bytes: Vec::new(),
-                                is_keyframe: false,
-                            },
-                        );
-                        dst.push(sample);
-                    }
-                }
-                cd.timestamps = new_ts;
-                cd.values = new_vals;
-                cd.video_samples = new_video;
-            }
-        }
-        for kf_list in keyframe_index.values_mut() {
-            kf_list.sort_by_key(|k| k.pts_ns);
-        }
-
-        // Step 3: build the public SourceMeta.channels list, computing per-channel
-        // and global time ranges. Channels without any messages get an empty
-        // range (sample_count = 0) — they are still listed for UI.
-        let mut channels: Vec<Channel> = Vec::with_capacity(summary.channels.len());
-        let mut global_range: Option<(i64, i64)> = None;
-
-        // Stable ordering by MCAP channel id keeps the channel list deterministic
-        // (summary.channels is a HashMap).
-        let mut mcap_ids: Vec<u16> = summary.channels.keys().copied().collect();
-        mcap_ids.sort();
-
-        for mcap_ch_id in mcap_ids {
-            let ch = &summary.channels[&mcap_ch_id];
-            let (kind, dtype, topic) = &channel_meta[&mcap_ch_id];
-            let channel_id = topic.clone();
-            let (sample_count, time_range) = match channel_data.get(&channel_id) {
-                Some(cd) if !cd.timestamps.is_empty() => {
-                    let first = *cd.timestamps.first().unwrap();
-                    let last = *cd.timestamps.last().unwrap();
-                    let end = last.saturating_add(1);
-                    global_range = Some(match global_range {
-                        Some((lo, hi)) => (lo.min(first), hi.max(end)),
-                        None => (first, end),
-                    });
-                    (
-                        cd.timestamps.len() as u64,
-                        TimeRange {
-                            start_ns: first,
-                            end_ns: end,
-                        },
-                    )
-                }
-                _ => (0, TimeRange::empty()),
-            };
-
-            // Unit hint: MCAP carries no unit on the channel record, but some
-            // producers stash it in the free-form `metadata` map.
-            let unit = ch.metadata.get("unit").cloned();
-
-            channels.push(Channel {
-                id: channel_id,
-                source_id: String::new(),
-                name: ch.topic.clone(),
-                kind: *kind,
-                dtype: *dtype,
-                unit,
-                sample_count,
-                time_range,
-            });
-        }
-
-        let time_range = match global_range {
-            Some((lo, hi)) => TimeRange {
-                start_ns: lo,
-                end_ns: hi,
-            },
-            None => TimeRange::empty(),
-        };
-
-        Ok(McapReader {
-            _bytes: owned,
-            meta: SourceMeta {
-                id: String::new(),
-                kind: SourceKind::Mcap,
-                time_range,
-                channels,
-            },
-            channel_data,
-            keyframe_index,
-        })
-    }
-
-    fn meta(&self) -> &SourceMeta {
-        &self.meta
-    }
-
-    fn fetch_range(
-        &self,
-        channel_id: &ChannelId,
-        range: TimeRange,
-        opts: FetchOpts,
-    ) -> crate::Result<ArrowIpc> {
-        let channel = self
-            .meta
-            .channels
-            .iter()
-            .find(|c| &c.id == channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
-
-        if matches!(channel.kind, ChannelKind::Video | ChannelKind::Bytes) {
-            return Err(crate::Error::UnsupportedKind);
-        }
-
-        let cd = self
-            .channel_data
-            .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
-
-        // Half-open lookup matching `docs/03-data-model.md` TimeRange contract.
-        let start_idx = cd.timestamps.partition_point(|&t| t < range.start_ns);
-        let end_idx = cd
-            .timestamps
-            .partition_point(|&t| t < range.end_ns)
-            .max(start_idx);
-        // `include_prev` surfaces one sample strictly before `start_ns` so a
-        // step-hold line renderer can draw the leading segment.
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
-
-        match channel.kind {
-            ChannelKind::Scalar => {
-                let body_ts = &cd.timestamps[start_idx..end_idx];
-                let body_vals: Vec<f64> = cd.values[start_idx..end_idx]
-                    .iter()
-                    .map(parsed_scalar_as_f64)
-                    .collect();
-                let (mut ts_out, mut vals_out) = (body_ts.to_vec(), body_vals);
-                if let Some(p) = prev_idx {
-                    ts_out.insert(0, cd.timestamps[p]);
-                    vals_out.insert(0, parsed_scalar_as_f64(&cd.values[p]));
-                }
-                build_scalar_ipc_raw(&ts_out, &vals_out)
-            }
-            ChannelKind::Vector => {
-                let lo = prev_idx.unwrap_or(start_idx);
-                let n = cd.vector_len.unwrap_or(3);
-                build_vector_ipc(&cd.timestamps[lo..end_idx], &cd.values[lo..end_idx], n)
-            }
-            ChannelKind::Enum => {
-                let lo = prev_idx.unwrap_or(start_idx);
-                build_enum_ipc(&cd.timestamps[lo..end_idx], &cd.values[lo..end_idx])
-            }
-            ChannelKind::Video | ChannelKind::Bytes => unreachable!("guarded above"),
-        }
-    }
-
-    fn video_stream(
-        &self,
-        channel_id: &ChannelId,
-        from_pts_ns: i64,
-    ) -> crate::Result<EncodedChunkIter> {
-        let channel = self
-            .meta
-            .channels
-            .iter()
-            .find(|c| &c.id == channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
-
-        if channel.kind != ChannelKind::Video {
-            return Err(crate::Error::UnsupportedKind);
-        }
-
-        let cd = self
-            .channel_data
-            .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
-        let video = cd
-            .video_samples
-            .as_ref()
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
-
-        // Snap to the largest keyframe whose pts <= from_pts_ns. If the
-        // request predates every keyframe, start at the first one so callers
-        // always receive a decodable prefix.
-        let kfs = self
-            .keyframe_index
-            .get(channel_id)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let start_pts = if kfs.is_empty() {
-            // No keyframes at all — nothing decodable; emit an empty stream.
-            return Ok(Box::new(std::iter::empty()));
-        } else {
-            let idx = kfs.partition_point(|k| k.pts_ns <= from_pts_ns);
-            if idx == 0 {
-                kfs[0].pts_ns
-            } else {
-                kfs[idx - 1].pts_ns
-            }
-        };
-        let start_idx = cd.timestamps.partition_point(|&t| t < start_pts);
-
-        // Clone only the tail we need; the MCAP fixture is small and this
-        // keeps the iterator `'static` + `Send` without self-referential
-        // trickery.
-        let out: Vec<EncodedChunk> = cd.timestamps[start_idx..]
-            .iter()
-            .zip(video[start_idx..].iter())
-            .map(|(&pts_ns, s)| EncodedChunk {
-                pts_ns,
-                is_keyframe: s.is_keyframe,
-                data: s.bytes.clone(),
-            })
-            .collect();
-
-        Ok(Box::new(out.into_iter()))
-    }
 }
 
 fn scalar_schema() -> Arc<Schema> {
@@ -798,7 +1000,7 @@ fn build_scalar_ipc_raw(timestamps: &[i64], values: &[f64]) -> crate::Result<Arr
 
 fn build_vector_ipc(
     timestamps: &[i64],
-    values: &[ParsedValue],
+    values: &[&ParsedValue],
     n: usize,
 ) -> crate::Result<ArrowIpc> {
     let schema = vector_schema(n);
@@ -819,7 +1021,7 @@ fn build_vector_ipc(
     write_ipc(schema, batch)
 }
 
-fn build_enum_ipc(timestamps: &[i64], values: &[ParsedValue]) -> crate::Result<ArrowIpc> {
+fn build_enum_ipc(timestamps: &[i64], values: &[&ParsedValue]) -> crate::Result<ArrowIpc> {
     let schema = enum_schema();
     let ts = TimestampNanosecondArray::from(timestamps.to_vec()).with_timezone("UTC");
     let codes: Vec<i32> = values
@@ -852,17 +1054,19 @@ mod tests {
     }
 
     #[test]
-    fn builds_keyframe_index_from_fixture() {
+    fn surfaces_video_keyframes_from_fixture() {
         let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
         let r = McapReader::open(&bytes).expect("open");
 
-        let kf = r
-            .keyframe_index
-            .get("/camera/front")
-            .expect("video channel indexed");
-        assert_eq!(kf.len(), 3, "expected 3 keyframes");
-        for w in kf.windows(2) {
-            assert!(w[1].pts_ns > w[0].pts_ns, "keyframes must be ordered");
+        // Fixture writes 3 video access units, each SPS+IDR (all keyframes).
+        let chunks: Vec<_> = r
+            .video_stream(&"/camera/front".to_string(), T0 - 1)
+            .expect("video_stream")
+            .collect();
+        assert_eq!(chunks.len(), 3, "expected 3 access units");
+        assert_eq!(chunks.iter().filter(|c| c.is_keyframe).count(), 3);
+        for w in chunks.windows(2) {
+            assert!(w[1].pts_ns > w[0].pts_ns, "access units must be ordered");
         }
 
         let ch = r
@@ -927,11 +1131,7 @@ mod tests {
             end_ns: T0 + 60_000_000,
         };
         let ipc = r
-            .fetch_range(
-                &speed_id,
-                range,
-                FetchOpts { include_prev: true },
-            )
+            .fetch_range(&speed_id, range, FetchOpts { include_prev: true })
             .expect("fetch");
         let batch = parse_ipc(&ipc);
 
@@ -966,6 +1166,11 @@ mod tests {
         assert_eq!(speed.kind, ChannelKind::Scalar);
         assert_eq!(speed.dtype, Some(DType::F64));
         assert_eq!(speed.sample_count, 10);
+        // /vehicle/speed spans 90 ms → end_ns is half-open (+1 on last).
+        assert_eq!(
+            speed.time_range.end_ns - speed.time_range.start_ns,
+            90_000_000 + 1
+        );
 
         let accel = r
             .meta()
@@ -1128,13 +1333,42 @@ mod tests {
             .collect();
         assert_eq!(chunks.len(), 3);
         for w in chunks.windows(2) {
-            assert!(w[1].pts_ns > w[0].pts_ns, "chunks must be strictly monotonic");
+            assert!(
+                w[1].pts_ns > w[0].pts_ns,
+                "chunks must be strictly monotonic"
+            );
         }
         // Fixture payload is SPS + IDR on every message, so each is a keyframe.
         for c in &chunks {
             assert!(c.is_keyframe);
             assert!(!c.data.is_empty(), "payload bytes preserved");
         }
+    }
+
+    #[test]
+    fn video_pull_is_bounded_and_resumable() {
+        let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
+        let r = McapReader::open(&bytes).expect("open");
+
+        let mut cursor = r
+            .open_video_cursor(&"/camera/front".to_string(), T0 - 1)
+            .expect("cursor");
+        let first = r.video_pull(&mut cursor, 1).expect("pull");
+        assert_eq!(first.len(), 1, "max_n caps the batch");
+        assert_eq!(first[0].pts_ns, T0);
+
+        // Drain the rest; the cursor resumes where it left off.
+        let mut rest = Vec::new();
+        loop {
+            let b = r.video_pull(&mut cursor, 8).expect("pull");
+            if b.is_empty() {
+                break;
+            }
+            rest.extend(b);
+        }
+        assert_eq!(rest.len(), 2);
+        assert_eq!(rest[0].pts_ns, T0 + 30_000_000);
+        assert_eq!(rest[1].pts_ns, T0 + 60_000_000);
     }
 
     #[test]
@@ -1177,10 +1411,7 @@ mod tests {
     fn parse_enum_json_in_range() {
         assert_eq!(parse_enum_json(br#"{"value": 0}"#), Some(0));
         assert_eq!(parse_enum_json(br#"{"value": -1}"#), Some(-1));
-        assert_eq!(
-            parse_enum_json(br#"{"value": 2147483647}"#),
-            Some(i32::MAX)
-        );
+        assert_eq!(parse_enum_json(br#"{"value": 2147483647}"#), Some(i32::MAX));
         assert_eq!(
             parse_enum_json(br#"{"value": -2147483648}"#),
             Some(i32::MIN)
@@ -1203,95 +1434,32 @@ mod tests {
         assert_eq!(parse_enum_json(br#"{"other": 1}"#), None);
     }
 
-    #[test]
-    fn predecompress_zstd_chunks_passes_through_non_mcap_bytes() {
-        // Buffer that doesn't start with MCAP magic must be returned
-        // verbatim — the pre-pass is a fast-path no-op for non-MCAP
-        // input and must not surface a parse error or mangle the
-        // bytes. A regression that dropped the magic-check guard would
-        // try to parse arbitrary bytes as record headers.
-        let input = b"this is plainly not an mcap file at all".to_vec();
-        let out = predecompress_zstd_chunks(input.clone()).expect("non-mcap pass-through");
-        assert_eq!(out, input);
-    }
-
-    #[test]
-    fn predecompress_zstd_chunks_short_input_is_returned_verbatim() {
-        // Inputs too short to hold even the leading + trailing magic
-        // pair must short-circuit; otherwise the cursor loop's
-        // `body_end = input.len() - MCAP_MAGIC.len()` underflows the
-        // `cursor + 9 <= body_end` bound check on the very first
-        // iteration. The MCAP magic alone is exactly 8 bytes — half
-        // of the required minimum — so this is the most common
-        // non-empty truncated input we'd see in the wild.
-        let input = MCAP_MAGIC.to_vec();
-        let out = predecompress_zstd_chunks(input.clone()).expect("short pass-through");
-        assert_eq!(out, input);
-    }
-
-    #[test]
-    fn predecompress_zstd_chunks_is_noop_for_uncompressed_mcap() {
-        // The plain fixture has `use_chunks(false)` so it contains no
-        // chunk records at all — the pre-pass must therefore round-trip
-        // it byte-for-byte. A regression that mangled the verbatim
-        // pass-through path (e.g. dropping each record's body) would
-        // produce bytes that look superficially MCAP-shaped but the
-        // downstream reader would fail to open. We assert both: the
-        // bytes are identical AND the reader still surfaces the four
-        // expected channels after the pre-pass.
-        let bytes = crate::fixtures::short_mcap_bytes().expect("generate plain mcap");
-        let pre = predecompress_zstd_chunks(bytes.clone()).expect("predecompress");
-        assert_eq!(pre, bytes, "uncompressed MCAP must not change");
-        let r = McapReader::open(&pre).expect("open after no-op predecompress");
-        assert_eq!(r.meta().channels.len(), 4);
-    }
-
-    /// Idempotence: running the pre-pass on its own output is a no-op.
-    /// Once chunks have been inlined as uncompressed records, a second
-    /// pass walks the same records verbatim. This matters because a
-    /// future re-open path (network refetch, panel remount, retry on
-    /// transient I/O error) may legitimately call the pre-pass on
-    /// already-rewritten bytes; corruption there would surface as a
-    /// "works once, fails twice" bug that's painful to track down.
-    /// The test also confirms the first pass actually rewrites the
-    /// buffer, so a regression that silently no-op'd the zstd branch
-    /// would surface as both `assert_ne!` (fast-fail) and `assert_eq!`
-    /// (slow-fail) checks rather than passing trivially.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn predecompress_zstd_chunks_is_idempotent_on_zstd_input() {
-        let zstd = crate::fixtures::short_mcap_zstd_bytes().expect("generate zstd mcap");
-        let once = predecompress_zstd_chunks(zstd.clone()).expect("first decompress");
-        assert_ne!(
-            once, zstd,
-            "first pass should rewrite zstd chunks (output must differ from compressed input)"
-        );
-        let twice = predecompress_zstd_chunks(once.clone()).expect("second decompress");
-        assert_eq!(once, twice, "second predecompress must be a byte-for-byte no-op");
-        // Double-rewritten bytes must still open cleanly.
-        let r = McapReader::open(&twice).expect("open after double predecompress");
-        assert_eq!(r.meta().channels.len(), 4);
-    }
-
     /// `short_mcap_zstd_bytes()` writes the same four-channel corpus as
-    /// `short_mcap_bytes()` but with chunk-level zstd compression. The
-    /// reader must surface an identical `SourceMeta` regardless of how the
-    /// chunks were compressed — this exercises the native `mcap` zstd
-    /// feature (and on wasm, the `ruzstd` pre-decompression hook).
+    /// `short_mcap_bytes()` but with chunk-level zstd compression. The lazy
+    /// reader must decode those chunks on demand (via `ruzstd`) and surface an
+    /// identical channel set + sample counts.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn zstd_compressed_fixture_round_trips_through_reader() {
         let bytes = crate::fixtures::short_mcap_zstd_bytes().expect("generate zstd mcap");
         // MCAP magic: 0x89 'M' 'C' 'A' 'P' '0' '\r' '\n'.
-        assert_eq!(&bytes[..5], b"\x89MCAP", "zstd fixture must start with MCAP magic");
+        assert_eq!(
+            &bytes[..5],
+            b"\x89MCAP",
+            "zstd fixture must start with MCAP magic"
+        );
         let r = McapReader::open(&bytes).expect("open zstd mcap");
 
         let plain = crate::fixtures::short_mcap_bytes().expect("generate plain mcap");
         let r_plain = McapReader::open(&plain).expect("open plain mcap");
 
         let mut zstd_names: Vec<_> = r.meta().channels.iter().map(|c| c.name.clone()).collect();
-        let mut plain_names: Vec<_> =
-            r_plain.meta().channels.iter().map(|c| c.name.clone()).collect();
+        let mut plain_names: Vec<_> = r_plain
+            .meta()
+            .channels
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
         zstd_names.sort();
         plain_names.sort();
         assert_eq!(
@@ -1307,5 +1475,23 @@ mod tests {
             .expect("/vehicle/speed missing");
         assert_eq!(speed.kind, ChannelKind::Scalar);
         assert_eq!(speed.sample_count, 10);
+
+        // Lazy ranged fetch over a zstd-chunked file must decode the right rows.
+        let ipc = r
+            .fetch_range(
+                &"/vehicle/speed".to_string(),
+                r.meta().time_range,
+                FetchOpts::default(),
+            )
+            .expect("fetch");
+        let batch = parse_ipc(&ipc);
+        assert_eq!(batch.num_rows(), 10);
+
+        // And video streams from a zstd chunk too.
+        let chunks: Vec<_> = r
+            .video_stream(&"/camera/front".to_string(), i64::MIN)
+            .expect("video_stream")
+            .collect();
+        assert_eq!(chunks.len(), 3);
     }
 }

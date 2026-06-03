@@ -12,7 +12,7 @@
 use arrow_array::{Array, Float64Array, TimestampNanosecondArray};
 use arrow_ipc::reader::FileReader;
 use arrow_schema::{DataType, TimeUnit};
-use data_core::{ChannelKind, DType, FetchOpts, McapReader, Reader, SourceKind};
+use data_core::{ChannelKind, DType, FetchOpts, McapReader, SourceKind};
 use std::io::Cursor;
 
 const FIXTURE: &[u8] = include_bytes!("../../../test-fixtures/short.mcap");

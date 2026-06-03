@@ -73,3 +73,45 @@ export function bucketFiles(files: File[]): Buckets {
 
   return { mcap, mf4, mp4Pairs, errors };
 }
+
+/** A URL input classified by the reader that can open it. */
+export interface UrlClassification {
+  kind: "mcap" | "mf4";
+  /** Display name derived from the URL's last path segment. */
+  name: string;
+}
+
+/**
+ * Derive a human-friendly source name from a URL — its last path segment,
+ * percent-decoded (e.g. `…/drives/2018-08-02.mf4?token=x` → `2018-08-02.mf4`).
+ * Falls back to the host, then the raw string, for URLs without a path.
+ */
+export function urlBasename(raw: string): string {
+  try {
+    const u = new URL(raw);
+    const seg = u.pathname.split("/").filter(Boolean).pop();
+    if (seg) return decodeURIComponent(seg);
+    return u.hostname || raw;
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Classify a URL by file extension into the reader that can open it. Mirrors
+ * `bucketFiles` for the drag/drop path: only `.mcap` and `.mf4` are
+ * loadable from a URL. (`.mp4` needs its `.mp4.timestamps` sidecar, which
+ * has no single-URL form, so it's rejected here.) Throws with a
+ * user-facing reason on anything unsupported.
+ */
+export function classifyUrl(raw: string): UrlClassification {
+  const url = raw.trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error("URL must start with http:// or https://");
+  }
+  const name = urlBasename(url);
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".mcap")) return { kind: "mcap", name };
+  if (lower.endsWith(".mf4")) return { kind: "mf4", name };
+  throw new Error("URL must point at a .mcap or .mf4 file");
+}
