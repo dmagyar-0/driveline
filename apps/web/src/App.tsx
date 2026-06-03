@@ -11,6 +11,7 @@ import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { getReadinessSnapshot } from "./panels/videoReadiness";
+import { hasChannelDrag } from "./panels/channelDrag";
 import { isCursorGated, startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
 import { Workspace } from "./layout/Workspace";
@@ -141,9 +142,10 @@ declare global {
         panelId: string,
         channelId: string,
       ) => void;
-      setEnumChannelBinding: (
+      addEnumChannelBinding: (panelId: string, channelId: string) => void;
+      removeEnumChannelBinding: (
         panelId: string,
-        channelId: string | null,
+        channelId: string,
       ) => void;
       getPlotPanelSync: (panelId: string) => {
         cursorNs: string;
@@ -412,8 +414,10 @@ export function App() {
         useSession.getState().addValueChannel(panelId, channelId),
       removeValueChannelBinding: (panelId, channelId) =>
         useSession.getState().removeValueChannel(panelId, channelId),
-      setEnumChannelBinding: (panelId, channelId) =>
-        useSession.getState().setEnumBinding(panelId, channelId),
+      addEnumChannelBinding: (panelId, channelId) =>
+        useSession.getState().addEnumChannel(panelId, channelId),
+      removeEnumChannelBinding: (panelId, channelId) =>
+        useSession.getState().removeEnumChannel(panelId, channelId),
       getPlotPanelSync: (panelId) => {
         const snap: PlotSyncSnapshot | undefined =
           window.__drivelinePlotPanels?.[panelId];
@@ -570,7 +574,11 @@ export function App() {
   // tied to the App component.
   useEffect(() => startPlaybackLoop(useSession), []);
 
+  // A channel drag (drawer → plot panel) is handled by the target panel.
+  // Ignore it at the shell level so it never trips the file-drop overlay or
+  // gets mistaken for a session load — the shell only loads dropped *files*.
   const onDrop = async (e: React.DragEvent<HTMLElement>) => {
+    if (hasChannelDrag(e.dataTransfer)) return;
     e.preventDefault();
     setDragActive(false);
     const files = Array.from(e.dataTransfer?.files ?? []);
@@ -579,10 +587,12 @@ export function App() {
   };
 
   const onDragOver = (e: React.DragEvent<HTMLElement>) => {
+    if (hasChannelDrag(e.dataTransfer)) return;
     e.preventDefault();
     setDragActive(true);
   };
   const onDragLeave = (e: React.DragEvent<HTMLElement>) => {
+    if (hasChannelDrag(e.dataTransfer)) return;
     e.preventDefault();
     setDragActive(false);
   };

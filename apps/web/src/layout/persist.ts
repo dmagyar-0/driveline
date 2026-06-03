@@ -25,6 +25,13 @@
 // panel's per-panel channel lists) was added the same way — optional on
 // read, always written — so existing v3 layouts survive untouched.
 //
+// `enumBindings` later changed shape (single channel-or-null per panel →
+// a multi-channel list, one state strip per bound channel). Rather than
+// bump the schema and drop every saved layout, `validate()` migrates the
+// legacy shape on read via `coerceEnumBindings` (`null`/`""` → `[]`,
+// `"id"` → `["id"]`). New writes are always `string[]`, so the key stays
+// v3 and existing layouts survive the upgrade.
+//
 // `attachLayoutPersistence` wires the Zustand subscribe → Storage write
 // loop; the first post-hydration fire is skipped so we don't rewrite the
 // exact payload we just loaded.
@@ -57,7 +64,7 @@ export interface PersistedLayout {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   valueBindings: Record<string, string[]>;
-  enumBindings: Record<string, string | null>;
+  enumBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
   // Global per-channel unit overrides, keyed by channel id.
   unitOverrides: Record<string, string>;
@@ -92,6 +99,28 @@ function isStringArrayMap(v: unknown): v is Record<string, string[]> {
     if (!isStringArray(v[k])) return false;
   }
   return true;
+}
+
+// Migrate `enumBindings` on read. The field used to hold one channel id
+// (or `null`) per panel; it now holds a list, so accept BOTH shapes and
+// coerce the legacy one: `null`/`""` → `[]`, `"id"` → `["id"]`, and an
+// existing `string[]` passes through. Returns `null` only for a value
+// that is neither a string, null, nor a string array — i.e. genuine
+// corruption — so a pre-migration layout still loads. Exported for reuse
+// by the named-layouts adapter, which carries the same field.
+export function coerceEnumBindings(
+  v: unknown,
+): Record<string, string[]> | null {
+  if (!isPlainObject(v)) return null;
+  const out: Record<string, string[]> = {};
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (isStringArray(x)) out[k] = x;
+    else if (x === null) out[k] = [];
+    else if (typeof x === "string") out[k] = x.length > 0 ? [x] : [];
+    else return null;
+  }
+  return out;
 }
 
 function isMapBindingMap(
@@ -162,7 +191,8 @@ function validate(raw: unknown): PersistedLayout | null {
   if (!isNullableStringMap(raw.sceneBindings)) return null;
   if (!isMapBindingMap(raw.mapBindings)) return null;
   if (!isStringArrayMap(raw.tableBindings)) return null;
-  if (!isNullableStringMap(raw.enumBindings)) return null;
+  const enumBindings = coerceEnumBindings(raw.enumBindings);
+  if (!enumBindings) return null;
   // Optional v3 fields — payloads written before these existed don't have
   // them. Default to an empty map so older saved layouts round-trip
   // cleanly (same posture as `plotPanelSettings`).
@@ -182,7 +212,7 @@ function validate(raw: unknown): PersistedLayout | null {
     mapBindings: raw.mapBindings,
     tableBindings: raw.tableBindings,
     valueBindings,
-    enumBindings: raw.enumBindings,
+    enumBindings,
     plotPanelSettings: settings,
     unitOverrides,
   };
@@ -232,7 +262,7 @@ export interface LayoutSlice {
   mapBindings: Record<string, MapBinding | null>;
   tableBindings: Record<string, string[]>;
   valueBindings: Record<string, string[]>;
-  enumBindings: Record<string, string | null>;
+  enumBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
   unitOverrides: Record<string, string>;
 }

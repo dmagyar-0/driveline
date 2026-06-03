@@ -161,6 +161,29 @@
   outline-offset: -2px;
 }
 
+/* Channel drag-and-drop target. A channel dragged from the Channels drawer
+   drops here to add it as a series. Orange (the plot's own accent — focus
+   ring, splitter) keeps it distinct from the shell's blue file-drop
+   overlay. The hint sits above the empty-state text and never intercepts
+   the pointer, so it can't break the drag it's reporting. */
+.dragOver {
+  outline: 2px dashed var(--color-accent-orange);
+  outline-offset: -2px;
+}
+
+.dropHint {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: var(--color-accent-orange-tint);
+  color: var(--color-fg-1);
+  font-size: 0.9rem;
+}
+
 .plotMount {
   position: absolute;
   inset: 0;

@@ -251,7 +251,11 @@ export interface SessionState {
   // `tableBindings`' shape but is keyed by `value-*` panel ids so the two
   // panel kinds never share a binding list.
   valueBindings: Record<string, string[]>;
-  enumBindings: Record<string, string | null>;
+  // Per-Enum-panel bindings. Mirrors `tableBindings`/`valueBindings`'
+  // multi-channel shape (keyed by `enum-*` panel ids): an enum panel
+  // stacks one state strip ("lane") per bound channel rather than filling
+  // itself with a single signal. Capped at `MAX_PLOT_SERIES`.
+  enumBindings: Record<string, string[]>;
   // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
   // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
   // panel-chrome work in Phase 7.
@@ -419,8 +423,12 @@ export interface SessionState {
   addValueChannel(panelId: string, channelId: string): void;
   /** Remove one channel from a value panel (no-op if absent). */
   removeValueChannel(panelId: string, channelId: string): void;
-  /** Bind an enum strip panel to a single channel; `null` clears. */
-  setEnumBinding(panelId: string, channelId: string | null): void;
+  /** Replace an enum panel's bound channels wholesale (capped, deduped). */
+  setEnumBinding(panelId: string, ids: string[]): void;
+  /** Append one channel to an enum panel (no-op if present or at cap). */
+  addEnumChannel(panelId: string, channelId: string): void;
+  /** Remove one channel from an enum panel (no-op if absent). */
+  removeEnumChannel(panelId: string, channelId: string): void;
   /** Switch the rail's open drawer; pass `null` to close. */
   setActiveRailTab(tab: RailTab | null): void;
   /** Hide / show the entire rail column. */
@@ -1012,10 +1020,38 @@ export const useSession = create<SessionState>((set, get) => {
       });
     },
 
-    setEnumBinding(panelId, channelId) {
+    setEnumBinding(panelId, ids) {
+      const seen = new Set<string>();
+      const next: string[] = [];
+      for (const id of ids) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        next.push(id);
+        if (next.length >= MAX_PLOT_SERIES) break;
+      }
+      set({ enumBindings: { ...get().enumBindings, [panelId]: next } });
+    },
+
+    addEnumChannel(panelId, channelId) {
       const prev = get().enumBindings;
-      if ((prev[panelId] ?? null) === channelId) return;
-      set({ enumBindings: { ...prev, [panelId]: channelId } });
+      const existing = prev[panelId] ?? [];
+      if (existing.includes(channelId)) return;
+      if (existing.length >= MAX_PLOT_SERIES) return;
+      set({
+        enumBindings: { ...prev, [panelId]: [...existing, channelId] },
+      });
+    },
+
+    removeEnumChannel(panelId, channelId) {
+      const prev = get().enumBindings;
+      const existing = prev[panelId];
+      if (!existing || !existing.includes(channelId)) return;
+      set({
+        enumBindings: {
+          ...prev,
+          [panelId]: existing.filter((x) => x !== channelId),
+        },
+      });
     },
 
     setActiveRailTab(tab) {
@@ -1483,7 +1519,7 @@ export const useSession = create<SessionState>((set, get) => {
             cur.valueBindings,
             goneChannelIds,
           ),
-          enumBindings: pruneSingleBindings(cur.enumBindings, goneChannelIds),
+          enumBindings: pruneMultiBindings(cur.enumBindings, goneChannelIds),
           loadedRanges,
           pendingFetch,
         });

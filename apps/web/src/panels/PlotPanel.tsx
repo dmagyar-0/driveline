@@ -15,7 +15,14 @@
 //
 // Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { MAX_PLOT_Y_AXES, useSession } from "../state/store";
@@ -25,6 +32,7 @@ import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
 import { cursorStrokeColor, cursorXPx, nsFromXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
+import { getChannelDragData, hasChannelDrag } from "./channelDrag";
 import { applyTransform, transformKey, type Transform } from "./transforms";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
@@ -122,6 +130,16 @@ function formatValue(v: number): string {
 // rather than a CSS-var read because it's used inside a canvas draw on the
 // hover hot path (no getComputedStyle per frame).
 const HOVER_CROSSHAIR_COLOR = "rgba(224, 224, 224, 0.55)";
+
+// P3 — hover tooltip placement. The box is nudged off the pointer by
+// `TOOLTIP_OFFSET_PX`; `TOOLTIP_MAX_WIDTH_PX` mirrors `.tooltip`'s
+// `max-width: 16rem` in PlotPanel.module.css (16rem ≈ 256px at the 16px
+// root). Both feed `tooltipPositionStyle`, which flips the tooltip to the
+// far side of the pointer before it would spill past the plot area — without
+// it, hovering near the right edge renders the value readout entirely
+// outside the panel.
+const TOOLTIP_OFFSET_PX = 12;
+const TOOLTIP_MAX_WIDTH_PX = 256;
 
 const EMPTY_X = new Float64Array();
 const EMPTY_Y = new Float64Array();
@@ -272,6 +290,39 @@ export function bandTickFilter(
   return kept.some((v) => v !== null) ? kept : splits;
 }
 
+// Position the hover tooltip beside the pointer, flipping to the opposite
+// side before it would overflow the plot area. Anchoring by `right`/`bottom`
+// (instead of `left`/`top`) when flipped makes the box grow away from the
+// near edge so it can never render outside the panel — the fix for the
+// value readout spilling past the right edge when hovering near it.
+//
+// `leftPx`/`topPx` are pointer coordinates relative to the plot area;
+// `areaW`/`areaH` are that area's size. Horizontal flips only when a
+// max-width tooltip wouldn't fit on the right AND the pointer is past the
+// midpoint, so a panel narrower than the tooltip still lands the box on the
+// side with more room rather than off the left edge. The tooltip's height is
+// content-driven (one row per channel), so vertical flips by whichever half
+// has more room.
+export function tooltipPositionStyle(t: {
+  leftPx: number;
+  topPx: number;
+  areaW: number;
+  areaH: number;
+}): CSSProperties {
+  const flipX =
+    t.leftPx + TOOLTIP_OFFSET_PX + TOOLTIP_MAX_WIDTH_PX > t.areaW &&
+    t.leftPx > t.areaW / 2;
+  const flipY = t.topPx > t.areaH / 2;
+  return {
+    ...(flipX
+      ? { right: `${t.areaW - t.leftPx + TOOLTIP_OFFSET_PX}px` }
+      : { left: `${t.leftPx + TOOLTIP_OFFSET_PX}px` }),
+    ...(flipY
+      ? { bottom: `${t.areaH - t.topPx + TOOLTIP_OFFSET_PX}px` }
+      : { top: `${t.topPx + TOOLTIP_OFFSET_PX}px` }),
+  };
+}
+
 export function PlotPanel({ panelId }: PlotPanelProps) {
   const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
@@ -324,6 +375,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
+  // True while a channel is dragged over this plot's area — drives the
+  // drop-target highlight. Distinct from the scrub pointer path: native
+  // drag events never fire pointermove, so the cursor hot path is untouched.
+  const [dragOver, setDragOver] = useState(false);
 
   // Bumped after each successful fetch so the chips' value-at-cursor
   // readout recomputes when fresh data lands (the binary search reads a
@@ -1013,7 +1068,13 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       return;
     }
     const rect = container.getBoundingClientRect();
-    scheduleHover(ns, e.clientX - rect.left, e.clientY - rect.top);
+    scheduleHover(
+      ns,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      rect.width,
+      rect.height,
+    );
   };
 
   const onScrubPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
@@ -1048,11 +1109,17 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     leftPx: number;
     topPx: number;
     ns: bigint;
+    // Plot-area size at hover time, so the tooltip can flip away from an
+    // edge it would otherwise overflow (see `tooltipPositionStyle`).
+    areaW: number;
+    areaH: number;
   } | null>(null);
   const pendingHover = useRef<{
     ns: bigint;
     leftPx: number;
     topPx: number;
+    areaW: number;
+    areaH: number;
   } | null>(null);
   const hoverRafId = useRef<number | null>(null);
 
@@ -1063,12 +1130,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     if (p === null) return;
     mark(`plot:hover:${panelId}`);
     useSession.getState().setHoverNs(p.ns);
-    setTooltip({ leftPx: p.leftPx, topPx: p.topPx, ns: p.ns });
+    setTooltip({
+      leftPx: p.leftPx,
+      topPx: p.topPx,
+      ns: p.ns,
+      areaW: p.areaW,
+      areaH: p.areaH,
+    });
   }, [panelId]);
 
   const scheduleHover = useCallback(
-    (ns: bigint, leftPx: number, topPx: number) => {
-      pendingHover.current = { ns, leftPx, topPx };
+    (
+      ns: bigint,
+      leftPx: number,
+      topPx: number,
+      areaW: number,
+      areaH: number,
+    ) => {
+      pendingHover.current = { ns, leftPx, topPx, areaW, areaH };
       if (hoverRafId.current === null) {
         hoverRafId.current = requestAnimationFrame(flushHover);
       }
@@ -1132,6 +1211,41 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
   const onRemove = (id: string) => {
     removePlotChannel(panelId, id);
+  };
+
+  // --- Drag-and-drop: accept a channel dragged from the Channels drawer. ---
+  // `addPlotChannel` already dedupes and enforces MAX_PLOT_SERIES, so the
+  // drop handler only has to gate on channel kind (plots render scalars).
+  const onChannelDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasChannelDrag(e.dataTransfer)) return;
+    // At capacity there's nowhere to put it: refuse the drop (no
+    // preventDefault ⇒ the browser won't fire `drop`) and show "no-drop".
+    if (atCap) {
+      e.dataTransfer.dropEffect = "none";
+      return;
+    }
+    // preventDefault marks this element as a valid drop target.
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    if (!dragOver) setDragOver(true);
+  };
+
+  const onChannelDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    // dragleave also fires when crossing into child nodes (plot mount,
+    // overlay canvas, tooltip); only clear when the pointer truly exits.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setDragOver(false);
+  };
+
+  const onChannelDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    if (!hasChannelDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    setDragOver(false);
+    const id = getChannelDragData(e.dataTransfer);
+    if (id === null) return;
+    const channel = channels.get(id);
+    if (!channel || channel.kind !== "scalar") return;
+    addPlotChannel(panelId, id);
   };
 
   return (
@@ -1213,7 +1327,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         ref={containerRef}
         className={`${styles.plotArea} ${
           globalRange ? styles.scrubbable : ""
-        }`}
+        } ${dragOver ? styles.dragOver : ""}`}
         role="slider"
         tabIndex={globalRange ? 0 : -1}
         aria-label="Scrub cursor on plot"
@@ -1226,21 +1340,30 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         onPointerUp={onScrubPointerUp}
         onPointerCancel={onScrubPointerUp}
         onPointerLeave={clearHover}
+        onDragOver={onChannelDragOver}
+        onDragLeave={onChannelDragLeave}
+        onDrop={onChannelDrop}
       >
         <div ref={plotMountRef} className={styles.plotMount} />
         <canvas ref={overlayRef} className={styles.overlay} />
+        {dragOver && (
+          <div
+            className={styles.dropHint}
+            data-testid="plot-drop-hint"
+            aria-hidden
+          >
+            Release to add channel
+          </div>
+        )}
         {tooltip !== null && boundChannels.length > 0 && (
           <div
             className={styles.tooltip}
             data-testid="plot-hover-tooltip"
             // Layout-driven dynamic position only (allowed inline style):
-            // nudge the tooltip right+down of the pointer so it never sits
-            // under the cursor. `pointer-events:none` (in CSS) keeps it
-            // from stealing the hover.
-            style={{
-              left: `${tooltip.leftPx + 12}px`,
-              top: `${tooltip.topPx + 12}px`,
-            }}
+            // beside the pointer, flipped to the far side before it would
+            // overflow the plot area (see `tooltipPositionStyle`).
+            // `pointer-events:none` (in CSS) keeps it from stealing the hover.
+            style={tooltipPositionStyle(tooltip)}
           >
             {boundChannels.map((c) => (
               <div key={c.id} className={styles.tooltipRow}>

@@ -1,6 +1,9 @@
-/* Phase 6 · EnumPanel styling. Hand-rolled canvas strip + cursor
- * overlay layered above. The header pill shows the current state at
- * cursor for at-a-glance reading. */
+/* EnumPanel — a vertical stack of state-strip "lanes", one per bound
+ * channel. Each lane is a small card: a label + current-state pill above a
+ * hand-rolled canvas strip (value-coloured segments) with the shared
+ * cursor overlay layered on top. Lanes keep their natural height and stack
+ * from the top, so a single signal no longer stretches to fill the panel;
+ * the panel scrolls once the lanes overflow. */
 
 .panel {
   position: relative;
@@ -39,43 +42,73 @@
   line-height: 1.5;
 }
 
-.header {
+/* Scroll container. Lanes stack from the top (`flex-start`) and the panel
+ * scrolls once they overflow, instead of stretching to fill. */
+.lanes {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  padding: var(--sp-5);
+}
+
+.lane {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4) var(--sp-5);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-6);
+}
+
+.laneHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4);
-  border-bottom: 1px solid var(--color-border-subtle);
+  gap: var(--sp-4);
+  min-height: 1.25rem;
   font-size: var(--fs-12);
 }
 
 .channelName {
-  color: var(--color-fg-2);
-  font-weight: 500;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  min-width: 0;
+  color: var(--color-fg-2);
+  font-weight: 500;
 }
 
-.currentPill {
+.currentPill,
+.currentPillMuted {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-2);
+  flex-shrink: 0;
   padding: 0 var(--sp-3);
-  background: var(--color-bg-4);
+  background: var(--color-bg-5);
   border-radius: var(--radius-pill);
   font-size: var(--fs-11);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--color-fg-3);
   line-height: 1.6;
-  flex-shrink: 0;
+}
+
+/* No state resolved at the cursor (no data yet, or cursor before the
+ * first sample): a dimmer pill keeps the header height stable. */
+.currentPillMuted {
+  color: var(--color-fg-6);
 }
 
 .swatch {
   width: 8px;
   height: 8px;
+  flex-shrink: 0;
   border-radius: var(--radius-2);
 }
 
@@ -83,10 +116,15 @@
   font-variant-numeric: tabular-nums;
 }
 
-.stripContainer {
+/* Fixed-height track. Rounded + clipped so the coloured segments and the
+ * cursor line inherit the strip's corner radius. The near-black track
+ * makes the saturated segment fills read crisply. */
+.stripWrap {
   position: relative;
-  flex: 1;
-  min-height: 24px;
+  height: 32px;
+  border-radius: var(--radius-4);
+  overflow: hidden;
+  background: var(--color-bg-0);
 }
 
 .strip,

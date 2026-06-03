@@ -46,7 +46,7 @@ const SAMPLE: PersistedLayout = {
   valueBindings: {
     "value-1": ["/vehicle/speed"],
   },
-  enumBindings: { "enum-1": "/state/gear", "enum-2": null },
+  enumBindings: { "enum-1": ["/state/gear"], "enum-2": [] },
   plotPanelSettings: {
     "plot-1": {
       gapThresholdSec: 1.5,
@@ -253,6 +253,34 @@ describe("layout persist", () => {
     );
     const loaded = loadLayoutFromStorage(s);
     expect(loaded?.plotPanelSettings).toEqual({});
+  });
+
+  it("migrates legacy single-channel enumBindings to arrays on read", () => {
+    // The enum panel used to bind one channel-or-null per panel. A v3
+    // layout written then must still load, coercing the legacy shape to
+    // the multi-channel list rather than dropping the whole layout.
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        ...SAMPLE,
+        enumBindings: { "enum-1": "/state/gear", "enum-2": null, "enum-3": "" },
+      }),
+    );
+    expect(loadLayoutFromStorage(s)?.enumBindings).toEqual({
+      "enum-1": ["/state/gear"],
+      "enum-2": [],
+      "enum-3": [],
+    });
+  });
+
+  it("returns null when an enumBindings value is neither string, null, nor array", () => {
+    const s = makeStorage();
+    s.setItem(
+      LAYOUT_STORAGE_KEY,
+      JSON.stringify({ ...SAMPLE, enumBindings: { "enum-1": 7 } }),
+    );
+    expect(loadLayoutFromStorage(s)).toBeNull();
   });
 
   it("returns null when plotPanelSettings has a non-finite threshold", () => {

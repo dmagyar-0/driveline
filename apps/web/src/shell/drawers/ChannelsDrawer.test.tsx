@@ -22,6 +22,7 @@ import {
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { ChannelsDrawer } from "./ChannelsDrawer";
+import { CHANNEL_DND_MIME } from "../../panels/channelDrag";
 import {
   useSession,
   qualifiedChannelId,
@@ -345,5 +346,22 @@ describe("ChannelsDrawer tree", () => {
     expect(useSession.getState().plotBindings["plot-1"]).toEqual([
       "mcap::/vehicle/speed",
     ]);
+  });
+
+  it("makes a scalar channel row draggable and stamps its id on dragstart", () => {
+    seedTree([mcapChannel("/vehicle/speed")]);
+    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+
+    const row = screen.getByTestId("channel-row-mcap::/vehicle/speed");
+    expect(row.getAttribute("draggable")).toBe("true");
+
+    const setData = vi.fn();
+    fireEvent.dragStart(row, {
+      dataTransfer: { setData, effectAllowed: "" } as unknown as DataTransfer,
+    });
+    expect(setData).toHaveBeenCalledWith(
+      CHANNEL_DND_MIME,
+      "mcap::/vehicle/speed",
+    );
   });
 });

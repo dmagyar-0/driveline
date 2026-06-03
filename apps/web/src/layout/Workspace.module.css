@@ -140,6 +140,9 @@
   border-radius: var(--radius-3);
   cursor: pointer;
   padding: 0;
+  transition:
+    background-color var(--motion-base),
+    color var(--motion-base);
 }
 
 .tabActionBtn:hover {
@@ -147,14 +150,14 @@
   color: var(--color-fg-2);
 }
 
+/* Close is the one destructive action in the cluster — warm it on hover so
+ * it reads apart from the neutral settings/maximize buttons. */
+.tabActionClose:hover {
+  background: var(--color-bg-5);
+  color: var(--color-error-dark);
+}
+
 .tabActionBtn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
-}
-
-.tabActionDisabled,
-.tabActionDisabled:hover {
-  color: var(--color-fg-6);
-  background: transparent;
-  cursor: not-allowed;
 }

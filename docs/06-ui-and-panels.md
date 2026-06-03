@@ -134,7 +134,7 @@ interface SessionState {
   sceneBindings:     Record<PanelId, ChannelId | null>;
   mapBindings:       Record<PanelId, MapBinding | null>;
   tableBindings:     Record<PanelId, ChannelId[]>;
-  enumBindings:      Record<PanelId, ChannelId | null>;
+  enumBindings:      Record<PanelId, ChannelId[]>;  // one state strip per channel
   videoHudOn:        Record<PanelId, boolean>;
   plotPanelSettings: Record<PanelId, PlotPanelSettings>; // gap threshold per panel
 
@@ -267,9 +267,14 @@ cross-panel sync snapshot.
 
 ### EnumPanel
 
-Hand-rolled canvas strip showing enum-state intervals layered with the
-shared cursor overlay. Each enum value's colour comes from
-`colorFor(String(value))` so two strips reading the same channel agree.
+Binds multiple scalar channels and renders each as its own fixed-height
+"lane" — a labelled, hand-rolled canvas strip of enum-state intervals
+layered with the shared cursor overlay, plus a current-state pill that
+reads the value at the cursor. Lanes stack from the top and the panel
+scrolls once they overflow, so a single signal occupies one short lane
+rather than filling the whole panel. Each enum value's colour comes from
+`colorFor(String(value))` so two strips reading the same channel agree;
+the value is drawn inside any segment wide enough to fit it.
 
 ## FlexLayout integration
 

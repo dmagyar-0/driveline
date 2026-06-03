@@ -17,7 +17,7 @@ function sample(): ViewState {
       },
       table: { "table-1": ["3|lat|g.mf4"] },
       value: { "value-1": ["3|lon|g.mf4"] },
-      enum: { "enum-1": "5|/gear|src.mcap" },
+      enum: { "enum-1": ["5|/gear|src.mcap"] },
       scene: { "scene-1": "4|pose|g.mf4" },
     },
     // A realistic ns timestamp well beyond Number.MAX_SAFE_INTEGER limits
