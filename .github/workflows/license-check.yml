@@ -1,0 +1,42 @@
+name: License check
+
+# Gates the dependency tree against Driveline's MPL-2.0 license policy.
+# Rust side: cargo-deny + deny.toml. JS side: scripts/check-js-licenses.mjs.
+# A dependency under a non-allowed (e.g. GPL/AGPL) license fails the build.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-licenses:
+    name: Rust dependency licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: cargo-deny (licenses)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses
+
+  js-licenses:
+    name: JS dependency licenses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check JS licenses
+        run: pnpm license:check:js
