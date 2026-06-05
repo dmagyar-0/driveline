@@ -80,14 +80,22 @@ function newPanelId(prefix: string): string {
 
 function buildModel(json: unknown | null): Model {
   const source = (json as IJsonModel | null) ?? defaultLayoutModel;
-  // Our tab chrome (`onRenderTab`) draws a single custom close button, so
-  // FlexLayout's own trailing ✕ must stay off — otherwise every tab shows
-  // two close buttons. Force it off for *whatever* layout we load (the
-  // default, a layout persisted from before this change, or one injected by
-  // a dev hook / e2e spec) instead of trusting each source's `global`.
+  // Our tab chrome (`onRenderTab`) draws its own close *and* maximize
+  // buttons, so FlexLayout's stock equivalents must stay off — otherwise
+  // every tab shows two close buttons (its trailing ✕) and every tabset
+  // shows a second, redundant maximize button on its right edge. Force both
+  // off for *whatever* layout we load (the default, a layout persisted from
+  // before this change, or one injected by a dev hook / e2e spec) instead of
+  // trusting each source's `global`. Disabling `tabSetEnableMaximize` only
+  // hides the stock button: our custom maximize still works because
+  // `Actions.maximizeToggle` doesn't gate on it.
   const normalized: IJsonModel = {
     ...source,
-    global: { ...source.global, tabEnableClose: false },
+    global: {
+      ...source.global,
+      tabEnableClose: false,
+      tabSetEnableMaximize: false,
+    },
   };
   try {
     return Model.fromJson(normalized);
@@ -334,9 +342,11 @@ export const Workspace = forwardRef<WorkspaceHandle>(function Workspace(_, ref) 
 
   const onRenderTabSet = useCallback(
     (_node: TabSetNode | BorderNode, _renderValues: ITabSetRenderValues) => {
-      // Single-tab tabsets already match the wireframe — leave the
-      // tabset action cluster (the maximize/restore button on the right
-      // edge) alone for now. Hook reserved for later phases.
+      // FlexLayout's stock tabset maximize/restore button (the one that used
+      // to sit on the right edge) is now disabled globally via
+      // `tabSetEnableMaximize:false` in `buildModel`, since the per-tab chrome
+      // in `onRenderTab` already carries a maximize button. Nothing to add to
+      // the tabset strip; hook reserved for later phases.
     },
     [],
   );
