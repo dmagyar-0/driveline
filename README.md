@@ -45,3 +45,25 @@ pnpm --filter e2e test        # Playwright e2e (pings the workers)
 - `crates/wasm-bindings/` — `wasm-bindgen` shim that targets `wasm32-unknown-unknown`
 - `test-fixtures/` — committed binary fixtures shared between Rust and JS
 - `docs/` — design docs (vision, architecture, data model, tasks)
+
+## License
+
+Driveline is licensed under the [Mozilla Public License 2.0](./LICENSE)
+(MPL-2.0). MPL-2.0 is a file-level weak copyleft: modifications to existing
+MPL-covered files must be shared back under the same license, but the code
+can be combined with proprietary modules — so the open core stays open while
+leaving room to build on top of it.
+
+Dependency licenses are enforced in CI. Every dependency must resolve to a
+permissive or MPL-compatible license; anything else (GPL/AGPL, ethical-source,
+or other non-OSI terms) fails the build:
+
+- **Rust** — [`cargo deny check licenses`](./deny.toml)
+  (`pnpm license:check:rust`)
+- **JS** — [`scripts/check-js-licenses.mjs`](./scripts/check-js-licenses.mjs)
+  (`pnpm license:check:js`)
+
+If you add a dependency under a new license, add its SPDX id to the allow
+list in **both** gates. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the
+per-file header convention.
+
