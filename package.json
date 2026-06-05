@@ -2,6 +2,7 @@
   "name": "driveline",
   "version": "0.1.0",
   "private": true,
+  "license": "MPL-2.0",
   "scripts": {
     "wasm:build": "wasm-pack build crates/wasm-bindings --target web --out-dir ../../apps/web/src/wasm --out-name wasm_bindings",
     "wasm:build:dev": "wasm-pack build crates/wasm-bindings --target web --out-dir ../../apps/web/src/wasm --out-name wasm_bindings --dev",
@@ -12,7 +13,9 @@
     "test:rust": "cargo test --workspace",
     "size:check": "node scripts/check-bundle-size.mjs",
     "e2e": "pnpm --filter e2e test",
-    "fmt": "cargo fmt --all && pnpm --filter web fmt"
+    "fmt": "cargo fmt --all && pnpm --filter web fmt",
+    "license:check:js": "node scripts/check-js-licenses.mjs",
+    "license:check:rust": "cargo deny check licenses"
   },
   "devDependencies": {},
   "packageManager": "pnpm@10.33.0"

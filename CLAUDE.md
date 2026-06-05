@@ -9,7 +9,7 @@ the full design.
 
 - **Frontend** (`apps/web/`): React 19 + TypeScript + Vite 6, **Zustand** (one
   store, no providers), **FlexLayout** (dockable panels), **uPlot** (signals),
-  Leaflet + react-leaflet (maps).
+  Leaflet (maps, driven imperatively — no React wrapper).
 - **Core** (`crates/data-core/`): pure portable Rust. Readers (`McapReader`,
   `Mf4Reader`, `Mp4SidecarReader`), Arrow IPC producers. No browser deps —
   testable natively with `cargo test`.

@@ -20,17 +20,14 @@
 // `cursorNs`. Bounds are auto-fit only on first load / binding change so
 // the fit doesn't fight manual pan/zoom on every refetch.
 //
-// Leaflet is loaded eagerly because react-leaflet pulls it in on import
-// anyway. Bundle hit ≈ 40 KB gzipped, well under the 350 KB budget.
+// Leaflet is driven through its imperative API (not a React wrapper) so
+// the dependency tree stays fully OSI-permissive: leaflet is BSD-2-Clause.
+// The map instance, polyline and cursor marker live in refs — they're
+// DOM-bound and not serialisable, so they never enter React state or the
+// store. Bundle hit ≈ 40 KB gzipped, well under the 350 KB budget.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  CircleMarker,
-  MapContainer,
-  Polyline,
-  TileLayer,
-  useMap,
-} from "react-leaflet";
+import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { LatLngExpression } from "leaflet";
 import { useSession } from "../state/store";
@@ -46,6 +43,12 @@ interface MapPanelProps {
 const MAX_POINTS = 5000;
 const DEFAULT_CENTER: LatLngExpression = [0, 0];
 const DEFAULT_ZOOM = 2;
+const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const TILE_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+// Cursor accent (not the series colour) so the marker reads as "where am
+// I" rather than "another track".
+const CURSOR_COLOR = "#f97316";
 
 // A GPS fix paired with the ns timestamp it was sampled at, so the cursor
 // marker can locate "the fix at (or just before) cursorNs".
@@ -129,30 +132,6 @@ function trackPointAt(
     else hi = mid - 1;
   }
   return track[lo];
-}
-
-// Auto-fit the map to the polyline only on first appearance of a track or
-// when the binding changes (keyed by `fitKey`). After that the user owns the
-// viewport — a refetch on range change won't yank the pan/zoom back.
-function FitToPolyline({
-  points,
-  fitKey,
-}: {
-  points: LatLngExpression[];
-  fitKey: string;
-}) {
-  const map = useMap();
-  const lastFitKey = useRef<string | null>(null);
-  useEffect(() => {
-    if (points.length < 2) return;
-    if (lastFitKey.current === fitKey) return;
-    lastFitKey.current = fitKey;
-    map.fitBounds(points as [number, number][], {
-      padding: [20, 20],
-      animate: false,
-    });
-  }, [map, points, fitKey]);
-  return null;
 }
 
 export function MapPanel({ panelId }: MapPanelProps) {
@@ -243,7 +222,7 @@ export function MapPanel({ panelId }: MapPanelProps) {
 
   // Fit key changes when the binding changes, re-arming the one-shot
   // auto-fit; refetches on range change keep the same key so they don't
-  // re-fit.
+  // re-fit and fight a manual pan/zoom.
   const fitKey = binding
     ? `${binding.latChannelId}|${binding.lonChannelId}`
     : "";
@@ -254,6 +233,90 @@ export function MapPanel({ panelId }: MapPanelProps) {
     () => trackPointAt(track, cursorNs),
     [track, cursorNs],
   );
+
+  // Imperative Leaflet wiring. The host <div> only exists in the bound
+  // branch, so the map is created when `isEmpty` flips to false and torn
+  // down (map.remove) when it flips back. mapRef guards against a double
+  // create under StrictMode's mount/cleanup/mount.
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const lineRef = useRef<L.Polyline | null>(null);
+  const markerRef = useRef<L.CircleMarker | null>(null);
+  const lastFitKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (isEmpty) return;
+    const host = hostRef.current;
+    if (!host || mapRef.current) return;
+    const map = L.map(host, {
+      center: DEFAULT_CENTER,
+      zoom: DEFAULT_ZOOM,
+      scrollWheelZoom: true,
+      attributionControl: true,
+    });
+    L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION }).addTo(map);
+    mapRef.current = map;
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      lineRef.current = null;
+      markerRef.current = null;
+      lastFitKeyRef.current = null;
+    };
+  }, [isEmpty]);
+
+  // Redraw the polyline whenever the downsampled points or the panel's
+  // palette colour change, and one-shot fit to it when the binding (fitKey)
+  // changes. Runs after the map-create effect on the same commit, so mapRef
+  // is populated by the time we read it.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (lineRef.current) {
+      lineRef.current.remove();
+      lineRef.current = null;
+    }
+    if (points.length > 1) {
+      // Polyline colour is a data-viz series colour from the plot palette
+      // (not the cursor accent). Two MapPanels in one workspace pick
+      // distinct hues; cursor strokes stay separate via cursorOverlay.ts.
+      const line = L.polyline(points, {
+        color: colorFor(panelId),
+        weight: 3,
+      }).addTo(map);
+      lineRef.current = line;
+      if (lastFitKeyRef.current !== fitKey) {
+        lastFitKeyRef.current = fitKey;
+        map.fitBounds(line.getBounds(), { padding: [20, 20], animate: false });
+      }
+    }
+  }, [points, panelId, fitKey]);
+
+  // Cursor marker tracking the GPS fix at the shared cursor. Created lazily
+  // and moved via setLatLng so a 60 Hz cursor doesn't churn Leaflet layers.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (cursorPoint === null) {
+      if (markerRef.current) {
+        markerRef.current.remove();
+        markerRef.current = null;
+      }
+      return;
+    }
+    const center: LatLngExpression = [cursorPoint.lat, cursorPoint.lon];
+    if (markerRef.current) {
+      markerRef.current.setLatLng(center);
+    } else {
+      markerRef.current = L.circleMarker(center, {
+        radius: 6,
+        color: CURSOR_COLOR,
+        fillColor: CURSOR_COLOR,
+        fillOpacity: 0.9,
+        weight: 2,
+      }).addTo(map);
+    }
+  }, [cursorPoint]);
 
   return (
     <section className={styles.panel} data-testid="map-panel">
@@ -266,46 +329,7 @@ export function MapPanel({ panelId }: MapPanelProps) {
         </div>
       ) : (
         <div className={styles.mapContainer} data-testid="map-container">
-          <MapContainer
-            center={DEFAULT_CENTER}
-            zoom={DEFAULT_ZOOM}
-            scrollWheelZoom
-            className={styles.map}
-            attributionControl
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {points.length > 1 && (
-              <>
-                {/* Polyline colour is a data-viz series colour from the
-                    plot palette (not the cursor accent). Two MapPanels
-                    in one workspace pick distinct hues; cursor strokes
-                    stay separate via panels/cursorOverlay.ts. */}
-                <Polyline
-                  positions={points}
-                  pathOptions={{ color: colorFor(panelId), weight: 3 }}
-                />
-                <FitToPolyline points={points} fitKey={fitKey} />
-              </>
-            )}
-            {cursorPoint !== null && (
-              // Marker tracking the GPS fix at the shared cursor. Cursor
-              // accent (not the series colour) so it reads as "where am I"
-              // rather than "another track".
-              <CircleMarker
-                center={[cursorPoint.lat, cursorPoint.lon]}
-                radius={6}
-                pathOptions={{
-                  color: "#f97316",
-                  fillColor: "#f97316",
-                  fillOpacity: 0.9,
-                  weight: 2,
-                }}
-              />
-            )}
-          </MapContainer>
+          <div ref={hostRef} className={styles.map} data-testid="map-leaflet" />
 
           {/* Status overlays. Mutually exclusive with the polyline so a
               failed/empty fetch is visible rather than a stale line. */}

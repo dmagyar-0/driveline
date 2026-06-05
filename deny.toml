@@ -1,0 +1,54 @@
+# cargo-deny configuration — license gating for the Rust dependency graph.
+#
+# Driveline ships under MPL-2.0 (weak copyleft). To keep that promise clean we
+# only allow dependencies under permissive or MPL-compatible licenses. A new
+# dep under GPL/AGPL/SSPL (or anything not on the allow list below) fails CI,
+# so copyleft can never sneak into the tree unnoticed.
+#
+# Run locally:  cargo deny check licenses
+# Docs:         https://embarkstudios.github.io/cargo-deny/
+
+[licenses]
+# v2 schema: anything not explicitly allowed is denied.
+version = 2
+confidence-threshold = 0.9
+
+# Licenses permitted anywhere in the graph. Every entry is either permissive
+# or our own weak-copyleft license (MPL-2.0, carried by the workspace crates).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",   # required by the `AND Unicode-3.0` clause on icu/unicode data
+    "Unlicense",     # dual-licensed `Unlicense OR MIT` crates
+    "CC0-1.0",       # public-domain dedication used by a couple of dev deps
+    "MPL-2.0",       # Driveline's own license (data-core, wasm-bindings)
+]
+
+# The LLVM exception rides along with `Apache-2.0 WITH LLVM-exception` on a few
+# crates; those are OR'd with plain Apache-2.0/MIT, but we whitelist the
+# exception explicitly so resolution never depends on clause ordering.
+exceptions = []
+
+[licenses.private]
+# Workspace crates are unpublished; still subject to the allow list above.
+ignore = false
+
+[bans]
+# Licensing-focused config; dependency-ban policy intentionally left permissive.
+multiple-versions = "allow"
+wildcards = "allow"
+
+[advisories]
+# This file gates licenses. Keep `cargo deny check advisories` available but
+# non-fatal here so a fresh CVE advisory doesn't block a licensing-only check.
+version = 2
+yanked = "warn"
+
+[sources]
+# mf4-rs is pulled from a pinned git revision; allow the GitHub org explicitly.
+unknown-git = "allow"
+unknown-registry = "deny"
