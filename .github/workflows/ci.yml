@@ -166,8 +166,17 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Bootstrap test deps
-        run: scripts/setup-test-env.sh
+      # `make fixtures-check` only needs ffmpeg (generate.py shells out to
+      # it) plus the Python generator deps — not the full setup-test-env.sh
+      # bootstrap (which also pulls pnpm/wasm/playwright and isn't on PATH
+      # in this minimal job).
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+
+      - name: Install fixture generator deps
+        run: pip3 install numpy mcap asammdf
 
       - name: Verify fixtures are fresh
         run: make fixtures-check
