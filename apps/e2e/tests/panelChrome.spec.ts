@@ -205,4 +205,24 @@ test.describe("Per-panel chrome (Phase 7)", () => {
       page.locator(".flexlayout__tabset .flexlayout__tab_button_trailing"),
     ).toHaveCount(0);
   });
+
+  test("no stock tabset maximize button (custom tab-maximize is the only one)", async ({
+    page,
+  }) => {
+    // `onRenderTab` draws one custom maximize button per tab → two for the
+    // default Video + Plot layout.
+    await expect(tabChrome(page, "tab-maximize")).toHaveCount(2);
+    // FlexLayout otherwise renders its own maximize/restore button in each
+    // tabset's right-edge toolbar (`flexlayout__tab_toolbar_button-min` when
+    // not maximized, `-max` when maximized) — a duplicate of our custom one.
+    // `buildModel` forces `tabSetEnableMaximize:false` for every loaded
+    // layout, so that stock button is gone and the custom tab button is the
+    // only way to maximize.
+    await expect(
+      page.locator(
+        ".flexlayout__tabset .flexlayout__tab_toolbar_button-min, " +
+          ".flexlayout__tabset .flexlayout__tab_toolbar_button-max",
+      ),
+    ).toHaveCount(0);
+  });
 });
