@@ -274,20 +274,55 @@ export function stackedBandRange(
   return [scaleMin, scaleMin + fullSpan];
 }
 
-// Tick/grid filter for a stacked band. Keeps only the split values inside the
-// band's data extent `[lo, hi]` (replacing the rest with `null`, which uPlot
-// hides), so a banded axis doesn't paint ticks across the empty space its
-// expanded scale spans. A `null` extent (degenerate or not-yet-resolved data)
-// or a filter that would blank the axis entirely falls back to the original
-// splits so a band never loses every label.
-export function bandTickFilter(
-  splits: number[],
+// How many gridlines to aim for inside each stacked band. The "nice" step
+// search in `niceBandSplits` lands on a round increment near `span / TARGET`,
+// so the realised count is usually this ±1. Kept small because a band is only
+// a slice of the plot height — a denser grid crowds once several bands stack.
+export const STACK_BAND_TICK_TARGET = 4;
+
+// Tick/grid values for a stacked band.
+//
+// Left to itself, uPlot picks the tick increment from the *expanded* banded
+// scale (≈3.6× the data height — see stackedBandRange) and we'd hide the ticks
+// that land outside the band. But "nice" on the expanded scale isn't nice on
+// the visible slice: each band keeps a different, oddly-spaced subset and the
+// empty margin above/below the data differs per band, so the stacked grid reads
+// as irregular and misaligned.
+//
+// Instead we synthesise the ticks ourselves, straight from the band's own data
+// extent `[lo, hi]`: snap `span / target` onto the 1·2·5·10 ladder for round
+// labels, then walk that step across the extent. Every band then gets an
+// evenly-spaced grid at the same density regardless of its magnitude, and
+// because the values stay inside `[lo, hi]`, uPlot maps them into the band and
+// never paints the expanded scale's empty margins. A `null` extent (degenerate
+// or not-yet-resolved data) yields no ticks — the band's flat line needs none.
+export function niceBandSplits(
   extent: [number, number] | null,
-): (number | null)[] {
-  if (!extent) return splits;
+  target: number,
+): number[] {
+  if (!extent) return [];
   const [lo, hi] = extent;
-  const kept = splits.map((v) => (v >= lo && v <= hi ? v : null));
-  return kept.some((v) => v !== null) ? kept : splits;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || !(hi > lo)) return [];
+  const n = Math.max(1, Math.floor(target));
+  const rawStep = (hi - lo) / n;
+  const mag = 10 ** Math.floor(Math.log10(rawStep));
+  const norm = rawStep / mag; // normalised into [1, 10)
+  const niceNorm = norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10;
+  const step = niceNorm * mag;
+  // Decimal places the step implies, used to scrub float drift from the
+  // accumulator so a 0.1 step renders "31.3" rather than "31.299999999999997".
+  const decimals = Math.max(0, -Math.floor(Math.log10(step)));
+  // Tolerance (in step units) so a value sitting essentially on a tick — modulo
+  // float error — isn't skipped at the low end or dropped at the high end.
+  const eps = 1e-6;
+  const first = Math.ceil(lo / step - eps) * step;
+  const ticks: number[] = [];
+  for (let i = 0; ; i++) {
+    const v = first + i * step;
+    if (v > hi + step * eps) break;
+    ticks.push(Number(v.toFixed(decimals)));
+  }
+  return ticks;
 }
 
 // Position the hover tooltip beside the pointer, flipping to the opposite
@@ -717,7 +752,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         // Overlaid: only the primary (left) axis paints the horizontal grid;
         // extra axes would overpaint it with their own (misaligned) lines.
         // Stacked: each banded axis owns a disjoint vertical slice, so every
-        // band paints its own grid (confined to its band by the filter below)
+        // band paints its own grid (confined to its band by the splits below)
         // and the empty forced axis paints none.
         grid: stacking
           ? isBanded
@@ -733,10 +768,18 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         show: rendered,
       };
       if (isBanded) {
-        // Drop ticks/gridlines that fall in the expanded scale's empty space
-        // outside this band's data extent.
-        axis.filter = (_self, splits) =>
-          bandTickFilter(splits, bandExtent.get(key) ?? null);
+        // Generate this band's ticks from its own data extent (recorded by the
+        // `range` callback above) rather than letting uPlot derive them from
+        // the expanded scale — see niceBandSplits. The values stay inside the
+        // band, so the grid is evenly spaced and confined to the band, and
+        // every band lands the same density regardless of magnitude.
+        axis.splits = () =>
+          niceBandSplits(bandExtent.get(key) ?? null, STACK_BAND_TICK_TARGET);
+        // Format the ticks ourselves too. uPlot's default formatter derives its
+        // decimal places from the *expanded* scale's increment, which would
+        // round a finer band tick (e.g. a 0.5 step) to the wrong precision; our
+        // splits are already clean numbers, so render them verbatim.
+        axis.values = (_self, splits) => splits.map((v) => String(v));
       }
       return axis;
     });

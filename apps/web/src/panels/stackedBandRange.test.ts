@@ -28,7 +28,7 @@ vi.hoisted(() => {
     }) as unknown as MediaQueryList;
 });
 
-import { STACK_BAND_GAP, bandTickFilter, stackedBandRange } from "./PlotPanel";
+import { STACK_BAND_GAP, niceBandSplits, stackedBandRange } from "./PlotPanel";
 
 // uPlot maps a scale's [min, max] across the full plot height with min at
 // the bottom (0) and max at the top (1). This is the normalised vertical
@@ -101,28 +101,42 @@ describe("stackedBandRange", () => {
   });
 });
 
-describe("bandTickFilter", () => {
-  it("nulls out splits outside the band's data extent (inclusive bounds)", () => {
-    // Scale expanded to [-3, 2] but data only spans [-1, 1]: the ticks at
-    // -3 and 2 sit in empty space and are hidden; -1, 0, 1 stay.
-    expect(bandTickFilter([-3, -2, -1, 0, 1, 2], [-1, 1])).toEqual([
-      null,
-      null,
-      -1,
-      0,
-      1,
-      null,
-    ]);
+describe("niceBandSplits", () => {
+  it("returns evenly spaced, round ticks within the band extent", () => {
+    // The wheel-speed case from the report: a ~3-unit band → integer ticks.
+    const ticks = niceBandSplits([30.4, 33.6], 4);
+    expect(ticks).toEqual([31, 32, 33]);
+    // Every tick lies inside the data extent (so uPlot keeps it in the band).
+    for (const t of ticks) {
+      expect(t).toBeGreaterThanOrEqual(30.4);
+      expect(t).toBeLessThanOrEqual(33.6);
+    }
+    // Even spacing — the whole point of the fix.
+    expect(ticks[1] - ticks[0]).toBeCloseTo(ticks[2] - ticks[1], 9);
   });
 
-  it("keeps every split when the extent is null (degenerate / unknown)", () => {
-    const splits = [-3, -2, -1, 0, 1];
-    expect(bandTickFilter(splits, null)).toBe(splits);
+  it("snaps the step to the 1·2·5 ladder for sub-unit ranges", () => {
+    // span 1.4, target 4 → rawStep 0.35 → nice step 0.5.
+    expect(niceBandSplits([31.0, 32.4], 4)).toEqual([31, 31.5, 32]);
   });
 
-  it("falls back to all splits rather than blanking the axis", () => {
-    // No split lands inside the band → keep them all so the band still
-    // shows a label instead of an empty gutter.
-    expect(bandTickFilter([10, 20, 30], [-1, 1])).toEqual([10, 20, 30]);
+  it("keeps the same density regardless of magnitude", () => {
+    const small = niceBandSplits([0, 1], 4);
+    const big = niceBandSplits([0, 1000], 4);
+    expect(small).toEqual([0, 0.2, 0.4, 0.6, 0.8, 1]);
+    expect(big).toEqual([0, 200, 400, 600, 800, 1000]);
+    // Identical tick count across three orders of magnitude.
+    expect(small.length).toBe(big.length);
+  });
+
+  it("scrubs floating-point drift so labels stay round", () => {
+    // 0.1 steps are the classic float-accumulation trap (0.1+0.2 ≠ 0.3).
+    expect(niceBandSplits([0, 0.5], 5)).toEqual([0, 0.1, 0.2, 0.3, 0.4, 0.5]);
+  });
+
+  it("returns no ticks for a null or degenerate extent", () => {
+    expect(niceBandSplits(null, 4)).toEqual([]);
+    expect(niceBandSplits([5, 5], 4)).toEqual([]); // flat
+    expect(niceBandSplits([1, -1], 4)).toEqual([]); // inverted
   });
 });
