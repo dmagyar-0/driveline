@@ -12,7 +12,9 @@
 //              `setVideoHudOn` / `toggleVideoHudOn` in the store, so the
 //              in-panel button + `h` keypress + this drawer all share
 //              one bit), and the bound channel with × to clear.
-//   - scene  → forward-compat single-channel binding (no rendering yet)
+//   - scene  → single-channel binding filtered to vector (point-cloud)
+//              channels; auto-detects compatible signals and offers only
+//              those. No rendering yet (pending the data-core format).
 //   - map    → lat/lon two-channel binding via two pickers
 //   - table  → multi-channel scalar binding (raw time-series table)
 //   - value  → multi-channel scalar binding (sample-at-cursor reader)
@@ -28,6 +30,7 @@ import {
   MAX_PLOT_Y_AXES,
   useSession,
   type Channel,
+  type ChannelKind,
   type PlotTransform,
   type SourceMeta,
 } from "../../state/store";
@@ -795,7 +798,16 @@ function VideoBody({ panelId }: BodyProps) {
   );
 }
 
+// Channel kinds a 3D scene can render. A point cloud is a per-frame array
+// of vertices, so the only existing wire kind that fits is `vector`
+// (scalars / enums / video can't describe 3D geometry). This is the single
+// place to widen when the data core lands a dedicated `point_cloud` kind —
+// add it here and the picker + auto-detect below light up with no other
+// change. See docs/06-ui-and-panels.md (ScenePanel).
+const SCENE_CHANNEL_KINDS: readonly ChannelKind[] = ["vector"];
+
 function SceneBody({ panelId }: BodyProps) {
+  const channels = useSession((st) => st.channels);
   const sources = useSession((st) => st.sources);
   const unitOverrides = useSession((st) => st.unitOverrides);
   const bindingId = useSession((st) => st.sceneBindings[panelId] ?? null);
@@ -804,6 +816,13 @@ function SceneBody({ panelId }: BodyProps) {
   const addBtnRef = useRef<HTMLButtonElement | null>(null);
   const [pickerAnchor, setPickerAnchor] = useState<DOMRect | null>(null);
 
+  // Auto-detect the bindable channels: only those whose kind the scene can
+  // actually render. Drives both the picker contents and the empty/disabled
+  // states below, so the user is never offered a channel that can't bind.
+  const compatibleCount = channels.filter((c) =>
+    SCENE_CHANNEL_KINDS.includes(c.kind),
+  ).length;
+  const hasCompatible = compatibleCount > 0;
   const boundChannel = bindingId ? findChannel(sources, bindingId) : null;
 
   const onToggle = (channelId: string) => {
@@ -821,7 +840,9 @@ function SceneBody({ panelId }: BodyProps) {
       <section className={s.section}>
         <h4 className={s.sectionTitle}>Status</h4>
         <p className={s.empty} data-testid="panel-scene-status">
-          3D rendering pending point-cloud format from rust core.
+          Renders a 3D point cloud from a vector channel — per-frame arrays of
+          XYZ vertices. Live rendering arrives with the point-cloud format from
+          the data core.
         </p>
       </section>
       <section className={s.section}>
@@ -857,17 +878,34 @@ function SceneBody({ panelId }: BodyProps) {
           ref={addBtnRef}
           type="button"
           className={s.addRow}
-          onClick={openPicker}
+          aria-disabled={!hasCompatible || undefined}
+          title={
+            hasCompatible
+              ? undefined
+              : "No point-cloud-compatible channels loaded"
+          }
+          onClick={() => {
+            if (!hasCompatible) return;
+            openPicker();
+          }}
           data-testid="panel-scene-add-channel"
         >
           + bind channel…
         </button>
+        <p className={s.gapHelp} data-testid="panel-scene-detect">
+          {hasCompatible
+            ? `${compatibleCount} compatible channel${
+                compatibleCount === 1 ? "" : "s"
+              } detected — only vector (point-cloud) channels can bind here.`
+            : "No vector (point-cloud) channels detected in the loaded sources yet."}
+        </p>
         {pickerAnchor !== null && (
           <ChannelPicker
             sources={sources}
             selectedIds={bindingId ? [bindingId] : []}
             maxSelected={1}
             anchorRect={pickerAnchor}
+            kinds={SCENE_CHANNEL_KINDS}
             onToggle={onToggle}
             onClose={() => setPickerAnchor(null)}
           />

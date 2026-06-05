@@ -178,6 +178,78 @@ describe("PanelDrawer", () => {
     expect(useSession.getState().sceneBindings["scene-1"]).toBeNull();
   });
 
+  describe("scene channel-kind filter", () => {
+    // The seed() source carries only a scalar + a video channel, so a fresh
+    // scene panel has nothing point-cloud-shaped to bind. Append a vector
+    // channel (the kind a point cloud arrives as) to exercise the happy path.
+    function addVectorChannel(): void {
+      const st = useSession.getState();
+      const vector = {
+        id: "cloud-a",
+        nativeId: "cloud-a",
+        sourceId: "src-a",
+        name: "lidar points",
+        group: null,
+        kind: "vector" as const,
+        dtype: "f64",
+        unit: null,
+        sampleCount: 10,
+        timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+      };
+      useSession.setState({
+        sources: st.sources.map((src) =>
+          src.id === "src-a"
+            ? { ...src, channels: [...src.channels, vector] }
+            : src,
+        ),
+        channels: [...st.channels, vector],
+      });
+    }
+
+    it("disables the add button when no vector channels are loaded", () => {
+      useSession.getState().setSelectedPanelId("scene-1");
+      render(<PanelDrawer />);
+      expect(
+        screen
+          .getByTestId("panel-scene-add-channel")
+          .getAttribute("aria-disabled"),
+      ).toBe("true");
+      expect(screen.getByTestId("panel-scene-detect").textContent).toMatch(
+        /No vector .* channels detected/,
+      );
+    });
+
+    it("enables the add button and reports the detected count", () => {
+      addVectorChannel();
+      useSession.getState().setSelectedPanelId("scene-1");
+      render(<PanelDrawer />);
+      const add = screen.getByTestId("panel-scene-add-channel");
+      expect(add.getAttribute("aria-disabled")).toBeNull();
+      expect(screen.getByTestId("panel-scene-detect").textContent).toContain(
+        "1 compatible channel ",
+      );
+    });
+
+    it("offers only vector channels in the scene picker", () => {
+      addVectorChannel();
+      useSession.getState().setSelectedPanelId("scene-1");
+      render(<PanelDrawer />);
+      fireEvent.click(screen.getByTestId("panel-scene-add-channel"));
+      // The vector channel is offered; the scalar `chan-a` is filtered out.
+      expect(screen.getByTestId("pick-cloud-a")).toBeTruthy();
+      expect(screen.queryByTestId("pick-chan-a")).toBeNull();
+    });
+
+    it("binds the picked vector channel through the picker", () => {
+      addVectorChannel();
+      useSession.getState().setSelectedPanelId("scene-1");
+      render(<PanelDrawer />);
+      fireEvent.click(screen.getByTestId("panel-scene-add-channel"));
+      fireEvent.click(screen.getByTestId("pick-cloud-a"));
+      expect(useSession.getState().sceneBindings["scene-1"]).toBe("cloud-a");
+    });
+  });
+
   it("renders the map body with two pickers", () => {
     useSession.getState().setSelectedPanelId("map-1");
     render(<PanelDrawer />);

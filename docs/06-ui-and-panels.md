@@ -248,7 +248,12 @@ FlexLayout component string to a React component:
 Empty-state placeholder. Awaits a `point_cloud` Arrow channel kind from
 the Rust core; binding shape (`Record<PanelId, ChannelId | null>`) is
 already allocated so the panel upgrades in place when the data path
-lands.
+lands. The PanelDrawer body auto-detects bindable channels by kind:
+`SCENE_CHANNEL_KINDS` (currently `["vector"]`, the only existing kind that
+can hold per-frame XYZ vertices) filters the `ChannelPicker`, the status
+copy names the expected format, and `+ bind channel…` disables when no
+compatible channel is loaded. Widen `SCENE_CHANNEL_KINDS` when the core
+adds a dedicated `point_cloud` kind and the picker lights up automatically.
 
 ### MapPanel
 
