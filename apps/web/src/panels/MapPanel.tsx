@@ -14,11 +14,14 @@
 // fixture uses two distinct cadences we'll need a merge step — flagged
 // in STATUS.md as a Phase 7+ carry-over rather than fixed here.
 //
-// Leaflet is loaded eagerly because react-leaflet pulls it in on import
-// anyway. Bundle hit ≈ 40 KB gzipped, well under the 350 KB budget.
+// Leaflet is driven through its imperative API (not a React wrapper) so
+// the dependency tree stays fully OSI-permissive: leaflet is BSD-2-Clause.
+// The map instance and polyline live in refs — they're DOM-bound and not
+// serialisable, so they never enter React state or the store. Bundle hit
+// ≈ 40 KB gzipped, well under the 350 KB budget.
 
-import { useEffect, useMemo, useState } from "react";
-import { MapContainer, Polyline, TileLayer, useMap } from "react-leaflet";
+import { useEffect, useMemo, useRef, useState } from "react";
+import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { LatLngExpression } from "leaflet";
 import { useSession } from "../state/store";
@@ -34,6 +37,9 @@ interface MapPanelProps {
 const MAX_POINTS = 5000;
 const DEFAULT_CENTER: LatLngExpression = [0, 0];
 const DEFAULT_ZOOM = 2;
+const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
+const TILE_ATTRIBUTION =
+  '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
 
 function findChannel(
   sources: SourceMeta[],
@@ -72,21 +78,6 @@ function downsample(
     }
   }
   return out;
-}
-
-// Subscribe inside the MapContainer so we can `fitBounds` whenever the
-// polyline changes — useMap() must be called within the MapContainer
-// children tree, hence this nested component rather than a ref dance.
-function FitToPolyline({ points }: { points: LatLngExpression[] }) {
-  const map = useMap();
-  useEffect(() => {
-    if (points.length < 2) return;
-    map.fitBounds(points as [number, number][], {
-      padding: [20, 20],
-      animate: false,
-    });
-  }, [map, points]);
-  return null;
 }
 
 export function MapPanel({ panelId }: MapPanelProps) {
@@ -161,6 +152,56 @@ export function MapPanel({ panelId }: MapPanelProps) {
 
   const isEmpty = binding === null || latChannel === null || lonChannel === null;
 
+  // Imperative Leaflet wiring. The host <div> only exists in the bound
+  // branch, so the map is created when `isEmpty` flips to false and torn
+  // down (map.remove) when it flips back. mapRef guards against a double
+  // create under StrictMode's mount/cleanup/mount.
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<L.Map | null>(null);
+  const lineRef = useRef<L.Polyline | null>(null);
+
+  useEffect(() => {
+    if (isEmpty) return;
+    const host = hostRef.current;
+    if (!host || mapRef.current) return;
+    const map = L.map(host, {
+      center: DEFAULT_CENTER,
+      zoom: DEFAULT_ZOOM,
+      scrollWheelZoom: true,
+      attributionControl: true,
+    });
+    L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION }).addTo(map);
+    mapRef.current = map;
+    return () => {
+      map.remove();
+      mapRef.current = null;
+      lineRef.current = null;
+    };
+  }, [isEmpty]);
+
+  // Redraw the polyline (and fit to it) whenever the downsampled points or
+  // the panel's palette colour change. Runs after the map-create effect on
+  // the same commit, so mapRef is populated by the time we read it.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (lineRef.current) {
+      lineRef.current.remove();
+      lineRef.current = null;
+    }
+    if (points.length > 1) {
+      // Polyline colour is a data-viz series colour from the plot palette
+      // (not the cursor accent). Two MapPanels in one workspace pick
+      // distinct hues; cursor strokes stay separate via cursorOverlay.ts.
+      const line = L.polyline(points, {
+        color: colorFor(panelId),
+        weight: 3,
+      }).addTo(map);
+      lineRef.current = line;
+      map.fitBounds(line.getBounds(), { padding: [20, 20], animate: false });
+    }
+  }, [points, panelId]);
+
   return (
     <section className={styles.panel} data-testid="map-panel">
       {isEmpty ? (
@@ -172,31 +213,11 @@ export function MapPanel({ panelId }: MapPanelProps) {
         </div>
       ) : (
         <div className={styles.mapContainer} data-testid="map-container">
-          <MapContainer
-            center={DEFAULT_CENTER}
-            zoom={DEFAULT_ZOOM}
-            scrollWheelZoom
+          <div
+            ref={hostRef}
             className={styles.map}
-            attributionControl
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {points.length > 1 && (
-              <>
-                {/* Polyline colour is a data-viz series colour from the
-                    plot palette (not the cursor accent). Two MapPanels
-                    in one workspace pick distinct hues; cursor strokes
-                    stay separate via panels/cursorOverlay.ts. */}
-                <Polyline
-                  positions={points}
-                  pathOptions={{ color: colorFor(panelId), weight: 3 }}
-                />
-                <FitToPolyline points={points} />
-              </>
-            )}
-          </MapContainer>
+            data-testid="map-leaflet"
+          />
           <span
             className={styles.pointsPill}
             data-testid="map-points-count"

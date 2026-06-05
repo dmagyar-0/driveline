@@ -1,40 +1,41 @@
 // @vitest-environment jsdom
 //
 // Phase 6 · MapPanel render tests. Leaflet manipulates real DOM
-// dimensions and crashes under jsdom, so react-leaflet is mocked at
-// the module boundary. We assert the empty-state and the bound-state
-// branch render; the actual tile/polyline rendering is exercised by
-// the e2e spec under apps/e2e/tests/.
+// dimensions and crashes under jsdom, so the `leaflet` module is mocked
+// at the boundary — L.map/tileLayer/polyline return lightweight stubs.
+// We assert the empty-state and the bound-state branch render, plus that
+// the polyline is drawn with the panel's palette colour. Actual tile and
+// polyline rendering is exercised by the e2e spec under apps/e2e/tests/.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-import type { ReactNode } from "react";
+// Records each L.polyline(...) call so tests can assert positions/colour
+// without a DOM node (the imperative API draws straight onto the map).
+const polylineCalls: Array<{
+  positions: unknown[];
+  options: { color?: string };
+}> = [];
 
-vi.mock("react-leaflet", () => ({
-  MapContainer: ({ children }: { children: ReactNode }) => (
-    <div data-testid="mock-map-container">{children}</div>
-  ),
-  TileLayer: () => <div data-testid="mock-tile-layer" />,
-  Polyline: ({
-    positions,
-    pathOptions,
-  }: {
-    positions: unknown;
-    pathOptions?: { color?: string };
-  }) => (
-    <div
-      data-testid="mock-polyline"
-      data-len={String((positions as unknown[]).length)}
-      data-color={pathOptions?.color ?? ""}
-    />
-  ),
-  useMap: () => ({
+vi.mock("leaflet", () => {
+  const tileLayer = () => ({ addTo: () => ({}) });
+  const map = () => ({
+    remove: () => undefined,
     fitBounds: () => undefined,
-  }),
-}));
+  });
+  const polyline = (positions: unknown[], options: { color?: string }) => {
+    polylineCalls.push({ positions, options });
+    const layer = {
+      addTo: () => layer,
+      getBounds: () => ({}),
+      remove: () => undefined,
+    };
+    return layer;
+  };
+  return { map, tileLayer, polyline };
+});
 
 vi.mock("leaflet/dist/leaflet.css", () => ({}));
 
@@ -90,6 +91,10 @@ function seed(): void {
 }
 
 describe("MapPanel", () => {
+  beforeEach(() => {
+    polylineCalls.length = 0;
+  });
+
   afterEach(async () => {
     cleanup();
     await useSession.getState().clear();
@@ -109,7 +114,7 @@ describe("MapPanel", () => {
     });
     render(<MapPanel panelId="map-1" />);
     expect(screen.getByTestId("map-container")).toBeTruthy();
-    expect(screen.getByTestId("mock-tile-layer")).toBeTruthy();
+    expect(screen.getByTestId("map-leaflet")).toBeTruthy();
   });
 
   it("clears the binding when one of the channels disappears", () => {
@@ -160,7 +165,10 @@ describe("MapPanel", () => {
       lonChannelId: "/gps/lon",
     });
     render(<MapPanel panelId="map-1" />);
-    const poly = await screen.findByTestId("mock-polyline");
-    expect(poly.getAttribute("data-color")).toBe(colorFor("map-1"));
+    // The pill text reflects the async fetch landing; wait on it, then
+    // assert the colour captured by the polyline stub.
+    await screen.findByText("3 pts");
+    const last = polylineCalls.at(-1);
+    expect(last?.options.color).toBe(colorFor("map-1"));
   });
 });

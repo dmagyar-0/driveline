@@ -7,7 +7,9 @@
   panels.
 - **Zustand** for global UI state. A single store; slices by concern.
 - **uPlot** for signal plotting.
-- **Leaflet** + **react-leaflet** v5 for the MapPanel.
+- **Leaflet** (BSD-2-Clause) for the MapPanel, driven through its imperative
+  API directly — no React wrapper, to keep the dependency tree fully
+  OSI-permissive.
 - **CSS Modules** for styling. Design tokens live in
   `apps/web/src/styles/tokens.css` and are the single source of truth for
   colour, type scale, radius, motion, focus rings. No Tailwind, no
