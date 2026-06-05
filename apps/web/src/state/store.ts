@@ -185,6 +185,28 @@ export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
   stackAxes: false,
 };
 
+/**
+ * Per-plot-panel wheel-zoom state (mouse-wheel scale on the x/y axes).
+ *
+ * `x` is the visible time window in nanoseconds (a `TimeRange`, mirroring
+ * every other time value in the store) or `null` to fit the full
+ * `globalRange`. `y` maps a 0-based y-axis index → its visible data-value
+ * window; an absent entry means that axis auto-fits its data.
+ *
+ * This slice is EPHEMERAL — purely a view transform over the same data, so
+ * it is not persisted (the layout adapter and named-layout snapshots skip
+ * it) and `clear()` resets it. A panel with no override is dropped from the
+ * map entirely, so `panelId in plotZoom` is the same as "is zoomed".
+ */
+export interface PlotAxisWindow {
+  min: number;
+  max: number;
+}
+export interface PlotZoom {
+  x: TimeRange | null;
+  y: Record<number, PlotAxisWindow>;
+}
+
 export interface SessionState {
   sources: SourceMeta[];
   channels: Channel[];
@@ -229,6 +251,10 @@ export interface SessionState {
   // gap-threshold choice. Round-trips through the layout adapter and
   // named-layout snapshots so reload restores it.
   plotPanelSettings: Record<string, PlotPanelSettings>;
+  // Per-plot-panel wheel-zoom windows (x/y scale overrides). Ephemeral:
+  // not persisted and reset by `clear()`. Absent key ⇒ that panel fits the
+  // full range (no zoom). See `PlotZoom`.
+  plotZoom: Record<string, PlotZoom>;
   // Global per-channel unit overrides, keyed by channel id. A signal's
   // unit is inferred from the file on load but is often missing or wrong,
   // so the user can override it; the override applies everywhere that
@@ -392,6 +418,24 @@ export interface SessionState {
    * like the other plot settings; only has a visible effect with ≥2 axes.
    */
   setPlotStackAxes(panelId: string, on: boolean): void;
+  /**
+   * Set (or clear, with `null`) a plot panel's visible x-window (the
+   * wheel-zoom time scale). Pruned to "no zoom" when both x and y are
+   * cleared. Ephemeral — never persisted.
+   */
+  setPlotZoomX(panelId: string, window: TimeRange | null): void;
+  /**
+   * Set (or clear, with `null`) a plot panel's visible window for one
+   * 0-based y-axis (the wheel-zoom value scale). Pruned to "no zoom" when
+   * the last override is cleared. Ephemeral — never persisted.
+   */
+  setPlotZoomY(
+    panelId: string,
+    axisIdx: number,
+    window: PlotAxisWindow | null,
+  ): void;
+  /** Clear every wheel-zoom override for a plot panel (back to auto-fit). */
+  resetPlotZoom(panelId: string): void;
   /**
    * Override a channel's unit globally (keyed by channel id). Pass a string
    * to set the override (`""` means "explicitly no unit"); pass `null` to
@@ -700,6 +744,7 @@ export const useSession = create<SessionState>((set, get) => {
     videoBindings: hydrated?.videoBindings ?? {},
     plotBindings: hydrated?.plotBindings ?? {},
     plotPanelSettings: hydrated?.plotPanelSettings ?? {},
+    plotZoom: {},
     unitOverrides: hydrated?.unitOverrides ?? {},
     videoHudOn: hydrated?.videoHudOn ?? {},
     sceneBindings: hydrated?.sceneBindings ?? {},
@@ -921,6 +966,55 @@ export const useSession = create<SessionState>((set, get) => {
       if (on) next.stackAxes = true;
       else delete next.stackAxes;
       set({ plotPanelSettings: { ...prev, [panelId]: next } });
+    },
+
+    setPlotZoomX(panelId, window) {
+      const prev = get().plotZoom;
+      const existing = prev[panelId];
+      const next: PlotZoom = { x: window, y: { ...(existing?.y ?? {}) } };
+      // Prune the panel entry when nothing is zoomed so `panelId in plotZoom`
+      // stays a faithful "is zoomed" check (and the persist subscriber's
+      // identity comparisons see a stable empty map).
+      if (next.x === null && Object.keys(next.y).length === 0) {
+        if (!(panelId in prev)) return;
+        const copy = { ...prev };
+        delete copy[panelId];
+        set({ plotZoom: copy });
+        return;
+      }
+      set({ plotZoom: { ...prev, [panelId]: next } });
+    },
+
+    setPlotZoomY(panelId, axisIdx, window) {
+      const prev = get().plotZoom;
+      const existing = prev[panelId];
+      const y = { ...(existing?.y ?? {}) };
+      if (window === null) {
+        if (!(axisIdx in y)) {
+          // Nothing to clear; only short-circuit when x is also untouched.
+          if (existing === undefined) return;
+        }
+        delete y[axisIdx];
+      } else {
+        y[axisIdx] = window;
+      }
+      const next: PlotZoom = { x: existing?.x ?? null, y };
+      if (next.x === null && Object.keys(next.y).length === 0) {
+        if (!(panelId in prev)) return;
+        const copy = { ...prev };
+        delete copy[panelId];
+        set({ plotZoom: copy });
+        return;
+      }
+      set({ plotZoom: { ...prev, [panelId]: next } });
+    },
+
+    resetPlotZoom(panelId) {
+      const prev = get().plotZoom;
+      if (!(panelId in prev)) return;
+      const copy = { ...prev };
+      delete copy[panelId];
+      set({ plotZoom: copy });
     },
 
     setChannelUnit(channelId, unit) {
@@ -1502,6 +1596,7 @@ export const useSession = create<SessionState>((set, get) => {
           videoBindings: {},
           plotBindings: {},
           plotPanelSettings: {},
+          plotZoom: {},
           unitOverrides: {},
           videoHudOn: {},
           sceneBindings: {},

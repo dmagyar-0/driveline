@@ -382,6 +382,80 @@
   color: var(--color-accent-orange);
 }
 
+/* Zoom controls (drawer twin of the plot's wheel zoom + reset button). */
+.zoomRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.zoomRowLabel {
+  font-size: var(--fs-12);
+  color: var(--color-fg-4);
+}
+
+.zoomButtons {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.zoomBtn {
+  min-width: 28px;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--color-bg-4);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-14);
+  line-height: 1;
+  transition: border-color var(--motion-base), background var(--motion-base);
+}
+
+.zoomBtn:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+}
+
+.zoomBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.zoomBtn:disabled {
+  cursor: not-allowed;
+  color: var(--color-fg-6);
+}
+
+.zoomReset {
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--color-bg-4);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-13);
+  text-align: center;
+  transition: border-color var(--motion-base), background var(--motion-base);
+}
+
+.zoomReset:hover:not(:disabled) {
+  border-color: var(--color-border-hover);
+}
+
+.zoomReset:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.zoomReset:disabled {
+  cursor: not-allowed;
+  color: var(--color-fg-6);
+}
+
 /* P4 · per-series statistics table. */
 .statsTable {
   width: 100%;
@@ -433,7 +507,9 @@
   .removeBtn,
   .addRow,
   .toggle,
-  .segment {
+  .segment,
+  .zoomBtn,
+  .zoomReset {
     transition: none;
   }
 }

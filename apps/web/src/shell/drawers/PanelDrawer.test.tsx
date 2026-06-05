@@ -144,6 +144,33 @@ describe("PanelDrawer", () => {
     expect(useSession.getState().plotBindings["plot-1"]).toEqual([]);
   });
 
+  it("plot zoom: ± zooms the time axis and Reset clears the override", () => {
+    useSession.setState({
+      globalRange: { startNs: 0n, endNs: 1_000_000_000n },
+    });
+    useSession.getState().setSelectedPanelId("plot-1");
+    useSession.getState().addPlotChannel("plot-1", "chan-a");
+    render(<PanelDrawer />);
+
+    // Nothing zoomed yet → Reset disabled.
+    const reset = screen.getByTestId(
+      "panel-plot-zoom-reset",
+    ) as HTMLButtonElement;
+    expect(reset.disabled).toBe(true);
+
+    // Zoom in on the time axis → an x window appears and Reset enables.
+    fireEvent.click(screen.getByTestId("panel-plot-zoom-in"));
+    expect(useSession.getState().plotZoom["plot-1"]?.x).toBeTruthy();
+    expect(
+      (screen.getByTestId("panel-plot-zoom-reset") as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+
+    // Reset clears every override for the panel.
+    fireEvent.click(screen.getByTestId("panel-plot-zoom-reset"));
+    expect("plot-1" in useSession.getState().plotZoom).toBe(false);
+  });
+
   it("renders the video body with HUD toggle reading store state", () => {
     useSession.getState().setSelectedPanelId("video-1");
     useSession.getState().setVideoBinding("video-1", "video-stream");

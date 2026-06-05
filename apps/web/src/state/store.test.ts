@@ -972,6 +972,53 @@ describe("layout + bindings (T6.2)", () => {
     expect(useSession.getState().plotPanelSettings).toBe(before);
   });
 
+  it("setPlotZoomX / setPlotZoomY store, coexist, and prune to no-zoom", () => {
+    const store = useSession.getState();
+    const xWin = { startNs: 1_000n, endNs: 9_000n };
+    store.setPlotZoomX("plot-1", xWin);
+    expect(useSession.getState().plotZoom["plot-1"]).toEqual({
+      x: xWin,
+      y: {},
+    });
+    // A y-axis window coexists with the x window.
+    store.setPlotZoomY("plot-1", 1, { min: -2, max: 2 });
+    expect(useSession.getState().plotZoom["plot-1"]).toEqual({
+      x: xWin,
+      y: { 1: { min: -2, max: 2 } },
+    });
+    // Clearing x leaves the panel zoomed (y still present).
+    store.setPlotZoomX("plot-1", null);
+    expect(useSession.getState().plotZoom["plot-1"]).toEqual({
+      x: null,
+      y: { 1: { min: -2, max: 2 } },
+    });
+    // Clearing the last y window prunes the panel entry entirely.
+    store.setPlotZoomY("plot-1", 1, null);
+    expect("plot-1" in useSession.getState().plotZoom).toBe(false);
+  });
+
+  it("setPlotZoomY no-ops cleanly on an unzoomed panel", () => {
+    const before = useSession.getState().plotZoom;
+    useSession.getState().setPlotZoomY("plot-1", 0, null);
+    // Clearing a window that was never set leaves the map identity intact.
+    expect(useSession.getState().plotZoom).toBe(before);
+  });
+
+  it("resetPlotZoom clears every override for a panel", () => {
+    const store = useSession.getState();
+    store.setPlotZoomX("plot-1", { startNs: 1n, endNs: 2n });
+    store.setPlotZoomY("plot-1", 0, { min: 0, max: 1 });
+    store.setPlotZoomY("plot-2", 0, { min: 0, max: 1 });
+    store.resetPlotZoom("plot-1");
+    expect("plot-1" in useSession.getState().plotZoom).toBe(false);
+    // Other panels are untouched.
+    expect("plot-2" in useSession.getState().plotZoom).toBe(true);
+    // Reset on an unzoomed panel is a no-op (identity preserved).
+    const before = useSession.getState().plotZoom;
+    store.resetPlotZoom("plot-1");
+    expect(useSession.getState().plotZoom).toBe(before);
+  });
+
   it("setChannelUnit overrides globally and reverts on null", () => {
     useSession.getState().setChannelUnit("/speed", "km/h");
     expect(useSession.getState().unitOverrides).toEqual({ "/speed": "km/h" });
