@@ -16,7 +16,14 @@ import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
-import { mark } from "../perf";
+import {
+  mark,
+  measure,
+  VIDEO_FIRST_FRAME,
+  VIDEO_SEEK_END,
+  VIDEO_SEEK_START,
+  VIDEO_SEEK_TO_BLIT,
+} from "../perf";
 import {
   clearPanelReadiness,
   getReadinessSnapshot,
@@ -119,6 +126,11 @@ export function VideoPanel({
   const uncoveredPaintedRef = useRef<boolean>(false);
   const videoDecodeRef = useRef<Comlink.Remote<VideoDecodeApi> | null>(null);
   const videoDecodeWorkerRef = useRef<Worker | null>(null);
+  // Task 4 — set true when a debounced seek is dispatched (VIDEO_SEEK_START
+  // marked); the rAF blit loop consumes it on the first post-seek blit to
+  // stamp VIDEO_SEEK_END and emit the VIDEO_SEEK_TO_BLIT measure. A plain
+  // boolean ref so the hot path neither allocates nor touches the store.
+  const seekPendingBlitRef = useRef<boolean>(false);
 
   // HUD refs. We keep them off React state so metric updates don't churn
   // the reconciler; the rAF loop writes directly into the HUD DOM.
@@ -159,6 +171,18 @@ export function VideoPanel({
   // local state once per state transition, which is rare.
   const [readyState, setReadyState] = useState<ReadyState>("absent");
 
+  // Task 2 — proactive decode-failure surface. The worker posts a
+  // `{ type: "decode-error" }` control message over the frame sink the
+  // instant the `VideoDecoder({ error })` callback (or a synchronous
+  // decode throw) latches a fatal fault. We flip to an error badge
+  // immediately instead of waiting out the 5 s STALLED_TIMEOUT_MS. The
+  // existing `onRetry` (forced seek) re-primes the worker, which clears
+  // the latch on re-open; we clear this local state when a fresh frame
+  // arrives so a successful retry dismisses the badge.
+  const [decodeError, setDecodeError] = useState<string | null>(null);
+  const decodeErrorRef = useRef<string | null>(null);
+  decodeErrorRef.current = decodeError;
+
   // `lastSeekTargetRef` starts null and is set to the initial `open()`
   // target once the worker has accepted it. The debounced cursor effect
   // skips a `seek()` that matches this — preventing a redundant seek on
@@ -177,8 +201,7 @@ export function VideoPanel({
   // HUD textContent without rerendering the React tree.
   const hudOn = useSession((s) => s.videoHudOn[panelId] ?? false);
   hudOnRef.current = hudOn;
-  const toggleHud = () =>
-    useSession.getState().toggleVideoHudOn(panelId);
+  const toggleHud = () => useSession.getState().toggleVideoHudOn(panelId);
 
   // Only re-render this panel when the open() inputs change. Cursor and
   // playing state are read non-reactively below via `useSession.subscribe`
@@ -230,9 +253,27 @@ export function VideoPanel({
             frameIndex: number;
             decodeQueue: number;
           }
+        | { type: "decode-error"; reason: string }
         | null;
       if (!data) return;
+      // Task 2 — control message: the worker latched a fatal decode fault.
+      // Surface it proactively so the panel doesn't sit on a frozen canvas
+      // until the 5 s stall timeout escalates. No VideoFrame to close here
+      // (control messages carry no transferables).
+      if ("type" in data) {
+        if (decodeErrorRef.current === null) {
+          decodeErrorRef.current = data.reason;
+          setDecodeError(data.reason);
+        }
+        return;
+      }
       const { ptsNs, frame, frameIndex, decodeQueue } = data;
+      // A fresh frame means the stream recovered (e.g. after a forced-seek
+      // retry re-primed the decoder); clear any standing decode-error badge.
+      if (decodeErrorRef.current !== null) {
+        decodeErrorRef.current = null;
+        setDecodeError(null);
+      }
       lastFrameIndexRef.current = frameIndex;
       lastDecodeQueueRef.current = decodeQueue;
       // Issue #2 — wall clock of the most recent frame arrival.
@@ -397,7 +438,18 @@ export function VideoPanel({
           q.splice(0, blitIdx);
           ctx.drawImage(target.frame, 0, 0, canvas.width, canvas.height);
           if (lastBlitPtsRef.current === null) {
-            mark("video:first-frame");
+            mark(VIDEO_FIRST_FRAME);
+          }
+          // Task 4 — close the seek-to-blit bracket on the first frame
+          // blitted after a seek was dispatched. `mark`/`measure` are cheap
+          // (no allocation in the steady-state path: the flag is false on
+          // every non-seek tick), and the measure lands on the standard
+          // `performance` timeline so `__drivelinePerf`/e2e can assert the
+          // T5.2 P50<120ms / P95<250ms budget.
+          if (seekPendingBlitRef.current) {
+            seekPendingBlitRef.current = false;
+            mark(VIDEO_SEEK_END);
+            measure(VIDEO_SEEK_TO_BLIT, VIDEO_SEEK_START, VIDEO_SEEK_END);
           }
           window.__drivelineVideoLastBlitPtsNs = target.ptsNs;
           lastBlitPtsRef.current = target.ptsNs;
@@ -448,9 +500,7 @@ export function VideoPanel({
           `  lag ${lagText}` +
           `  q ${snapshot.blitQueueLen}/${MAX_QUEUE}`;
         const warn = snapshot.dropped > 0 || lagWarn;
-        const cls = warn
-          ? `${styles.stats} ${styles.statsWarn}`
-          : styles.stats;
+        const cls = warn ? `${styles.stats} ${styles.statsWarn}` : styles.stats;
         if (stats.className !== cls) stats.className = cls;
       }
 
@@ -523,8 +573,7 @@ export function VideoPanel({
         // started so the Transport can apply hysteresis.
         if (waitingSinceMsRef.current === null) {
           waitingSinceMsRef.current = nowMsRead;
-          lastFrameIndexAtWaitStartRef.current =
-            lastFrameIndexRef.current;
+          lastFrameIndexAtWaitStartRef.current = lastFrameIndexRef.current;
         }
         const waitedMs = nowMsRead - waitingSinceMsRef.current;
         // If `frameIndex` advanced since the wait started, the decoder
@@ -532,12 +581,10 @@ export function VideoPanel({
         // start to "now" with the current frameIndex. Keeps a slow but
         // healthy pipeline from being declared stalled.
         if (
-          lastFrameIndexRef.current !==
-          lastFrameIndexAtWaitStartRef.current
+          lastFrameIndexRef.current !== lastFrameIndexAtWaitStartRef.current
         ) {
           waitingSinceMsRef.current = nowMsRead;
-          lastFrameIndexAtWaitStartRef.current =
-            lastFrameIndexRef.current;
+          lastFrameIndexAtWaitStartRef.current = lastFrameIndexRef.current;
           nextState = "waiting";
         } else if (waitedMs >= STALLED_TIMEOUT_MS) {
           nextState = "stalled";
@@ -571,6 +618,8 @@ export function VideoPanel({
       lastDecodeQueueRef.current = 0;
       droppedFramesRef.current = 0;
       lastBlitPtsRef.current = null;
+      seekPendingBlitRef.current = false;
+      decodeErrorRef.current = null;
       // Issue #2 — drop our entry from the readiness registry so the
       // playback rAF doesn't keep gating on an unmounted panel.
       waitingSinceMsRef.current = null;
@@ -623,6 +672,13 @@ export function VideoPanel({
     if (!client) return;
     waitingSinceMsRef.current = null;
     lastReadyMsRef.current = performance.now();
+    // Task 2 — optimistically drop the error badge; if the retry's re-open
+    // fails again the worker re-posts `decode-error` and we flip back.
+    decodeErrorRef.current = null;
+    setDecodeError(null);
+    // Bracket the retry's seek-to-blit latency too (Task 4).
+    mark(VIDEO_SEEK_START);
+    seekPendingBlitRef.current = true;
     void client.seek(target, true).catch(() => undefined);
   };
 
@@ -691,6 +747,11 @@ export function VideoPanel({
         // Drop stale frames ahead of the seek so the blit loop converges fast.
         for (const e of queueRef.current) e.frame.close();
         queueRef.current = [];
+        // Task 4 — open the seek-to-blit bracket. The rAF blit loop closes
+        // it (VIDEO_SEEK_END + VIDEO_SEEK_TO_BLIT measure) on the first
+        // frame it draws after this dispatch.
+        mark(VIDEO_SEEK_START);
+        seekPendingBlitRef.current = true;
         void client.seek(target).catch(() => undefined);
       }, SEEK_DEBOUNCE_MS);
     });
@@ -730,11 +791,7 @@ export function VideoPanel({
         HUD
       </button>
       {hudOn && (
-        <div
-          ref={hudDomRef}
-          data-testid="video-hud"
-          className={styles.hud}
-        />
+        <div ref={hudDomRef} data-testid="video-hud" className={styles.hud} />
       )}
       <div
         ref={statsDomRef}
@@ -755,16 +812,23 @@ export function VideoPanel({
           <span>no video at this time</span>
         </div>
       )}
-      {/* Issue #2 — inline stalled badge. Inclusion-list rendering: only
-       *  the "stalled" state surfaces this UI; "waiting" is the
-       *  Transport's responsibility (the orange dot next to play). */}
-      {readyState === "stalled" && (
+      {/* Issue #2 / Task 2 — inline error badge. Reuses the stalled-badge
+       *  UI for two failure modes: a latched fatal decode error surfaced
+       *  proactively by the worker (decodeError !== null), or the slower
+       *  5 s stall escalation (readyState === "stalled"). The decode error
+       *  takes precedence so its more-specific copy wins when both are
+       *  true. "waiting" is the Transport's responsibility (the orange dot
+       *  next to play) and is intentionally excluded here. */}
+      {(decodeError !== null || readyState === "stalled") && (
         <div
           className={styles.stalledBadge}
           data-testid="video-panel-stalled-badge"
-          role="status"
+          data-error={decodeError !== null ? "decode" : "stall"}
+          role="alert"
         >
-          <span>stream stalled</span>
+          <span>
+            {decodeError !== null ? "decode error" : "stream stalled"}
+          </span>
           <button
             type="button"
             className={styles.stalledRetry}

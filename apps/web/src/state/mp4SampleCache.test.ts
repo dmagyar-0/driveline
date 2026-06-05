@@ -12,6 +12,7 @@ import {
   findIndexAtOrBeforePts,
   findKeyframeAtOrBefore,
 } from "./mp4SampleCache";
+import { Mp4BudgetCoordinator } from "./memoryBudget";
 
 function makeFile(): { file: File; index: Mp4SidecarIndex } {
   // Six 4-byte samples laid out contiguously: bytes [0..24).
@@ -142,6 +143,124 @@ describe("Mp4SampleCache", () => {
     const { file, index } = makeFile();
     const cache = new Mp4SampleCache(file, index, 1024);
     await expect(cache.getSample(99)).rejects.toThrow(/out of range/);
+  });
+});
+
+describe("Mp4SampleCache shared global budget", () => {
+  it("evicts based on the aggregate across caches, not just per-cache bytes", async () => {
+    // Shared ceiling = 16 bytes total across two caches. Each cache has a
+    // generous *local* budget (1024) so per-cache eviction never fires —
+    // only the global coordinator should force eviction once the aggregate
+    // crosses the ceiling. This is the over-commitment fix: N caches must
+    // collectively stay under one ceiling, not each claim the full budget.
+    const coord = new Mp4BudgetCoordinator(16);
+    const a = makeFile();
+    const b = makeFile();
+    const cacheA = new Mp4SampleCache(a.file, a.index, 1024, coord);
+    const cacheB = new Mp4SampleCache(b.file, b.index, 1024, coord);
+
+    // 4 samples in A (16 bytes) — exactly at the ceiling.
+    await cacheA.getSample(0);
+    await cacheA.getSample(1);
+    await cacheA.getSample(2);
+    await cacheA.getSample(3);
+    expect(coord.total()).toBe(16);
+
+    // Now fetch into B. The aggregate would be 20 > 16, so the coordinator
+    // must drive eviction even though neither cache is over its own 1024
+    // budget. Total stays bounded at/under the shared ceiling.
+    await cacheB.getSample(0);
+    expect(coord.total()).toBeLessThanOrEqual(16);
+    expect(cacheA.byteSize() + cacheB.byteSize()).toBeLessThanOrEqual(16);
+
+    cacheA.dispose();
+    cacheB.dispose();
+  });
+
+  it("reclaims a cache's reported bytes from the aggregate on dispose", async () => {
+    const coord = new Mp4BudgetCoordinator(1024);
+    const a = makeFile();
+    const cache = new Mp4SampleCache(a.file, a.index, 1024, coord);
+    await cache.getSample(0);
+    await cache.getSample(1);
+    expect(coord.total()).toBe(8);
+    cache.dispose();
+    // Disposal must detach from the coordinator so its bytes stop counting.
+    expect(coord.total()).toBe(0);
+  });
+
+  it("does not let one cache's pressure starve another via the shared total", async () => {
+    // Both caches register with the default-zero ceiling bumped up; the
+    // global view is what matters. With a tight ceiling, the freshest
+    // inserts win across caches (LRU is global-budget-aware per cache).
+    const coord = new Mp4BudgetCoordinator(8);
+    const a = makeFile();
+    const b = makeFile();
+    const cacheA = new Mp4SampleCache(a.file, a.index, 1024, coord);
+    const cacheB = new Mp4SampleCache(b.file, b.index, 1024, coord);
+    await cacheA.getSample(0);
+    await cacheA.getSample(1);
+    await cacheB.getSample(0);
+    await cacheB.getSample(1);
+    // Aggregate never exceeds the 8-byte ceiling.
+    expect(coord.total()).toBeLessThanOrEqual(8);
+    cacheA.dispose();
+    cacheB.dispose();
+  });
+});
+
+describe("Mp4SampleCache active-set hard bound", () => {
+  it("caps resident bytes even when every sample is active", async () => {
+    // Build a file big enough that the active set alone would blow past
+    // the hard ceiling. 40 samples × 4 bytes = 160 bytes. Budget = 4 →
+    // hard ceiling = max(32, 8) = 32 bytes. Pinning all 40 must NOT keep
+    // 160 bytes resident: the hard bound evicts LRU active samples.
+    const n = 40;
+    const bytes = new Uint8Array(n * 4);
+    for (let i = 0; i < n; i++) bytes[i * 4] = i & 0xff;
+    const file = new File([bytes], "big.mp4");
+    const pts = new BigInt64Array(n);
+    const offsets = new BigUint64Array(n);
+    const sizes = new Uint32Array(n);
+    for (let i = 0; i < n; i++) {
+      pts[i] = BigInt(i) * 33_000_000n;
+      offsets[i] = BigInt(i * 4);
+      sizes[i] = 4;
+    }
+    const index: Mp4SidecarIndex = {
+      channelId: "1/video",
+      ptsNs: pts,
+      offsets,
+      sizes,
+      isSync: Uint8Array.from(
+        Array.from({ length: n }, (_, i) => (i % 4 === 0 ? 1 : 0)),
+      ),
+      sps: new Uint8Array(),
+      pps: new Uint8Array(),
+    };
+
+    const cache = new Mp4SampleCache(file, index, 4); // hard ceiling = 32
+    cache.setActive(Array.from({ length: n }, (_, i) => i));
+    for (let i = 0; i < n; i++) await cache.getSample(i);
+
+    // Even with everything pinned, the cache cannot grow without limit.
+    expect(cache.byteSize()).toBeLessThanOrEqual(32);
+    cache.dispose();
+  });
+
+  it("still preferentially retains active samples in the common case", async () => {
+    // Generous hard ceiling; one unpinned sample present. Soft eviction
+    // should drop the unpinned one first and keep the pinned set intact.
+    const { file, index } = makeFile();
+    const cache = new Mp4SampleCache(file, index, 8); // hard ceiling = 32
+    await cache.getSample(0);
+    await cache.getSample(1);
+    await cache.getSample(2);
+    cache.setActive([0, 2]);
+    cache.setBudgetBytes(8); // over budget by one sample; evict the unpinned
+    // Sample 1 (unpinned) goes; pinned 0 and 2 stay (8 bytes resident).
+    expect(cache.byteSize()).toBe(8);
+    cache.dispose();
   });
 });
 

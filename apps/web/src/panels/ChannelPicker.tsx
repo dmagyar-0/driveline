@@ -6,11 +6,16 @@
 // search. Both are post-MVP per docs/06-ui-and-panels.md:13-14.
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { SourceMeta } from "../state/store";
+import type { ChannelKind, SourceMeta } from "../state/store";
 import { useSession } from "../state/store";
 import { channelLabel } from "../state/units";
 import { colorFor } from "./palette";
 import styles from "./ChannelPicker.module.css";
+
+// Default to scalar-only so existing callers (PlotPanel, Table/Value/Scene/Map
+// drawers) keep their behaviour. Panels that admit other kinds — EnumPanel,
+// which renders genuine `enum`-kind code series — pass an explicit set.
+const DEFAULT_KINDS: readonly ChannelKind[] = ["scalar"];
 
 interface Props {
   sources: SourceMeta[];
@@ -19,6 +24,8 @@ interface Props {
   anchorRect: DOMRect | null;
   onToggle: (channelId: string) => void;
   onClose: () => void;
+  // Which channel kinds the picker offers. Defaults to `["scalar"]`.
+  kinds?: readonly ChannelKind[];
 }
 
 export function ChannelPicker({
@@ -28,6 +35,7 @@ export function ChannelPicker({
   anchorRect,
   onToggle,
   onClose,
+  kinds = DEFAULT_KINDS,
 }: Props) {
   const unitOverrides = useSession((st) => st.unitOverrides);
   const selected = useMemo(() => new Set(selectedIds), [selectedIds]);
@@ -104,12 +112,15 @@ export function ChannelPicker({
       } as const)
     : undefined;
 
-  const sourcesWithScalars = sources
+  const kindSet = useMemo(() => new Set(kinds), [kinds]);
+  const sourcesWithChannels = sources
     .map((s) => ({
       source: s,
-      channels: s.channels.filter((c) => c.kind === "scalar"),
+      channels: s.channels.filter((c) => kindSet.has(c.kind)),
     }))
     .filter((g) => g.channels.length > 0);
+  // Label the empty state for what the picker actually offers.
+  const kindLabel = kinds.length === 1 ? `${kinds[0]} ` : "";
 
   return (
     <div
@@ -120,11 +131,11 @@ export function ChannelPicker({
       aria-label="Add channel"
       data-testid="plot-channel-picker"
     >
-      {sourcesWithScalars.length === 0 ? (
-        <p className={styles.empty}>No scalar channels loaded.</p>
+      {sourcesWithChannels.length === 0 ? (
+        <p className={styles.empty}>No {kindLabel}channels loaded.</p>
       ) : (
         <div className={styles.tree}>
-          {sourcesWithScalars.map(({ source, channels }) => (
+          {sourcesWithChannels.map(({ source, channels }) => (
             <details key={source.id} open className={styles.group}>
               <summary className={styles.groupHeader}>
                 <span className={styles.sourceName}>{source.name}</span>

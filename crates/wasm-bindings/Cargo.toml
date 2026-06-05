@@ -9,11 +9,13 @@ description = "wasm-bindgen glue exposing data-core to the browser worker."
 crate-type = ["cdylib", "rlib"]
 
 [package.metadata.wasm-pack.profile.release]
-# wasm-opt is downloaded lazily by wasm-pack; disable to keep CI / sandboxed
-# builds hermetic. Re-enable on developer machines by overriding this to true.
-wasm-opt = false
+# Size-optimise the shipped WASM. wasm-opt is fetched lazily by wasm-pack and
+# is required to stay within the <2 MB-gzip budget enforced by
+# `scripts/check-bundle-size.mjs`. `-Oz` optimises aggressively for size.
+wasm-opt = ['-Oz']
 
 [package.metadata.wasm-pack.profile.dev]
+# Keep dev builds fast — skip wasm-opt entirely.
 wasm-opt = false
 
 [dependencies]

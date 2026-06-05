@@ -159,8 +159,7 @@ fn write_short_corpus<W: std::io::Write + std::io::Seek>(
     use ::mcap::records::MessageHeader;
 
     let float_schema = writer.add_schema("foxglove.Float64", "jsonschema", b"")?;
-    let speed_ch =
-        writer.add_channel(float_schema, "/vehicle/speed", "json", &BTreeMap::new())?;
+    let speed_ch = writer.add_channel(float_schema, "/vehicle/speed", "json", &BTreeMap::new())?;
     for i in 0u32..10 {
         let ts = T0_MCAP_NS + (i as u64) * 10_000_000;
         let payload = format!(r#"{{"value":{}}}"#, i).into_bytes();
@@ -215,15 +214,12 @@ fn write_short_corpus<W: std::io::Write + std::io::Seek>(
         0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0xc0, 0x1e, // SPS header + minimal bytes
         0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00, // IDR header + minimal bytes
     ];
-    let video_schema =
-        writer.add_schema("foxglove.CompressedVideo", "jsonschema", b"")?;
-    let camera_ch =
-        writer.add_channel(video_schema, "/camera/front", "json", &BTreeMap::new())?;
+    let video_schema = writer.add_schema("foxglove.CompressedVideo", "jsonschema", b"")?;
+    let camera_ch = writer.add_channel(video_schema, "/camera/front", "json", &BTreeMap::new())?;
     let b64 = base64::engine::general_purpose::STANDARD.encode(FAKE_SPS_IDR);
     for i in 0u32..3 {
         let ts = T0_MCAP_NS + (i as u64) * 30_000_000;
-        let payload =
-            format!(r#"{{"data":"{}","format":"h264"}}"#, b64).into_bytes();
+        let payload = format!(r#"{{"data":"{}","format":"h264"}}"#, b64).into_bytes();
         writer.write_to_known_channel(
             &MessageHeader {
                 channel_id: camera_ch,
@@ -252,8 +248,8 @@ const MP4_SAMPLE_COUNT: usize = 10;
 /// serialiser to accept; these never reach a real decoder — the T2.4 e2e
 /// only exercises the parse + sidecar-pairing path.
 const DUMMY_SPS: &[u8] = &[
-    0x67, 0x64, 0x00, 0x1e, 0xac, 0xd9, 0x40, 0xa0, 0x3d, 0xa1, 0x00, 0x00, 0x03, 0x00, 0x01,
-    0x00, 0x00, 0x03, 0x00, 0x3c, 0x0f, 0x16, 0x2e, 0x48,
+    0x67, 0x64, 0x00, 0x1e, 0xac, 0xd9, 0x40, 0xa0, 0x3d, 0xa1, 0x00, 0x00, 0x03, 0x00, 0x01, 0x00,
+    0x00, 0x03, 0x00, 0x3c, 0x0f, 0x16, 0x2e, 0x48,
 ];
 const DUMMY_PPS: &[u8] = &[0x68, 0xeb, 0xec, 0xb2, 0x2c];
 
@@ -262,7 +258,9 @@ const DUMMY_PPS: &[u8] = &[0x68, 0xeb, 0xec, 0xb2, 0x2c];
 /// adequate for `Mp4SidecarReader::open_pair` (which only reads the `moov`)
 /// but not playable. Paired with `short_sidecar_bytes`.
 pub fn short_mp4_bytes() -> crate::Result<Vec<u8>> {
-    use mp4::{AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType};
+    use mp4::{
+        AvcConfig, Bytes, MediaConfig, Mp4Config, Mp4Sample, Mp4Writer, TrackConfig, TrackType,
+    };
 
     let config = Mp4Config {
         major_brand: "isom".parse().expect("static str parses as FourCC"),

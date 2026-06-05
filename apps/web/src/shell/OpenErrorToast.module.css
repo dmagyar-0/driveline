@@ -1,0 +1,115 @@
+/* Transient ingest-error toast, anchored bottom-centre above the
+ * transport row. CSS Modules only — design tokens come from index.css. */
+
+.toast {
+  position: absolute;
+  left: 50%;
+  bottom: var(--sp-6);
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  max-width: min(560px, calc(100% - var(--sp-8)));
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--color-border-strong);
+  border-left: 3px solid var(--color-fg-error, #e5534b);
+  border-radius: var(--radius-4);
+  background: var(--color-bg-5);
+  box-shadow: var(--shadow-overlay, 0 6px 24px rgba(0, 0, 0, 0.4));
+  animation: toast-in var(--motion-base) ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.title {
+  font-size: var(--fs-13);
+  font-weight: 600;
+  color: var(--color-fg-2);
+}
+
+.detail {
+  font-size: var(--fs-12);
+  color: var(--color-fg-5);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex: none;
+}
+
+.detailsBtn {
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  color: var(--color-fg-3);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-12);
+  padding: var(--sp-2) var(--sp-3);
+  white-space: nowrap;
+  transition:
+    border-color var(--motion-base),
+    color var(--motion-base);
+}
+
+.detailsBtn:hover {
+  border-color: var(--color-border-hover);
+  color: var(--color-fg-2);
+}
+
+.detailsBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.dismissBtn {
+  background: transparent;
+  border: 0;
+  color: var(--color-fg-5);
+  cursor: pointer;
+  font-size: var(--fs-16);
+  line-height: 1;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-3);
+}
+
+.dismissBtn:hover {
+  color: var(--color-fg-2);
+  background: var(--color-bg-4);
+}
+
+.dismissBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast {
+    animation: none;
+  }
+  .detailsBtn {
+    transition: none;
+  }
+}

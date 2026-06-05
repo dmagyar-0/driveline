@@ -17,7 +17,28 @@ import type { Mp4SidecarIndex } from "../workers/dataCore.worker";
 import {
   getInitialBudgetBytes,
   memoryPressure,
+  sharedMp4Budget,
+  type Mp4BudgetCoordinator,
 } from "./memoryBudget";
+
+/**
+ * Factor applied to a cache's own budget to derive the *hard* ceiling at
+ * which even active (pinned) samples become evictable. The active set is
+ * normally exempt from eviction so the decoder never refetches a sample
+ * it just decoded past — but a runaway active window must not let the
+ * cache grow without bound. Once resident bytes cross
+ * `budget * ACTIVE_HARD_MULTIPLIER`, the least-recently-used active
+ * samples are evicted too. The multiplier leaves generous headroom for a
+ * legitimately large GOP/active window before the hard bound bites.
+ */
+const ACTIVE_HARD_MULTIPLIER = 2;
+
+/**
+ * Absolute floor for the active hard ceiling, so a tiny per-cache budget
+ * (tests shrink it to a handful of bytes) still permits a minimal active
+ * window before the hard bound starts evicting pinned samples.
+ */
+const ACTIVE_HARD_FLOOR_BYTES = 32;
 
 export interface BufferedRange {
   startNs: bigint;
@@ -55,15 +76,25 @@ export class Mp4SampleCache {
   private rangesListeners: Array<(ranges: BufferedRange[]) => void> = [];
   private pendingListeners: Array<(p: PendingFetch | null) => void> = [];
   private currentPending: PendingFetch | null = null;
+  /**
+   * Shared budget coordinator. Each cache reports its resident bytes here
+   * and consults the aggregate when deciding to evict, so N mp4 sources
+   * collectively stay under one heap-derived ceiling instead of each
+   * claiming half the heap.
+   */
+  private readonly coordinator: Mp4BudgetCoordinator;
 
   constructor(
     file: File,
     index: Mp4SidecarIndex,
     budgetBytes: number = getInitialBudgetBytes(),
+    coordinator: Mp4BudgetCoordinator = sharedMp4Budget,
   ) {
     this.file = file;
     this.index = index;
     this.budget = budgetBytes;
+    this.coordinator = coordinator;
+    this.coordinator.register(this);
   }
 
   /** Total bytes currently held by the cache. */
@@ -185,6 +216,9 @@ export class Mp4SampleCache {
     this.inFlight.clear();
     this.active.clear();
     this.cachedBytes = 0;
+    // Detach from the shared budget so its bytes stop counting against the
+    // global ceiling and the registry entry doesn't leak.
+    this.coordinator.unregister(this);
     this.rangesListeners = [];
     this.pendingListeners = [];
     this.currentPending = null;
@@ -211,33 +245,86 @@ export class Mp4SampleCache {
       lastUsed: ++lastUsedTick,
     });
     this.cachedBytes += size;
+    this.coordinator.report(this, this.cachedBytes);
     this.scheduleRangesNotify();
     this.evictIfNeeded();
     return bytes;
   }
 
+  /**
+   * Hard upper bound on resident bytes. Above this, even active (pinned)
+   * samples are evictable — the active-set exemption must never let the
+   * cache grow without limit. Derived from the per-cache budget with a
+   * floor so tiny test budgets still allow a minimal active window.
+   */
+  private activeHardCeiling(): number {
+    return Math.max(
+      ACTIVE_HARD_FLOOR_BYTES,
+      Math.floor(this.budget * ACTIVE_HARD_MULTIPLIER),
+    );
+  }
+
   private evictIfNeeded(): void {
+    // Soft eviction fires when this cache is over its own budget, the
+    // *aggregate* across all caches is over the shared ceiling, or the
+    // browser reports memory pressure. The coordinator check keeps the
+    // global footprint bounded even though each cache also has a local
+    // budget; the pressure signal alone is never relied upon for the cap.
     const needsEviction = (): boolean =>
-      this.cachedBytes > this.budget || memoryPressure() === "high";
-    if (!needsEviction()) return;
-    // Snapshot all evictable entries (anything not in the active set),
-    // ordered by lastUsed ascending. We pop from the front until we are
-    // back under budget or run out.
+      this.cachedBytes > this.budget ||
+      this.coordinator.overBudget() ||
+      memoryPressure() === "high";
+
+    // Hard eviction fires when resident bytes cross the per-cache hard
+    // ceiling regardless of the active set — this is what prevents a large
+    // pinned active window from starving eviction and growing unbounded.
+    const overHardCeiling = (): boolean =>
+      this.cachedBytes > this.activeHardCeiling();
+
+    if (!needsEviction() && !overHardCeiling()) return;
+
+    let changed = false;
+
+    // Pass 1: evict non-active samples (LRU first) — the common case,
+    // which preferentially retains the active set.
     const evictable: Array<{ idx: number; lastUsed: number; size: number }> = [];
     for (const [idx, entry] of this.cached) {
       if (this.active.has(idx)) continue;
       evictable.push({ idx, lastUsed: entry.lastUsed, size: entry.size });
     }
     evictable.sort((a, b) => a.lastUsed - b.lastUsed);
-    let changed = false;
     for (const e of evictable) {
-      if (!needsEviction()) break;
+      if (!needsEviction() && !overHardCeiling()) break;
       if (this.cached.delete(e.idx)) {
+        this.active.delete(e.idx);
         this.cachedBytes -= e.size;
         changed = true;
       }
     }
-    if (changed) this.scheduleRangesNotify();
+
+    // Pass 2: only if we are still above the hard ceiling — i.e. the
+    // active set alone exceeds it — evict the least-recently-used active
+    // samples too. Bounded growth wins over the pin guarantee here.
+    if (overHardCeiling()) {
+      const pinned: Array<{ idx: number; lastUsed: number; size: number }> = [];
+      for (const [idx, entry] of this.cached) {
+        pinned.push({ idx, lastUsed: entry.lastUsed, size: entry.size });
+      }
+      pinned.sort((a, b) => a.lastUsed - b.lastUsed);
+      for (const e of pinned) {
+        if (!overHardCeiling()) break;
+        if (this.cached.delete(e.idx)) {
+          this.active.delete(e.idx);
+          this.cachedBytes -= e.size;
+          changed = true;
+        }
+      }
+    }
+
+    if (changed) {
+      this.coordinator.report(this, this.cachedBytes);
+      this.scheduleRangesNotify();
+    }
   }
 
   private scheduleRangesNotify(): void {

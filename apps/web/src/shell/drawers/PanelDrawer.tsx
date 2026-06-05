@@ -119,8 +119,8 @@ function PanelBody({
 function Empty() {
   return (
     <p className={s.empty} data-testid="panel-drawer-empty">
-      Select a panel to configure it. Click any panel in the workspace
-      or use the Channels drawer.
+      Select a panel to configure it. Click any panel in the workspace or use
+      the Channels drawer.
     </p>
   );
 }
@@ -128,8 +128,7 @@ function Empty() {
 function UnknownKind() {
   return (
     <p className={s.empty} data-testid="panel-drawer-unknown">
-      Unknown panel kind. The id prefix doesn't match any registered
-      panel.
+      Unknown panel kind. The id prefix doesn't match any registered panel.
     </p>
   );
 }
@@ -444,7 +443,10 @@ function PlotTransformPicker({
         </select>
       </label>
       {kind === "scale" && (
-        <div className={s.transformScale} data-testid={`panel-plot-scale-${channelId}`}>
+        <div
+          className={s.transformScale}
+          data-testid={`panel-plot-scale-${channelId}`}
+        >
           <label className={s.transformScaleField}>
             <span>×</span>
             <input
@@ -520,7 +522,8 @@ function PlotSeriesStatsSection({
   if (bound.length === 0) return null;
 
   const statsById = new Map<string, PlotSeriesStats>();
-  for (const stat of snap?.seriesStats ?? []) statsById.set(stat.channelId, stat);
+  for (const stat of snap?.seriesStats ?? [])
+    statsById.set(stat.channelId, stat);
   const currentById = new Map<string, number>();
   for (const sample of snap?.sampleAtCursor ?? []) {
     if (sample) currentById.set(sample.channelId, sample.value);
@@ -669,9 +672,7 @@ function PlotGapThresholdControl({ panelId }: BodyProps) {
             setStore(null);
           } else {
             const parsed = Number.parseFloat(draft);
-            setStore(
-              Number.isFinite(parsed) && parsed > 0 ? parsed : 1,
-            );
+            setStore(Number.isFinite(parsed) && parsed > 0 ? parsed : 1);
           }
         }}
         data-testid="panel-plot-gap-toggle"
@@ -718,9 +719,7 @@ function VideoBody({ panelId }: BodyProps) {
   const hudOn = useSession((st) => st.videoHudOn[panelId] ?? false);
 
   const codec = useDecoderCodec(bindingId);
-  const boundChannel = bindingId
-    ? findChannel(sources, bindingId)
-    : null;
+  const boundChannel = bindingId ? findChannel(sources, bindingId) : null;
 
   return (
     <>
@@ -894,10 +893,7 @@ function MapBody({ panelId }: BodyProps) {
   const lonChannel =
     binding === null ? null : findChannel(sources, binding.lonChannelId);
 
-  const updatePair = (
-    nextLat: string | null,
-    nextLon: string | null,
-  ): void => {
+  const updatePair = (nextLat: string | null, nextLon: string | null): void => {
     if (nextLat === null || nextLon === null) {
       // Wait for the user to pick the missing axis before persisting —
       // otherwise we'd save a half-formed binding and the panel would
@@ -959,9 +955,7 @@ function MapBody({ panelId }: BodyProps) {
           type="button"
           className={s.addRow}
           onClick={() =>
-            setLatAnchor(
-              latBtnRef.current?.getBoundingClientRect() ?? null,
-            )
+            setLatAnchor(latBtnRef.current?.getBoundingClientRect() ?? null)
           }
           data-testid="panel-map-pick-lat"
         >
@@ -1012,9 +1006,7 @@ function MapBody({ panelId }: BodyProps) {
           type="button"
           className={s.addRow}
           onClick={() =>
-            setLonAnchor(
-              lonBtnRef.current?.getBoundingClientRect() ?? null,
-            )
+            setLonAnchor(lonBtnRef.current?.getBoundingClientRect() ?? null)
           }
           data-testid="panel-map-pick-lon"
         >
@@ -1322,6 +1314,7 @@ function EnumBody({ panelId }: BodyProps) {
           selectedIds={ids}
           maxSelected={MAX_PLOT_SERIES}
           anchorRect={pickerAnchor}
+          kinds={["scalar", "enum"]}
           onToggle={onToggle}
           onClose={() => setPickerAnchor(null)}
         />

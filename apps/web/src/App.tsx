@@ -2,8 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { tableFromIPC } from "apache-arrow";
 import * as Comlink from "comlink";
 import { makeDataCoreClient, makeVideoDecodeClient } from "./workerClient";
-import type { DataCoreApi, Mf4Summary, VideoDecodeApi } from "./workerClient";
+import type {
+  DataCoreApi,
+  Mf4Summary,
+  VideoDecodeApi,
+  WorkerCrash,
+} from "./workerClient";
 import type { Remote } from "comlink";
+import { WorkerErrorBanner } from "./WorkerErrorBanner";
 import { useSession } from "./state/store";
 import type { OpenResult } from "./state/store";
 import type { RailTab } from "./state/persist/ui";
@@ -120,10 +126,7 @@ declare global {
       setPlotStackAxes: (panelId: string, on: boolean) => void;
       // Override a channel's unit globally (or `null` to revert to the
       // file-inferred unit).
-      setChannelUnitOverride: (
-        channelId: string,
-        unit: string | null,
-      ) => void;
+      setChannelUnitOverride: (channelId: string, unit: string | null) => void;
       // Phase 6 — bind new panel kinds programmatically from e2e.
       setSceneChannelBinding: (
         panelId: string,
@@ -134,27 +137,20 @@ declare global {
         binding: MapBinding | null,
       ) => void;
       addTableChannelBinding: (panelId: string, channelId: string) => void;
-      removeTableChannelBinding: (
-        panelId: string,
-        channelId: string,
-      ) => void;
+      removeTableChannelBinding: (panelId: string, channelId: string) => void;
       addValueChannelBinding: (panelId: string, channelId: string) => void;
-      removeValueChannelBinding: (
-        panelId: string,
-        channelId: string,
-      ) => void;
+      removeValueChannelBinding: (panelId: string, channelId: string) => void;
       addEnumChannelBinding: (panelId: string, channelId: string) => void;
-      removeEnumChannelBinding: (
-        panelId: string,
-        channelId: string,
-      ) => void;
+      removeEnumChannelBinding: (panelId: string, channelId: string) => void;
       getPlotPanelSync: (panelId: string) => {
         cursorNs: string;
         boundChannelIds: string[];
         lastFetchedRange: { startNs: string; endNs: string } | null;
-        sampleAtCursor: Array<
-          { channelId: string; tsNs: string; value: number } | null
-        >;
+        sampleAtCursor: Array<{
+          channelId: string;
+          tsNs: string;
+          value: number;
+        } | null>;
         // The plot's actual x-axis domain in epoch seconds (pinned to the
         // global timeline, not the per-series data extent).
         xScaleSec: { min: number; max: number } | null;
@@ -189,8 +185,10 @@ declare global {
       // equality first, substring fallback so `"short.mp4 (2)"` still
       // resolves when a re-run collides on the base name. Returns null if
       // no source/channel matches.
-      findChannelId: (q: { sourceName: string; nativeId: string }) =>
-        string | null;
+      findChannelId: (q: {
+        sourceName: string;
+        nativeId: string;
+      }) => string | null;
       // Phase 2 (Sources drawer) — enumerate loaded sources and the
       // session's global range. BigInts are serialised as decimal
       // strings so `page.evaluate` can return them.
@@ -265,10 +263,19 @@ export function App() {
   const workspaceRef = useRef<WorkspaceHandle | null>(null);
   const [ready, setReady] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  // Fatal worker-crash state, kept LOCAL to App (not the Zustand store). The
+  // first crash wins — a crashed worker can cascade into the other, and the
+  // user only needs to know to reload once.
+  const [workerCrash, setWorkerCrash] = useState<WorkerCrash | null>(null);
 
   useEffect(() => {
-    const { proxy: dc, worker: dcWorker } = makeDataCoreClient();
-    const { proxy: vd, worker: vdWorker } = makeVideoDecodeClient();
+    // `setWorkerCrash` is a stable React setter, so capturing it inside this
+    // mount-once effect is safe. Functional update keeps the first crash and
+    // ignores any follow-on crashes from the cascading worker.
+    const onCrash = (crash: WorkerCrash) =>
+      setWorkerCrash((prev) => prev ?? crash);
+    const { proxy: dc, worker: dcWorker } = makeDataCoreClient(onCrash);
+    const { proxy: vd, worker: vdWorker } = makeVideoDecodeClient(onCrash);
     dataCore.current = dc;
     videoDecode.current = vd;
     useSession.getState().setWorker(dc);
@@ -293,268 +300,280 @@ export function App() {
     // (debounced) as the session evolves.
     const detachUrlState = attachUrlState();
 
-    window.__drivelineDevHooks = {
-      ping: async () => await dc.ping(),
-      pingVideo: async () => await vd.ping(),
-      fetchScalar: async () => {
-        const bytes = await dc.fetchRangeStub();
-        const table = tableFromIPC(bytes);
-        const value = table.getChild("value");
-        if (!value) throw new Error("arrow table missing 'value' column");
-        let sum = 0;
-        for (let i = 0; i < value.length; i++) sum += Number(value.get(i));
-        return { rows: table.numRows, sum };
-      },
-      openMf4: async (bytes) => {
-        // The worker now ingests a `File` (copied to OPFS for lazy reads), so
-        // wrap the raw test bytes in one. Real ingestion passes the dropped
-        // `File` directly.
-        const file = new File([bytes as BlobPart], "devhook.mf4");
-        const handle = await dc.openMf4(file);
-        const summary = await dc.mf4Summary(handle);
-        return { handle, summary };
-      },
-      closeMf4: async (handle) => {
-        await dc.closeMf4(handle);
-      },
-      mf4FetchRange: async (handle, channelId, startNs, endNs, includePrev) => {
-        const bytes = await dc.mf4FetchRange(
+    // Dev-only hook surface. Gated behind `import.meta.env.DEV` so the ~60
+    // store-mutating methods are tree-shaken out of production builds and
+    // never reach `window` for end users. Playwright e2e runs against the
+    // Vite dev server (`pnpm --filter web dev`, see apps/e2e/playwright.config.ts),
+    // where `import.meta.env.DEV` is `true`, so the specs keep their hooks.
+    if (import.meta.env.DEV) {
+      window.__drivelineDevHooks = {
+        ping: async () => await dc.ping(),
+        pingVideo: async () => await vd.ping(),
+        fetchScalar: async () => {
+          const bytes = await dc.fetchRangeStub();
+          const table = tableFromIPC(bytes);
+          const value = table.getChild("value");
+          if (!value) throw new Error("arrow table missing 'value' column");
+          let sum = 0;
+          for (let i = 0; i < value.length; i++) sum += Number(value.get(i));
+          return { rows: table.numRows, sum };
+        },
+        openMf4: async (bytes) => {
+          // The worker now ingests a `File` (copied to OPFS for lazy reads), so
+          // wrap the raw test bytes in one. Real ingestion passes the dropped
+          // `File` directly.
+          const file = new File([bytes as BlobPart], "devhook.mf4");
+          const handle = await dc.openMf4(file);
+          const summary = await dc.mf4Summary(handle);
+          return { handle, summary };
+        },
+        closeMf4: async (handle) => {
+          await dc.closeMf4(handle);
+        },
+        mf4FetchRange: async (
           handle,
           channelId,
           startNs,
           endNs,
           includePrev,
-        );
-        const table = tableFromIPC(bytes);
-        const ts = table.getChild("ts");
-        if (!ts) throw new Error("arrow table missing 'ts' column");
-        const value = table.getChild("value");
-        if (!value) throw new Error("arrow table missing 'value' column");
-        let valueSum = 0;
-        for (let i = 0; i < value.length; i++) valueSum += Number(value.get(i));
-        return {
-          rows: table.numRows,
-          tsSchema: table.schema.fields[0].type.toString(),
-          valueSchema: table.schema.fields[1].type.toString(),
-          firstTsNs: String(ts.get(0)),
-          lastTsNs: String(ts.get(ts.length - 1)),
-          valueSum,
-        };
-      },
-      openFiles: async (descs) => {
-        const files = descs.map(
-          (d) => new File([d.bytes as BlobPart], d.name),
-        );
-        return await useSession.getState().openFiles(files);
-      },
-      openUrl: async (url) => {
-        return await useSession.getState().openUrl(url);
-      },
-      clearSession: async () => {
-        await useSession.getState().clear();
-      },
-      removeSource: async (sourceId) => {
-        await useSession.getState().removeSource(sourceId);
-      },
-      videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
-      videoHudStats: () => {
-        const h: VideoHudSnapshot | undefined = window.__drivelineVideoHud;
-        if (!h) return null;
-        return {
-          ptsNs: h.ptsNs === null ? null : h.ptsNs.toString(),
-          frameIndex: h.frameIndex,
-          decodeQueue: h.decodeQueue,
-          blitQueueLen: h.blitQueueLen,
-          dropped: h.dropped,
-          codec: h.codec,
-          hudOn: h.hudOn,
-        };
-      },
-      getSessionSnapshot: () => {
-        const s = useSession.getState();
-        return {
-          cursorNs: s.cursorNs.toString(),
-          playing: s.playing,
-          speed: s.speed,
-          globalRange: s.globalRange
-            ? {
-                startNs: s.globalRange.startNs.toString(),
-                endNs: s.globalRange.endNs.toString(),
-              }
-            : null,
-        };
-      },
-      getLayoutJson: () =>
-        JSON.stringify(useSession.getState().layoutJson),
-      setLayoutJson: (json) => useSession.getState().setLayoutJson(json),
-      addVideoPanel: (channelId) =>
-        workspaceRef.current?.addVideoPanel(channelId),
-      addPlotPanel: () => workspaceRef.current?.addPlotPanel(),
-      addScenePanel: () => workspaceRef.current?.addScenePanel(),
-      addMapPanel: () => workspaceRef.current?.addMapPanel(),
-      addTablePanel: () => workspaceRef.current?.addTablePanel(),
-      addValuePanel: () => workspaceRef.current?.addValuePanel(),
-      addEnumPanel: () => workspaceRef.current?.addEnumPanel(),
-      resetLayout: () => workspaceRef.current?.resetLayout(),
-      setVideoChannelBinding: (panelId, channelId) =>
-        useSession.getState().setVideoBinding(panelId, channelId),
-      addPlotChannelBinding: (panelId, channelId) =>
-        useSession.getState().addPlotChannel(panelId, channelId),
-      setPlotChannelAxis: (panelId, channelId, axis) =>
-        useSession.getState().setPlotChannelAxis(panelId, channelId, axis),
-      setPlotStackAxes: (panelId, on) =>
-        useSession.getState().setPlotStackAxes(panelId, on),
-      setChannelUnitOverride: (channelId, unit) =>
-        useSession.getState().setChannelUnit(channelId, unit),
-      setSceneChannelBinding: (panelId, channelId) =>
-        useSession.getState().setSceneBinding(panelId, channelId),
-      setMapChannelBinding: (panelId, binding) =>
-        useSession.getState().setMapBinding(panelId, binding),
-      addTableChannelBinding: (panelId, channelId) =>
-        useSession.getState().addTableChannel(panelId, channelId),
-      removeTableChannelBinding: (panelId, channelId) =>
-        useSession.getState().removeTableChannel(panelId, channelId),
-      addValueChannelBinding: (panelId, channelId) =>
-        useSession.getState().addValueChannel(panelId, channelId),
-      removeValueChannelBinding: (panelId, channelId) =>
-        useSession.getState().removeValueChannel(panelId, channelId),
-      addEnumChannelBinding: (panelId, channelId) =>
-        useSession.getState().addEnumChannel(panelId, channelId),
-      removeEnumChannelBinding: (panelId, channelId) =>
-        useSession.getState().removeEnumChannel(panelId, channelId),
-      getPlotPanelSync: (panelId) => {
-        const snap: PlotSyncSnapshot | undefined =
-          window.__drivelinePlotPanels?.[panelId];
-        if (!snap) return null;
-        return {
-          cursorNs: snap.cursorNs.toString(),
-          boundChannelIds: [...snap.boundChannelIds],
-          lastFetchedRange: snap.lastFetchedRange
-            ? {
-                startNs: snap.lastFetchedRange.startNs.toString(),
-                endNs: snap.lastFetchedRange.endNs.toString(),
-              }
-            : null,
-          sampleAtCursor: snap.sampleAtCursor.map((s) =>
-            s === null
-              ? null
-              : {
-                  channelId: s.channelId,
-                  tsNs: s.tsNs.toString(),
-                  value: s.value,
-                },
-          ),
-          xScaleSec: snap.xScaleSec,
-          yScale: snap.yScale,
-        };
-      },
-      getPlotPanelSeriesStats: (panelId) => {
-        const snap: PlotSyncSnapshot | undefined =
-          window.__drivelinePlotPanels?.[panelId];
-        if (!snap) return null;
-        return snap.seriesStats.map((s) => ({
-          channelId: s.channelId,
-          min: s.min,
-          max: s.max,
-          count: s.count,
-        }));
-      },
-      listChannels: () =>
-        useSession.getState().channels.map((c) => ({
-          id: c.id,
-          sourceId: c.sourceId,
-          name: c.name,
-          kind: c.kind,
-          dtype: c.dtype,
-          unit: c.unit,
-          sampleCount: c.sampleCount,
-        })),
-      findChannelId: ({ sourceName, nativeId }) => {
-        const sources = useSession.getState().sources;
-        const exact = sources.find((s) => s.name === sourceName);
-        const src =
-          exact ?? sources.find((s) => s.name.includes(sourceName)) ?? null;
-        if (!src) return null;
-        const ch = src.channels.find((c) => c.nativeId === nativeId);
-        return ch?.id ?? null;
-      },
-      listSources: () =>
-        useSession.getState().sources.map((s) => ({
-          id: s.id,
-          kind: s.kind,
-          name: s.name,
-          timeRange: {
-            startNs: s.timeRange.startNs.toString(),
-            endNs: s.timeRange.endNs.toString(),
-          },
-          channelIds: s.channels.map((c) => c.id),
-        })),
-      getGlobalRange: () => {
-        const r = useSession.getState().globalRange;
-        return r === null
-          ? null
-          : { startNs: r.startNs.toString(), endNs: r.endNs.toString() };
-      },
-      setActiveRailTab: (tab) =>
-        useSession.getState().setActiveRailTab(tab),
-      getActiveRailTab: () => useSession.getState().activeRailTab,
-      setRailCollapsed: (collapsed) =>
-        useSession.getState().setRailCollapsed(collapsed),
-      setSelectedPanelId: (id) =>
-        useSession.getState().setSelectedPanelId(id),
-      getSelectedPanelId: () => useSession.getState().selectedPanelId,
-      getVideoHudOn: (panelId) =>
-        useSession.getState().videoHudOn[panelId] ?? false,
-      saveCurrentLayoutAs: (name) =>
-        useSession.getState().saveCurrentLayoutAs(name),
-      restoreNamedLayout: (id) =>
-        useSession.getState().restoreNamedLayout(id),
-      listNamedLayouts: () => {
-        const st = useSession.getState();
-        const currentJsonStr = JSON.stringify(st.layoutJson ?? null);
-        return st.namedLayouts.map((l) => ({
-          id: l.id,
-          name: l.name,
-          createdAt: l.createdAt,
-          isLive: JSON.stringify(l.layoutJson ?? null) === currentJsonStr,
-          isActive: st.activeNamedLayoutId === l.id,
-        }));
-      },
-      addBookmarkAtCursor: (label) =>
-        useSession.getState().addBookmarkAtCursor(label),
-      listBookmarks: () =>
-        useSession.getState().bookmarks.map((b) => ({
-          id: b.id,
-          ns: b.ns.toString(),
-          label: b.label,
-          color: b.color,
-          createdAt: b.createdAt,
-        })),
-      removeBookmark: (id) => useSession.getState().removeBookmark(id),
-      renameBookmark: (id, label) =>
-        useSession.getState().renameBookmark(id, label),
-      getVideoReadiness: () => {
-        const out: Array<{
-          panelId: string;
-          state: "ready" | "waiting" | "stalled" | "uncovered" | "absent";
-          lastReadyMs: number;
-          waitingSinceMs: number | null;
-          lastBlitPtsNs: string | null;
-        }> = [];
-        for (const [panelId, r] of getReadinessSnapshot()) {
-          out.push({
-            panelId,
-            state: r.state,
-            lastReadyMs: r.lastReadyMs,
-            waitingSinceMs: r.waitingSinceMs,
-            lastBlitPtsNs:
-              r.lastBlitPtsNs === null ? null : r.lastBlitPtsNs.toString(),
-          });
-        }
-        return out;
-      },
-      getCursorGated: () => isCursorGated(),
-    };
+        ) => {
+          const bytes = await dc.mf4FetchRange(
+            handle,
+            channelId,
+            startNs,
+            endNs,
+            includePrev,
+          );
+          const table = tableFromIPC(bytes);
+          const ts = table.getChild("ts");
+          if (!ts) throw new Error("arrow table missing 'ts' column");
+          const value = table.getChild("value");
+          if (!value) throw new Error("arrow table missing 'value' column");
+          let valueSum = 0;
+          for (let i = 0; i < value.length; i++)
+            valueSum += Number(value.get(i));
+          return {
+            rows: table.numRows,
+            tsSchema: table.schema.fields[0].type.toString(),
+            valueSchema: table.schema.fields[1].type.toString(),
+            firstTsNs: String(ts.get(0)),
+            lastTsNs: String(ts.get(ts.length - 1)),
+            valueSum,
+          };
+        },
+        openFiles: async (descs) => {
+          const files = descs.map(
+            (d) => new File([d.bytes as BlobPart], d.name),
+          );
+          return await useSession.getState().openFiles(files);
+        },
+        openUrl: async (url) => {
+          return await useSession.getState().openUrl(url);
+        },
+        clearSession: async () => {
+          await useSession.getState().clear();
+        },
+        removeSource: async (sourceId) => {
+          await useSession.getState().removeSource(sourceId);
+        },
+        videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
+        videoHudStats: () => {
+          const h: VideoHudSnapshot | undefined = window.__drivelineVideoHud;
+          if (!h) return null;
+          return {
+            ptsNs: h.ptsNs === null ? null : h.ptsNs.toString(),
+            frameIndex: h.frameIndex,
+            decodeQueue: h.decodeQueue,
+            blitQueueLen: h.blitQueueLen,
+            dropped: h.dropped,
+            codec: h.codec,
+            hudOn: h.hudOn,
+          };
+        },
+        getSessionSnapshot: () => {
+          const s = useSession.getState();
+          return {
+            cursorNs: s.cursorNs.toString(),
+            playing: s.playing,
+            speed: s.speed,
+            globalRange: s.globalRange
+              ? {
+                  startNs: s.globalRange.startNs.toString(),
+                  endNs: s.globalRange.endNs.toString(),
+                }
+              : null,
+          };
+        },
+        getLayoutJson: () => JSON.stringify(useSession.getState().layoutJson),
+        setLayoutJson: (json) => useSession.getState().setLayoutJson(json),
+        addVideoPanel: (channelId) =>
+          workspaceRef.current?.addVideoPanel(channelId),
+        addPlotPanel: () => workspaceRef.current?.addPlotPanel(),
+        addScenePanel: () => workspaceRef.current?.addScenePanel(),
+        addMapPanel: () => workspaceRef.current?.addMapPanel(),
+        addTablePanel: () => workspaceRef.current?.addTablePanel(),
+        addValuePanel: () => workspaceRef.current?.addValuePanel(),
+        addEnumPanel: () => workspaceRef.current?.addEnumPanel(),
+        resetLayout: () => workspaceRef.current?.resetLayout(),
+        setVideoChannelBinding: (panelId, channelId) =>
+          useSession.getState().setVideoBinding(panelId, channelId),
+        addPlotChannelBinding: (panelId, channelId) =>
+          useSession.getState().addPlotChannel(panelId, channelId),
+        setPlotChannelAxis: (panelId, channelId, axis) =>
+          useSession.getState().setPlotChannelAxis(panelId, channelId, axis),
+        setPlotStackAxes: (panelId, on) =>
+          useSession.getState().setPlotStackAxes(panelId, on),
+        setChannelUnitOverride: (channelId, unit) =>
+          useSession.getState().setChannelUnit(channelId, unit),
+        setSceneChannelBinding: (panelId, channelId) =>
+          useSession.getState().setSceneBinding(panelId, channelId),
+        setMapChannelBinding: (panelId, binding) =>
+          useSession.getState().setMapBinding(panelId, binding),
+        addTableChannelBinding: (panelId, channelId) =>
+          useSession.getState().addTableChannel(panelId, channelId),
+        removeTableChannelBinding: (panelId, channelId) =>
+          useSession.getState().removeTableChannel(panelId, channelId),
+        addValueChannelBinding: (panelId, channelId) =>
+          useSession.getState().addValueChannel(panelId, channelId),
+        removeValueChannelBinding: (panelId, channelId) =>
+          useSession.getState().removeValueChannel(panelId, channelId),
+        addEnumChannelBinding: (panelId, channelId) =>
+          useSession.getState().addEnumChannel(panelId, channelId),
+        removeEnumChannelBinding: (panelId, channelId) =>
+          useSession.getState().removeEnumChannel(panelId, channelId),
+        getPlotPanelSync: (panelId) => {
+          const snap: PlotSyncSnapshot | undefined =
+            window.__drivelinePlotPanels?.[panelId];
+          if (!snap) return null;
+          return {
+            cursorNs: snap.cursorNs.toString(),
+            boundChannelIds: [...snap.boundChannelIds],
+            lastFetchedRange: snap.lastFetchedRange
+              ? {
+                  startNs: snap.lastFetchedRange.startNs.toString(),
+                  endNs: snap.lastFetchedRange.endNs.toString(),
+                }
+              : null,
+            sampleAtCursor: snap.sampleAtCursor.map((s) =>
+              s === null
+                ? null
+                : {
+                    channelId: s.channelId,
+                    tsNs: s.tsNs.toString(),
+                    value: s.value,
+                  },
+            ),
+            xScaleSec: snap.xScaleSec,
+            yScale: snap.yScale,
+          };
+        },
+        getPlotPanelSeriesStats: (panelId) => {
+          const snap: PlotSyncSnapshot | undefined =
+            window.__drivelinePlotPanels?.[panelId];
+          if (!snap) return null;
+          return snap.seriesStats.map((s) => ({
+            channelId: s.channelId,
+            min: s.min,
+            max: s.max,
+            count: s.count,
+          }));
+        },
+        listChannels: () =>
+          useSession.getState().channels.map((c) => ({
+            id: c.id,
+            sourceId: c.sourceId,
+            name: c.name,
+            kind: c.kind,
+            dtype: c.dtype,
+            unit: c.unit,
+            sampleCount: c.sampleCount,
+          })),
+        findChannelId: ({ sourceName, nativeId }) => {
+          const sources = useSession.getState().sources;
+          const exact = sources.find((s) => s.name === sourceName);
+          const src =
+            exact ?? sources.find((s) => s.name.includes(sourceName)) ?? null;
+          if (!src) return null;
+          const ch = src.channels.find((c) => c.nativeId === nativeId);
+          return ch?.id ?? null;
+        },
+        listSources: () =>
+          useSession.getState().sources.map((s) => ({
+            id: s.id,
+            kind: s.kind,
+            name: s.name,
+            timeRange: {
+              startNs: s.timeRange.startNs.toString(),
+              endNs: s.timeRange.endNs.toString(),
+            },
+            channelIds: s.channels.map((c) => c.id),
+          })),
+        getGlobalRange: () => {
+          const r = useSession.getState().globalRange;
+          return r === null
+            ? null
+            : { startNs: r.startNs.toString(), endNs: r.endNs.toString() };
+        },
+        setActiveRailTab: (tab) => useSession.getState().setActiveRailTab(tab),
+        getActiveRailTab: () => useSession.getState().activeRailTab,
+        setRailCollapsed: (collapsed) =>
+          useSession.getState().setRailCollapsed(collapsed),
+        setSelectedPanelId: (id) =>
+          useSession.getState().setSelectedPanelId(id),
+        getSelectedPanelId: () => useSession.getState().selectedPanelId,
+        getVideoHudOn: (panelId) =>
+          useSession.getState().videoHudOn[panelId] ?? false,
+        saveCurrentLayoutAs: (name) =>
+          useSession.getState().saveCurrentLayoutAs(name),
+        restoreNamedLayout: (id) =>
+          useSession.getState().restoreNamedLayout(id),
+        listNamedLayouts: () => {
+          const st = useSession.getState();
+          const currentJsonStr = JSON.stringify(st.layoutJson ?? null);
+          return st.namedLayouts.map((l) => ({
+            id: l.id,
+            name: l.name,
+            createdAt: l.createdAt,
+            isLive: JSON.stringify(l.layoutJson ?? null) === currentJsonStr,
+            isActive: st.activeNamedLayoutId === l.id,
+          }));
+        },
+        addBookmarkAtCursor: (label) =>
+          useSession.getState().addBookmarkAtCursor(label),
+        listBookmarks: () =>
+          useSession.getState().bookmarks.map((b) => ({
+            id: b.id,
+            ns: b.ns.toString(),
+            label: b.label,
+            color: b.color,
+            createdAt: b.createdAt,
+          })),
+        removeBookmark: (id) => useSession.getState().removeBookmark(id),
+        renameBookmark: (id, label) =>
+          useSession.getState().renameBookmark(id, label),
+        getVideoReadiness: () => {
+          const out: Array<{
+            panelId: string;
+            state: "ready" | "waiting" | "stalled" | "uncovered" | "absent";
+            lastReadyMs: number;
+            waitingSinceMs: number | null;
+            lastBlitPtsNs: string | null;
+          }> = [];
+          for (const [panelId, r] of getReadinessSnapshot()) {
+            out.push({
+              panelId,
+              state: r.state,
+              lastReadyMs: r.lastReadyMs,
+              waitingSinceMs: r.waitingSinceMs,
+              lastBlitPtsNs:
+                r.lastBlitPtsNs === null ? null : r.lastBlitPtsNs.toString(),
+            });
+          }
+          return out;
+        },
+        getCursorGated: () => isCursorGated(),
+      };
+    }
     setReady(true);
     return () => {
       detachPersistence();
@@ -562,7 +581,9 @@ export function App() {
       detachNamedLayoutsPersistence();
       detachBookmarksPersistence();
       detachUrlState();
-      delete window.__drivelineDevHooks;
+      if (import.meta.env.DEV) {
+        delete window.__drivelineDevHooks;
+      }
       useSession.getState().setWorker(null);
       dataCore.current = null;
       videoDecode.current = null;
@@ -640,24 +661,27 @@ export function App() {
   };
 
   return (
-    <Shell
-      ready={ready}
-      dragActive={dragActive}
-      onDrop={onDrop}
-      onDragOver={onDragOver}
-      onDragLeave={onDragLeave}
-      ensurePlotPanel={ensurePlotPanel}
-      addVideoPanel={addVideoPanel}
-      addPlotPanel={addPlotPanel}
-      addScenePanel={addScenePanel}
-      addMapPanel={addMapPanel}
-      addTablePanel={addTablePanel}
-      addValuePanel={addValuePanel}
-      addEnumPanel={addEnumPanel}
-      resetLayout={resetLayout}
-      transport={<Transport />}
-    >
-      <Workspace ref={workspaceRef} />
-    </Shell>
+    <>
+      {workerCrash && <WorkerErrorBanner crash={workerCrash} />}
+      <Shell
+        ready={ready}
+        dragActive={dragActive}
+        onDrop={onDrop}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        ensurePlotPanel={ensurePlotPanel}
+        addVideoPanel={addVideoPanel}
+        addPlotPanel={addPlotPanel}
+        addScenePanel={addScenePanel}
+        addMapPanel={addMapPanel}
+        addTablePanel={addTablePanel}
+        addValuePanel={addValuePanel}
+        addEnumPanel={addEnumPanel}
+        resetLayout={resetLayout}
+        transport={<Transport />}
+      >
+        <Workspace ref={workspaceRef} />
+      </Shell>
+    </>
   );
 }

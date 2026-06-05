@@ -1,0 +1,69 @@
+/* Fatal worker-crash banner. Pinned to the top of the viewport above all
+ * shell chrome (the shortcuts scrim is z-index 100). Non-dismissable: the
+ * only resolution is a reload, so there is no close affordance. */
+.banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-5) var(--sp-7);
+  background: var(--color-error);
+  color: var(--color-fg-1);
+  border-bottom: 1px solid var(--color-error-dark);
+  box-shadow: var(--shadow-1);
+}
+
+.icon {
+  flex: none;
+  font-size: var(--fs-16);
+  line-height: 1;
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+}
+
+.title {
+  font-weight: var(--fw-semibold);
+}
+
+.detail {
+  color: var(--color-fg-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+
+.reloadBtn {
+  flex: none;
+  padding: 7px 16px;
+  background: var(--color-fg-1);
+  border: 1px solid var(--color-fg-1);
+  color: var(--color-error);
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  transition: background var(--motion-base);
+}
+
+.reloadBtn:hover {
+  background: var(--color-fg-2);
+}
+
+.reloadBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reloadBtn {
+    transition: none;
+  }
+}

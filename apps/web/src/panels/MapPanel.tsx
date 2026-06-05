@@ -14,11 +14,17 @@
 // fixture uses two distinct cadences we'll need a merge step — flagged
 // in STATUS.md as a Phase 7+ carry-over rather than fixed here.
 //
+// Beyond the polyline this panel surfaces explicit load/error/empty
+// states (so a failed fetch is visible, not just `console.error` + a
+// stale line) and a cursor marker that tracks the GPS fix at the shared
+// `cursorNs`. Bounds are auto-fit only on first load / binding change so
+// the fit doesn't fight manual pan/zoom on every refetch.
+//
 // Leaflet is driven through its imperative API (not a React wrapper) so
 // the dependency tree stays fully OSI-permissive: leaflet is BSD-2-Clause.
-// The map instance and polyline live in refs — they're DOM-bound and not
-// serialisable, so they never enter React state or the store. Bundle hit
-// ≈ 40 KB gzipped, well under the 350 KB budget.
+// The map instance, polyline and cursor marker live in refs — they're
+// DOM-bound and not serialisable, so they never enter React state or the
+// store. Bundle hit ≈ 40 KB gzipped, well under the 350 KB budget.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as L from "leaflet";
@@ -27,7 +33,7 @@ import type { LatLngExpression } from "leaflet";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta } from "../state/store";
 import { colorFor } from "./palette";
-import { seriesFromArrow } from "./seriesFromArrow";
+import { decodeSeries } from "./seriesFromArrow";
 import styles from "./MapPanel.module.css";
 
 interface MapPanelProps {
@@ -40,11 +46,27 @@ const DEFAULT_ZOOM = 2;
 const TILE_URL = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
 const TILE_ATTRIBUTION =
   '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors';
+// Cursor accent (not the series colour) so the marker reads as "where am
+// I" rather than "another track".
+const CURSOR_COLOR = "#f97316";
 
-function findChannel(
-  sources: SourceMeta[],
-  channelId: string,
-): Channel | null {
+// A GPS fix paired with the ns timestamp it was sampled at, so the cursor
+// marker can locate "the fix at (or just before) cursorNs".
+interface TrackPoint {
+  lat: number;
+  lon: number;
+  tsNs: bigint;
+}
+
+// Load status for the fetch+decode pipeline. Discriminated so the render
+// branches are explicit (no "blank when not ready" bug).
+type Load =
+  | { status: "idle" } // no binding / no range yet
+  | { status: "loading" }
+  | { status: "error"; message: string }
+  | { status: "ready"; track: TrackPoint[] };
+
+function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
   for (const s of sources) {
     const hit = s.channels.find((c) => c.id === channelId);
     if (hit) return hit;
@@ -52,32 +74,64 @@ function findChannel(
   return null;
 }
 
-function downsample(
+// Zip lat/lon by index into timestamped track points, dropping non-finite
+// coordinates, and downsample to ≤ MAX_POINTS. The final in-range sample is
+// always kept so the tail isn't clipped by the stride.
+function buildTrack(
   lats: Float64Array,
   lons: Float64Array,
-): LatLngExpression[] {
-  const n = Math.min(lats.length, lons.length);
+  tsNs: BigInt64Array,
+): TrackPoint[] {
+  const n = Math.min(lats.length, lons.length, tsNs.length);
   if (n === 0) return [];
   const stride = n > MAX_POINTS ? Math.ceil(n / MAX_POINTS) : 1;
-  const out: LatLngExpression[] = [];
-  for (let i = 0; i < n; i += stride) {
+  const out: TrackPoint[] = [];
+  const push = (i: number) => {
     const lat = lats[i];
     const lon = lons[i];
     if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      out.push([lat, lon]);
+      out.push({ lat, lon, tsNs: tsNs[i] });
     }
-  }
-  // Always include the final sample so the polyline tail isn't clipped
-  // by the stride.
-  if (n > 0) {
-    const lat = lats[n - 1];
-    const lon = lons[n - 1];
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-      const last = out[out.length - 1] as [number, number] | undefined;
-      if (!last || last[0] !== lat || last[1] !== lon) out.push([lat, lon]);
+  };
+  for (let i = 0; i < n; i += stride) push(i);
+  // Always include the final sample so the polyline tail isn't clipped by
+  // the stride.
+  const lastIdx = n - 1;
+  if (lastIdx % stride !== 0) {
+    const last = out[out.length - 1];
+    const lat = lats[lastIdx];
+    const lon = lons[lastIdx];
+    if (
+      Number.isFinite(lat) &&
+      Number.isFinite(lon) &&
+      (!last || last.lat !== lat || last.lon !== lon)
+    ) {
+      out.push({ lat, lon, tsNs: tsNs[lastIdx] });
     }
   }
   return out;
+}
+
+function toLatLng(track: TrackPoint[]): LatLngExpression[] {
+  return track.map((p) => [p.lat, p.lon] as [number, number]);
+}
+
+// Locate the track point at (or just before) cursorNs via binary search.
+// `track` is ordered by tsNs (GPS samples are emitted in time order).
+function trackPointAt(
+  track: TrackPoint[],
+  cursorNs: bigint,
+): TrackPoint | null {
+  if (track.length === 0) return null;
+  if (cursorNs < track[0].tsNs) return null;
+  let lo = 0;
+  let hi = track.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (track[mid].tsNs <= cursorNs) lo = mid;
+    else hi = mid - 1;
+  }
+  return track[lo];
 }
 
 export function MapPanel({ panelId }: MapPanelProps) {
@@ -85,19 +139,16 @@ export function MapPanel({ panelId }: MapPanelProps) {
   const globalRange = useSession((s) => s.globalRange);
   const binding = useSession((s) => s.mapBindings[panelId] ?? null);
   const setMapBinding = useSession((s) => s.setMapBinding);
+  const cursorNs = useSession((s) => s.cursorNs);
 
   const latChannel = useMemo(
     () =>
-      binding === null
-        ? null
-        : findChannel(sources, binding.latChannelId),
+      binding === null ? null : findChannel(sources, binding.latChannelId),
     [binding, sources],
   );
   const lonChannel = useMemo(
     () =>
-      binding === null
-        ? null
-        : findChannel(sources, binding.lonChannelId),
+      binding === null ? null : findChannel(sources, binding.lonChannelId),
     [binding, sources],
   );
 
@@ -112,14 +163,15 @@ export function MapPanel({ panelId }: MapPanelProps) {
     }
   }, [binding, latChannel, lonChannel, panelId, setMapBinding, sources.length]);
 
-  const [points, setPoints] = useState<LatLngExpression[]>([]);
+  const [load, setLoad] = useState<Load>({ status: "idle" });
 
   useEffect(() => {
     if (!globalRange || !latChannel || !lonChannel) {
-      setPoints([]);
+      setLoad({ status: "idle" });
       return;
     }
     let aborted = false;
+    setLoad({ status: "loading" });
     void (async () => {
       try {
         const store = useSession.getState();
@@ -138,11 +190,26 @@ export function MapPanel({ panelId }: MapPanelProps) {
           ),
         ]);
         if (aborted) return;
-        const lats = seriesFromArrow(latBytes).ys;
-        const lons = seriesFromArrow(lonBytes).ys;
-        setPoints(downsample(lats, lons));
+        const latRes = decodeSeries(latBytes);
+        const lonRes = decodeSeries(lonBytes);
+        if (!latRes.ok) {
+          setLoad({ status: "error", message: latRes.message });
+          return;
+        }
+        if (!lonRes.ok) {
+          setLoad({ status: "error", message: lonRes.message });
+          return;
+        }
+        const track = buildTrack(latRes.ys, lonRes.ys, latRes.rawTsNs);
+        setLoad({ status: "ready", track });
       } catch (err) {
-        if (!aborted) console.error("MapPanel fetch failed", err);
+        if (aborted) return;
+        console.error("MapPanel fetch failed", err);
+        setLoad({
+          status: "error",
+          message:
+            err instanceof Error ? err.message : "Failed to load GPS data.",
+        });
       }
     })();
     return () => {
@@ -150,7 +217,22 @@ export function MapPanel({ panelId }: MapPanelProps) {
     };
   }, [globalRange, latChannel, lonChannel]);
 
-  const isEmpty = binding === null || latChannel === null || lonChannel === null;
+  const isEmpty =
+    binding === null || latChannel === null || lonChannel === null;
+
+  // Fit key changes when the binding changes, re-arming the one-shot
+  // auto-fit; refetches on range change keep the same key so they don't
+  // re-fit and fight a manual pan/zoom.
+  const fitKey = binding
+    ? `${binding.latChannelId}|${binding.lonChannelId}`
+    : "";
+
+  const track = load.status === "ready" ? load.track : [];
+  const points = useMemo(() => toLatLng(track), [track]);
+  const cursorPoint = useMemo(
+    () => trackPointAt(track, cursorNs),
+    [track, cursorNs],
+  );
 
   // Imperative Leaflet wiring. The host <div> only exists in the bound
   // branch, so the map is created when `isEmpty` flips to false and torn
@@ -159,6 +241,8 @@ export function MapPanel({ panelId }: MapPanelProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
   const lineRef = useRef<L.Polyline | null>(null);
+  const markerRef = useRef<L.CircleMarker | null>(null);
+  const lastFitKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (isEmpty) return;
@@ -176,12 +260,15 @@ export function MapPanel({ panelId }: MapPanelProps) {
       map.remove();
       mapRef.current = null;
       lineRef.current = null;
+      markerRef.current = null;
+      lastFitKeyRef.current = null;
     };
   }, [isEmpty]);
 
-  // Redraw the polyline (and fit to it) whenever the downsampled points or
-  // the panel's palette colour change. Runs after the map-create effect on
-  // the same commit, so mapRef is populated by the time we read it.
+  // Redraw the polyline whenever the downsampled points or the panel's
+  // palette colour change, and one-shot fit to it when the binding (fitKey)
+  // changes. Runs after the map-create effect on the same commit, so mapRef
+  // is populated by the time we read it.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -198,9 +285,38 @@ export function MapPanel({ panelId }: MapPanelProps) {
         weight: 3,
       }).addTo(map);
       lineRef.current = line;
-      map.fitBounds(line.getBounds(), { padding: [20, 20], animate: false });
+      if (lastFitKeyRef.current !== fitKey) {
+        lastFitKeyRef.current = fitKey;
+        map.fitBounds(line.getBounds(), { padding: [20, 20], animate: false });
+      }
     }
-  }, [points, panelId]);
+  }, [points, panelId, fitKey]);
+
+  // Cursor marker tracking the GPS fix at the shared cursor. Created lazily
+  // and moved via setLatLng so a 60 Hz cursor doesn't churn Leaflet layers.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (cursorPoint === null) {
+      if (markerRef.current) {
+        markerRef.current.remove();
+        markerRef.current = null;
+      }
+      return;
+    }
+    const center: LatLngExpression = [cursorPoint.lat, cursorPoint.lon];
+    if (markerRef.current) {
+      markerRef.current.setLatLng(center);
+    } else {
+      markerRef.current = L.circleMarker(center, {
+        radius: 6,
+        color: CURSOR_COLOR,
+        fillColor: CURSOR_COLOR,
+        fillOpacity: 0.9,
+        weight: 2,
+      }).addTo(map);
+    }
+  }, [cursorPoint]);
 
   return (
     <section className={styles.panel} data-testid="map-panel">
@@ -213,15 +329,42 @@ export function MapPanel({ panelId }: MapPanelProps) {
         </div>
       ) : (
         <div className={styles.mapContainer} data-testid="map-container">
-          <div
-            ref={hostRef}
-            className={styles.map}
-            data-testid="map-leaflet"
-          />
-          <span
-            className={styles.pointsPill}
-            data-testid="map-points-count"
-          >
+          <div ref={hostRef} className={styles.map} data-testid="map-leaflet" />
+
+          {/* Status overlays. Mutually exclusive with the polyline so a
+              failed/empty fetch is visible rather than a stale line. */}
+          {load.status === "loading" && (
+            <div
+              className={styles.statusOverlay}
+              data-testid="map-loading"
+              role="status"
+            >
+              Loading GPS…
+            </div>
+          )}
+          {load.status === "error" && (
+            <div
+              className={styles.statusOverlay}
+              data-testid="map-error"
+              role="alert"
+            >
+              <span className={styles.statusIcon} aria-hidden="true">
+                !
+              </span>
+              {load.message}
+            </div>
+          )}
+          {load.status === "ready" && points.length === 0 && (
+            <div
+              className={styles.statusOverlay}
+              data-testid="map-no-data"
+              role="status"
+            >
+              No GPS fixes in range.
+            </div>
+          )}
+
+          <span className={styles.pointsPill} data-testid="map-points-count">
             {points.length} pts
           </span>
         </div>

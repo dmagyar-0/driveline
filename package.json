@@ -11,6 +11,7 @@
     "test": "pnpm --filter web test --run && cargo test --workspace",
     "test:web": "pnpm --filter web test --run",
     "test:rust": "cargo test --workspace",
+    "size:check": "node scripts/check-bundle-size.mjs",
     "e2e": "pnpm --filter e2e test",
     "fmt": "cargo fmt --all && pnpm --filter web fmt",
     "license:check:js": "node scripts/check-js-licenses.mjs",

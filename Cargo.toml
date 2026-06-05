@@ -11,3 +11,8 @@ license = "MPL-2.0"
 opt-level = "s"
 lto = true
 codegen-units = 1
+# Defence-in-depth: trap on integer overflow in the shipped WASM instead of
+# silently wrapping. Time values are nanosecond bigints and arithmetic on
+# offsets/ranges must never wrap silently. (The actual unchecked-arithmetic
+# audit lives in data-core; this is belt-and-suspenders.)
+overflow-checks = true
