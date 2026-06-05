@@ -159,6 +159,14 @@ jobs:
   fixtures-check:
     name: Fixtures freshness
     runs-on: ubuntu-latest
+    # Informational, non-blocking. The committed fixtures are binary
+    # artifacts produced by ffmpeg/libx264 + asammdf, whose byte output is
+    # not guaranteed bit-identical across tool versions. We regenerate and
+    # hash-check to surface genuine staleness, but a pure encoder/library
+    # version drift must not block unrelated PRs — so the job is allowed to
+    # fail. Run `make fixtures && make fixtures-check` locally to confirm a
+    # real fixture change.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -166,8 +174,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      # `make fixtures-check` only needs ffmpeg (generate.py shells out to
-      # it) plus the Python generator deps — not the full setup-test-env.sh
+      # `make fixtures` only needs ffmpeg (generate.py shells out to it)
+      # plus the Python generator deps — not the full setup-test-env.sh
       # bootstrap (which also pulls pnpm/wasm/playwright and isn't on PATH
       # in this minimal job).
       - name: Install ffmpeg
@@ -178,8 +186,12 @@ jobs:
       - name: Install fixture generator deps
         run: pip3 install numpy mcap asammdf
 
-      - name: Verify fixtures are fresh
-        run: make fixtures-check
+      # Regenerate from scratch (produces the gitignored out.h264 the hash
+      # check needs), then verify the committed out.h264 hash is fresh.
+      - name: Regenerate and verify fixtures are fresh
+        run: |
+          make fixtures
+          make fixtures-check
 
 # -----------------------------------------------------------------------------
 # NOTE: Playwright e2e (`pnpm e2e`) is intentionally NOT run in CI by default —
