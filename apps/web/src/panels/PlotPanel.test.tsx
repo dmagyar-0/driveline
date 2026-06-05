@@ -276,6 +276,11 @@ describe("PlotPanel", () => {
 
   afterEach(() => {
     cleanup();
+    // These per-panel slices aren't reseeded by `seedSession`, so clear them
+    // between tests — otherwise state left by one case (a wheel zoom window,
+    // or a stack/axis assignment from the stacking tests) leaks into the
+    // next panel mounted under the same id.
+    useSession.setState({ plotZoom: {}, plotPanelSettings: {} });
     if (window.__drivelinePlotPanels) {
       delete window.__drivelinePlotPanels["test-panel"];
       delete window.__drivelinePlotPanels["drop-panel"];
@@ -603,6 +608,93 @@ describe("PlotPanel", () => {
       "persisted-a",
       "persisted-b",
     ]);
+  });
+
+  it("applies an x-zoom window to the visible domain and reset clears it", async () => {
+    render(<PlotPanel panelId="test-panel" />);
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+    // No override yet → no reset button, domain pinned to the global range.
+    expect(screen.queryByTestId("plot-reset-zoom")).toBeNull();
+
+    // Zoom the x-axis to the middle 10 ms of the 20 ms timeline.
+    await act(async () => {
+      useSession
+        .getState()
+        .setPlotZoomX("test-panel", {
+          startNs: 1_005_000_000n,
+          endNs: 1_015_000_000n,
+        });
+    });
+
+    // The apply effect re-resolves the x-scale to the zoom window.
+    await waitFor(() => {
+      const x = window.__drivelinePlotPanels?.["test-panel"]?.xScaleSec;
+      return !!x && Math.abs(x.min - 1.005) < 1e-4 && Math.abs(x.max - 1.015) < 1e-4;
+    });
+    // The Reset-zoom button surfaces while zoomed.
+    const reset = await screen.findByTestId("plot-reset-zoom");
+
+    // Clicking it clears the override and the domain snaps back to global.
+    await act(async () => {
+      fireEvent.click(reset);
+    });
+    expect("test-panel" in useSession.getState().plotZoom).toBe(false);
+    await waitFor(() => {
+      const x = window.__drivelinePlotPanels?.["test-panel"]?.xScaleSec;
+      return !!x && Math.abs(x.min - 1.0) < 1e-4 && Math.abs(x.max - 1.02) < 1e-4;
+    });
+    expect(screen.queryByTestId("plot-reset-zoom")).toBeNull();
+  });
+
+  it("wheel over the plot drawing area zooms the x-axis", async () => {
+    render(<PlotPanel panelId="test-panel" />);
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+    const area = screen.getByRole("slider");
+
+    // Scroll up (deltaY < 0) near the centre of the 400×200 stubbed area →
+    // zoom in. The native wheel listener derives the target + window from
+    // uPlot's resolved bbox/axis geometry. (The y half of a "both" zoom
+    // needs uPlot's auto-range resolved, which only happens in its rAF
+    // redraw — not driven under jsdom; the y path is covered below via an
+    // explicit window and end-to-end in the browser.)
+    await act(async () => {
+      fireEvent.wheel(area, { deltaY: -120, clientX: 200, clientY: 90 });
+    });
+
+    const z = useSession.getState().plotZoom["test-panel"];
+    expect(z).toBeTruthy();
+    // x narrowed to a sub-range of the 1.0–1.02 s timeline.
+    expect(z.x).not.toBeNull();
+    expect(z.x!.startNs).toBeGreaterThan(1_000_000_000n);
+    expect(z.x!.endNs).toBeLessThan(1_020_000_000n);
+  });
+
+  it("applies a y-axis zoom window to the resolved y-scale", async () => {
+    render(<PlotPanel panelId="test-panel" />);
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+
+    // Pin axis 0 (scale "y", which the sync snapshot reads) to [-5, 5].
+    await act(async () => {
+      useSession.getState().setPlotZoomY("test-panel", 0, { min: -5, max: 5 });
+    });
+
+    await waitFor(() => {
+      const y = window.__drivelinePlotPanels?.["test-panel"]?.yScale;
+      return !!y && Math.abs(y.min + 5) < 1e-6 && Math.abs(y.max - 5) < 1e-6;
+    });
+    expect(screen.getByTestId("plot-reset-zoom")).toBeTruthy();
   });
 });
 

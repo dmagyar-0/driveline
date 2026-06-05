@@ -33,6 +33,11 @@ import {
 } from "../../state/store";
 import { channelLabel } from "../../state/units";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
+import {
+  WHEEL_ZOOM_STEP,
+  isPlotZoomed,
+  scaleWindowX,
+} from "../../panels/plotZoom";
 import { ChannelPicker } from "../../panels/ChannelPicker";
 import type { PlotSeriesStats, PlotSyncSnapshot } from "../../panels/PlotPanel";
 import {
@@ -237,9 +242,80 @@ function PlotBody({ panelId }: BodyProps) {
         )}
       </section>
       <PlotSeriesStatsSection panelId={panelId} bound={bound} />
+      <PlotZoomControl panelId={panelId} />
       <PlotStackAxesControl panelId={panelId} />
       <PlotGapThresholdControl panelId={panelId} />
     </>
+  );
+}
+
+/**
+ * Wheel-zoom controls, mirrored into the drawer so the same scaling is
+ * reachable here as on the plot itself. "Reset zoom" clears every x/y
+ * override (the drawer twin of the plot's top-right button) and disables
+ * when nothing is zoomed; the ± buttons zoom the time axis in/out around
+ * its centre (the most common scale, and the one whose base — `globalRange`
+ * — is known here without the live uPlot). Per-axis y-zoom stays a
+ * scroll-over-the-axis gesture, where the pointer picks the axis.
+ */
+function PlotZoomControl({ panelId }: BodyProps) {
+  const zoom = useSession((st) => st.plotZoom[panelId]);
+  const globalRange = useSession((st) => st.globalRange);
+  const zoomed = isPlotZoomed(zoom);
+
+  const zoomTime = (factor: number) => {
+    const st = useSession.getState();
+    const bound = st.globalRange;
+    if (!bound) return;
+    const base = st.plotZoom[panelId]?.x ?? bound;
+    st.setPlotZoomX(panelId, scaleWindowX(base, 0.5, factor, bound));
+  };
+
+  return (
+    <section className={s.section} data-testid="panel-plot-zoom-section">
+      <div className={s.sectionHeader}>
+        <h4 className={s.sectionTitle}>Zoom</h4>
+      </div>
+      <div className={s.zoomRow}>
+        <span className={s.zoomRowLabel}>Time axis</span>
+        <div className={s.zoomButtons}>
+          <button
+            type="button"
+            className={s.zoomBtn}
+            onClick={() => zoomTime(WHEEL_ZOOM_STEP)}
+            disabled={!globalRange}
+            aria-label="Zoom out on the time axis"
+            data-testid="panel-plot-zoom-out"
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className={s.zoomBtn}
+            onClick={() => zoomTime(1 / WHEEL_ZOOM_STEP)}
+            disabled={!globalRange}
+            aria-label="Zoom in on the time axis"
+            data-testid="panel-plot-zoom-in"
+          >
+            +
+          </button>
+        </div>
+      </div>
+      <button
+        type="button"
+        className={s.zoomReset}
+        onClick={() => useSession.getState().resetPlotZoom(panelId)}
+        disabled={!zoomed}
+        data-testid="panel-plot-zoom-reset"
+      >
+        Reset zoom
+      </button>
+      <p className={s.gapHelp}>
+        {zoomed
+          ? "Scroll over the plot to zoom both axes, or over a single axis to zoom only it."
+          : "Scroll over the plot to zoom both axes, over an axis to zoom only it. Use ± for the time axis."}
+      </p>
+    </section>
   );
 }
 

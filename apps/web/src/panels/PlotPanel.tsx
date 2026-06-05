@@ -13,12 +13,17 @@
 // Several plot panels can coexist, each with its own independent set of
 // channels (per the manual checklist in docs/09-verification-plan.md:131).
 //
-// Out of scope: pan/zoom, y-axis fixed range, step-hold/linear toggle.
+// Mouse-wheel zoom (see `plotZoom.ts`) scales the x and/or y axes
+// depending on where the pointer is; a "Reset zoom" button surfaces in the
+// plot's top-right while any scale is overridden.
+//
+// Out of scope: panning, y-axis fixed range, step-hold/linear toggle.
 
 import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -26,7 +31,7 @@ import {
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { MAX_PLOT_Y_AXES, useSession } from "../state/store";
-import type { Channel, SourceMeta, TimeRange } from "../state/store";
+import type { Channel, PlotZoom, SourceMeta, TimeRange } from "../state/store";
 import { channelLabel, effectiveUnit } from "../state/units";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
@@ -34,6 +39,17 @@ import { cursorStrokeColor, cursorXPx, nsFromXPx } from "./cursorOverlay";
 import { MAX_PLOT_SERIES, colorFor } from "./palette";
 import { getChannelDragData, hasChannelDrag } from "./channelDrag";
 import { applyTransform, transformKey, type Transform } from "./transforms";
+import {
+  WHEEL_ZOOM_STEP,
+  axisIdxFromScaleKey,
+  isPlotZoomed,
+  plotFractions,
+  scaleWindowX,
+  scaleWindowY,
+  zoomTargetForPointer,
+  type ZoomGeometry,
+  type ZoomHitRect,
+} from "./plotZoom";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
 import { formatAxisTick } from "../timeline/formatTime";
@@ -158,6 +174,114 @@ const NONE_TRANSFORM: Transform = { kind: "none" };
 // / plot-sync specs assert on it). Extra axes get "y1", "y2", … keys.
 function scaleKeyForAxis(axisIdx: number): string {
   return axisIdx === 0 ? "y" : `y${axisIdx}`;
+}
+
+// Build the wheel-zoom hit-test geometry from a live uPlot instance. The
+// drawing area comes from `plot.bbox`; the gutters are partitioned from the
+// axes' resolved layout (`_pos`, the post-layout CSS-pixel offset uPlot
+// computes for every axis — not in the public typings, so read through a
+// narrow cast, mirroring the existing `axis.font` access in `yAxisSize`).
+//
+// Each gutter rect spans the WHOLE band for its axis (ticks + values +
+// label), not just the tick strip, by partitioning the space outside the
+// drawing area between adjacent axes — so wheeling anywhere over an axis,
+// including its unit label, targets that axis. Returns null before the
+// first layout (zero-size bbox).
+function buildZoomGeometry(plot: uPlot): ZoomGeometry | null {
+  const bbox = plot.bbox;
+  if (!bbox) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const left = bbox.left / dpr;
+  const top = bbox.top / dpr;
+  const width = bbox.width / dpr;
+  const height = bbox.height / dpr;
+  if (!(width > 0) || !(height > 0)) return null;
+  const right = left + width;
+  const bottom = top + height;
+  // Sentinel beyond any in-container pointer — the outermost gutter runs to
+  // the panel edge without needing the container's measured size.
+  const OUT = 1e6;
+
+  const axisPos = (ax: uPlot.Axis): number | null => {
+    const g = ax as unknown as { _show?: boolean; _pos?: number };
+    if (g._show === false || ax.show === false || g._pos == null) return null;
+    return g._pos;
+  };
+
+  const lefts: { axisIdx: number; pos: number }[] = [];
+  const rights: { axisIdx: number; pos: number }[] = [];
+  const axes: ZoomHitRect[] = [];
+
+  for (const ax of plot.axes) {
+    const pos = axisPos(ax);
+    if (pos == null || ax.scale == null) continue;
+    if (ax.scale === "x") {
+      // x-axis gutter: the full-width band on its side of the drawing area.
+      if (ax.side === 0) {
+        axes.push({ target: { kind: "x" }, x0: left, x1: right, y0: 0, y1: top });
+      } else {
+        axes.push({
+          target: { kind: "x" },
+          x0: left,
+          x1: right,
+          y0: bottom,
+          y1: OUT,
+        });
+      }
+      continue;
+    }
+    const axisIdx = axisIdxFromScaleKey(ax.scale);
+    if (axisIdx == null) continue;
+    (ax.side === 3 ? lefts : rights).push({ axisIdx, pos });
+  }
+
+  // Left axes stack outward from the drawing area; partition [0, left] so
+  // each owns the slice up to its position (a single left axis ⇒ [0, left]).
+  lefts.sort((a, b) => a.pos - b.pos);
+  let leftStart = 0;
+  for (const a of lefts) {
+    axes.push({
+      target: { kind: "y", axisIdx: a.axisIdx },
+      x0: leftStart,
+      x1: a.pos,
+      y0: top,
+      y1: bottom,
+    });
+    leftStart = a.pos;
+  }
+  // Right axes stack outward; each owns [its pos, next axis pos], the
+  // outermost running to the panel edge.
+  rights.sort((a, b) => a.pos - b.pos);
+  for (let i = 0; i < rights.length; i++) {
+    axes.push({
+      target: { kind: "y", axisIdx: rights[i].axisIdx },
+      x0: rights[i].pos,
+      x1: i + 1 < rights.length ? rights[i + 1].pos : OUT,
+      y0: top,
+      y1: bottom,
+    });
+  }
+
+  return { plot: { left, top, width, height }, axes };
+}
+
+// Read a scale's currently-resolved [min, max] (the visible window) as the
+// base for the first wheel notch on an axis that has no override yet.
+function readResolvedScale(
+  plot: uPlot,
+  key: string,
+): { min: number; max: number } | null {
+  const sc = plot.scales[key];
+  if (
+    sc &&
+    sc.min != null &&
+    sc.max != null &&
+    Number.isFinite(sc.min) &&
+    Number.isFinite(sc.max)
+  ) {
+    return { min: sc.min, max: sc.max };
+  }
+  return null;
 }
 
 // Cap on how many distinct axes a panel renders. Mirrors MAX_PLOT_Y_AXES
@@ -366,6 +490,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // redraws its overlay when ANY plot is hovered (Grafana shared
   // crosshair). The hover *write* path is rAF-coalesced below.
   const hoverNs = useSession((s) => s.hoverNs);
+  // Wheel-zoom windows for this panel (x/y scale overrides). Subscribed so
+  // the panel re-applies them to uPlot and toggles the "Reset zoom" button
+  // when they change. Absent (undefined) ⇒ no zoom.
+  const zoom = useSession((s) => s.plotZoom[panelId]);
 
   const boundChannelIds = useMemo(
     () => storedBindings ?? [],
@@ -420,14 +548,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     [boundChannels, axisOf],
   );
 
-  // How many distinct y-axes actually carry a bound channel. Drives the
-  // "Stack" toggle's visibility (offered only with ≥2 axes) and gates the
-  // band remap in the build effect — stacking a single axis is a no-op.
-  const usedAxisCount = useMemo(() => {
+  // The distinct y-axes that actually carry a bound channel, ascending.
+  // `usedAxisCount` drives the "Stack" toggle's visibility (offered only
+  // with ≥2 axes) and gates the band remap; the index list is the set of
+  // axes a "scale both" wheel over the plot area zooms.
+  const usedAxisIndices = useMemo(() => {
     const used = new Set<number>();
     for (const c of boundChannels) used.add(axisOf(c.id));
-    return used.size;
+    return [...used].sort((a, b) => a - b);
   }, [boundChannels, axisOf]);
+  const usedAxisCount = usedAxisIndices.length;
+  // Stacking is only meaningful (and only remaps the y-scales) with ≥2
+  // data-bearing axes; the wheel handler skips y-zoom while it's on,
+  // since each band already owns its axis's vertical slice.
+  const stacking = stackAxes && usedAxisCount >= 2;
+  const usedAxisIndicesRef = useRef(usedAxisIndices);
+  usedAxisIndicesRef.current = usedAxisIndices;
+  const stackingRef = useRef(stacking);
+  stackingRef.current = stacking;
 
   // Drop bindings that no longer map to a live scalar channel. Defence in
   // depth against stale ids left in the persisted layout (e.g. the user
@@ -467,6 +605,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // a ref rather than the closed-over `globalRangeSec`.
   const globalRangeSecRef = useRef<[number, number] | null>(globalRangeSec);
   globalRangeSecRef.current = globalRangeSec;
+  // The full timeline in ns (the x-zoom base + clamp bound) and the live
+  // zoom windows, read through refs so the scale `range` callbacks (baked
+  // in at build time) and the native wheel handler (attached once) always
+  // see current values without a rebuild / re-bind.
+  const globalRangeRef = useRef<TimeRange | null>(globalRange);
+  globalRangeRef.current = globalRange;
+  const zoomRef = useRef<PlotZoom | undefined>(zoom);
+  zoomRef.current = zoom;
   // uPlot bakes the axis `values` callback in at build time, but the mode
   // can flip without a rebuild — so the callback reads the live value
   // through a ref rather than the closed-over `timeMode`. The effect below
@@ -653,7 +799,6 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // zero bound channels.
     usedAxes.add(0);
     const axisOrder = [...usedAxes].sort((a, b) => a - b);
-    const groupOrder = axisOrder.map(scaleKeyForAxis);
 
     const sharedUnitFor = (axisIdx: number): string | undefined => {
       let shared: string | null | undefined;
@@ -676,7 +821,6 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     const dataAxisOrder = [
       ...new Set(boundChannels.map((c) => axisOf(c.id))),
     ].sort((a, b) => a - b);
-    const stacking = stackAxes && dataAxisOrder.length >= 2;
     const bandCount = dataAxisOrder.length;
     // Data extent per banded scale, recorded by the `range` callback and read
     // by each axis's tick/grid `filter` so an axis only labels (and grids) its
@@ -684,24 +828,36 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // empty space outside the band. Persists across redraws within this plot;
     // a rebuild gets a fresh map.
     const bandExtent = new Map<string, [number, number] | null>();
+    // Every y-scale carries a `range` callback (resolved synchronously inside
+    // `setData`, so the e2e/plot-sync specs can read `scales.y` straight off).
+    // Priority per axis: an explicit wheel/side-menu zoom window wins (overlay
+    // mode only — a stacked band already owns its axis's vertical slice, so
+    // per-band zoom is out of scope and skipped); else the stacked-band remap;
+    // else uPlot's own default auto-range (`rangeNum(d,d,0.1,true)` ≡ the
+    // built-in `snapNumY`), so an unzoomed, unstacked axis looks exactly as it
+    // did before this callback existed.
     const yScales: uPlot.Scales = {};
-    for (const key of groupOrder) yScales[key] = { auto: true };
-    if (stacking) {
-      dataAxisOrder.forEach((axisIdx, slot) => {
-        const key = scaleKeyForAxis(axisIdx);
-        yScales[key] = {
-          // uPlot passes the data extent for this scale; record it for the
-          // band filter, then remap it into the band. (Like the x-scale
-          // `range` below, this runs synchronously inside `setData`, so the
-          // resolved scale is readable immediately.)
-          range: (_u, dMin, dMax) => {
+    for (const axisIdx of axisOrder) {
+      const key = scaleKeyForAxis(axisIdx);
+      const isBandedAxis = stacking && dataAxisOrder.includes(axisIdx);
+      const slot = isBandedAxis ? dataAxisOrder.indexOf(axisIdx) : 0;
+      yScales[key] = {
+        auto: true,
+        range: (_u, dMin, dMax) => {
+          const z = zoomRef.current?.y?.[axisIdx];
+          if (z && !isBandedAxis) return [z.min, z.max];
+          if (isBandedAxis) {
             const lo = Number.isFinite(dMin) ? dMin : 0;
             const hi = Number.isFinite(dMax) ? dMax : 1;
             bandExtent.set(key, hi > lo ? [lo, hi] : null);
             return stackedBandRange(dMin, dMax, slot, bandCount);
-          },
-        };
-      });
+          }
+          if (!Number.isFinite(dMin) || !Number.isFinite(dMax)) {
+            return [null, null];
+          }
+          return uPlot.rangeNum(dMin, dMax, 0.1, true);
+        },
+      };
     }
 
     const yAxes: uPlot.Axis[] = axisOrder.map((axisIdx, idx) => {
@@ -766,7 +922,17 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           // fill the panel — it occupies only its real slice of absolute
           // time. Falls back to the data extent only before any source
           // has set a global range.
+          //
+          // A wheel/side-menu x-zoom narrows the domain to its window
+          // (converted ns → epoch seconds, the same precision the global
+          // range uses), taking precedence over the global pin.
           range: (_u, dataMin, dataMax) => {
+            const zx = zoomRef.current?.x;
+            if (zx) {
+              const lo = Number(zx.startNs) / 1e9;
+              const hi = Number(zx.endNs) / 1e9;
+              if (hi > lo) return [lo, hi];
+            }
             const r = globalRangeSecRef.current;
             if (r && r[1] > r[0]) return r;
             return [dataMin, dataMax];
@@ -819,6 +985,86 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seriesKey]);
+
+  // Apply wheel/side-menu zoom changes to the live plot. The scale `range`
+  // callbacks above read `zoomRef`, so re-resolving every scale via
+  // `setData(plot.data)` (resetScales defaults true) re-fits to the current
+  // zoom — or back to global/auto on reset — without a rebuild or refetch.
+  // A layout effect run synchronously (uPlot itself batches the actual
+  // canvas repaint through its own rAF, so a wheel burst still paints ≤1×
+  // per frame) so the rescale lands in the same commit as the React state
+  // change — no one-frame lag while wheeling. On mount `plotRef` is still
+  // null (the build effect runs after layout effects), so the first run is a
+  // no-op and the build/fetch path owns the initial draw.
+  //
+  // `publishSync` changes identity every cursor tick (it closes over
+  // `cursorNs`), so this reads it through a ref instead of depending on it —
+  // otherwise the rescale would re-fire on every scrub.
+  const publishSyncRef = useRef(publishSync);
+  publishSyncRef.current = publishSync;
+  useLayoutEffect(() => {
+    const plot = plotRef.current;
+    if (!plot) return;
+    mark(`plot:zoom:${panelId}`);
+    // `setData` alone defers its scale resolution to a microtask; `batch`
+    // runs uPlot's commit synchronously, so the re-resolved scales are
+    // readable immediately for the republish below.
+    plot.batch(() => {
+      plot.setData(plot.data);
+    });
+    // Re-publish so the sync snapshot's resolved `xScaleSec` / `yScale`
+    // reflect the post-rescale scales (the cursor-overlay effect's publish
+    // ran before this one, when the scales were still pre-zoom).
+    publishSyncRef.current();
+  }, [zoom, panelId]);
+
+  // Mouse-wheel zoom. A native, non-passive listener so it can
+  // `preventDefault()` the page scroll (React's synthetic onWheel is
+  // passive and can't). Attached once; reads geometry from the live uPlot
+  // and the rest through render-synced refs / `getState`, then writes the
+  // computed window(s) to the store — the layout effect above applies them.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onWheel = (e: WheelEvent) => {
+      const plot = plotRef.current;
+      const bound = globalRangeRef.current;
+      if (!plot || !bound) return;
+      const geom = buildZoomGeometry(plot);
+      if (!geom) return;
+      const rect = container.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const target = zoomTargetForPointer(geom, px, py);
+      if (target === null) return;
+      // Over an interactive region: take over the wheel from page scroll.
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1 / WHEEL_ZOOM_STEP : WHEEL_ZOOM_STEP;
+      const { fracX, fracTop } = plotFractions(geom, px, py);
+      const st = useSession.getState();
+      const z = st.plotZoom[panelId];
+      if (target.kind === "x" || target.kind === "both") {
+        const base = z?.x ?? bound;
+        st.setPlotZoomX(panelId, scaleWindowX(base, fracX, factor, bound));
+      }
+      // Y-zoom only in overlay mode — a stacked band owns its axis's slice.
+      if (
+        (target.kind === "y" || target.kind === "both") &&
+        !stackingRef.current
+      ) {
+        const axes =
+          target.kind === "y" ? [target.axisIdx] : usedAxisIndicesRef.current;
+        for (const axisIdx of axes) {
+          const key = scaleKeyForAxis(axisIdx);
+          const base = z?.y?.[axisIdx] ?? readResolvedScale(plot, key);
+          if (!base) continue;
+          st.setPlotZoomY(panelId, axisIdx, scaleWindowY(base, fracTop, factor));
+        }
+      }
+    };
+    container.addEventListener("wheel", onWheel, { passive: false });
+    return () => container.removeEventListener("wheel", onWheel);
+  }, [panelId]);
 
   // Repaint axis labels when the relative/absolute mode flips. The plot
   // instance and its data are untouched — only the tick formatter's output
@@ -930,7 +1176,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
-    const range = lastRangeRef.current ?? globalRange;
+    // Project the cursor/hover over the VISIBLE x-window: when x is zoomed
+    // the drawing area spans `zoom.x` (a sub-range of the fetched global
+    // range), so a cursor outside that window resolves to `null` and draws
+    // nothing (correctly off-screen). Unzoomed it's the full fetched range.
+    const range = zoom?.x ?? lastRangeRef.current ?? globalRange;
     if (!range) return;
     const bbox = plot.bbox;
     // uPlot's bbox is in device pixels; convert to CSS pixels for the
@@ -970,7 +1220,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.moveTo(left + x + 0.5, top);
     ctx.lineTo(left + x + 0.5, top + height);
     ctx.stroke();
-  }, [cursorNs, hoverNs, globalRange, seriesKey, publishSync]);
+    // `zoom` is a dep so the cursor/crosshair reproject after a wheel zoom
+    // (which changes the visible window without touching cursorNs).
+  }, [cursorNs, hoverNs, globalRange, seriesKey, publishSync, zoom]);
 
   // Drop this panel's sync snapshot on unmount so stale ids don't leak
   // into a test after a panel is closed.
@@ -1028,7 +1280,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     (clientX: number): bigint | null => {
       const plot = plotRef.current;
       const container = containerRef.current;
-      const range = lastRangeRef.current ?? globalRange;
+      // Map over the VISIBLE window so a drag-scrub while zoomed lands on
+      // the instant under the pointer (not on the full fetched range).
+      const range = zoomRef.current?.x ?? lastRangeRef.current ?? globalRange;
       if (!plot || !container || !range) return null;
       const rect = container.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -1346,6 +1600,24 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       >
         <div ref={plotMountRef} className={styles.plotMount} />
         <canvas ref={overlayRef} className={styles.overlay} />
+        {isPlotZoomed(zoom) && (
+          <button
+            type="button"
+            className={styles.resetZoom}
+            // Sits above the (pointer-events:none) overlay; stop the
+            // pointerdown so a click here doesn't also start a drag-scrub
+            // on the plot area beneath it.
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.stopPropagation();
+              useSession.getState().resetPlotZoom(panelId);
+            }}
+            data-testid="plot-reset-zoom"
+            title="Reset zoom to fit"
+          >
+            Reset zoom
+          </button>
+        )}
         {dragOver && (
           <div
             className={styles.dropHint}

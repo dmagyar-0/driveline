@@ -205,6 +205,35 @@
   font-size: 0.9rem;
 }
 
+/* Reset-zoom affordance: shown in the plot's top-right corner only while a
+   scale is wheel-zoomed. Sits above the overlay canvas (which is
+   pointer-events:none) so it stays clickable; the component stops pointer
+   propagation so a click can't start a drag-scrub on the area beneath it. */
+.resetZoom {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 4;
+  pointer-events: auto;
+  background: var(--color-bg-1);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.resetZoom:hover {
+  background: var(--color-bg-5);
+  color: var(--color-fg-1);
+}
+
+.resetZoom:focus-visible {
+  outline: 2px solid var(--color-accent-orange);
+  outline-offset: 2px;
+}
+
 /* P3 · floating hover tooltip. Positioned absolutely within `.plotArea`
    via inline left/top (pointer-relative). Never intercepts the pointer so
    it can't break the hover it's reporting. */
