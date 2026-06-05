@@ -67,6 +67,45 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Centred status overlay for loading / error / no-data states. Sits above
+ * the tiles (Leaflet panes top out around z-index 700) but below the
+ * attribution control. Pointer-events stay off so the map underneath is
+ * still pannable while a transient "Loading…" shows. */
+.statusOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 450;
+  max-width: 80%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  text-align: center;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-6);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--color-fg-3);
+  pointer-events: none;
+}
+
+.statusIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-red, #f87171);
+  color: var(--color-bg-0, #0b0b0b);
+  font-weight: 700;
+  font-size: var(--fs-11);
+}
+
 /* Leaflet's default tiles render fine on the dark theme, but the
  * attribution control needs a darker background than its CSS default
  * so it remains legible on the dark canvas behind it. */

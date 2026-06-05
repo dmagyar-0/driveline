@@ -24,7 +24,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { Channel, SourceMeta, TimeRange } from "../state/store";
-import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
+import { decodeSeries, type PlotSeries } from "./seriesFromArrow";
 import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 import { colorFor, MAX_PLOT_SERIES } from "./palette";
 import styles from "./EnumPanel.module.css";
@@ -45,10 +45,7 @@ const LABEL_FONT =
 // we paint the value inside it — avoids labels crowding segment edges.
 const LABEL_PAD = 8;
 
-function findChannel(
-  sources: SourceMeta[],
-  channelId: string,
-): Channel | null {
+function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
   for (const s of sources) {
     const hit = s.channels.find((c) => c.id === channelId);
     if (hit) return hit;
@@ -67,40 +64,58 @@ function readableTextColor(hex: string): string {
   return lum > 0.6 ? "#0b0b0b" : "#ffffff";
 }
 
-interface Segment {
+// Colour rendered for a "no data" gap (consecutive NaN/non-finite samples).
+// A neutral dark fill, visually distinct from any palette state colour.
+const GAP_COLOR = "#2a2a2e";
+
+export interface Segment {
   startNs: bigint;
   endNs: bigint;
-  value: number;
+  // `null` marks a "no data" gap (NaN / non-finite samples coalesced).
+  value: number | null;
   color: string;
+}
+
+// Two samples belong to the same segment when they are the same finite value,
+// OR both are non-finite (NaN / ±Inf) — so a run of NaN coalesces into one
+// gap rather than fragmenting into one segment per sample (NaN !== NaN).
+function sameState(a: number, b: number): boolean {
+  const aFin = Number.isFinite(a);
+  const bFin = Number.isFinite(b);
+  if (!aFin && !bFin) return true;
+  if (aFin !== bFin) return false;
+  return a === b;
+}
+
+function segmentFor(value: number, startNs: bigint, endNs: bigint): Segment {
+  const isGap = !Number.isFinite(value);
+  return {
+    startNs,
+    endNs,
+    value: isGap ? null : value,
+    color: isGap ? GAP_COLOR : colorFor(String(value)),
+  };
 }
 
 // Walk the decoded series, coalescing consecutive samples with the same
 // value into a single segment so a 10 k-sample binary channel becomes a
-// handful of fills rather than 10 k of them.
-function segmentsFor(series: PlotSeries, rangeEndNs: bigint): Segment[] {
+// handful of fills rather than 10 k of them. Runs of NaN/non-finite samples
+// collapse into a single "no data" gap segment instead of thousands of
+// `colorFor("NaN")` fills.
+export function segmentsFor(series: PlotSeries, rangeEndNs: bigint): Segment[] {
   const out: Segment[] = [];
   if (series.ys.length === 0) return out;
   let curValue = series.ys[0];
   let curStart = series.rawTsNs[0];
   for (let i = 1; i < series.ys.length; i++) {
     const v = series.ys[i];
-    if (v !== curValue) {
-      out.push({
-        startNs: curStart,
-        endNs: series.rawTsNs[i],
-        value: curValue,
-        color: colorFor(String(curValue)),
-      });
+    if (!sameState(v, curValue)) {
+      out.push(segmentFor(curValue, curStart, series.rawTsNs[i]));
       curValue = v;
       curStart = series.rawTsNs[i];
     }
   }
-  out.push({
-    startNs: curStart,
-    endNs: rangeEndNs,
-    value: curValue,
-    color: colorFor(String(curValue)),
-  });
+  out.push(segmentFor(curValue, curStart, rangeEndNs));
   return out;
 }
 
@@ -122,6 +137,9 @@ function EnumLane({ channel, range }: EnumLaneProps) {
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const segmentsRef = useRef<Segment[]>([]);
   const [renderTick, setRenderTick] = useState(0);
+  // Lane-level status so a schema/dtype mismatch surfaces as a visible error
+  // instead of a silently blank strip. `null` = healthy.
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   // Keep both canvases sized to the strip wrapper.
   useEffect(() => {
@@ -154,10 +172,28 @@ function EnumLane({ channel, range }: EnumLaneProps) {
           .getState()
           .fetchChannelRange(channel.id, range.startNs, range.endNs, false);
         if (aborted) return;
-        segmentsRef.current = segmentsFor(seriesFromArrow(bytes), range.endNs);
+        const decoded = decodeSeries(bytes);
+        if (!decoded.ok) {
+          // A genuine schema/dtype mismatch (e.g. a vector channel bound
+          // here, or a corrupt batch): clear the strip and show the reason
+          // rather than rendering blank or garbage.
+          segmentsRef.current = [];
+          setErrorMsg(decoded.message);
+          setRenderTick((n) => n + 1);
+          return;
+        }
+        segmentsRef.current = segmentsFor(decoded, range.endNs);
+        setErrorMsg(null);
         setRenderTick((n) => n + 1);
       } catch (err) {
-        if (!aborted) console.error("EnumPanel fetch failed", err);
+        if (!aborted) {
+          console.error("EnumPanel fetch failed", err);
+          segmentsRef.current = [];
+          setErrorMsg(
+            err instanceof Error ? err.message : "Failed to load channel.",
+          );
+          setRenderTick((n) => n + 1);
+        }
       }
     })();
     return () => {
@@ -184,17 +220,25 @@ function EnumLane({ channel, range }: EnumLaneProps) {
     ctx.textBaseline = "middle";
     ctx.font = LABEL_FONT;
     for (const seg of segments) {
-      const x0 = (Number(seg.startNs - range.startNs) / span) * w;
-      const x1 = (Number(seg.endNs - range.startNs) / span) * w;
-      const segW = x1 - x0;
+      // Clamp to the visible range and order the edges so an out-of-order
+      // timestamp can never produce a negative-width rect (which paints
+      // backwards / not at all on some canvas impls).
+      const rawX0 = (Number(seg.startNs - range.startNs) / span) * w;
+      const rawX1 = (Number(seg.endNs - range.startNs) / span) * w;
+      const lo = Math.max(0, Math.min(rawX0, rawX1));
+      const hi = Math.min(w, Math.max(rawX0, rawX1));
+      const segW = hi - lo;
+      if (segW <= 0) continue;
       ctx.fillStyle = seg.color;
-      ctx.fillRect(Math.floor(x0), 0, Math.max(1, Math.ceil(segW)), h);
-      // Label the state inside the segment when there's room — turns the
-      // colour blocks into a readable state track.
+      ctx.fillRect(Math.floor(lo), 0, Math.max(1, Math.ceil(segW)), h);
+      // A "no data" gap (seg.value === null) gets the neutral fill but no
+      // label. Otherwise label the state inside the segment when there's
+      // room — turns the colour blocks into a readable state track.
+      if (seg.value === null) continue;
       const label = String(seg.value);
       if (segW >= ctx.measureText(label).width + LABEL_PAD) {
         ctx.fillStyle = readableTextColor(seg.color);
-        ctx.fillText(label, (x0 + x1) / 2, h / 2 + 0.5);
+        ctx.fillText(label, (lo + hi) / 2, h / 2 + 0.5);
       }
     }
   }, [renderTick, range]);
@@ -240,7 +284,7 @@ function EnumLane({ channel, range }: EnumLaneProps) {
         >
           {channel.name}
         </span>
-        {currentSeg !== null ? (
+        {currentSeg !== null && currentSeg.value !== null ? (
           <span className={styles.currentPill} data-testid="enum-current">
             <span
               className={styles.swatch}
@@ -253,13 +297,24 @@ function EnumLane({ channel, range }: EnumLaneProps) {
           </span>
         ) : (
           <span className={styles.currentPillMuted} data-testid="enum-current">
-            <span className={styles.currentLabel}>—</span>
+            <span className={styles.currentLabel}>
+              {currentSeg !== null ? "no data" : "—"}
+            </span>
           </span>
         )}
       </div>
       <div ref={wrapRef} className={styles.stripWrap}>
         <canvas ref={stripRef} className={styles.strip} />
         <canvas ref={overlayRef} className={styles.overlay} />
+        {errorMsg !== null && (
+          <div
+            className={styles.laneError}
+            role="alert"
+            data-testid="enum-error"
+          >
+            {errorMsg}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -281,14 +336,14 @@ export function EnumPanel({ panelId }: EnumPanelProps) {
     [boundIds, sources],
   );
 
-  // Drop bindings that no longer map to a live scalar channel. Gate on
+  // Drop bindings that no longer map to a live scalar/enum channel. Gate on
   // `sources.length > 0` so a fresh hydrate (channels list empty) doesn't
   // wipe a persisted binding before the user has dropped a file.
   useEffect(() => {
     if (sources.length === 0) return;
     const filtered = boundIds.filter((id) => {
       const c = findChannel(sources, id);
-      return c !== null && c.kind === "scalar";
+      return c !== null && (c.kind === "scalar" || c.kind === "enum");
     });
     if (filtered.length !== boundIds.length) {
       setEnumBinding(panelId, filtered);
@@ -303,7 +358,7 @@ export function EnumPanel({ panelId }: EnumPanelProps) {
         <div className={styles.empty} data-testid="enum-empty">
           <p className={styles.emptyTitle}>Enum</p>
           <p className={styles.emptyBody}>
-            Bind scalar channels from the Panel drawer (up to{" "}
+            Bind scalar or enum channels from the Panel drawer (up to{" "}
             {MAX_PLOT_SERIES}). Each becomes its own state strip.
           </p>
         </div>

@@ -151,6 +151,9 @@ const CHUNK_CACHE_CAP: usize = 8;
 /// can't grow unbounded.
 const VALUE_CACHE_CAP: usize = 256;
 
+/// One parsed-sample cache entry: `((segment index, mcap channel id), time-sorted samples)`.
+type ValueCacheEntry = ((usize, u16), Rc<Vec<(i64, ParsedValue)>>);
+
 pub struct McapReader {
     /// Source of record bytes. `RefCell` because reads take `&mut R` while the
     /// public methods only have `&self`. Never holds the whole file.
@@ -166,7 +169,7 @@ pub struct McapReader {
     /// FIFO cache of parsed signal samples, keyed by `(segment index, mcap
     /// channel id)`. Time-sorted within each entry. Makes repeated pan/seek
     /// fetches over the same window cheap (no re-parse).
-    value_cache: RefCell<VecDeque<((usize, u16), Rc<Vec<(i64, ParsedValue)>>)>>,
+    value_cache: RefCell<VecDeque<ValueCacheEntry>>,
 }
 
 impl McapReader {
@@ -912,9 +915,9 @@ fn is_keyframe(annex_b: &[u8]) -> bool {
         }
         let nal_type = annex_b[sc_end] & 0x1F;
         match nal_type {
-            5 | 7 => return true,          // IDR slice or SPS
-            1 | 2 | 3 | 4 => return false, // Non-IDR VCL slice
-            _ => {}                        // AUD (9), PPS (8), SEI (6), etc. — keep scanning.
+            5 | 7 => return true,  // IDR slice or SPS
+            1..=4 => return false, // Non-IDR VCL slice
+            _ => {}                // AUD (9), PPS (8), SEI (6), etc. — keep scanning.
         }
         i = sc_end + 1;
     }
@@ -1010,7 +1013,7 @@ fn build_vector_ipc(
     for v in values {
         match v {
             ParsedValue::Vector(inner) if inner.len() == n => flat.extend_from_slice(inner),
-            _ => flat.extend(std::iter::repeat(f64::NAN).take(n)),
+            _ => flat.extend(std::iter::repeat_n(f64::NAN, n)),
         }
     }
     let child = Arc::new(Float64Array::from(flat));

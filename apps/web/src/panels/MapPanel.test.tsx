@@ -9,7 +9,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import type { ReactNode } from "react";
 
@@ -31,6 +33,12 @@ vi.mock("react-leaflet", () => ({
       data-color={pathOptions?.color ?? ""}
     />
   ),
+  CircleMarker: ({ center }: { center: [number, number] }) => (
+    <div
+      data-testid="mock-cursor-marker"
+      data-center={`${center[0]},${center[1]}`}
+    />
+  ),
   useMap: () => ({
     fitBounds: () => undefined,
   }),
@@ -38,10 +46,16 @@ vi.mock("react-leaflet", () => ({
 
 vi.mock("leaflet/dist/leaflet.css", () => ({}));
 
+// Mock the decoder so a fetch resolves to a deterministic track (lat/lon
+// share a timestamp axis). `decodeSeries` returns the tagged result the
+// panel now consumes.
 vi.mock("./seriesFromArrow", () => ({
-  seriesFromArrow: () => ({
+  decodeSeries: () => ({
+    ok: true,
+    kind: "scalar",
     xs: new Float64Array([0, 1, 2]),
     ys: new Float64Array([10, 20, 30]),
+    rawTsNs: new BigInt64Array([0n, 500_000_000n, 1_000_000_000n]),
   }),
 }));
 
@@ -162,5 +176,40 @@ describe("MapPanel", () => {
     render(<MapPanel panelId="map-1" />);
     const poly = await screen.findByTestId("mock-polyline");
     expect(poly.getAttribute("data-color")).toBe(colorFor("map-1"));
+  });
+
+  it("renders a cursor marker at the GPS fix for the current cursorNs", async () => {
+    seed();
+    useSession.setState({
+      fetchChannelRange: async () => new Uint8Array(),
+      // Cursor at 1s lands on the last decoded sample (ts 1_000_000_000n).
+      cursorNs: 1_000_000_000n,
+    });
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/gps/lat",
+      lonChannelId: "/gps/lon",
+    });
+    render(<MapPanel panelId="map-1" />);
+    const marker = await screen.findByTestId("mock-cursor-marker");
+    // Mocked decode: lat ys === lon ys === [10,20,30]; the fix at 1s is 30.
+    expect(marker.getAttribute("data-center")).toBe("30,30");
+  });
+
+  it("shows an error overlay when the fetch rejects", async () => {
+    seed();
+    useSession.setState({
+      fetchChannelRange: async () => {
+        throw new Error("worker exploded");
+      },
+    });
+    useSession.getState().setMapBinding("map-1", {
+      latChannelId: "/gps/lat",
+      lonChannelId: "/gps/lon",
+    });
+    render(<MapPanel panelId="map-1" />);
+    const err = await screen.findByTestId("map-error");
+    expect(err.textContent).toContain("worker exploded");
+    // No stale polyline alongside the error.
+    expect(screen.queryByTestId("mock-polyline")).toBeNull();
   });
 });

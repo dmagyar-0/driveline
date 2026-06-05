@@ -15,7 +15,12 @@ apps/web/.vite
 # project's tsconfig.json).
 *.tsbuildinfo
 
-# wasm-pack output (generated; regenerate with `pnpm wasm:build`)
+# wasm-pack output. This is a generated build artefact, NOT committed: the
+# `.wasm` is multi-MB and would bloat history. Regenerate with `pnpm wasm:build`
+# (or `:dev`). `pnpm build` and CI build it before tsc/Vite. Only `.gitkeep`
+# is tracked so the directory exists on a fresh checkout. (wasm-pack also
+# drops its own `apps/web/src/wasm/.gitignore` containing `*`, which is
+# consistent with this — the whole dir's contents stay untracked.)
 apps/web/src/wasm/*
 !apps/web/src/wasm/.gitkeep
 

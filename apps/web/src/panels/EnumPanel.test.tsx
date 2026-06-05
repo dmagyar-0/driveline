@@ -7,7 +7,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 vi.hoisted(() => {
   const g = globalThis as unknown as { ResizeObserver: unknown };
@@ -18,7 +20,8 @@ vi.hoisted(() => {
   };
 });
 
-import { EnumPanel } from "./EnumPanel";
+import { EnumPanel, segmentsFor } from "./EnumPanel";
+import type { PlotSeries } from "./seriesFromArrow";
 import { useSession, type SourceMeta } from "../state/store";
 
 const SOURCE: SourceMeta = {
@@ -50,6 +53,17 @@ const SOURCE: SourceMeta = {
       sampleCount: 5,
       timeRange: { startNs: 0n, endNs: 1_000_000_000n },
     },
+    {
+      id: "/state/drive_mode",
+      nativeId: "/state/drive_mode",
+      sourceId: "src-a",
+      name: "drive_mode",
+      kind: "enum",
+      dtype: "i32",
+      unit: null,
+      sampleCount: 5,
+      timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+    },
   ],
 };
 
@@ -77,9 +91,7 @@ describe("EnumPanel", () => {
     seed();
     useSession.getState().setEnumBinding("enum-1", ["/state/gear"]);
     render(<EnumPanel panelId="enum-1" />);
-    expect(screen.getByTestId("enum-channel-name").textContent).toBe(
-      "gear",
-    );
+    expect(screen.getByTestId("enum-channel-name").textContent).toBe("gear");
   });
 
   it("renders one lane per bound channel", () => {
@@ -124,5 +136,59 @@ describe("EnumPanel", () => {
     expect(useSession.getState().enumBindings["enum-1"]).toEqual([
       "/persisted",
     ]);
+  });
+
+  it("admits an enum-kind channel binding and renders its lane", () => {
+    seed();
+    useSession.getState().setEnumBinding("enum-1", ["/state/drive_mode"]);
+    render(<EnumPanel panelId="enum-1" />);
+    // The cull effect keeps enum-kind bindings (not only scalar).
+    expect(useSession.getState().enumBindings["enum-1"]).toEqual([
+      "/state/drive_mode",
+    ]);
+    expect(screen.getByTestId("enum-channel-name").textContent).toBe(
+      "drive_mode",
+    );
+  });
+});
+
+// `series` factory: build a minimal PlotSeries from parallel ys/ts arrays.
+function series(ys: number[], tsNs: bigint[]): PlotSeries {
+  return {
+    kind: "scalar",
+    xs: new Float64Array(ys.length),
+    ys: new Float64Array(ys),
+    rawTsNs: BigInt64Array.from(tsNs),
+  };
+}
+
+describe("EnumPanel · segmentsFor", () => {
+  it("coalesces consecutive equal values into one segment", () => {
+    const segs = segmentsFor(series([1, 1, 1, 2, 2], [0n, 1n, 2n, 3n, 4n]), 5n);
+    expect(segs.map((s) => s.value)).toEqual([1, 2]);
+    expect(segs[0]).toMatchObject({ startNs: 0n, endNs: 3n });
+    expect(segs[1]).toMatchObject({ startNs: 3n, endNs: 5n });
+  });
+
+  it("coalesces a run of NaN into a single gap segment (value === null)", () => {
+    const segs = segmentsFor(
+      series([NaN, NaN, NaN, NaN], [0n, 1n, 2n, 3n]),
+      4n,
+    );
+    expect(segs).toHaveLength(1);
+    expect(segs[0].value).toBeNull();
+    // No `colorFor("NaN")` — gaps get the neutral gap colour.
+    expect(segs[0].color).not.toBe("NaN");
+  });
+
+  it("separates a NaN gap from surrounding finite states", () => {
+    const segs = segmentsFor(series([1, NaN, NaN, 2], [0n, 1n, 2n, 3n]), 4n);
+    expect(segs.map((s) => s.value)).toEqual([1, null, 2]);
+  });
+
+  it("treats Infinity as a gap too", () => {
+    const segs = segmentsFor(series([Infinity, -Infinity], [0n, 1n]), 2n);
+    expect(segs).toHaveLength(1);
+    expect(segs[0].value).toBeNull();
   });
 });

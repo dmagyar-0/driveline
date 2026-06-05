@@ -37,10 +37,13 @@ the full design.
 | Verify fixtures fresh | `make fixtures-check` |
 | Bootstrap test deps | `scripts/setup-test-env.sh` (idempotent) |
 
-**IMPORTANT:** `pnpm dev` needs the WASM bundle present. On a fresh checkout
-or after touching `crates/`, run `pnpm wasm:build` (or `:dev`) first. The
-generated bundle in `apps/web/src/wasm/` **is checked into git** so editors,
-CI, and tests work without `wasm-pack` — don't add it to `.gitignore`.
+**IMPORTANT:** `pnpm dev`, `pnpm --filter web build`, and `tsc` all need the
+WASM bundle present. The generated bundle in `apps/web/src/wasm/` is **NOT
+committed to git** — it's a build artefact (the `.wasm` is multi-MB and would
+bloat history) and is `.gitignore`d. On a fresh checkout, after touching
+`crates/`, or in CI, run `pnpm wasm:build` (or `:dev`) **before** anything that
+imports the bundle. `pnpm build` already does this (`pnpm wasm:build && pnpm
+--filter web build`), and CI regenerates it as a dedicated step.
 
 ## Hard rules
 

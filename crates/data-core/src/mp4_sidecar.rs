@@ -23,9 +23,7 @@ use std::io::Cursor;
 use mp4::{Mp4Reader as Mp4Parser, TrackType};
 
 use crate::reader::{ArrowIpc, Reader};
-use crate::types::{
-    Channel, ChannelId, ChannelKind, FetchOpts, SourceKind, SourceMeta, TimeRange,
-};
+use crate::types::{Channel, ChannelId, ChannelKind, FetchOpts, SourceKind, SourceMeta, TimeRange};
 
 /// Per-sample sample-table data extracted at open time. Parallel arrays
 /// keyed by sample index (0-based, matching `pts_ns`). `offset` is an
@@ -247,8 +245,7 @@ fn build_sample_index(track: &mp4::Mp4Track) -> crate::Result<Mp4SampleIndex> {
     // The `mp4` crate pre-populates `StscEntry::first_sample` (see
     // `mp4-0.14.0/src/track.rs:817`) so we don't have to derive it
     // ourselves here.
-    let mut offsets: Vec<u64> = Vec::with_capacity(count);
-    offsets.resize(count, 0);
+    let mut offsets: Vec<u64> = vec![0; count];
 
     if stsc.entries.is_empty() {
         // No stsc means no samples — must agree with stsz.sample_count.
@@ -264,34 +261,130 @@ fn build_sample_index(track: &mp4::Mp4Track) -> crate::Result<Mp4SampleIndex> {
         });
     }
 
-    let total_chunks = chunk_offsets.len();
+    // All arithmetic below operates on attacker-controlled `moov` table
+    // values, so every step uses checked operations and explicit bounds
+    // validation. A malformed `moov` (e.g. `first_chunk == 0`, descending
+    // `first_chunk`, a `samples_per_chunk` that overflows when scaled, or a
+    // chunk/sample index past the end of the offset/size tables) returns a
+    // descriptive `Err` instead of wrapping silently in the release WASM
+    // build or panicking on an out-of-bounds index.
+    let total_chunks = chunk_offsets.len() as u32;
+    let mut prev_first_chunk: Option<u32> = None;
     for (entry_idx, entry) in stsc.entries.iter().enumerate() {
         let first_chunk = entry.first_chunk;
         let samples_per_chunk = entry.samples_per_chunk;
+
+        // Chunk ids are 1-based (ISO/IEC 14496-12 §8.7.4); `first_chunk == 0`
+        // would underflow the `chunk_id - 1` index below.
+        if first_chunk == 0 {
+            return Err(crate::Error::Mp4MalformedSampleTable(format!(
+                "stsc entry {entry_idx} has first_chunk == 0 (chunk ids are 1-based)"
+            )));
+        }
+        // `first_chunk` must be strictly increasing across stsc entries.
+        // Non-monotonic ordering breaks the half-open `first_chunk..=last_chunk`
+        // chunk-range derivation (a descending value would underflow
+        // `next.first_chunk - 1`).
+        if let Some(prev) = prev_first_chunk {
+            if first_chunk <= prev {
+                return Err(crate::Error::Mp4MalformedSampleTable(format!(
+                    "stsc first_chunk not strictly increasing: entry {entry_idx} \
+                     has first_chunk {first_chunk} <= previous {prev}"
+                )));
+            }
+        }
+        prev_first_chunk = Some(first_chunk);
+
+        // `first_chunk` must reference a chunk that actually exists in the
+        // `stco`/`co64` table. If it points past the end, the
+        // `first_chunk..=last_chunk` range below is either empty (for the
+        // final entry, where `last_chunk == total_chunks < first_chunk`) or
+        // would dereference a missing chunk offset. An empty range would
+        // silently leave sample offsets at 0 — i.e. wrong byte offsets that
+        // make JS read garbage — so reject it explicitly rather than
+        // returning a structurally-broken index.
+        if first_chunk > total_chunks {
+            return Err(crate::Error::Mp4MalformedSampleTable(format!(
+                "stsc entry {entry_idx} first_chunk {first_chunk} exceeds the \
+                 {total_chunks}-chunk stco/co64 table"
+            )));
+        }
+
         let last_chunk = if entry_idx + 1 < stsc.entries.len() {
-            stsc.entries[entry_idx + 1].first_chunk - 1
+            // `next.first_chunk >= 1` is guaranteed by the `first_chunk == 0`
+            // check applied to every entry, so this subtraction cannot
+            // underflow; use `checked_sub` defensively regardless.
+            stsc.entries[entry_idx + 1]
+                .first_chunk
+                .checked_sub(1)
+                .ok_or_else(|| {
+                    crate::Error::Mp4MalformedSampleTable(format!(
+                        "stsc entry {} first_chunk underflow",
+                        entry_idx + 1
+                    ))
+                })?
         } else {
-            total_chunks as u32
+            total_chunks
         };
 
         for chunk_id in first_chunk..=last_chunk {
-            let chunk_offset = *chunk_offsets
-                .get(chunk_id as usize - 1)
-                .ok_or(crate::Error::Mp4(mp4::Error::InvalidData(
-                    "stsc references chunk beyond stco/co64 table",
-                )))?;
+            let chunk_idx = (chunk_id as usize).checked_sub(1).ok_or_else(|| {
+                crate::Error::Mp4MalformedSampleTable("stsc chunk_id underflow".to_string())
+            })?;
+            let chunk_offset = *chunk_offsets.get(chunk_idx).ok_or_else(|| {
+                crate::Error::Mp4MalformedSampleTable(format!(
+                    "stsc references chunk {chunk_id} beyond stco/co64 table of \
+                     {total_chunks} chunks"
+                ))
+            })?;
 
-            let first_sample_in_chunk =
-                entry.first_sample + (chunk_id - first_chunk) * samples_per_chunk;
+            // first_sample_in_chunk = entry.first_sample
+            //     + (chunk_id - first_chunk) * samples_per_chunk
+            let chunk_delta = chunk_id.checked_sub(first_chunk).ok_or_else(|| {
+                crate::Error::Mp4MalformedSampleTable("stsc chunk delta underflow".to_string())
+            })?;
+            let sample_offset_in_entry =
+                chunk_delta.checked_mul(samples_per_chunk).ok_or_else(|| {
+                    crate::Error::Mp4MalformedSampleTable(format!(
+                        "stsc entry {entry_idx}: samples_per_chunk {samples_per_chunk} \
+                         overflows when scaled by chunk count"
+                    ))
+                })?;
+            let first_sample_in_chunk = entry
+                .first_sample
+                .checked_add(sample_offset_in_entry)
+                .ok_or_else(|| {
+                    crate::Error::Mp4MalformedSampleTable(format!(
+                        "stsc entry {entry_idx}: first_sample overflow"
+                    ))
+                })?;
+
             let mut running_offset = chunk_offset;
             for k in 0..samples_per_chunk {
-                let sid = first_sample_in_chunk + k;
+                let sid = match first_sample_in_chunk.checked_add(k) {
+                    Some(sid) => sid,
+                    None => break,
+                };
                 if sid as usize > count {
                     break;
                 }
-                let idx = sid as usize - 1;
+                // `sid >= 1` here: `first_sample` is 1-based and `k >= 0`, so
+                // the subtraction is safe, but stay checked on principle.
+                let idx = (sid as usize).checked_sub(1).ok_or_else(|| {
+                    crate::Error::Mp4MalformedSampleTable("sample id underflow".to_string())
+                })?;
+                // `idx < count` is guaranteed by the `sid > count` break above,
+                // and `offsets`/`sizes` are both length `count`.
                 offsets[idx] = running_offset;
-                running_offset += sizes[idx] as u64;
+                running_offset =
+                    running_offset
+                        .checked_add(sizes[idx] as u64)
+                        .ok_or_else(|| {
+                            crate::Error::Mp4MalformedSampleTable(
+                                "running chunk offset overflow while summing sample sizes"
+                                    .to_string(),
+                            )
+                        })?;
             }
         }
     }
@@ -328,10 +421,12 @@ fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>>
 
         let mut parts = line.splitn(3, '\t');
         let frame_str = parts.next().expect("splitn yields at least one element");
-        let ts_str = parts.next().ok_or_else(|| crate::Error::SidecarMalformedLine {
-            line_no: idx,
-            reason: "missing timestamp column (expected `<frame>\\t<ts_ns>`)".to_string(),
-        })?;
+        let ts_str = parts
+            .next()
+            .ok_or_else(|| crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: "missing timestamp column (expected `<frame>\\t<ts_ns>`)".to_string(),
+            })?;
         if parts.next().is_some() {
             return Err(crate::Error::SidecarMalformedLine {
                 line_no: idx,
@@ -339,12 +434,14 @@ fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>>
             });
         }
 
-        let frame: usize = frame_str.trim().parse().map_err(|_| {
-            crate::Error::SidecarMalformedLine {
-                line_no: idx,
-                reason: format!("frame column {frame_str:?} is not a non-negative integer"),
-            }
-        })?;
+        let frame: usize =
+            frame_str
+                .trim()
+                .parse()
+                .map_err(|_| crate::Error::SidecarMalformedLine {
+                    line_no: idx,
+                    reason: format!("frame column {frame_str:?} is not a non-negative integer"),
+                })?;
         if frame != pts_ns.len() {
             return Err(crate::Error::SidecarMalformedLine {
                 line_no: idx,
@@ -355,14 +452,13 @@ fn parse_sidecar_text(bytes: &[u8], mp4_count: usize) -> crate::Result<Vec<i64>>
             });
         }
 
-        let ts_ns: i64 =
-            ts_str
-                .trim()
-                .parse()
-                .map_err(|_| crate::Error::SidecarMalformedLine {
-                    line_no: idx,
-                    reason: format!("timestamp column {ts_str:?} is not an i64"),
-                })?;
+        let ts_ns: i64 = ts_str
+            .trim()
+            .parse()
+            .map_err(|_| crate::Error::SidecarMalformedLine {
+                line_no: idx,
+                reason: format!("timestamp column {ts_str:?} is not an i64"),
+            })?;
         pts_ns.push(ts_ns);
     }
 
@@ -732,7 +828,11 @@ mod tests {
         let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
         assert_eq!(
             r.pts_ns(),
-            &[1777112584089512192i64, 1777112584122845525, 1777112584156178858]
+            &[
+                1777112584089512192i64,
+                1777112584122845525,
+                1777112584156178858
+            ]
         );
     }
 
@@ -819,5 +919,141 @@ mod tests {
             }
             other => panic!("expected SidecarMalformedLine, got {other:?}"),
         }
+    }
+
+    // ---- Malformed-moov hardening (T1: unchecked integer arithmetic) ----
+    //
+    // These fixtures take a *valid* synth mp4 and surgically corrupt its
+    // `stsc`/`stco` sample tables, mimicking an attacker-supplied `moov`.
+    // The reader must reject each one with a clean `Err` — never wrap a
+    // byte offset silently (release WASM) or panic on an out-of-bounds
+    // index. We accept either the new `Mp4MalformedSampleTable` variant or
+    // the upstream `Mp4` parse error (the `mp4` crate already `checked_*`s a
+    // few of these at parse time), but never a panic and never `Ok`.
+
+    /// Locate the first occurrence of a 4-byte box type (e.g. `b"stsc"`)
+    /// and return the index of the byte *immediately after* the type tag,
+    /// i.e. the start of the box body. Panics if the tag is absent.
+    fn find_box_body(buf: &[u8], fourcc: &[u8; 4]) -> usize {
+        buf.windows(4)
+            .position(|w| w == fourcc)
+            .map(|p| p + 4)
+            .unwrap_or_else(|| panic!("box {:?} not found in synth mp4", fourcc))
+    }
+
+    /// Overwrite a big-endian u32 at `pos` in place.
+    fn put_u32(buf: &mut [u8], pos: usize, val: u32) {
+        buf[pos..pos + 4].copy_from_slice(&val.to_be_bytes());
+    }
+
+    /// Read a big-endian u32 at `pos`.
+    fn get_u32(buf: &[u8], pos: usize) -> u32 {
+        u32::from_be_bytes(buf[pos..pos + 4].try_into().unwrap())
+    }
+
+    /// stsc body layout after the `stsc` tag:
+    ///   [version+flags: 4][entry_count: 4]
+    ///   then `entry_count` × [first_chunk: 4][samples_per_chunk: 4][sdi: 4]
+    /// Returns the absolute byte offset of entry `i`'s `first_chunk` field.
+    fn stsc_entry_first_chunk_pos(buf: &[u8], i: usize) -> usize {
+        let body = find_box_body(buf, b"stsc");
+        let entries_start = body + 4 /*version+flags*/ + 4 /*entry_count*/;
+        entries_start + i * 12
+    }
+
+    fn assert_clean_err(err: crate::Error) {
+        match err {
+            crate::Error::Mp4MalformedSampleTable(_) | crate::Error::Mp4(_) => {}
+            other => panic!("expected a malformed-moov / mp4 parse error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_stsc_first_chunk_zero() {
+        // synth_mp4(10): one stsc entry {first_chunk: 1, samples_per_chunk: 10}.
+        let mut mp4 = synth_mp4(10);
+        let pos = stsc_entry_first_chunk_pos(&mp4, 0);
+        assert_eq!(get_u32(&mp4, pos), 1, "synth stsc entry 0 first_chunk");
+        put_u32(&mut mp4, pos, 0); // illegal: chunk ids are 1-based.
+        let sidecar = synth_sidecar(0, 1_000, 10);
+
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar)
+            .expect_err("first_chunk == 0 must be rejected, not accepted");
+        assert_clean_err(err);
+    }
+
+    #[test]
+    fn rejects_stsc_descending_first_chunk() {
+        // Need ≥2 chunks so there are ≥2 stsc entries to make descending.
+        // 90 samples at duration 1, duration_per_chunk = timescale = 30, so
+        // the writer emits 3 chunks. With every chunk holding the same number
+        // of samples the writer collapses them into a single stsc entry, so we
+        // instead fabricate a second descending entry by rewriting entry 0's
+        // first_chunk to a large value (making the single-entry table claim
+        // first_chunk past the chunk table) AND, where ≥2 entries exist,
+        // corrupt the ordering directly.
+        let mut mp4 = synth_mp4(90);
+        let body = find_box_body(&mp4, b"stsc");
+        let entry_count = get_u32(&mp4, body + 4);
+        let sidecar = synth_sidecar(0, 1_000, 90);
+
+        if entry_count >= 2 {
+            // Make entry 1's first_chunk < entry 0's first_chunk (descending).
+            let e0 = stsc_entry_first_chunk_pos(&mp4, 0);
+            let e1 = stsc_entry_first_chunk_pos(&mp4, 1);
+            put_u32(&mut mp4, e0, 5);
+            put_u32(&mut mp4, e1, 2); // 2 <= 5 → not strictly increasing.
+        } else {
+            // Single entry: point first_chunk past the chunk-offset table so
+            // the chunk-range walk reads beyond `stco`.
+            let e0 = stsc_entry_first_chunk_pos(&mp4, 0);
+            put_u32(&mut mp4, e0, 9999);
+        }
+
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar)
+            .expect_err("descending / out-of-range first_chunk must be rejected");
+        assert_clean_err(err);
+    }
+
+    #[test]
+    fn rejects_stsc_samples_per_chunk_overflow() {
+        // Drive `(chunk_id - first_chunk) * samples_per_chunk` to overflow.
+        // Two stsc entries: entry0 spans a wide chunk range, entry1 sets a
+        // huge samples_per_chunk so the scaled multiply overflows u32. We
+        // synthesise a 2-entry table by giving entry0 first_chunk=1 with a
+        // large samples_per_chunk; the multiply `(last_chunk - first_chunk) *
+        // samples_per_chunk` overflows once samples_per_chunk is near u32::MAX.
+        let mut mp4 = synth_mp4(90);
+        let body = find_box_body(&mp4, b"stsc");
+        let entry_count = get_u32(&mp4, body + 4);
+        let sidecar = synth_sidecar(0, 1_000, 90);
+
+        // samples_per_chunk lives 4 bytes after each entry's first_chunk.
+        let spc0 = stsc_entry_first_chunk_pos(&mp4, 0) + 4;
+        put_u32(&mut mp4, spc0, u32::MAX);
+        // Ensure the chunk range spanned by entry 0 is > 1 so the multiply
+        // `chunk_delta * samples_per_chunk` actually scales and overflows.
+        if entry_count < 2 {
+            // Single entry → last_chunk = total_chunks (≥3 for 90 samples),
+            // so chunk_delta reaches ≥2, and 2 * u32::MAX overflows u32.
+        }
+
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar)
+            .expect_err("samples_per_chunk overflow must be rejected, not wrapped");
+        assert_clean_err(err);
+    }
+
+    #[test]
+    fn rejects_stsc_chunk_index_out_of_range() {
+        // Point the single stsc entry's first_chunk beyond the stco table so
+        // the chunk-offset lookup `chunk_offsets.get(chunk_id - 1)` misses.
+        let mut mp4 = synth_mp4(10);
+        let pos = stsc_entry_first_chunk_pos(&mp4, 0);
+        put_u32(&mut mp4, pos, 4242); // far past the 1-chunk stco table.
+        let sidecar = synth_sidecar(0, 1_000, 10);
+
+        let err = Mp4SidecarReader::open_pair(&mp4, &sidecar)
+            .expect_err("out-of-range chunk index must be rejected, not panic");
+        assert_clean_err(err);
     }
 }

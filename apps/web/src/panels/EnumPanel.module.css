@@ -138,3 +138,20 @@
 .overlay {
   pointer-events: none;
 }
+
+/* Lane-level error: a schema/dtype mismatch or fetch failure. Overlays the
+ * strip with a legible message so the lane never silently renders blank. */
+.laneError {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--sp-3);
+  text-align: center;
+  background: var(--color-bg-0);
+  color: var(--color-accent-red, #f87171);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  overflow: hidden;
+}

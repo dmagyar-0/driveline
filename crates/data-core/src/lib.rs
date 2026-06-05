@@ -55,6 +55,9 @@ pub enum Error {
     #[error("mp4 parse error: {0}")]
     Mp4(#[from] mp4::Error),
 
+    #[error("malformed mp4 sample table (moov): {0}")]
+    Mp4MalformedSampleTable(String),
+
     #[error(
         "mp4 video track has {mp4_count} samples but sidecar has {sidecar_count} entries; \
          the sidecar must contain exactly one `frame\\ttimestamp_ns` line per mp4 sample"

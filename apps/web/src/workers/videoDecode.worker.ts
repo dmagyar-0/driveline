@@ -82,6 +82,47 @@ let cursorNs: bigint = 0n;
 let dataCore: Comlink.Remote<DataCorePortApi> | null = null;
 let mp4Lazy: Comlink.Remote<Mp4LazyPortApi> | null = null;
 let session: SessionState | null = null;
+// Sink port set before open() lands; adopted by the session at open() time.
+let pendingSink: MessagePort | null = null;
+
+// Latched fatal decode error from the `VideoDecoder({ error })` callback.
+// A mid-stream decode fault (corrupt NAL, GPU reset, unsupported feature)
+// fires the async error callback OUTSIDE any open/seek/close body, so it
+// can't reject a pending promise on its own. We latch it here and surface
+// it two ways: (1) proactively, by posting a `decode-error` control message
+// over the frame sink so the panel can flip to its stalled/retry UI without
+// waiting for the 5 s stall timeout; (2) reactively, by rejecting the NEXT
+// open()/seek() unless it is a forced retry that re-primes the decoder. The
+// latch is cleared at the start of every `openInternal` so a re-open (the
+// panel's retry path) recovers a wedged stream instead of staying broken.
+let decodeError: Error | null = null;
+
+// Posts a structured control message over the active frame sink. The sink
+// is the same `MessagePort` the worker already uses to hand `VideoFrame`s
+// to the panel; the panel's `onmessage` discriminates frame vs control
+// payloads. No-op when no sink is connected yet.
+function postSinkControl(message: { type: "decode-error"; reason: string }): void {
+  const sink = session?.sink ?? pendingSink;
+  if (sink) sink.postMessage(message);
+}
+
+// Handle the async `VideoDecoder` error callback. Latch the error, end the
+// current session so the pull loop and drains stop touching a dead decoder,
+// and notify the panel proactively. Recovery happens on the next open/seek,
+// which recreates the decoder from scratch.
+function onDecoderError(e: DOMException | Error): void {
+  const reason = e instanceof Error ? e.message : String(e);
+  console.error("VideoDecoder error:", e);
+  decodeError = e instanceof Error ? e : new Error(reason);
+  if (session) {
+    session.ended = true;
+    if (session.pendingPreTargetFrame) {
+      session.pendingPreTargetFrame.close();
+      session.pendingPreTargetFrame = null;
+    }
+  }
+  postSinkControl({ type: "decode-error", reason });
+}
 
 function getDataCore(): Comlink.Remote<DataCorePortApi> {
   if (!dataCore) {
@@ -137,8 +178,10 @@ async function pullAndFeed(): Promise<void> {
     try {
       session.decoder.decode(chunk);
     } catch (e) {
-      console.error("VideoDecoder error:", e);
-      session.ended = true;
+      // Synchronous decode throw (e.g. unconfigured/closed codec, malformed
+      // chunk). Latch + notify the same way the async error callback does so
+      // the panel reacts immediately instead of waiting on the stall timer.
+      onDecoderError(e as Error);
       return;
     }
     session.inFlight += 1;
@@ -225,6 +268,12 @@ async function openInternal(
   fromPtsNs: bigint,
 ): Promise<OpenResult> {
   await closeInternal();
+  // Recovery point: a fresh open/seek recreates the decoder below, so any
+  // previously-latched fatal decode error no longer applies. Clear it here
+  // (rather than in the public `seek`/`open`) so every code path that builds
+  // a new session — including the panel's forced retry — un-wedges the
+  // stream.
+  decodeError = null;
   // Re-seed the cursor watermark so the first pull respects the open
   // target. Without this, a stale `cursorNs` from a previous stream
   // would either over-pace or stall the new decode.
@@ -238,11 +287,10 @@ async function openInternal(
   );
   const decoder = new VideoDecoder({
     output: (frame) => onFrame(frame),
-    error: (e) => {
-      // Fatal for this session. Surface once; callers can observe via the
-      // next `open()` / `seek()` rejection.
-      console.error("VideoDecoder error:", e);
-    },
+    // Fatal for this session: latch the error, end the session, and notify
+    // the panel proactively (see `onDecoderError`). The next open/seek
+    // recreates the decoder, so a wedged stream recovers on retry.
+    error: (e) => onDecoderError(e),
   });
 
   session = {
@@ -285,7 +333,11 @@ async function openInternal(
     try {
       decoder.decode(chunk);
     } catch (e) {
-      console.error("VideoDecoder error:", e);
+      // A throw while feeding the priming batch is fatal for this session;
+      // latch + notify, then abort priming. The returned codec is still
+      // valid (configure() succeeded), so `open()` resolves — the panel
+      // learns of the failure via the proactive `decode-error` message.
+      onDecoderError(e as Error);
       break;
     }
     session.inFlight += 1;
@@ -445,6 +497,13 @@ export const videoDecodeApi = {
     // If set before open(), the latest port wins and will be adopted at open().
     pendingSink = port;
   },
+  // Backward-compatible additive method: lets the panel (or a test) poll the
+  // latched fatal decode error reactively, as a fallback to the proactive
+  // `decode-error` sink message. Returns null once a successful open/seek has
+  // recovered the stream. Existing Comlink consumers are unaffected.
+  lastError(): string | null {
+    return decodeError ? decodeError.message : null;
+  },
   setCursor(ns: bigint): void {
     cursorNs = ns;
     // Wake the pull loop in case the pacing gate was the only reason it
@@ -483,8 +542,15 @@ export const videoDecodeApi = {
       // Duplicate-target guard: the debounced effect in VideoPanel can fire
       // with an unchanged target after a drag that ended on the same PTS.
       // The teardown+reopen round-trip isn't free, so skip it — unless the
-      // caller forces it (retry re-seeks the same PTS on a wedged stream).
-      if (!force && session.lastOpenedFromNs === targetNs) return;
+      // caller forces it (retry re-seeks the same PTS on a wedged stream),
+      // or the session has latched a fatal decode error, in which case the
+      // re-open below is the only way to un-wedge it.
+      if (
+        !force &&
+        decodeError === null &&
+        session.lastOpenedFromNs === targetNs
+      )
+        return;
       const { sourceKind, sourceHandle, channelId, ops } = session;
       try {
         session.decoder.reset();
@@ -505,8 +571,6 @@ export const videoDecodeApi = {
     await runExclusive(() => closeInternal());
   },
 };
-
-let pendingSink: MessagePort | null = null;
 
 export type VideoDecodeApi = typeof videoDecodeApi;
 

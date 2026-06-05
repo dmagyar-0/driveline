@@ -11,6 +11,10 @@ import {
   measure,
   snapshot,
   timed,
+  VIDEO_FIRST_FRAME,
+  VIDEO_SEEK_END,
+  VIDEO_SEEK_START,
+  VIDEO_SEEK_TO_BLIT,
 } from "./perf";
 
 beforeEach(() => {
@@ -21,6 +25,30 @@ beforeEach(() => {
 afterEach(() => {
   performance.clearMarks();
   performance.clearMeasures();
+});
+
+describe("named video seams", () => {
+  // The worker, panel, and e2e/perfBudgets all reference these canonical
+  // strings; pin them so a rename here can't silently desync the seek-to-blit
+  // budget assertion from the mark the panel actually emits.
+  it("expose the canonical mark/measure names", () => {
+    expect(VIDEO_FIRST_FRAME).toBe("video:first-frame");
+    expect(VIDEO_SEEK_START).toBe("video:seek:start");
+    expect(VIDEO_SEEK_END).toBe("video:seek:end");
+    expect(VIDEO_SEEK_TO_BLIT).toBe("video:seek-to-blit");
+  });
+
+  it("VIDEO_SEEK_TO_BLIT measure spans the seek start/end marks", () => {
+    // Mirrors the panel: mark start on seek dispatch, end on first post-seek
+    // blit, then measure between them. The measure must land on the
+    // performance timeline so `__drivelinePerf` / e2e can read it.
+    mark(VIDEO_SEEK_START);
+    mark(VIDEO_SEEK_END);
+    measure(VIDEO_SEEK_TO_BLIT, VIDEO_SEEK_START, VIDEO_SEEK_END);
+    const measures = performance.getEntriesByName(VIDEO_SEEK_TO_BLIT);
+    expect(measures.length).toBeGreaterThanOrEqual(1);
+    expect(measures[0].entryType).toBe("measure");
+  });
 });
 
 describe("mark", () => {

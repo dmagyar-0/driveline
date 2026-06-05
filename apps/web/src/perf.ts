@@ -7,6 +7,20 @@
 // module makes it easy to remove later — every seam imports `perf` and
 // nothing reaches into `performance` directly.
 
+// Named perf seams. Kept here next to the wrapper so callers reference one
+// canonical string and e2e / perfBudgets can assert against the same name.
+//
+// `VIDEO_FIRST_FRAME` is the one-shot mark stamped the first time the panel
+// blits a frame after open. `VIDEO_SEEK_*` brackets a seek: the panel marks
+// `VIDEO_SEEK_START` when it dispatches a debounced seek to the worker, then
+// stamps `VIDEO_SEEK_END` and emits the `VIDEO_SEEK_TO_BLIT` measure when the
+// first post-seek frame lands on the canvas. The measure is the seek-to-blit
+// latency the T5.2 budget (P50 < 120 ms / P95 < 250 ms) gates on.
+export const VIDEO_FIRST_FRAME = "video:first-frame";
+export const VIDEO_SEEK_START = "video:seek:start";
+export const VIDEO_SEEK_END = "video:seek:end";
+export const VIDEO_SEEK_TO_BLIT = "video:seek-to-blit";
+
 export interface PerfSnapshot {
   readonly entries: ReadonlyArray<{
     name: string;

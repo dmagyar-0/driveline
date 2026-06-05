@@ -14,6 +14,7 @@ import { TopBar } from "./TopBar";
 import { Rail } from "./Rail";
 import { Drawer } from "./Drawer";
 import { FirstRun } from "./FirstRun";
+import { OpenErrorToast } from "./OpenErrorToast";
 import styles from "./Shell.module.css";
 
 export interface ShellProps {
@@ -92,6 +93,7 @@ export function Shell({
         </div>
       </div>
       {transport}
+      <OpenErrorToast />
       {dragActive && (
         <div className={styles.dragOverlay}>
           Drop .mcap, .mf4, or .mp4 (+ .mp4.timestamps) to load a session.

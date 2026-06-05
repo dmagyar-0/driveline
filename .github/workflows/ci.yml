@@ -1,0 +1,197 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Rust: portable data-core + wasm-bindings. Clippy is gated with -D warnings
+  # so lint regressions fail the build.
+  # ---------------------------------------------------------------------------
+  rust:
+    name: Rust (clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+  # ---------------------------------------------------------------------------
+  # Web: build the WASM bundle (artefact is NOT committed), then typecheck and
+  # run the JS unit + Arrow contract tests.
+  # ---------------------------------------------------------------------------
+  web:
+    name: Web (typecheck + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+            ${{ runner.os }}-cargo-
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      # The wasm bundle in apps/web/src/wasm/ is generated, not committed, so it
+      # must be built before tsc / Vite / vitest can resolve its imports.
+      - name: Build WASM bundle
+        run: pnpm wasm:build
+
+      - name: Typecheck
+        run: pnpm --filter web exec tsc --noEmit
+
+      - name: Unit + Arrow contract tests
+        run: pnpm --filter web test --run
+
+  # ---------------------------------------------------------------------------
+  # Size budget: production build, then enforce the first-load / wasm gzip
+  # budgets from CLAUDE.md via scripts/check-bundle-size.mjs.
+  # ---------------------------------------------------------------------------
+  size-budget:
+    name: Size budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        uses: jetli/wasm-pack-action@v0.4.0
+        with:
+          version: latest
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+            ${{ runner.os }}-cargo-
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install JS deps
+        run: pnpm install --frozen-lockfile
+
+      # `pnpm build` runs `pnpm wasm:build && pnpm --filter web build`, so the
+      # release-optimised wasm (wasm-opt -Oz) ends up in apps/web/dist.
+      - name: Production build
+        run: pnpm build
+
+      - name: Check bundle size budget
+        run: pnpm size:check
+
+  # ---------------------------------------------------------------------------
+  # Fixtures freshness. Gated as its own job so a missing-deps failure is
+  # clearly attributable here and does not mask the core rust/web jobs.
+  # ---------------------------------------------------------------------------
+  fixtures-check:
+    name: Fixtures freshness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bootstrap test deps
+        run: scripts/setup-test-env.sh
+
+      - name: Verify fixtures are fresh
+        run: make fixtures-check
+
+# -----------------------------------------------------------------------------
+# NOTE: Playwright e2e (`pnpm e2e`) is intentionally NOT run in CI by default —
+# it needs a 4K-capable headless browser with WebCodecs and large fixtures,
+# which is slow and flaky for every push. Run it manually with `pnpm e2e`, or
+# enable the optional job below behind a workflow_dispatch / label trigger.
+#
+#   e2e:
+#     name: Playwright e2e (manual)
+#     if: github.event_name == 'workflow_dispatch'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v4
+#       - uses: dtolnay/rust-toolchain@stable
+#         with: { targets: wasm32-unknown-unknown }
+#       - uses: jetli/wasm-pack-action@v0.4.0
+#       - uses: pnpm/action-setup@v4
+#       - uses: actions/setup-node@v4
+#         with: { node-version: 22, cache: pnpm }
+#       - run: pnpm install --frozen-lockfile
+#       - run: pnpm wasm:build
+#       - run: pnpm --filter e2e exec playwright install --with-deps chromium
+#       - run: pnpm e2e
+# -----------------------------------------------------------------------------

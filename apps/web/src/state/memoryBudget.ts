@@ -49,3 +49,80 @@ export function memoryPressure(): "low" | "high" {
   if (m.jsHeapSizeLimit === 0) return "low";
   return m.usedJSHeapSize / m.jsHeapSizeLimit > 0.8 ? "high" : "low";
 }
+
+/**
+ * Shared global budget ceiling across *all* `Mp4SampleCache` instances.
+ *
+ * Each mp4 source builds its own cache, but they must not each claim
+ * half the heap independently — with N sources that over-commits to
+ * N × (heap/2). The coordinator holds a single heap-derived ceiling and
+ * tracks the aggregate cached bytes across every registered cache, so a
+ * cache can ask "are we over the global cap?" and evict accordingly.
+ *
+ * The ceiling is derived from the heap *and* is correct on browsers
+ * where `performance.memory` (and therefore `memoryPressure()`) is
+ * inert: it falls back to the same fixed constant as
+ * `getInitialBudgetBytes()`, so the cap never relies on the pressure
+ * signal being live.
+ */
+export class Mp4BudgetCoordinator {
+  /** Aggregate cached bytes, summed across all registered caches. */
+  private totalBytes = 0;
+  /** Per-cache reported byte counts; identity-keyed so dispose is clean. */
+  private readonly perCache = new Map<object, number>();
+  private ceiling: number;
+
+  constructor(ceilingBytes: number = getInitialBudgetBytes()) {
+    this.ceiling = Math.max(0, Math.floor(ceilingBytes));
+  }
+
+  /** Register a cache. Idempotent; starts it at zero reported bytes. */
+  register(cache: object): void {
+    if (!this.perCache.has(cache)) this.perCache.set(cache, 0);
+  }
+
+  /** Drop a cache from the registry and reclaim its reported bytes. */
+  unregister(cache: object): void {
+    const prev = this.perCache.get(cache);
+    if (prev === undefined) return;
+    this.totalBytes -= prev;
+    this.perCache.delete(cache);
+  }
+
+  /** Record a cache's current resident byte count. */
+  report(cache: object, bytes: number): void {
+    const prev = this.perCache.get(cache) ?? 0;
+    this.totalBytes += bytes - prev;
+    this.perCache.set(cache, bytes);
+  }
+
+  /** Aggregate cached bytes across all registered caches. */
+  total(): number {
+    return this.totalBytes;
+  }
+
+  /** The shared ceiling in bytes. */
+  ceilingBytes(): number {
+    return this.ceiling;
+  }
+
+  /** Replace the ceiling (used by tests; production derives it once). */
+  setCeilingBytes(n: number): void {
+    this.ceiling = Math.max(0, Math.floor(n));
+  }
+
+  /**
+   * True when the global total exceeds the shared ceiling, or the
+   * browser reports memory pressure. Caches consult this in addition to
+   * their own per-cache budget so the *aggregate* stays bounded.
+   */
+  overBudget(): boolean {
+    return this.totalBytes > this.ceiling || memoryPressure() === "high";
+  }
+}
+
+/**
+ * Process-wide coordinator every cache uses by default. A single ceiling
+ * shared across sources keeps the aggregate cache footprint bounded.
+ */
+export const sharedMp4Budget = new Mp4BudgetCoordinator();
