@@ -107,7 +107,10 @@ function PanelBody({
     case "scene":
       return <SceneBody panelId={panelId} />;
     case "map":
-      return <MapBody panelId={panelId} />;
+      // Keyed by panelId so the half-pick local state in MapBody resets
+      // when a different map panel is selected (same-kind switches reuse
+      // the instance otherwise, leaking a pending lat/lon across panels).
+      return <MapBody key={panelId} panelId={panelId} />;
     case "table":
       return <TableBody panelId={panelId} />;
     case "value":
@@ -921,40 +924,60 @@ function MapBody({ panelId }: BodyProps) {
   const binding = useSession((st) => st.mapBindings[panelId] ?? null);
   const setMapBinding = useSession((st) => st.setMapBinding);
 
+  // The store's MapBinding is all-or-nothing (both axes required), but the
+  // two pickers are filled one at a time. Hold a freshly-picked axis here
+  // until its partner is chosen, then commit the complete pair. Without
+  // this, the first pick was written straight back as `null` (a half pair
+  // can't be persisted), so the map could never be bound from the drawer.
+  // The instance is keyed by panelId (see PanelBody) so these reset when a
+  // different map panel is selected.
+  const [pendingLat, setPendingLat] = useState<string | null>(null);
+  const [pendingLon, setPendingLon] = useState<string | null>(null);
+
   const latBtnRef = useRef<HTMLButtonElement | null>(null);
   const lonBtnRef = useRef<HTMLButtonElement | null>(null);
   const [latAnchor, setLatAnchor] = useState<DOMRect | null>(null);
   const [lonAnchor, setLonAnchor] = useState<DOMRect | null>(null);
 
-  const latChannel =
-    binding === null ? null : findChannel(sources, binding.latChannelId);
-  const lonChannel =
-    binding === null ? null : findChannel(sources, binding.lonChannelId);
+  // Effective selection: a half-pick (pending) overrides the committed
+  // binding so the drawer reflects the click immediately, before its
+  // partner lands.
+  const latId = pendingLat ?? binding?.latChannelId ?? null;
+  const lonId = pendingLon ?? binding?.lonChannelId ?? null;
 
-  const updatePair = (nextLat: string | null, nextLon: string | null): void => {
-    if (nextLat === null || nextLon === null) {
-      // Wait for the user to pick the missing axis before persisting —
-      // otherwise we'd save a half-formed binding and the panel would
-      // immediately render the empty state.
-      setMapBinding(panelId, null);
-      return;
-    }
-    setMapBinding(panelId, {
-      latChannelId: nextLat,
-      lonChannelId: nextLon,
-    });
-  };
+  const latChannel = latId === null ? null : findChannel(sources, latId);
+  const lonChannel = lonId === null ? null : findChannel(sources, lonId);
 
   const onPickLat = (channelId: string) => {
-    const curLon = binding?.lonChannelId ?? null;
-    updatePair(channelId, curLon);
+    if (lonId !== null) {
+      // Partner already chosen → commit the full pair; the store now holds
+      // the truth, so drop the local half-picks.
+      setMapBinding(panelId, { latChannelId: channelId, lonChannelId: lonId });
+      setPendingLat(null);
+      setPendingLon(null);
+    } else {
+      setPendingLat(channelId);
+    }
     setLatAnchor(null);
   };
 
   const onPickLon = (channelId: string) => {
-    const curLat = binding?.latChannelId ?? null;
-    updatePair(curLat, channelId);
+    if (latId !== null) {
+      setMapBinding(panelId, { latChannelId: latId, lonChannelId: channelId });
+      setPendingLat(null);
+      setPendingLon(null);
+    } else {
+      setPendingLon(channelId);
+    }
     setLonAnchor(null);
+  };
+
+  // Removing either axis clears the whole pair (the binding is a pair) and
+  // any in-flight half-pick.
+  const clearBinding = () => {
+    setPendingLat(null);
+    setPendingLon(null);
+    setMapBinding(panelId, null);
   };
 
   return (
@@ -977,7 +1000,7 @@ function MapBody({ panelId }: BodyProps) {
               <button
                 type="button"
                 className={s.removeBtn}
-                onClick={() => setMapBinding(panelId, null)}
+                onClick={clearBinding}
                 aria-label={`Remove ${latChannel.name}`}
                 data-testid="panel-map-remove-lat"
               >
@@ -1002,7 +1025,7 @@ function MapBody({ panelId }: BodyProps) {
         {latAnchor !== null && (
           <ChannelPicker
             sources={sources}
-            selectedIds={binding ? [binding.latChannelId] : []}
+            selectedIds={latId ? [latId] : []}
             maxSelected={1}
             anchorRect={latAnchor}
             onToggle={onPickLat}
@@ -1028,7 +1051,7 @@ function MapBody({ panelId }: BodyProps) {
               <button
                 type="button"
                 className={s.removeBtn}
-                onClick={() => setMapBinding(panelId, null)}
+                onClick={clearBinding}
                 aria-label={`Remove ${lonChannel.name}`}
                 data-testid="panel-map-remove-lon"
               >
@@ -1053,7 +1076,7 @@ function MapBody({ panelId }: BodyProps) {
         {lonAnchor !== null && (
           <ChannelPicker
             sources={sources}
-            selectedIds={binding ? [binding.lonChannelId] : []}
+            selectedIds={lonId ? [lonId] : []}
             maxSelected={1}
             anchorRect={lonAnchor}
             onToggle={onPickLon}

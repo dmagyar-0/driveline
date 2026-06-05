@@ -38,6 +38,17 @@ function seed(): void {
             timeRange: { startNs: 0n, endNs: 1_000_000_000n },
           },
           {
+            id: "chan-b",
+            nativeId: "chan-b",
+            sourceId: "src-a",
+            name: "beta",
+            kind: "scalar",
+            dtype: "f64",
+            unit: null,
+            sampleCount: 3,
+            timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+          },
+          {
             id: "video-stream",
             nativeId: "video-stream",
             sourceId: "src-a",
@@ -57,6 +68,17 @@ function seed(): void {
         nativeId: "chan-a",
         sourceId: "src-a",
         name: "alpha",
+        kind: "scalar",
+        dtype: "f64",
+        unit: null,
+        sampleCount: 3,
+        timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+      },
+      {
+        id: "chan-b",
+        nativeId: "chan-b",
+        sourceId: "src-a",
+        name: "beta",
         kind: "scalar",
         dtype: "f64",
         unit: null,
@@ -267,6 +289,54 @@ describe("PanelDrawer", () => {
     render(<PanelDrawer />);
     fireEvent.click(screen.getByTestId("panel-map-remove-lat"));
     expect(useSession.getState().mapBindings["map-1"]).toBeNull();
+  });
+
+  it("binds the map by picking lat then lon one at a time", () => {
+    // Regression: the two pickers are filled one at a time, but the store's
+    // MapBinding needs both axes. Picking lat alone used to be discarded
+    // (written straight back as null), so the map could never be bound from
+    // the drawer — the user just saw nothing happen on click.
+    useSession.getState().setSelectedPanelId("map-1");
+    // clear() is a no-op without a worker (jsdom), so reset the binding
+    // explicitly for a hermetic start.
+    useSession.getState().setMapBinding("map-1", null);
+    render(<PanelDrawer />);
+
+    // Pick latitude.
+    fireEvent.click(screen.getByTestId("panel-map-pick-lat"));
+    fireEvent.click(screen.getByTestId("pick-chan-a"));
+    // Half-pick: the drawer reflects lat immediately, but nothing is
+    // committed until lon lands.
+    expect(screen.getByTestId("panel-map-remove-lat")).toBeTruthy();
+    expect(useSession.getState().mapBindings["map-1"] ?? null).toBeNull();
+
+    // Pick longitude → the complete pair commits.
+    fireEvent.click(screen.getByTestId("panel-map-pick-lon"));
+    fireEvent.click(screen.getByTestId("pick-chan-b"));
+    expect(useSession.getState().mapBindings["map-1"]).toEqual({
+      latChannelId: "chan-a",
+      lonChannelId: "chan-b",
+    });
+  });
+
+  it("binds the map when lon is picked before lat", () => {
+    // Order independence: the half-pick is held whichever axis is chosen
+    // first.
+    useSession.getState().setSelectedPanelId("map-1");
+    useSession.getState().setMapBinding("map-1", null);
+    render(<PanelDrawer />);
+
+    fireEvent.click(screen.getByTestId("panel-map-pick-lon"));
+    fireEvent.click(screen.getByTestId("pick-chan-b"));
+    expect(screen.getByTestId("panel-map-remove-lon")).toBeTruthy();
+    expect(useSession.getState().mapBindings["map-1"] ?? null).toBeNull();
+
+    fireEvent.click(screen.getByTestId("panel-map-pick-lat"));
+    fireEvent.click(screen.getByTestId("pick-chan-a"));
+    expect(useSession.getState().mapBindings["map-1"]).toEqual({
+      latChannelId: "chan-a",
+      lonChannelId: "chan-b",
+    });
   });
 
   it("renders the table body and remove fires removeTableChannel", () => {
