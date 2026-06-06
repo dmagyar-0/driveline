@@ -30,7 +30,12 @@ import {
 } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { MAX_PLOT_Y_AXES, useSession } from "../state/store";
+import {
+  MAX_PLOT_Y_AXES,
+  effectivePlotZoomX,
+  isPlotTimeAxisSynced,
+  useSession,
+} from "../state/store";
 import type {
   Channel,
   PlotAxisWindow,
@@ -593,8 +598,18 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const hoverNs = useSession((s) => s.hoverNs);
   // Wheel-zoom windows for this panel (x/y scale overrides). Subscribed so
   // the panel re-applies them to uPlot and toggles the "Reset zoom" button
-  // when they change. Absent (undefined) ⇒ no zoom.
+  // when they change. Absent (undefined) ⇒ no zoom. The per-panel `x` is
+  // only the source of truth when this panel is NOT synced — see
+  // `effectiveZoomX` below — but `zoom.y` is always per-panel.
   const zoom = useSession((s) => s.plotZoom[panelId]);
+  // Whether this plot's time axis follows the shared (synced) window. Synced
+  // is the default; the user opts out per-panel from the drawer.
+  const syncTimeAxis = useSession((s) => isPlotTimeAxisSynced(s, panelId));
+  // The time window this plot actually displays: the shared window when
+  // synced, else this panel's own x-zoom. `null` ⇒ fit the full range. The
+  // scale callback, the wheel base, and the reset-button check all read it,
+  // so a synced panel tracks `sharedPlotZoomX` and an unsynced one its own.
+  const effectiveZoomX = useSession((s) => effectivePlotZoomX(s, panelId));
 
   const boundChannelIds = useMemo(
     () => storedBindings ?? [],
@@ -714,6 +729,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   globalRangeRef.current = globalRange;
   const zoomRef = useRef<PlotZoom | undefined>(zoom);
   zoomRef.current = zoom;
+  // The visible x-window (shared-or-own, resolved by `effectivePlotZoomX`),
+  // read by the x-scale `range` callback through a ref so a synced panel
+  // picks up `sharedPlotZoomX` changes without a rebuild — same posture as
+  // `zoomRef` for the y-axes.
+  const effectiveZoomXRef = useRef<TimeRange | null>(effectiveZoomX);
+  effectiveZoomXRef.current = effectiveZoomX;
   // uPlot bakes the axis `values` callback in at build time, but the mode
   // can flip without a rebuild — so the callback reads the live value
   // through a ref rather than the closed-over `timeMode`. The effect below
@@ -1046,9 +1067,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           //
           // A wheel/side-menu x-zoom narrows the domain to its window
           // (converted ns → epoch seconds, the same precision the global
-          // range uses), taking precedence over the global pin.
+          // range uses), taking precedence over the global pin. The window
+          // is the shared one when this panel is synced, else its own —
+          // resolved by `effectivePlotZoomX` and read through a ref.
           range: (_u, dataMin, dataMax) => {
-            const zx = zoomRef.current?.x;
+            const zx = effectiveZoomXRef.current;
             if (zx) {
               const lo = Number(zx.startNs) / 1e9;
               const hi = Number(zx.endNs) / 1e9;
@@ -1140,7 +1163,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // reflect the post-rescale scales (the cursor-overlay effect's publish
     // ran before this one, when the scales were still pre-zoom).
     publishSyncRef.current();
-  }, [zoom, panelId]);
+    // `effectiveZoomX` is in the deps so a synced panel re-resolves its
+    // x-scale when `sharedPlotZoomX` changes (another plot zoomed); `zoom`
+    // covers this panel's own y (and own x while unsynced).
+  }, [zoom, effectiveZoomX, panelId]);
 
   // Mouse-wheel zoom. A native, non-passive listener so it can
   // `preventDefault()` the page scroll (React's synthetic onWheel is
@@ -1172,8 +1198,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       const st = useSession.getState();
       const z = st.plotZoom[panelId];
       if (target.kind === "x" || target.kind === "both") {
-        const base = z?.x ?? bound;
-        st.setPlotZoomX(panelId, scaleWindowX(base, fracX, factor, bound));
+        // Zoom from whatever this panel currently shows (shared window when
+        // synced, else its own), then route the result back the same way:
+        // `applyPlotZoomX` writes the shared window for a synced panel —
+        // moving every synced plot — or this panel's own x otherwise.
+        const base = effectiveZoomXRef.current ?? bound;
+        st.applyPlotZoomX(panelId, scaleWindowX(base, fracX, factor, bound));
       }
       // Y-zoom. Overlay: scale every targeted axis (one gutter axis, or all
       // used axes for a "both") across the full plot height. Stacked: scale
@@ -1329,10 +1359,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.clearRect(0, 0, overlay.width, overlay.height);
 
     // Project the cursor/hover over the VISIBLE x-window: when x is zoomed
-    // the drawing area spans `zoom.x` (a sub-range of the fetched global
+    // the drawing area spans the effective window (the shared one when this
+    // panel is synced, else its own — a sub-range of the fetched global
     // range), so a cursor outside that window resolves to `null` and draws
     // nothing (correctly off-screen). Unzoomed it's the full fetched range.
-    const range = zoom?.x ?? lastRangeRef.current ?? globalRange;
+    const range = effectiveZoomX ?? lastRangeRef.current ?? globalRange;
     if (!range) return;
     const bbox = plot.bbox;
     // uPlot's bbox is in device pixels; convert to CSS pixels for the
@@ -1372,9 +1403,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     ctx.moveTo(left + x + 0.5, top);
     ctx.lineTo(left + x + 0.5, top + height);
     ctx.stroke();
-    // `zoom` is a dep so the cursor/crosshair reproject after a wheel zoom
-    // (which changes the visible window without touching cursorNs).
-  }, [cursorNs, hoverNs, globalRange, seriesKey, publishSync, zoom]);
+    // `effectiveZoomX` is a dep so the cursor/crosshair reproject after a
+    // wheel zoom — including when ANOTHER synced plot drives the shared
+    // window — which changes the visible range without touching cursorNs.
+  }, [cursorNs, hoverNs, globalRange, seriesKey, publishSync, effectiveZoomX]);
 
   // Drop this panel's sync snapshot on unmount so stale ids don't leak
   // into a test after a panel is closed.
@@ -1433,8 +1465,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       const plot = plotRef.current;
       const container = containerRef.current;
       // Map over the VISIBLE window so a drag-scrub while zoomed lands on
-      // the instant under the pointer (not on the full fetched range).
-      const range = zoomRef.current?.x ?? lastRangeRef.current ?? globalRange;
+      // the instant under the pointer (not on the full fetched range). Uses
+      // the effective window (shared when synced, else this panel's own).
+      const range = effectiveZoomXRef.current ?? lastRangeRef.current ?? globalRange;
       if (!plot || !container || !range) return null;
       const rect = container.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -1752,7 +1785,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       >
         <div ref={plotMountRef} className={styles.plotMount} />
         <canvas ref={overlayRef} className={styles.overlay} />
-        {isPlotZoomed(zoom) && (
+        {(effectiveZoomX !== null || isPlotZoomed(zoom)) && (
           <button
             type="button"
             className={styles.resetZoom}
@@ -1762,10 +1795,14 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
-              useSession.getState().resetPlotZoom(panelId);
+              useSession.getState().clearPlotZoom(panelId);
             }}
             data-testid="plot-reset-zoom"
-            title="Reset zoom to fit"
+            title={
+              syncTimeAxis
+                ? "Reset zoom to fit (time axis is synced across plots)"
+                : "Reset zoom to fit"
+            }
           >
             Reset zoom
           </button>

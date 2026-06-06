@@ -28,6 +28,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   MAX_PLOT_Y_AXES,
+  effectivePlotZoomX,
+  isPlotTimeAxisSynced,
   useSession,
   type Channel,
   type ChannelKind,
@@ -267,14 +269,21 @@ function PlotBody({ panelId }: BodyProps) {
 function PlotZoomControl({ panelId }: BodyProps) {
   const zoom = useSession((st) => st.plotZoom[panelId]);
   const globalRange = useSession((st) => st.globalRange);
-  const zoomed = isPlotZoomed(zoom);
+  // The visible time window (shared-or-own) drives both the ± base and the
+  // "is anything zoomed?" check, so the controls reflect the synced window
+  // even when this panel's own `plotZoom` entry is empty.
+  const effX = useSession((st) => effectivePlotZoomX(st, panelId));
+  const syncTimeAxis = useSession((st) => isPlotTimeAxisSynced(st, panelId));
+  const zoomed = effX !== null || isPlotZoomed(zoom);
 
   const zoomTime = (factor: number) => {
     const st = useSession.getState();
     const bound = st.globalRange;
     if (!bound) return;
-    const base = st.plotZoom[panelId]?.x ?? bound;
-    st.setPlotZoomX(panelId, scaleWindowX(base, 0.5, factor, bound));
+    // Zoom from whatever this panel shows, route back the same way as the
+    // wheel — `applyPlotZoomX` moves the shared window when synced.
+    const base = effectivePlotZoomX(st, panelId) ?? bound;
+    st.applyPlotZoomX(panelId, scaleWindowX(base, 0.5, factor, bound));
   };
 
   return (
@@ -310,16 +319,29 @@ function PlotZoomControl({ panelId }: BodyProps) {
       <button
         type="button"
         className={s.zoomReset}
-        onClick={() => useSession.getState().resetPlotZoom(panelId)}
+        onClick={() => useSession.getState().clearPlotZoom(panelId)}
         disabled={!zoomed}
         data-testid="panel-plot-zoom-reset"
       >
         Reset zoom
       </button>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={syncTimeAxis}
+        className={`${s.toggle} ${syncTimeAxis ? s.toggleOn : ""}`}
+        onClick={() =>
+          useSession.getState().setPlotSyncTimeAxis(panelId, !syncTimeAxis)
+        }
+        data-testid="panel-plot-sync-toggle"
+      >
+        <span>Sync time axis across plots</span>
+        <span className={s.toggleState}>{syncTimeAxis ? "on" : "off"}</span>
+      </button>
       <p className={s.gapHelp}>
-        {zoomed
-          ? "Scroll over the plot to zoom both axes, or over a single axis to zoom only it."
-          : "Scroll over the plot to zoom both axes, over an axis to zoom only it. Use ± for the time axis."}
+        {syncTimeAxis
+          ? "On: zooming the time axis here moves every synced plot to the same window. Y-axes stay independent."
+          : "Off: this plot's time axis zooms on its own. Turn on to lock its timeline to the other synced plots."}
       </p>
     </section>
   );

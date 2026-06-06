@@ -158,17 +158,44 @@ describe("PanelDrawer", () => {
     ) as HTMLButtonElement;
     expect(reset.disabled).toBe(true);
 
-    // Zoom in on the time axis → an x window appears and Reset enables.
+    // Zoom in on the time axis. plot-1 is synced by default, so the window
+    // lands in the SHARED store and Reset enables.
     fireEvent.click(screen.getByTestId("panel-plot-zoom-in"));
-    expect(useSession.getState().plotZoom["plot-1"]?.x).toBeTruthy();
+    expect(useSession.getState().sharedPlotZoomX).toBeTruthy();
     expect(
       (screen.getByTestId("panel-plot-zoom-reset") as HTMLButtonElement)
         .disabled,
     ).toBe(false);
 
-    // Reset clears every override for the panel.
+    // Reset clears the shared window (and any per-panel override).
     fireEvent.click(screen.getByTestId("panel-plot-zoom-reset"));
-    expect("plot-1" in useSession.getState().plotZoom).toBe(false);
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
+  });
+
+  it("plot sync-time-axis toggle flips the per-panel flag (default on)", () => {
+    useSession.getState().setSelectedPanelId("plot-1");
+    useSession.getState().addPlotChannel("plot-1", "chan-a");
+    render(<PanelDrawer />);
+
+    const toggle = screen.getByTestId(
+      "panel-plot-sync-toggle",
+    ) as HTMLButtonElement;
+    // Default: synced on.
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+
+    // Turning it off persists `syncTimeAxis: false` on the panel.
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"]?.syncTimeAxis,
+    ).toBe(false);
+
+    // Turning it back on stores it as a deletion (default posture).
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(
+      "syncTimeAxis" in (useSession.getState().plotPanelSettings["plot-1"] ?? {}),
+    ).toBe(false);
   });
 
   it("renders the video body with HUD toggle reading store state", () => {

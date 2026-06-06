@@ -163,10 +163,11 @@ export const MAX_PLOT_Y_AXES = 4;
  * read at once without overlapping. Only takes effect when ≥2 axes carry
  * data; the per-band maths lives in `PlotPanel.stackedBandRange`.
  *
- * `axisAssignments`, `transforms`, and `stackAxes` are OPTIONAL (additive
- * — payloads written before they existed omit them). Readers default via
- * `DEFAULT_PLOT_PANEL_SETTINGS`; the persistence validators tolerate the
- * extra keys, so they round-trip without a schema bump.
+ * `axisAssignments`, `transforms`, `stackAxes`, and `syncTimeAxis` are
+ * OPTIONAL (additive — payloads written before they existed omit them).
+ * Readers default via `DEFAULT_PLOT_PANEL_SETTINGS`; the persistence
+ * validators tolerate the extra keys, so they round-trip without a schema
+ * bump.
  */
 export interface PlotPanelSettings {
   gapThresholdSec: number | null;
@@ -176,6 +177,12 @@ export interface PlotPanelSettings {
   transforms?: Record<string, PlotTransform>;
   // Stack the in-use y-axes into vertical bands. Absent ⇒ `false` (overlay).
   stackAxes?: boolean;
+  // Sync this plot's time (x) axis with every other synced plot: zooming
+  // the timeline on one moves them all to the same window (the y-axes stay
+  // per-panel). Absent ⇒ `true` (synced by default, restoring the
+  // "time axis is always shared" invariant under zoom); stored as `false`
+  // only when the user turns it off, so an untouched panel stays minimal.
+  syncTimeAxis?: boolean;
 }
 
 export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
@@ -183,6 +190,7 @@ export const DEFAULT_PLOT_PANEL_SETTINGS: PlotPanelSettings = {
   axisAssignments: {},
   transforms: {},
   stackAxes: false,
+  syncTimeAxis: true,
 };
 
 /**
@@ -255,6 +263,13 @@ export interface SessionState {
   // not persisted and reset by `clear()`. Absent key ⇒ that panel fits the
   // full range (no zoom). See `PlotZoom`.
   plotZoom: Record<string, PlotZoom>;
+  // The shared time (x) window that every plot with `syncTimeAxis` on
+  // displays — the rendezvous point that keeps synced timelines locked
+  // together without enumerating sibling panels. `null` ⇒ synced plots fit
+  // the full `globalRange`. Ephemeral, like `plotZoom`: not persisted and
+  // reset by `clear()`. Read via the `effectivePlotZoomX` selector, never
+  // directly by panels (it only applies when a panel is synced).
+  sharedPlotZoomX: TimeRange | null;
   // Global per-channel unit overrides, keyed by channel id. A signal's
   // unit is inferred from the file on load but is often missing or wrong,
   // so the user can override it; the override applies everywhere that
@@ -419,6 +434,15 @@ export interface SessionState {
    */
   setPlotStackAxes(panelId: string, on: boolean): void;
   /**
+   * Toggle whether a plot panel's time (x) axis follows the shared zoom
+   * window (`syncTimeAxis`, default `true`). Turning it OFF copies the
+   * current shared window into the panel's own x-zoom so its view doesn't
+   * jump; turning it ON drops the panel's own x-window so it re-adopts the
+   * shared one. `true` (the default) is stored as a deletion to keep an
+   * untouched panel minimal. Persists through the layout adapter.
+   */
+  setPlotSyncTimeAxis(panelId: string, on: boolean): void;
+  /**
    * Set (or clear, with `null`) a plot panel's visible x-window (the
    * wheel-zoom time scale). Pruned to "no zoom" when both x and y are
    * cleared. Ephemeral — never persisted.
@@ -436,6 +460,25 @@ export interface SessionState {
   ): void;
   /** Clear every wheel-zoom override for a plot panel (back to auto-fit). */
   resetPlotZoom(panelId: string): void;
+  /**
+   * Set (or clear, with `null`) the shared time (x) window that every
+   * `syncTimeAxis` plot displays. Ephemeral — never persisted.
+   */
+  setSharedPlotZoomX(window: TimeRange | null): void;
+  /**
+   * Apply a time (x) window from a panel, routed by its sync mode: a synced
+   * panel writes the shared window (moving every synced plot); an unsynced
+   * panel writes its own `plotZoom[panelId].x`. The single entry point for
+   * the wheel handler and the drawer's ± buttons.
+   */
+  applyPlotZoomX(panelId: string, window: TimeRange | null): void;
+  /**
+   * Reset a plot panel's zoom from the UI: clears its own x/y overrides and,
+   * when the panel is synced, also clears the shared time window (so every
+   * synced plot returns to the full range together). The "Reset zoom"
+   * action behind the in-plot button and the drawer twin.
+   */
+  clearPlotZoom(panelId: string): void;
   /**
    * Override a channel's unit globally (keyed by channel id). Pass a string
    * to set the override (`""` means "explicitly no unit"); pass `null` to
@@ -685,6 +728,34 @@ function pruneMapBindings(
   return changed ? out : m;
 }
 
+/**
+ * True when a plot panel's time (x) axis follows the shared zoom window.
+ * Synced is the default, so an absent flag reads as `true`.
+ */
+export function isPlotTimeAxisSynced(
+  s: Pick<SessionState, "plotPanelSettings">,
+  panelId: string,
+): boolean {
+  return s.plotPanelSettings[panelId]?.syncTimeAxis ?? true;
+}
+
+/**
+ * The time (x) window a plot panel should display: the shared window when it
+ * is synced, otherwise its own per-panel x-zoom. `null` ⇒ fit the full
+ * `globalRange`. Both branches return a stable store reference (never a
+ * freshly built object), so it is safe to use directly as a selector. The
+ * one source of truth for the scale callback, the wheel base, and the
+ * "is this panel zoomed?" check.
+ */
+export function effectivePlotZoomX(
+  s: Pick<SessionState, "plotPanelSettings" | "sharedPlotZoomX" | "plotZoom">,
+  panelId: string,
+): TimeRange | null {
+  return isPlotTimeAxisSynced(s, panelId)
+    ? s.sharedPlotZoomX
+    : (s.plotZoom[panelId]?.x ?? null);
+}
+
 export const useSession = create<SessionState>((set, get) => {
   let worker: Remote<DataCoreApi> | null = null;
   // Serialise `openFiles` so two rapid drops don't interleave `set()` calls.
@@ -745,6 +816,7 @@ export const useSession = create<SessionState>((set, get) => {
     plotBindings: hydrated?.plotBindings ?? {},
     plotPanelSettings: hydrated?.plotPanelSettings ?? {},
     plotZoom: {},
+    sharedPlotZoomX: null,
     unitOverrides: hydrated?.unitOverrides ?? {},
     videoHudOn: hydrated?.videoHudOn ?? {},
     sceneBindings: hydrated?.sceneBindings ?? {},
@@ -968,6 +1040,30 @@ export const useSession = create<SessionState>((set, get) => {
       set({ plotPanelSettings: { ...prev, [panelId]: next } });
     },
 
+    setPlotSyncTimeAxis(panelId, on) {
+      const existing = get().plotPanelSettings[panelId];
+      const current = existing?.syncTimeAxis ?? true;
+      if (current === on) return;
+      // Keep the view stable across the switch. Leaving the synced group:
+      // adopt the shared window as this panel's own x-zoom so it doesn't
+      // jump. Joining it: drop our own x-window so we follow the shared one.
+      // The y-zoom is untouched either way — only the time axis syncs.
+      if (on) get().setPlotZoomX(panelId, null);
+      else get().setPlotZoomX(panelId, get().sharedPlotZoomX);
+      // `true` is the default, so persist it as a deletion (mirrors the
+      // stack / axis "default" posture); store `false` explicitly. Read the
+      // settings map fresh — `setPlotZoomX` above only touched `plotZoom`.
+      const next: PlotPanelSettings = {
+        ...existing,
+        gapThresholdSec: existing?.gapThresholdSec ?? null,
+      };
+      if (on) delete next.syncTimeAxis;
+      else next.syncTimeAxis = false;
+      set({
+        plotPanelSettings: { ...get().plotPanelSettings, [panelId]: next },
+      });
+    },
+
     setPlotZoomX(panelId, window) {
       const prev = get().plotZoom;
       const existing = prev[panelId];
@@ -1015,6 +1111,32 @@ export const useSession = create<SessionState>((set, get) => {
       const copy = { ...prev };
       delete copy[panelId];
       set({ plotZoom: copy });
+    },
+
+    setSharedPlotZoomX(window) {
+      const prev = get().sharedPlotZoomX;
+      // Skip redundant writes: synced panels re-resolve their scales off
+      // this value's identity, so a no-op set would repaint every plot.
+      const same =
+        window === null
+          ? prev === null
+          : prev !== null &&
+            prev.startNs === window.startNs &&
+            prev.endNs === window.endNs;
+      if (same) return;
+      set({ sharedPlotZoomX: window });
+    },
+
+    applyPlotZoomX(panelId, window) {
+      const synced = get().plotPanelSettings[panelId]?.syncTimeAxis ?? true;
+      if (synced) get().setSharedPlotZoomX(window);
+      else get().setPlotZoomX(panelId, window);
+    },
+
+    clearPlotZoom(panelId) {
+      const synced = get().plotPanelSettings[panelId]?.syncTimeAxis ?? true;
+      get().resetPlotZoom(panelId);
+      if (synced) get().setSharedPlotZoomX(null);
     },
 
     setChannelUnit(channelId, unit) {
@@ -1597,6 +1719,7 @@ export const useSession = create<SessionState>((set, get) => {
           plotBindings: {},
           plotPanelSettings: {},
           plotZoom: {},
+          sharedPlotZoomX: null,
           unitOverrides: {},
           videoHudOn: {},
           sceneBindings: {},
