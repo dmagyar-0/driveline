@@ -68,6 +68,48 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
+  it("buckets .csv into tabular as csv", () => {
+    const r = bucketFiles([f("signals.csv")]);
+    expect(r.tabular).toEqual([
+      { file: expect.any(File), format: "csv" },
+    ]);
+    expect(r.tabular[0].file.name).toBe("signals.csv");
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("buckets .parquet and .pq into tabular as parquet", () => {
+    const r = bucketFiles([f("a.parquet"), f("b.pq")]);
+    expect(r.tabular.map((t) => [t.file.name, t.format])).toEqual([
+      ["a.parquet", "parquet"],
+      ["b.pq", "parquet"],
+    ]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("matches tabular extensions case-insensitively", () => {
+    const r = bucketFiles([f("DATA.CSV"), f("RUN.PARQUET")]);
+    expect(r.tabular.map((t) => t.format)).toEqual(["csv", "parquet"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("keeps tabular files separate from the other buckets in one drop", () => {
+    const r = bucketFiles([
+      f("log.mcap"),
+      f("sensor.mf4"),
+      f("signals.csv"),
+      f("cols.parquet"),
+    ]);
+    expect(r.mcap).toHaveLength(1);
+    expect(r.mf4).toHaveLength(1);
+    expect(r.tabular).toHaveLength(2);
+    expect(r.mp4Pairs).toHaveLength(0);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("always returns a tabular array even when none are dropped", () => {
+    expect(bucketFiles([f("a.mcap")]).tabular).toEqual([]);
+  });
+
   it("pairs the matching mp4 and errors on the unpaired one", () => {
     // Two mp4s but only one sidecar — the paired one succeeds, the
     // other is reported as missing its sidecar.

@@ -12,6 +12,7 @@ import type { Remote } from "comlink";
 import { WorkerErrorBanner } from "./WorkerErrorBanner";
 import { useSession } from "./state/store";
 import type { OpenResult } from "./state/store";
+import type { BasisDraft } from "./state/tabularImport";
 import type { RailTab } from "./state/persist/ui";
 import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
@@ -194,7 +195,7 @@ declare global {
       // strings so `page.evaluate` can return them.
       listSources: () => Array<{
         id: string;
-        kind: "mcap" | "mf4" | "mp4+sidecar";
+        kind: "mcap" | "mf4" | "mp4+sidecar" | "tabular";
         name: string;
         timeRange: { startNs: string; endNs: string };
         channelIds: string[];
@@ -253,6 +254,26 @@ declare global {
         lastBlitPtsNs: string | null;
       }>;
       getCursorGated: () => boolean;
+    };
+    // CSV / Parquet import flow. Lets Playwright drive the import-config
+    // dialog headlessly: read the pending queue, then confirm (with a chosen
+    // basis) or cancel the head entry without scraping the dialog DOM. BigInts
+    // never cross this boundary (the schema/basis are plain JSON + strings).
+    __drivelineTabular?: {
+      // The pending-import queue (head first). `bytes` is omitted — tests
+      // assert on the inspected schema + filename, not the raw blob.
+      pending: () => Array<{
+        id: string;
+        name: string;
+        format: "csv" | "parquet";
+        columns: Array<{ name: string; dtype: string; is_numeric: boolean }>;
+        suggested: BasisDraft;
+      }>;
+      // Confirm a queued import by id with a basis draft (epoch offset is a
+      // decimal string so full ns precision survives `page.evaluate`).
+      confirm: (id: string, basis: BasisDraft) => Promise<void>;
+      // Cancel (drop) a queued import by id.
+      cancel: (id: string) => void;
     };
   }
 }
@@ -573,6 +594,23 @@ export function App() {
         },
         getCursorGated: () => isCursorGated(),
       };
+      window.__drivelineTabular = {
+        pending: () =>
+          useSession.getState().pendingTabularImports.map((p) => ({
+            id: p.id,
+            name: p.name,
+            format: p.format,
+            columns: p.schema.columns.map((c) => ({
+              name: c.name,
+              dtype: c.dtype,
+              is_numeric: c.is_numeric,
+            })),
+            suggested: p.suggested,
+          })),
+        confirm: (id, basis) =>
+          useSession.getState().confirmTabularImport(id, basis),
+        cancel: (id) => useSession.getState().cancelTabularImport(id),
+      };
     }
     setReady(true);
     return () => {
@@ -583,6 +621,7 @@ export function App() {
       detachUrlState();
       if (import.meta.env.DEV) {
         delete window.__drivelineDevHooks;
+        delete window.__drivelineTabular;
       }
       useSession.getState().setWorker(null);
       dataCore.current = null;

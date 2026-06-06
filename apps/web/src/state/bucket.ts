@@ -14,10 +14,22 @@ export interface BucketError {
   reason: string;
 }
 
+/** Tabular formats (CSV / Parquet) need a user-chosen time basis before they
+ *  can open, so they're carried with their detected `format` string (the value
+ *  the wasm `tabular_*` endpoints expect) rather than opened eagerly. */
+export type TabularFormat = "csv" | "parquet";
+
+export interface TabularInput {
+  file: File;
+  format: TabularFormat;
+}
+
 export interface Buckets {
   mcap: File[];
   mf4: File[];
   mp4Pairs: Mp4Pair[];
+  /** CSV / Parquet drops — deferred behind the import-config dialog. */
+  tabular: TabularInput[];
   errors: BucketError[];
 }
 
@@ -28,6 +40,7 @@ export function bucketFiles(files: File[]): Buckets {
   const mf4: File[] = [];
   const sidecars = new Map<string, File>(); // mp4 filename -> sidecar file
   const mp4s: File[] = [];
+  const tabular: TabularInput[] = [];
   const errors: BucketError[] = [];
 
   for (const f of files) {
@@ -44,6 +57,11 @@ export function bucketFiles(files: File[]): Buckets {
       mcap.push(f);
     } else if (lower.endsWith(".mf4")) {
       mf4.push(f);
+    } else if (lower.endsWith(".csv")) {
+      tabular.push({ file: f, format: "csv" });
+    } else if (lower.endsWith(".parquet") || lower.endsWith(".pq")) {
+      // `.pq` is a common short alias for Parquet.
+      tabular.push({ file: f, format: "parquet" });
     } else {
       errors.push({ name, reason: `unknown file type: ${name}` });
     }
@@ -71,7 +89,7 @@ export function bucketFiles(files: File[]): Buckets {
     });
   }
 
-  return { mcap, mf4, mp4Pairs, errors };
+  return { mcap, mf4, mp4Pairs, tabular, errors };
 }
 
 /** A URL input classified by the reader that can open it. */

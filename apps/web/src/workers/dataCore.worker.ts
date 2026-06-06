@@ -19,6 +19,11 @@ import init, {
   close_mp4_sidecar,
   mp4_sidecar_summary,
   mp4_sidecar_index,
+  tabular_inspect,
+  open_tabular,
+  tabular_summary,
+  tabular_fetch_range,
+  close_tabular,
 } from "../wasm/wasm_bindings.js";
 import {
   normaliseEncodedChunk,
@@ -34,6 +39,7 @@ import {
   type RawMf4Summary,
   type RawMp4Summary,
 } from "./normalise";
+import type { RawTabularSchema } from "../state/tabularImport";
 
 /**
  * Per-sample table for an mp4+sidecar source. Returned by
@@ -445,6 +451,61 @@ export const dataCoreApi = {
   async mp4SidecarIndex(handle: number): Promise<Mp4SidecarIndex> {
     await ready;
     return normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+  },
+  /**
+   * Inspect a CSV / Parquet blob without retaining it: returns the
+   * `TabularSchema` (`{ columns, suggested }`) the import dialog drives its
+   * column list and default time-basis from. `format` is `"csv"` or
+   * `"parquet"`. The bytes are NOT held in wasm — the JS caller keeps them
+   * (in the pending-import slice) and re-passes them to `openTabular` on
+   * confirm.
+   */
+  async tabularInspect(
+    bytes: Uint8Array,
+    format: string,
+  ): Promise<RawTabularSchema> {
+    await ready;
+    return tabular_inspect(bytes, format) as RawTabularSchema;
+  },
+  /**
+   * Open a CSV / Parquet blob with an explicit `TimeBasis` (JSON string) and
+   * register the resulting reader in the wasm slab. Returns the integer
+   * handle the other `tabular*` methods take. Like the mp4-sidecar path the
+   * bytes are passed wholesale (no OPFS copy); the wasm reader owns them for
+   * the source's lifetime, freed by `closeTabular`.
+   */
+  async openTabular(
+    bytes: Uint8Array,
+    format: string,
+    basisJson: string,
+  ): Promise<number> {
+    await ready;
+    return open_tabular(bytes, format, basisJson);
+  },
+  /**
+   * `SourceMeta` for an open tabular reader, in the MF4-style shape
+   * (`{ start_ns, end_ns, channels:[{ id, name, unit, group, sample_count,
+   * start_ns, end_ns }] }` with `group` always null), normalised so every
+   * `*_ns` field is a `bigint`. Reuses `normaliseMf4` since the wire shape is
+   * identical.
+   */
+  async tabularSummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(tabular_summary(handle) as RawMf4Summary);
+  },
+  async tabularFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    return tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+  },
+  async closeTabular(handle: number): Promise<void> {
+    await ready;
+    close_tabular(handle);
   },
   async openMcapVideoStream(
     handle: number,

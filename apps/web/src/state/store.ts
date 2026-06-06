@@ -15,7 +15,19 @@
 
 import type { Remote } from "comlink";
 import { create } from "zustand";
-import { bucketFiles, classifyUrl, type BucketError } from "./bucket";
+import {
+  bucketFiles,
+  classifyUrl,
+  type BucketError,
+  type TabularFormat,
+} from "./bucket";
+import {
+  draftFromSchema,
+  draftToBasis,
+  basisToJson,
+  type BasisDraft,
+  type RawTabularSchema,
+} from "./tabularImport";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import {
   loadLayoutFromStorage,
@@ -53,7 +65,7 @@ import {
 } from "./mp4SampleCache";
 import { readMp4HeaderBytes } from "./mp4HeaderSlice";
 
-export type SourceKind = "mcap" | "mf4" | "mp4+sidecar";
+export type SourceKind = "mcap" | "mf4" | "mp4+sidecar" | "tabular";
 export type ChannelKind = ChannelKindWire;
 
 export interface TimeRange {
@@ -117,6 +129,27 @@ export interface SourceMeta {
 export interface OpenResult {
   opened: string[];
   errors: BucketError[];
+}
+
+/**
+ * A dropped CSV / Parquet file awaiting a user-chosen time basis. Unlike the
+ * other formats, a tabular source can't open until the user confirms how its
+ * time column should be read, so `openFiles` inspects the file, stashes the
+ * result here, and the import dialog (`TabularImportDialog`) opens the source
+ * on confirm. Multiple drops queue FIFO; `id` is a stable key for the dialog
+ * list and the dev-hook confirm/cancel targeting.
+ */
+export interface PendingTabularImport {
+  /** Stable queue key (monotonic), distinct from the eventual source id. */
+  id: string;
+  name: string;
+  format: TabularFormat;
+  /** Raw file bytes, re-passed to `openTabular` on confirm. */
+  bytes: Uint8Array;
+  /** Inspected schema: column list + suggested basis (drives the dialog). */
+  schema: RawTabularSchema;
+  /** The editable default basis derived from `schema.suggested`. */
+  suggested: BasisDraft;
 }
 
 /**
@@ -330,8 +363,25 @@ export interface SessionState {
    * source has a pending fetch.
    */
   pendingFetch: Record<string, PendingFetch | null>;
-  /** Drives a drop batch through bucket → per-source open → merge. */
+  /**
+   * FIFO queue of dropped CSV / Parquet files awaiting a time basis. The
+   * `TabularImportDialog` renders the head of this queue; confirming/cancelling
+   * shifts it. Empty when there's nothing to configure. Reset by `clear()`.
+   */
+  pendingTabularImports: PendingTabularImport[];
+  /** Drives a drop batch through bucket → per-source open → merge. CSV/Parquet
+   *  files are inspected and queued into `pendingTabularImports` instead of
+   *  opening eagerly (they need a time basis first). */
   openFiles(files: File[]): Promise<OpenResult>;
+  /**
+   * Confirm a queued tabular import: open the source with `basis`, register it
+   * exactly like an MF4 source, and dequeue it. No-op on an unknown id (a
+   * stale confirm). Resolves when the source is registered (or the open
+   * failed, in which case the failure surfaces via `lastOpenErrors`).
+   */
+  confirmTabularImport(id: string, basis: BasisDraft): Promise<void>;
+  /** Cancel (drop) a queued tabular import by id. No-op on an unknown id. */
+  cancelTabularImport(id: string): void;
   /**
    * Open a single `.mcap`/`.mf4` from a URL. MCAP fetches the full body;
    * MF4 reads lazily over HTTP range requests through its index, so a large
@@ -612,6 +662,25 @@ function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
     timeRange: { startNs: c.start_ns, endNs: c.end_ns },
   }));
 }
+// Tabular (CSV / Parquet) summaries arrive in the MF4 shape — one scalar F64
+// channel per surfaced numeric column — so the channel mapping mirrors
+// `mf4Channels`. Building these the same way is what makes a tabular source
+// indistinguishable to the panels (Plot/Table/Map/Value/Enum all consume the
+// flat `channels` list and the ranged `fetchChannelRange` path).
+function tabularChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: c.group,
+    kind: "scalar" as const,
+    dtype: "f64",
+    unit: c.unit,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
 function mp4Channels(sourceId: string, s: Mp4SidecarSummary): Channel[] {
   return s.channels.map((c) => ({
     id: qualifiedChannelId(sourceId, c.id),
@@ -689,6 +758,10 @@ export const useSession = create<SessionState>((set, get) => {
   let worker: Remote<DataCoreApi> | null = null;
   // Serialise `openFiles` so two rapid drops don't interleave `set()` calls.
   let pending: Promise<unknown> = Promise.resolve();
+  // Monotonic key for queued tabular imports (stable across the drop batch /
+  // dialog confirm cycle; never reused so a dialog re-render can't target a
+  // recycled slot).
+  let tabularImportSeq = 0;
   // Hydrate layout + bindings synchronously so the first render paints the
   // saved layout. Missing / malformed storage → `null` and empty maps; the
   // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
@@ -762,6 +835,7 @@ export const useSession = create<SessionState>((set, get) => {
     lastOpenErrors: [],
     loadedRanges: {},
     pendingFetch: {},
+    pendingTabularImports: [],
 
     setWorker(w) {
       worker = w;
@@ -1370,6 +1444,15 @@ export const useSession = create<SessionState>((set, get) => {
             includePrev,
           );
         }
+        if (source.kind === "tabular") {
+          return await worker.tabularFetchRange(
+            source.handle,
+            channel.nativeId,
+            startNs,
+            endNs,
+            includePrev,
+          );
+        }
         throw new Error(`channel kind not plottable: ${source.kind}`);
       } finally {
         mark(perfEnd);
@@ -1486,7 +1569,37 @@ export const useSession = create<SessionState>((set, get) => {
           }
         }
 
+        // CSV / Parquet can't open until the user picks a time basis. Inspect
+        // each one (without retaining the bytes in wasm), then queue a pending
+        // import the dialog will turn into a source on confirm. We DON'T add
+        // them to `opened` here — they're not loaded yet.
+        const newPending: PendingTabularImport[] = [];
+        for (const t of buckets.tabular) {
+          try {
+            const bytes = await fileBytes(t.file);
+            const schema = await w.tabularInspect(bytes, t.format);
+            newPending.push({
+              id: `tab-${tabularImportSeq++}`,
+              name: t.file.name,
+              format: t.format,
+              bytes,
+              schema,
+              suggested: draftFromSchema(schema),
+            });
+          } catch (e) {
+            errors.push({ name: t.file.name, reason: String(e) });
+          }
+        }
+
         commitOpenedSources(newSources, errors);
+        if (newPending.length > 0) {
+          set({
+            pendingTabularImports: [
+              ...get().pendingTabularImports,
+              ...newPending,
+            ],
+          });
+        }
         return { opened, errors };
       });
 
@@ -1495,6 +1608,74 @@ export const useSession = create<SessionState>((set, get) => {
       // queues behind it rather than racing.
       pending = next.catch(() => undefined);
       return next;
+    },
+
+    async confirmTabularImport(id, basis) {
+      const run = async () => {
+        if (!worker) throw new Error("session store: worker not initialised");
+        const w = worker;
+        const pendingImport = get().pendingTabularImports.find(
+          (p) => p.id === id,
+        );
+        // Unknown id (already confirmed/cancelled, or a stale dialog): no-op.
+        if (!pendingImport) return;
+
+        const timeBasis = draftToBasis(basis);
+        if (timeBasis === null) {
+          // The dialog gates Confirm on a valid draft, so this only fires for a
+          // programmatic (dev-hook) call with a bad basis — surface it and
+          // leave the import queued so the user can retry.
+          set({
+            lastOpenErrors: [
+              {
+                name: pendingImport.name,
+                reason: "invalid time basis (missing column or epoch offset)",
+              },
+            ],
+          });
+          return;
+        }
+
+        const errors: BucketError[] = [];
+        const newSources: SourceMeta[] = [];
+        try {
+          const handle = await w.openTabular(
+            pendingImport.bytes,
+            pendingImport.format,
+            basisToJson(timeBasis),
+          );
+          const summary = await w.tabularSummary(handle);
+          const sourceId = uniqueSourceId(pendingImport.name, get().sources);
+          newSources.push({
+            id: sourceId,
+            kind: "tabular",
+            name: pendingImport.name,
+            handle,
+            timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+            channels: tabularChannels(sourceId, summary),
+          });
+        } catch (e) {
+          errors.push({ name: pendingImport.name, reason: String(e) });
+        }
+
+        // Register the source (widens globalRange, seeds cursor) exactly like
+        // an MF4 open, then dequeue this import.
+        commitOpenedSources(newSources, errors);
+        set({
+          pendingTabularImports: get().pendingTabularImports.filter(
+            (p) => p.id !== id,
+          ),
+        });
+      };
+      const next = pending.then(run, run);
+      pending = next.catch(() => undefined);
+      await next;
+    },
+
+    cancelTabularImport(id) {
+      const cur = get().pendingTabularImports;
+      const next = cur.filter((p) => p.id !== id);
+      if (next.length !== cur.length) set({ pendingTabularImports: next });
     },
 
     async openUrl(url) {
@@ -1562,6 +1743,7 @@ export const useSession = create<SessionState>((set, get) => {
           try {
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
+            else if (s.kind === "tabular") await w.closeTabular(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
@@ -1607,6 +1789,7 @@ export const useSession = create<SessionState>((set, get) => {
           lastOpenErrors: [],
           loadedRanges: {},
           pendingFetch: {},
+          pendingTabularImports: [],
         });
       };
       const next = pending.then(run, run);
@@ -1626,6 +1809,7 @@ export const useSession = create<SessionState>((set, get) => {
           try {
             if (src.kind === "mcap") await w.closeMcap(src.handle);
             else if (src.kind === "mf4") await w.closeMf4(src.handle);
+            else if (src.kind === "tabular") await w.closeTabular(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source

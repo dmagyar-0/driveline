@@ -15,6 +15,7 @@ import { Rail } from "./Rail";
 import { Drawer } from "./Drawer";
 import { FirstRun } from "./FirstRun";
 import { OpenErrorToast } from "./OpenErrorToast";
+import { TabularImportDialog } from "./TabularImportDialog";
 import styles from "./Shell.module.css";
 
 export interface ShellProps {
@@ -94,9 +95,11 @@ export function Shell({
       </div>
       {transport}
       <OpenErrorToast />
+      <TabularImportDialog />
       {dragActive && (
         <div className={styles.dragOverlay}>
-          Drop .mcap, .mf4, or .mp4 (+ .mp4.timestamps) to load a session.
+          Drop .mcap, .mf4, .csv, .parquet, or .mp4 (+ .mp4.timestamps) to load
+          a session.
         </div>
       )}
     </main>
