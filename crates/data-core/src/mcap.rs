@@ -450,7 +450,10 @@ impl McapReader {
             .get(channel_id)
             .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
 
-        if matches!(cm.kind, ChannelKind::Video | ChannelKind::Bytes) {
+        if matches!(
+            cm.kind,
+            ChannelKind::Video | ChannelKind::Bytes | ChannelKind::PointCloud
+        ) {
             return Err(crate::Error::UnsupportedKind);
         }
         let mcap_id = cm.mcap_id;
@@ -518,7 +521,9 @@ impl McapReader {
                 build_vector_ipc(ts_slice, &val_refs, n)
             }
             ChannelKind::Enum => build_enum_ipc(ts_slice, &val_refs),
-            ChannelKind::Video | ChannelKind::Bytes => unreachable!("guarded above"),
+            ChannelKind::Video | ChannelKind::Bytes | ChannelKind::PointCloud => {
+                unreachable!("guarded above")
+            }
         }
     }
 

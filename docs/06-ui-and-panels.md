@@ -245,15 +245,27 @@ FlexLayout component string to a React component:
 
 ### ScenePanel
 
-Empty-state placeholder. Awaits a `point_cloud` Arrow channel kind from
-the Rust core; binding shape (`Record<PanelId, ChannelId | null>`) is
-already allocated so the panel upgrades in place when the data path
-lands. The PanelDrawer body auto-detects bindable channels by kind:
-`SCENE_CHANNEL_KINDS` (currently `["vector"]`, the only existing kind that
-can hold per-frame XYZ vertices) filters the `ChannelPicker`, the status
-copy names the expected format, and `+ bind channel…` disables when no
-compatible channel is loaded. Widen `SCENE_CHANNEL_KINDS` when the core
-adds a dedicated `point_cloud` kind and the picker lights up automatically.
+3D point-cloud viewer (LiDAR). Binds a single `point_cloud` channel via
+`sceneBindings[panelId]` and renders the spin active at the shared cursor
+through a dependency-free **WebGL2** renderer (`pointCloudRenderer.ts`) —
+no three.js (the size budget counts lazy chunks too, and a point cloud is
+one `gl.POINTS` draw call). Points are coloured by **intensity** via a
+turbo colormap LUT; orbit / pan / zoom with the mouse, over a ground grid.
+
+Data path: the Rust core's `PointCloudReader` (`SourceKind::Lidar`,
+`ChannelKind::PointCloud`) reads a *Driveline point-cloud Parquet*
+(`*.lidar.parquet`, one row per spin) and `fetch_range` emits
+`{ ts, positions: List<Float32>, intensities: List<Float32> }` per spin.
+`pointCloudFromArrow.ts` decodes it. Time-sync is waste-free: the panel
+pulls the source's spin start-times once (`lidarSpinTimes`) and
+binary-searches them locally, refetching geometry **only when the cursor
+crosses into a new spin**, so playback/scrub steps the cloud without a
+per-tick fetch. See `tools/alpamayo_lidar_to_driveline.py` for the
+NVIDIA-Alpamayo (Draco) → `.lidar.parquet` converter.
+
+The PanelDrawer body auto-detects bindable channels by kind:
+`SCENE_CHANNEL_KINDS` (`["point_cloud", "vector"]`) filters the
+`ChannelPicker`, and `+ bind channel…` disables when none is loaded.
 
 ### MapPanel
 

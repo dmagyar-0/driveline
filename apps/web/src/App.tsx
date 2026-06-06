@@ -18,6 +18,7 @@ import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { getReadinessSnapshot } from "./panels/videoReadiness";
+import { getSceneFrameInfo } from "./panels/sceneDevState";
 import { hasChannelDrag } from "./panels/channelDrag";
 import { isCursorGated, startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
@@ -160,6 +161,19 @@ declare global {
         // blank-plot bug would surface here as NaN.
         yScale: { min: number; max: number } | null;
       } | null;
+      // Scene panel — read what the 3D point-cloud view is showing at the
+      // cursor (bound channel, active spin index + ts, GPU point count, GL
+      // health) so specs can assert intensity-coloured playback without
+      // scraping the WebGL canvas.
+      getScenePanelSync: (panelId: string) => {
+        boundChannelId: string | null;
+        pointCount: number;
+        frameTsNs: string | null;
+        spinIndex: number;
+        spinCount: number;
+        glOk: boolean;
+        error: string | null;
+      } | null;
       // T6.3 — per-series min/max stats over the most recent render for
       // `signalAlignment.spec.ts`.
       getPlotPanelSeriesStats: (panelId: string) => Array<{
@@ -195,7 +209,7 @@ declare global {
       // strings so `page.evaluate` can return them.
       listSources: () => Array<{
         id: string;
-        kind: "mcap" | "mf4" | "mp4+sidecar" | "tabular";
+        kind: "mcap" | "mf4" | "mp4+sidecar" | "tabular" | "lidar";
         name: string;
         timeRange: { startNs: string; endNs: string };
         channelIds: string[];
@@ -520,6 +534,7 @@ export function App() {
             count: s.count,
           }));
         },
+        getScenePanelSync: (panelId) => getSceneFrameInfo(panelId),
         listChannels: () =>
           useSession.getState().channels.map((c) => ({
             id: c.id,

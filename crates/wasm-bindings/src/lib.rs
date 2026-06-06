@@ -10,8 +10,8 @@ use std::cell::RefCell;
 
 use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
-    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, Reader, TabularReader, TimeBasis,
-    TimeRange,
+    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader,
+    TabularReader, TimeBasis, TimeRange,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -65,6 +65,7 @@ thread_local! {
     static MCAP_READERS: RefCell<Slab<McapReader>> = const { RefCell::new(Slab::new()) };
     static VIDEO_STREAMS: RefCell<Slab<McapVideoStream>> = const { RefCell::new(Slab::new()) };
     static TABULAR_READERS: RefCell<Slab<TabularReader>> = const { RefCell::new(Slab::new()) };
+    static LIDAR_READERS: RefCell<Slab<PointCloudReader>> = const { RefCell::new(Slab::new()) };
 }
 
 /// A live MCAP video stream: a lazy cursor plus the handle of the `McapReader`
@@ -310,6 +311,7 @@ fn channel_kind_str(k: ChannelKind) -> &'static str {
         ChannelKind::Video => "video",
         ChannelKind::Enum => "enum",
         ChannelKind::Bytes => "bytes",
+        ChannelKind::PointCloud => "point_cloud",
     }
 }
 
@@ -737,6 +739,121 @@ pub fn tabular_time_column_ns(handle: u32) -> Result<js_sys::BigInt64Array, JsEr
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid tabular handle"))?;
         let ts = reader.time_ns();
+        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
+        for (i, &v) in ts.iter().enumerate() {
+            arr.set_index(i as u32, v);
+        }
+        Ok(arr)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// LiDAR / point cloud (Driveline point-cloud Parquet)
+// ---------------------------------------------------------------------------
+
+/// Open a Driveline point-cloud Parquet (one row per LiDAR spin) and register
+/// the resulting `PointCloudReader` in the thread-local slab. Returns the
+/// integer handle the other `lidar_*` endpoints take. The bytes are decoded
+/// eagerly into per-spin point buffers and the reader owns them for the
+/// source's lifetime (freed by `close_lidar`); the JS caller can drop its copy
+/// of `bytes` once this returns.
+#[wasm_bindgen]
+pub fn open_lidar(bytes: &[u8]) -> Result<u32, JsError> {
+    let reader = PointCloudReader::open(bytes)
+        .map_err(|e| JsError::new(&format!("open lidar failed: {e}")))?;
+    let key = LIDAR_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the lidar reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_lidar(handle: u32) {
+    LIDAR_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the lidar reader's `SourceMeta` as a plain JS object. A point-cloud
+/// source surfaces exactly one channel; like the MF4 summary the kind is
+/// implicit (the JS store hardcodes `point_cloud`), so the shape reuses the
+/// MF4 summary layout (`group` always null, `sample_count` = peak points/spin).
+#[wasm_bindgen]
+pub fn lidar_summary(handle: u32) -> Result<JsValue, JsError> {
+    LIDAR_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid lidar handle"))?;
+        let meta = reader.meta();
+        let summary = Mf4Summary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| ChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    unit: c.unit.clone(),
+                    group: None,
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for the spins overlapping `[start_ns, end_ns)` of the given
+/// point-cloud channel. The 3D scene panel passes a zero/one-width window plus
+/// `include_prev` to fetch exactly the spin active at the cursor. The emitted
+/// schema is `{ ts: Timestamp(ns), positions: List<Float32>, intensities:
+/// List<Float32> }` (one row per spin) — see `pointcloud.rs`.
+#[wasm_bindgen]
+pub fn lidar_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    LIDAR_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid lidar handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
+    })
+}
+
+/// Ascending spin start timestamps (ns) of a point-cloud source, as a
+/// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
+/// locally to map the cursor to a spin index, so it only refetches point data
+/// when the active spin changes (not once per cursor tick).
+#[wasm_bindgen]
+pub fn lidar_spin_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
+    LIDAR_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid lidar handle"))?;
+        let ts = reader.spin_times();
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
         for (i, &v) in ts.iter().enumerate() {
             arr.set_index(i as u32, v);

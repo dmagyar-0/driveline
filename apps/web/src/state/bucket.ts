@@ -38,10 +38,18 @@ export interface Buckets {
   videoNeedsTimestamps: File[];
   /** CSV / Parquet drops — deferred behind the import-config dialog. */
   tabular: TabularInput[];
+  /**
+   * Driveline point-cloud Parquet drops (`*.lidar.parquet`) — one row per
+   * LiDAR spin, opened straight into the 3D scene pipeline. Detected by the
+   * compound `.lidar.parquet` suffix so a plain `.parquet` still routes to the
+   * tabular (scalar) import flow.
+   */
+  lidar: File[];
   errors: BucketError[];
 }
 
 const SIDECAR_SUFFIX = ".mp4.timestamps";
+const LIDAR_SUFFIX = ".lidar.parquet";
 
 export function bucketFiles(files: File[]): Buckets {
   const mcap: File[] = [];
@@ -49,6 +57,7 @@ export function bucketFiles(files: File[]): Buckets {
   const sidecars = new Map<string, File>(); // mp4 filename -> sidecar file
   const mp4s: File[] = [];
   const tabular: TabularInput[] = [];
+  const lidar: File[] = [];
   const errors: BucketError[] = [];
 
   for (const f of files) {
@@ -65,6 +74,10 @@ export function bucketFiles(files: File[]): Buckets {
       mcap.push(f);
     } else if (lower.endsWith(".mf4")) {
       mf4.push(f);
+    } else if (lower.endsWith(LIDAR_SUFFIX)) {
+      // Point-cloud Parquet — checked before the generic `.parquet` branch so
+      // a `*.lidar.parquet` routes to the 3D scene pipeline, not tabular.
+      lidar.push(f);
     } else if (lower.endsWith(".csv")) {
       tabular.push({ file: f, format: "csv" });
     } else if (lower.endsWith(".parquet") || lower.endsWith(".pq")) {
@@ -99,7 +112,7 @@ export function bucketFiles(files: File[]): Buckets {
     });
   }
 
-  return { mcap, mf4, mp4Pairs, videoNeedsTimestamps, tabular, errors };
+  return { mcap, mf4, mp4Pairs, videoNeedsTimestamps, tabular, lidar, errors };
 }
 
 /** A URL input classified by the reader that can open it. */

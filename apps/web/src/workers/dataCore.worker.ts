@@ -25,6 +25,11 @@ import init, {
   tabular_fetch_range,
   tabular_time_column_ns,
   close_tabular,
+  open_lidar,
+  lidar_summary,
+  lidar_fetch_range,
+  lidar_spin_times,
+  close_lidar,
 } from "../wasm/wasm_bindings.js";
 import {
   normaliseEncodedChunk,
@@ -516,6 +521,55 @@ export const dataCoreApi = {
   async closeTabular(handle: number): Promise<void> {
     await ready;
     close_tabular(handle);
+  },
+  /**
+   * Open a Driveline point-cloud Parquet (one row per LiDAR spin). Like the
+   * tabular path the whole blob is passed wholesale (no OPFS copy) and the
+   * wasm reader owns the decoded per-spin buffers for the source's lifetime,
+   * freed by `closeLidar`. The JS caller can drop its `bytes` once this
+   * returns.
+   */
+  async openLidar(bytes: Uint8Array): Promise<number> {
+    await ready;
+    return open_lidar(bytes);
+  },
+  /**
+   * `SourceMeta` for an open point-cloud reader, in the MF4-style shape
+   * (single channel, `group` null, `sample_count` = peak points/spin),
+   * normalised so every `*_ns` field is a `bigint`.
+   */
+  async lidarSummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(lidar_summary(handle) as RawMf4Summary);
+  },
+  /**
+   * Arrow IPC for the spins overlapping `[startNs, endNs)`. The scene panel
+   * passes a zero/one-width window + `includePrev` to fetch exactly the spin
+   * active at the cursor. Schema: `{ ts, positions: List<f32>, intensities:
+   * List<f32> }`, one row per spin.
+   */
+  async lidarFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    return lidar_fetch_range(handle, channelId, startNs, endNs, includePrev);
+  },
+  /**
+   * Ascending spin start timestamps (ns) for a point-cloud source, one per
+   * frame. The scene panel binary-searches this locally so it only refetches
+   * point data when the active spin changes.
+   */
+  async lidarSpinTimes(handle: number): Promise<BigInt64Array> {
+    await ready;
+    return lidar_spin_times(handle);
+  },
+  async closeLidar(handle: number): Promise<void> {
+    await ready;
+    close_lidar(handle);
   },
   async openMcapVideoStream(
     handle: number,

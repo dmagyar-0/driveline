@@ -68,7 +68,7 @@ import { synthesizeSidecarBytes } from "./videoTimestampBinding";
 import { shiftFetchWindow, shiftRangeArrowTs } from "./offsetShift";
 import { parseEpochOffsetNs } from "./tabularImport";
 
-export type SourceKind = "mcap" | "mf4" | "mp4+sidecar" | "tabular";
+export type SourceKind = "mcap" | "mf4" | "mp4+sidecar" | "tabular" | "lidar";
 export type ChannelKind = ChannelKindWire;
 
 export interface TimeRange {
@@ -700,6 +700,13 @@ export interface SessionState {
     endNs: bigint,
     includePrev: boolean,
   ): Promise<Uint8Array>;
+  /**
+   * Ascending spin start timestamps (ns) for a point-cloud channel — one per
+   * frame. The 3D scene panel binary-searches this locally to map the cursor
+   * to a spin index, so it only refetches geometry when the active spin
+   * changes (not once per cursor tick). Throws for non-lidar channels.
+   */
+  lidarSpinTimes(channelId: string): Promise<BigInt64Array>;
 }
 
 export const MIN_SPEED = 0.25;
@@ -798,6 +805,24 @@ function mp4Channels(sourceId: string, s: Mp4SidecarSummary): Channel[] {
     name: c.name,
     group: null,
     kind: "video" as const,
+    dtype: null,
+    unit: null,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
+// Point-cloud (LiDAR) summaries arrive in the MF4 shape — the reader emits a
+// single channel — so the mapping mirrors `mf4Channels` but hardcodes the
+// `point_cloud` kind so the ScenePanel/PanelDrawer route it to the 3D scene
+// pipeline rather than a plot. `sample_count` carries peak points-per-spin.
+function lidarChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: null,
+    kind: "point_cloud" as const,
     dtype: null,
     unit: null,
     sampleCount: c.sample_count,
@@ -1655,11 +1680,37 @@ export const useSession = create<SessionState>((set, get) => {
           );
           return shiftRangeArrowTs(bytes, offset);
         }
+        if (source.kind === "lidar") {
+          // Point-cloud batches carry a List<Float32> geometry schema, not the
+          // scalar `{ts,value}` shape `shiftRangeArrowTs` rewrites — and lidar
+          // sources never carry a time offset (always 0n), so pass the bytes
+          // through unmodified. The window is already un-shifted (offset 0).
+          return worker.lidarFetchRange(
+            source.handle,
+            channel.nativeId,
+            win.startNs,
+            win.endNs,
+            includePrev,
+          );
+        }
         throw new Error(`channel kind not plottable: ${source.kind}`);
       } finally {
         mark(perfEnd);
         measure(`fetch-range:${channelId}`, perfStart, perfEnd);
       }
+    },
+
+    async lidarSpinTimes(channelId) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel) throw new Error(`unknown channel: ${channelId}`);
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      if (source.kind !== "lidar") {
+        throw new Error(`not a point-cloud channel: ${channelId}`);
+      }
+      return worker.lidarSpinTimes(source.handle);
     },
 
     async openFiles(files) {
@@ -1714,6 +1765,34 @@ export const useSession = create<SessionState>((set, get) => {
               handle,
               timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
               channels,
+              timeOffsetNs: 0n,
+            });
+            opened.push(f.name);
+          } catch (e) {
+            errors.push({ name: f.name, reason: String(e) });
+          }
+        }
+
+        for (const f of buckets.lidar) {
+          try {
+            // Point-cloud Parquet opens eagerly (like a tabular source): the
+            // bytes are decoded into per-spin buffers in wasm and the JS copy
+            // is dropped once `openLidar` returns. One point-cloud channel per
+            // source, bindable to a 3D scene panel.
+            const bytes = await fileBytes(f);
+            const handle = await w.openLidar(bytes);
+            const summary = await w.lidarSummary(handle);
+            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+            const channels = lidarChannels(id, summary);
+            newSources.push({
+              id,
+              kind: "lidar",
+              name: f.name,
+              handle,
+              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+              channels,
+              // Point clouds carry no time offset; alignment is in the spin
+              // timestamps and the fetch path passes bytes through unshifted.
               timeOffsetNs: 0n,
             });
             opened.push(f.name);
@@ -2091,6 +2170,7 @@ export const useSession = create<SessionState>((set, get) => {
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
             else if (s.kind === "tabular") await w.closeTabular(s.handle);
+            else if (s.kind === "lidar") await w.closeLidar(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
@@ -2159,6 +2239,7 @@ export const useSession = create<SessionState>((set, get) => {
             if (src.kind === "mcap") await w.closeMcap(src.handle);
             else if (src.kind === "mf4") await w.closeMf4(src.handle);
             else if (src.kind === "tabular") await w.closeTabular(src.handle);
+            else if (src.kind === "lidar") await w.closeLidar(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source

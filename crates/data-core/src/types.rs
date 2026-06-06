@@ -29,6 +29,10 @@ pub enum ChannelKind {
     Video,
     Enum,
     Bytes,
+    /// A per-frame array of 3D points (e.g. a LiDAR spin). Each "sample" is a
+    /// whole point cloud, fetched one frame at a time by the 3D scene panel —
+    /// not a scalar time series. See `pointcloud.rs` for the Arrow schema.
+    PointCloud,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +83,9 @@ pub enum SourceKind {
     Mf4,
     Mp4Sidecar,
     Tabular,
+    /// A Driveline point-cloud Parquet (one row per LiDAR spin). See
+    /// `PointCloudReader`.
+    Lidar,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
