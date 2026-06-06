@@ -50,6 +50,26 @@ describe("axisIdxFromScaleKey", () => {
   });
 });
 
+// Stacked layout for the same 300×180 plot with TWO data-bearing bands
+// (axis 0 on top, axis 1 below). Mirrors what `buildZoomGeometry` emits while
+// stacked: an x-gutter, then per band a left flank + right flank ("y") and a
+// drawing-area slice ("both" tagged with the band's axis). The slices tile the
+// whole drawing area, so no point falls through to the overlay "both" default.
+const STACKED_GEOM: ZoomGeometry = {
+  plot: { left: 50, top: 0, width: 300, height: 180 },
+  axes: [
+    { target: { kind: "x" }, x0: 50, x1: 350, y0: 180, y1: 1e6 },
+    // Top band (axis 0): rows 0–90.
+    { target: { kind: "y", axisIdx: 0 }, x0: 0, x1: 50, y0: 0, y1: 90 },
+    { target: { kind: "y", axisIdx: 0 }, x0: 350, x1: 1e6, y0: 0, y1: 90 },
+    { target: { kind: "both", axisIdx: 0 }, x0: 50, x1: 350, y0: 0, y1: 90 },
+    // Bottom band (axis 1): rows 90–180.
+    { target: { kind: "y", axisIdx: 1 }, x0: 0, x1: 50, y0: 90, y1: 180 },
+    { target: { kind: "y", axisIdx: 1 }, x0: 350, x1: 1e6, y0: 90, y1: 180 },
+    { target: { kind: "both", axisIdx: 1 }, x0: 50, x1: 350, y0: 90, y1: 180 },
+  ],
+};
+
 describe("zoomTargetForPointer", () => {
   it("scales both axes inside the drawing area", () => {
     expect(zoomTargetForPointer(GEOM, 200, 90)).toEqual({ kind: "both" });
@@ -69,6 +89,32 @@ describe("zoomTargetForPointer", () => {
   });
   it("returns null outside every interactive region", () => {
     expect(zoomTargetForPointer(GEOM, 500, 500)).toBeNull();
+  });
+
+  it("stacked: drawing-area slice scales x + that band's y", () => {
+    // Vertical position picks the band; horizontal position doesn't.
+    expect(zoomTargetForPointer(STACKED_GEOM, 200, 45)).toEqual({
+      kind: "both",
+      axisIdx: 0,
+    });
+    expect(zoomTargetForPointer(STACKED_GEOM, 200, 135)).toEqual({
+      kind: "both",
+      axisIdx: 1,
+    });
+  });
+  it("stacked: gutter flank scales only that band's y (either side)", () => {
+    // Left flank of the top band and right flank of the bottom band.
+    expect(zoomTargetForPointer(STACKED_GEOM, 25, 45)).toEqual({
+      kind: "y",
+      axisIdx: 0,
+    });
+    expect(zoomTargetForPointer(STACKED_GEOM, 375, 135)).toEqual({
+      kind: "y",
+      axisIdx: 1,
+    });
+  });
+  it("stacked: x-gutter still scales only x", () => {
+    expect(zoomTargetForPointer(STACKED_GEOM, 200, 190)).toEqual({ kind: "x" });
   });
 });
 

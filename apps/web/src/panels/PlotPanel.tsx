@@ -31,7 +31,13 @@ import {
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
 import { MAX_PLOT_Y_AXES, useSession } from "../state/store";
-import type { Channel, PlotZoom, SourceMeta, TimeRange } from "../state/store";
+import type {
+  Channel,
+  PlotAxisWindow,
+  PlotZoom,
+  SourceMeta,
+  TimeRange,
+} from "../state/store";
 import { channelLabel, effectiveUnit } from "../state/units";
 import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
 import { mergeSeries } from "./mergeSeries";
@@ -182,12 +188,26 @@ function scaleKeyForAxis(axisIdx: number): string {
 // computes for every axis — not in the public typings, so read through a
 // narrow cast, mirroring the existing `axis.font` access in `yAxisSize`).
 //
-// Each gutter rect spans the WHOLE band for its axis (ticks + values +
-// label), not just the tick strip, by partitioning the space outside the
-// drawing area between adjacent axes — so wheeling anywhere over an axis,
-// including its unit label, targets that axis. Returns null before the
-// first layout (zero-size bbox).
-function buildZoomGeometry(plot: uPlot): ZoomGeometry | null {
+// Overlay mode: each y-gutter rect spans the WHOLE band for its axis (ticks +
+// values + label), not just the tick strip, by partitioning the space outside
+// the drawing area between adjacent axes — so wheeling anywhere over an axis,
+// including its unit label, targets that axis. The drawing area itself isn't
+// rectangled here; `zoomTargetForPointer` falls back to "both" for it.
+//
+// Stacked mode: horizontal position no longer picks the axis — the bands are
+// stacked vertically — so the panel is sliced into `dataAxisOrder.length`
+// horizontal bands (top→bottom, ascending axis index, matching
+// `stackedBandRange`'s slot order). Each band gets a drawing-area slice tagged
+// "both" (x + that band's y) plus left/right gutter flanks tagged "y" (that
+// band's y only). The slices tile the whole drawing area, so the overlay
+// "both" fallback never fires while stacked.
+//
+// Returns null before the first layout (zero-size bbox).
+function buildZoomGeometry(
+  plot: uPlot,
+  stacking: boolean,
+  dataAxisOrder: number[],
+): ZoomGeometry | null {
   const bbox = plot.bbox;
   if (!bbox) return null;
   const dpr = window.devicePixelRatio || 1;
@@ -208,28 +228,48 @@ function buildZoomGeometry(plot: uPlot): ZoomGeometry | null {
     return g._pos;
   };
 
-  const lefts: { axisIdx: number; pos: number }[] = [];
-  const rights: { axisIdx: number; pos: number }[] = [];
   const axes: ZoomHitRect[] = [];
 
+  // X-axis gutter(s): full-width band on the top/bottom side of the drawing
+  // area. Independent of stacking — x always scales the shared timeline.
+  for (const ax of plot.axes) {
+    if (ax.scale !== "x") continue;
+    const pos = axisPos(ax);
+    if (pos == null) continue;
+    if (ax.side === 0) {
+      axes.push({ target: { kind: "x" }, x0: left, x1: right, y0: 0, y1: top });
+    } else {
+      axes.push({ target: { kind: "x" }, x0: left, x1: right, y0: bottom, y1: OUT });
+    }
+  }
+
+  if (stacking && dataAxisOrder.length >= 2) {
+    const n = dataAxisOrder.length;
+    for (let k = 0; k < n; k++) {
+      const axisIdx = dataAxisOrder[k];
+      // Band k owns the k-th horizontal slice (top→bottom). Boundaries use the
+      // same `(k/n)*height` expression for adjacent bands so they meet exactly
+      // — no float gap that would leak a pointer to the "both" fallback.
+      const y0 = top + (k / n) * height;
+      const y1 = top + ((k + 1) / n) * height;
+      // Gutter flanks beside this band (left and right of the drawing area):
+      // y-only zoom for the band. Both flanks map to the same band so wheeling
+      // next to its ticks works regardless of which side the axis renders on.
+      axes.push({ target: { kind: "y", axisIdx }, x0: 0, x1: left, y0, y1 });
+      axes.push({ target: { kind: "y", axisIdx }, x0: right, x1: OUT, y0, y1 });
+      // Drawing-area slice: x + this band's y.
+      axes.push({ target: { kind: "both", axisIdx }, x0: left, x1: right, y0, y1 });
+    }
+    return { plot: { left, top, width, height }, axes };
+  }
+
+  // Overlay: y-axes partition the gutters horizontally — axis 0 on the left,
+  // higher indices stacked on the right — each spanning the full plot height.
+  const lefts: { axisIdx: number; pos: number }[] = [];
+  const rights: { axisIdx: number; pos: number }[] = [];
   for (const ax of plot.axes) {
     const pos = axisPos(ax);
-    if (pos == null || ax.scale == null) continue;
-    if (ax.scale === "x") {
-      // x-axis gutter: the full-width band on its side of the drawing area.
-      if (ax.side === 0) {
-        axes.push({ target: { kind: "x" }, x0: left, x1: right, y0: 0, y1: top });
-      } else {
-        axes.push({
-          target: { kind: "x" },
-          x0: left,
-          x1: right,
-          y0: bottom,
-          y1: OUT,
-        });
-      }
-      continue;
-    }
+    if (pos == null || ax.scale == null || ax.scale === "x") continue;
     const axisIdx = axisIdxFromScaleKey(ax.scale);
     if (axisIdx == null) continue;
     (ax.side === 3 ? lefts : rights).push({ axisIdx, pos });
@@ -396,6 +436,32 @@ export function stackedBandRange(
   const fullSpan = (hi - lo) / innerFrac;
   const scaleMin = lo - normLo * fullSpan;
   return [scaleMin, scaleMin + fullSpan];
+}
+
+// Map a pointer's whole-plot vertical fraction (0 = top, 1 = bottom) to the
+// fraction WITHIN stacked band `slot` of `count` (0 = band top = the band's
+// max value, 1 = band bottom = its min). Mirrors `stackedBandRange`'s band
+// edges (inset by `STACK_BAND_GAP`) so that when a band is wheel-zoomed the
+// value under the pointer stays fixed, exactly like the unstacked y-zoom.
+// Pointing into the inter-band gap clamps to the nearer band edge; a
+// degenerate band (zero inner height) maps to its centre.
+export function bandFracTop(
+  fracTop: number,
+  slot: number,
+  count: number,
+): number {
+  const n = Math.max(1, Math.floor(count));
+  const s = Math.min(Math.max(0, Math.floor(slot)), n - 1);
+  const bandFrac = 1 / n;
+  const gap = STACK_BAND_GAP * bandFrac;
+  // The band's data region as top-down pixel fractions: top edge (max value)
+  // at `s*bandFrac + gap`, bottom edge (min value) `gap` short of the next
+  // band — the complement of stackedBandRange's bottom-up `normLo`/`normHi`.
+  const topPix = s * bandFrac + gap;
+  const inner = bandFrac - 2 * gap;
+  if (!(inner > 0)) return 0.5;
+  const f = (fracTop - topPix) / inner;
+  return f < 0 ? 0 : f > 1 ? 1 : f;
 }
 
 // How many gridlines to aim for inside each stacked band. The "nice" step
@@ -670,6 +736,12 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const decodedRef = useRef<
     { channelId: string; series: PlotSeries }[]
   >([]);
+  // Per-axis auto-ranged DATA extent recorded by each banded scale's `range`
+  // callback (keyed by 0-based axis index). The wheel handler needs this as
+  // the base for the first per-band zoom notch: while stacked, the resolved
+  // `plot.scales[key]` holds the EXPANDED band range (≈3.6× the data), not the
+  // data extent, so `readResolvedScale` would zoom against the wrong span.
+  const bandDataExtentRef = useRef<Map<number, PlotAxisWindow>>(new Map());
 
   const publishSync = useCallback(() => {
     const store =
@@ -865,12 +937,15 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     const bandExtent = new Map<string, [number, number] | null>();
     // Every y-scale carries a `range` callback (resolved synchronously inside
     // `setData`, so the e2e/plot-sync specs can read `scales.y` straight off).
-    // Priority per axis: an explicit wheel/side-menu zoom window wins (overlay
-    // mode only — a stacked band already owns its axis's vertical slice, so
-    // per-band zoom is out of scope and skipped); else the stacked-band remap;
-    // else uPlot's own default auto-range (`rangeNum(d,d,0.1,true)` ≡ the
-    // built-in `snapNumY`), so an unzoomed, unstacked axis looks exactly as it
-    // did before this callback existed.
+    // Priority per axis:
+    //   - Overlay: an explicit wheel/side-menu zoom window wins; else uPlot's
+    //     default auto-range (`rangeNum(d,d,0.1,true)` ≡ the built-in
+    //     `snapNumY`), so an unzoomed, unstacked axis looks exactly as before.
+    //   - Stacked: the band remaps its DATA extent into its vertical slice; a
+    //     per-band zoom window narrows that extent (so the band shows a zoomed
+    //     slice of its signal) while keeping the same slot. Either way the
+    //     extent is recorded for the wheel base (bandDataExtentRef) and the
+    //     ticks (bandExtent → niceBandSplits) so the grid tracks the zoom.
     const yScales: uPlot.Scales = {};
     for (const axisIdx of axisOrder) {
       const key = scaleKeyForAxis(axisIdx);
@@ -880,13 +955,16 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         auto: true,
         range: (_u, dMin, dMax) => {
           const z = zoomRef.current?.y?.[axisIdx];
-          if (z && !isBandedAxis) return [z.min, z.max];
           if (isBandedAxis) {
-            const lo = Number.isFinite(dMin) ? dMin : 0;
-            const hi = Number.isFinite(dMax) ? dMax : 1;
+            const dataLo = Number.isFinite(dMin) ? dMin : 0;
+            const dataHi = Number.isFinite(dMax) ? dMax : 1;
+            bandDataExtentRef.current.set(axisIdx, { min: dataLo, max: dataHi });
+            const lo = z && z.max > z.min ? z.min : dataLo;
+            const hi = z && z.max > z.min ? z.max : dataHi;
             bandExtent.set(key, hi > lo ? [lo, hi] : null);
-            return stackedBandRange(dMin, dMax, slot, bandCount);
+            return stackedBandRange(lo, hi, slot, bandCount);
           }
+          if (z) return [z.min, z.max];
           if (!Number.isFinite(dMin) || !Number.isFinite(dMax)) {
             return [null, null];
           }
@@ -1021,6 +1099,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // Clear decoded series so a post-rebuild cursor tick doesn't publish
     // stale samples keyed by the previous binding set.
     decodedRef.current = [];
+    // Drop band data extents from the previous axis layout; the new scales'
+    // `range` callbacks repopulate this on the first `setData`.
+    bandDataExtentRef.current.clear();
 
     return () => {
       plot.destroy();
@@ -1073,7 +1154,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       const plot = plotRef.current;
       const bound = globalRangeRef.current;
       if (!plot || !bound) return;
-      const geom = buildZoomGeometry(plot);
+      const geom = buildZoomGeometry(
+        plot,
+        stackingRef.current,
+        usedAxisIndicesRef.current,
+      );
       if (!geom) return;
       const rect = container.getBoundingClientRect();
       const px = e.clientX - rect.left;
@@ -1090,18 +1175,42 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         const base = z?.x ?? bound;
         st.setPlotZoomX(panelId, scaleWindowX(base, fracX, factor, bound));
       }
-      // Y-zoom only in overlay mode — a stacked band owns its axis's slice.
-      if (
-        (target.kind === "y" || target.kind === "both") &&
-        !stackingRef.current
-      ) {
-        const axes =
-          target.kind === "y" ? [target.axisIdx] : usedAxisIndicesRef.current;
-        for (const axisIdx of axes) {
-          const key = scaleKeyForAxis(axisIdx);
-          const base = z?.y?.[axisIdx] ?? readResolvedScale(plot, key);
-          if (!base) continue;
-          st.setPlotZoomY(panelId, axisIdx, scaleWindowY(base, fracTop, factor));
+      // Y-zoom. Overlay: scale every targeted axis (one gutter axis, or all
+      // used axes for a "both") across the full plot height. Stacked: scale
+      // just the band under the pointer, anchored at the pointer's position
+      // WITHIN that band and based on the band's own data extent — the
+      // resolved scale holds the expanded band range, so we read the recorded
+      // data extent (bandDataExtentRef) instead.
+      if (target.kind === "y" || target.kind === "both") {
+        if (stackingRef.current) {
+          const axisIdx = target.axisIdx;
+          const order = usedAxisIndicesRef.current;
+          const slot = axisIdx == null ? -1 : order.indexOf(axisIdx);
+          if (axisIdx != null && slot >= 0) {
+            const base =
+              z?.y?.[axisIdx] ?? bandDataExtentRef.current.get(axisIdx);
+            if (base) {
+              const fracBand = bandFracTop(fracTop, slot, order.length);
+              st.setPlotZoomY(
+                panelId,
+                axisIdx,
+                scaleWindowY(base, fracBand, factor),
+              );
+            }
+          }
+        } else {
+          const axes =
+            target.kind === "y" ? [target.axisIdx] : usedAxisIndicesRef.current;
+          for (const axisIdx of axes) {
+            const key = scaleKeyForAxis(axisIdx);
+            const base = z?.y?.[axisIdx] ?? readResolvedScale(plot, key);
+            if (!base) continue;
+            st.setPlotZoomY(
+              panelId,
+              axisIdx,
+              scaleWindowY(base, fracTop, factor),
+            );
+          }
         }
       }
     };

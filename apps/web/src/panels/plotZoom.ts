@@ -8,6 +8,12 @@
 //   - wheel over a y-axis gutter         → scale only that y-axis (so a
 //     panel with several y-axes zooms just the one under the pointer).
 //
+// Stacked mode (each y-axis remapped into its own horizontal band) keeps the
+// same shape with the band standing in for "the y under the pointer": wheel
+// over a band's slice of the drawing area scales x + THAT band's y, and wheel
+// over the gutter flanking a band scales only that band's y. Vertical position
+// (not horizontal) picks the band, mirroring the visual stack.
+//
 // The x window lives in nanoseconds (`bigint`, mirroring all time state)
 // so the cursor overlay / drag-to-scrub keep their precision; y windows
 // are plain data-unit floats. Zoom-out that reaches the full timeline
@@ -28,7 +34,9 @@ export const MIN_X_SPAN_NS = 1000n;
 export type ZoomTarget =
   | { kind: "x" }
   | { kind: "y"; axisIdx: number }
-  | { kind: "both" };
+  // `axisIdx` is set only when stacked, naming the single band to scale
+  // alongside x; absent (overlay) means "x + every y-axis".
+  | { kind: "both"; axisIdx?: number };
 
 // A gutter / plot-area rectangle in CSS pixels (container-relative),
 // tagged with what wheeling over it should scale.
@@ -43,7 +51,10 @@ export interface ZoomHitRect {
 export interface ZoomGeometry {
   // The plot drawing area (uPlot's bbox) in CSS pixels.
   plot: { left: number; top: number; width: number; height: number };
-  // One rect per rendered axis gutter (the x-axis + each shown y-axis).
+  // Tagged hit rects. Overlay: one per rendered axis gutter (the x-axis +
+  // each shown y-axis); the drawing area falls through to a "both" default.
+  // Stacked: the x-gutter(s) plus, per band, two gutter flanks ("y") and a
+  // drawing-area slice ("both") — together these tile the whole drawing area.
   axes: ZoomHitRect[];
 }
 
@@ -68,14 +79,19 @@ export function axisIdxFromScaleKey(key: string): number | null {
 
 const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-// Hit-test a pointer (CSS px, container-relative) against the plot
-// geometry. Inside the drawing area scales both axes; over a gutter scales
-// just that axis. Returns null when the pointer is outside every region.
+// Hit-test a pointer (CSS px, container-relative) against the plot geometry.
+// Tagged rects are checked first so a stacked band's drawing-area slice (which
+// overlaps the plot bbox) wins; the plot bbox is the overlay fallback, where no
+// rect covers the drawing area and wheeling there scales both axes. Over a
+// gutter scales just that axis. Returns null when outside every region.
 export function zoomTargetForPointer(
   geom: ZoomGeometry,
   px: number,
   py: number,
 ): ZoomTarget | null {
+  for (const r of geom.axes) {
+    if (px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1) return r.target;
+  }
   const p = geom.plot;
   if (
     px >= p.left &&
@@ -84,9 +100,6 @@ export function zoomTargetForPointer(
     py <= p.top + p.height
   ) {
     return { kind: "both" };
-  }
-  for (const r of geom.axes) {
-    if (px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1) return r.target;
   }
   return null;
 }

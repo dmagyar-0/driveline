@@ -28,7 +28,12 @@ vi.hoisted(() => {
     }) as unknown as MediaQueryList;
 });
 
-import { STACK_BAND_GAP, niceBandSplits, stackedBandRange } from "./PlotPanel";
+import {
+  STACK_BAND_GAP,
+  bandFracTop,
+  niceBandSplits,
+  stackedBandRange,
+} from "./PlotPanel";
 
 // uPlot maps a scale's [min, max] across the full plot height with min at
 // the bottom (0) and max at the top (1). This is the normalised vertical
@@ -98,6 +103,54 @@ describe("stackedBandRange", () => {
     // slot 5 with 2 bands clamps to the bottom band; slot -1 to the top.
     expect(stackedBandRange(0, 1, 5, 2)).toEqual(stackedBandRange(0, 1, 1, 2));
     expect(stackedBandRange(0, 1, -1, 2)).toEqual(stackedBandRange(0, 1, 0, 2));
+  });
+});
+
+describe("bandFracTop", () => {
+  // 2 bands → bandFrac 0.5, gap 0.04, inner height 0.42. Top band's data
+  // region runs pixel-fraction 0.04–0.46; bottom band's 0.54–0.96.
+  it("maps a pointer to 0 at the band top and 1 at the band bottom", () => {
+    expect(bandFracTop(0.04, 0, 2)).toBeCloseTo(0, 6); // top of top band
+    expect(bandFracTop(0.46, 0, 2)).toBeCloseTo(1, 6); // bottom of top band
+    expect(bandFracTop(0.54, 1, 2)).toBeCloseTo(0, 6); // top of bottom band
+    expect(bandFracTop(0.96, 1, 2)).toBeCloseTo(1, 6); // bottom of bottom band
+  });
+
+  it("maps the band centre to 0.5", () => {
+    expect(bandFracTop(0.25, 0, 2)).toBeCloseTo(0.5, 6);
+    expect(bandFracTop(0.75, 1, 2)).toBeCloseTo(0.5, 6);
+  });
+
+  it("clamps pointers in the inter-band gap to the nearer band edge", () => {
+    // Above the top band, and below the bottom band.
+    expect(bandFracTop(0, 0, 2)).toBe(0);
+    expect(bandFracTop(1, 1, 2)).toBe(1);
+    // In the gap just under the top band: clamps to its bottom (1).
+    expect(bandFracTop(0.5, 0, 2)).toBe(1);
+  });
+
+  it("normalises slot/count (floored, clamped into range) like stackedBandRange", () => {
+    // Fractional slot floors; an out-of-range slot clamps into the band set.
+    expect(bandFracTop(0.25, 0.4, 2)).toBeCloseTo(bandFracTop(0.25, 0, 2), 6);
+    expect(bandFracTop(0.75, 5, 2)).toBeCloseTo(bandFracTop(0.75, 1, 2), 6);
+    expect(bandFracTop(0.25, -1, 2)).toBeCloseTo(bandFracTop(0.25, 0, 2), 6);
+  });
+
+  it("anchors the within-band fraction so the value under the pointer is fixed", () => {
+    // The point of bandFracTop: feeding it to scaleWindowY keeps the value
+    // under the pointer pinned while zooming. Cross-check against the band's
+    // own remap: a value at pixel-fraction p resolves to fraction f within the
+    // band, and `max - f*(max-min)` must recover that value.
+    const extent: [number, number] = [0, 10];
+    for (const slot of [0, 1]) {
+      const r = stackedBandRange(extent[0], extent[1], slot, 2);
+      for (const v of [0, 2.5, 5, 7.5, 10]) {
+        const pixFrac = 1 - frac(v, r); // uPlot frac() is bottom-up; invert it
+        const f = bandFracTop(pixFrac, slot, 2);
+        const anchor = extent[1] - f * (extent[1] - extent[0]);
+        expect(anchor).toBeCloseTo(v, 6);
+      }
+    }
   });
 });
 
