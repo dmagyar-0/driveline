@@ -7,6 +7,16 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { Remote } from "comlink";
 import {
+  Float64,
+  Table,
+  TimeUnit,
+  Timestamp,
+  makeData,
+  makeVector,
+  tableFromIPC,
+  tableToIPC,
+} from "apache-arrow";
+import {
   MAX_SPEED,
   MIN_SPEED,
   effectivePlotZoomX,
@@ -20,6 +30,25 @@ import type {
   Mf4Summary,
   Mp4SidecarSummary,
 } from "../workerClient";
+
+const TS_TYPE = new Timestamp(TimeUnit.NANOSECOND, "UTC");
+
+// Build a single-batch scalar Arrow IPC (`ts: Timestamp64`, `value: Float64`)
+// — the wire shape the readers emit and the offset shift rewrites.
+function scalarArrowIpc(ts: BigInt64Array, value: Float64Array): Uint8Array {
+  const tsVec = makeVector(makeData({ type: TS_TYPE, data: ts }));
+  const valVec = makeVector(makeData({ type: new Float64(), data: value }));
+  return tableToIPC(new Table({ ts: tsVec, value: valVec }), "file");
+}
+
+// Pull the `ts` column back out of an IPC batch for assertions.
+function arrowTs(bytes: Uint8Array): bigint[] {
+  const table = tableFromIPC(bytes);
+  const col = table.getChild("ts");
+  if (!col) throw new Error("no ts column");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return Array.from((col as any).data[0].values as BigInt64Array);
+}
 
 interface Summaries {
   mcap: McapSummary;
@@ -80,6 +109,10 @@ type FakeWorker = Remote<DataCoreApi> & {
   openLog: string[];
   closeLog: string[];
   openResolvers: Array<() => void>;
+  // Feature 1: the ns time column `tabularTimeColumnNs` returns. Tests set this
+  // to control the synthesized sidecar's line count (and so the open's count
+  // validation). Defaults to a 30-entry column (matches `summaries.mp4`).
+  setTabularTimeColumn: (ts: BigInt64Array) => void;
 };
 
 function makeFakeWorker(summaries: Summaries): FakeWorker {
@@ -89,6 +122,11 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
   const openResolvers: Array<() => void> = [];
   // If non-empty, each open call blocks until its resolver is invoked.
   let blocking = false;
+  // The ns time column `tabularTimeColumnNs` returns (Feature 1). Defaults to
+  // a 30-entry ascending column so it matches `summaries.mp4.channels[0].sample_count`.
+  let tabularTimeColumn = BigInt64Array.from(
+    Array.from({ length: 30 }, (_v, i) => BigInt(10_000 + i * 100)),
+  ) as BigInt64Array;
 
   function maybeBlock(): Promise<void> {
     if (!blocking) return Promise.resolve();
@@ -148,9 +186,29 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       );
       return new Uint8Array([0xbb]);
     },
-    async openMp4Sidecar() {
+    async openMp4Sidecar(_mp4Bytes: Uint8Array, sidecarBytes?: Uint8Array) {
       openLog.push("mp4");
       await maybeBlock();
+      // Mimic the real reader's line-count validation (docs/05-video-pipeline
+      // §Sidecar format): a synthesized sidecar whose line count != the mp4
+      // sample count fails the open. Only the Feature-1 path passes a sidecar
+      // whose lines are `<i>\t<ts>`; the paired-path test fixtures pass opaque
+      // bytes (`[1,2,3]`), which produce no parseable lines — skip those so the
+      // existing paired-open tests keep working.
+      if (sidecarBytes && sidecarBytes.length > 0) {
+        const text = new TextDecoder().decode(sidecarBytes);
+        const lines = text
+          .split("\n")
+          .filter((l) => /^\d+\t-?\d+$/.test(l));
+        if (
+          lines.length > 0 &&
+          lines.length !== summaries.mp4.channels[0].sample_count
+        ) {
+          throw new Error(
+            `sidecar line count ${lines.length} != sample count ${summaries.mp4.channels[0].sample_count}`,
+          );
+        }
+      }
       return nextHandle++;
     },
     async closeMp4Sidecar(h: number) {
@@ -174,6 +232,48 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
         pps: new Uint8Array(0),
       };
     },
+    async tabularInspect() {
+      return {
+        columns: [{ name: "t", dtype: "f64", is_numeric: true }],
+        suggested: {
+          time_column: "t",
+          unit: "Seconds",
+          mode: "Relative",
+          epoch_offset_ns: 0,
+        },
+      };
+    },
+    async openTabular() {
+      openLog.push("tabular");
+      await maybeBlock();
+      return nextHandle++;
+    },
+    async closeTabular(h: number) {
+      closeLog.push(`tabular:${h}`);
+    },
+    async tabularSummary() {
+      return summaries.mf4;
+    },
+    async tabularFetchRange(
+      handle: number,
+      channelId: string,
+      startNs: bigint,
+      endNs: bigint,
+      includePrev: boolean,
+    ) {
+      openLog.push(
+        `tabularFetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+      );
+      // Echo a real single-batch Arrow IPC so offset-boundary tests can
+      // assert the returned `ts` column was shifted forward by the offset.
+      return scalarArrowIpc(
+        new BigInt64Array([startNs]),
+        new Float64Array([1]),
+      );
+    },
+    async tabularTimeColumnNs() {
+      return tabularTimeColumn;
+    },
   } as unknown as Remote<DataCoreApi>;
 
   const fake = api as FakeWorker;
@@ -183,6 +283,9 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
   // @ts-expect-error — attach the blocking toggle for tests that need it
   fake.__setBlocking = (b: boolean) => {
     blocking = b;
+  };
+  fake.setTabularTimeColumn = (ts: BigInt64Array) => {
+    tabularTimeColumn = ts;
   };
   return fake;
 }
@@ -263,15 +366,18 @@ describe("session store", () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
     const r = await useSession.getState().openFiles([
-      file("lone.mp4"), // missing sidecar
-      file("notes.txt"), // unknown extension
+      file("lone.mp4"), // no sidecar → queued for binding (Feature 1, not an error)
+      file("notes.txt"), // unknown extension → error
       file("short.mf4"), // opens fine
     ]);
     expect(r.opened).toEqual(["short.mf4"]);
-    expect(r.errors).toHaveLength(2);
+    // Only the unknown extension is an error now; the sidecar-less mp4 is
+    // deferred to the video-timestamp binding queue.
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0].name).toBe("notes.txt");
     expect(useSession.getState().sources).toHaveLength(1);
-    // Errors land on the slice so the Sources drawer can render them.
-    expect(useSession.getState().lastOpenErrors).toHaveLength(2);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(1);
+    expect(useSession.getState().pendingVideoBindings).toHaveLength(1);
   });
 
   it("dismissOpenErrors clears the lastOpenErrors slice", async () => {
@@ -743,6 +849,187 @@ describe("fetchChannelRange", () => {
     );
   });
 
+});
+
+describe("per-source time offset (Feature 2)", () => {
+  it("defaults a freshly-opened source's offset to 0n", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    expect(useSession.getState().sources[0].timeOffsetNs).toBe(0n);
+  });
+
+  it("setSourceOffset parses a decimal string into a bigint offset", () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    return useSession
+      .getState()
+      .openFiles([file("short.mf4")])
+      .then(() => {
+        const id = useSession.getState().sources[0].id;
+        useSession.getState().setSourceOffset(id, "123456789");
+        expect(useSession.getState().sources[0].timeOffsetNs).toBe(
+          123456789n,
+        );
+      });
+  });
+
+  it("preserves full ns precision past Number.MAX_SAFE_INTEGER", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    const id = useSession.getState().sources[0].id;
+    const big = "1700000000123456789";
+    useSession.getState().setSourceOffset(id, big);
+    expect(useSession.getState().sources[0].timeOffsetNs).toBe(BigInt(big));
+  });
+
+  it("ignores an unparseable offset string (no-op)", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    const id = useSession.getState().sources[0].id;
+    useSession.getState().setSourceOffset(id, "12.5");
+    useSession.getState().setSourceOffset(id, "abc");
+    expect(useSession.getState().sources[0].timeOffsetNs).toBe(0n);
+  });
+
+  it("refuses to set an offset on a video (mp4+sidecar) source", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession
+      .getState()
+      .openFiles([file("short.mp4"), file("short.mp4.timestamps")]);
+    const id = useSession.getState().sources[0].id;
+    useSession.getState().setSourceOffset(id, "500");
+    expect(useSession.getState().sources[0].timeOffsetNs).toBe(0n);
+  });
+
+  it("queries the reader with the window shifted back by the offset", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    const src = useSession.getState().sources[0];
+    useSession.getState().setSourceOffset(src.id, "500");
+    await useSession
+      .getState()
+      .fetchChannelRange(src.channels[0].id, 1_000n, 2_000n, false);
+    // Window is [start - O, end - O] = [500, 1500].
+    expect(worker.openLog).toContain(
+      `mf4FetchRange:${src.handle}:0/1:500:1500:false`,
+    );
+  });
+
+  it("shifts the returned sample timestamps forward by the offset", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    // Open a tabular source (its fake fetch echoes the requested startNs as the
+    // sole `ts` so we can see the round-trip cleanly).
+    await useSession.getState().openFiles([file("signals.csv")]);
+    const head = useSession.getState().pendingTabularImports[0];
+    await useSession.getState().confirmTabularImport(head.id, head.suggested);
+    const src = useSession.getState().sources.find((s) => s.kind === "tabular")!;
+    useSession.getState().setSourceOffset(src.id, "500");
+    const bytes = await useSession
+      .getState()
+      .fetchChannelRange(src.channels[0].id, 1_000n, 2_000n, false);
+    // The reader was queried at startNs 500 (echoed back as the ts); the store
+    // adds the offset 500 back, so the panel sees ts 1000 — on the session clock.
+    expect(arrowTs(bytes)).toEqual([1_000n]);
+  });
+
+  it("is a pass-through (no window shift) for a 0n offset", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mf4")]);
+    const src = useSession.getState().sources[0];
+    await useSession
+      .getState()
+      .fetchChannelRange(src.channels[0].id, 1_000n, 2_000n, false);
+    expect(worker.openLog).toContain(
+      `mf4FetchRange:${src.handle}:0/1:1000:2000:false`,
+    );
+  });
+});
+
+describe("sidecar-less mp4 timestamp binding (Feature 1)", () => {
+  it("queues a sidecar-less mp4 instead of erroring", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    const res = await useSession.getState().openFiles([file("cam.mp4")]);
+    expect(res.errors).toHaveLength(0);
+    const pending = useSession.getState().pendingVideoBindings;
+    expect(pending).toHaveLength(1);
+    expect(pending[0].name).toBe("cam.mp4");
+    // Not opened as a source yet.
+    expect(useSession.getState().sources).toHaveLength(0);
+  });
+
+  it("binds a queued mp4 to a tabular source via the synthesized sidecar", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    // Drop the csv and the mp4 together: tabular import is queued first.
+    await useSession.getState().openFiles([file("signals.csv"), file("cam.mp4")]);
+    const head = useSession.getState().pendingTabularImports[0];
+    await useSession.getState().confirmTabularImport(head.id, head.suggested);
+    const tabular = useSession
+      .getState()
+      .sources.find((s) => s.kind === "tabular")!;
+    const binding = useSession.getState().pendingVideoBindings[0];
+    // The default fake time column has 30 entries == summaries.mp4.channels[0].sample_count.
+    await useSession.getState().confirmVideoBinding(binding.id, tabular.id);
+    const video = useSession
+      .getState()
+      .sources.find((s) => s.kind === "mp4+sidecar");
+    expect(video).toBeDefined();
+    expect(video!.name).toBe("cam.mp4");
+    // Dequeued on success.
+    expect(useSession.getState().pendingVideoBindings).toHaveLength(0);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(0);
+  });
+
+  it("surfaces a count mismatch and keeps the binding queued", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    // Time column with the WRONG number of rows (29 != mp4 sample_count 30).
+    worker.setTabularTimeColumn(
+      BigInt64Array.from(Array.from({ length: 29 }, (_v, i) => BigInt(i))),
+    );
+    await useSession.getState().openFiles([file("signals.csv"), file("cam.mp4")]);
+    const head = useSession.getState().pendingTabularImports[0];
+    await useSession.getState().confirmTabularImport(head.id, head.suggested);
+    const tabular = useSession
+      .getState()
+      .sources.find((s) => s.kind === "tabular")!;
+    const binding = useSession.getState().pendingVideoBindings[0];
+    await useSession.getState().confirmVideoBinding(binding.id, tabular.id);
+    // No video source opened; binding stays queued; an error is surfaced.
+    expect(
+      useSession.getState().sources.some((s) => s.kind === "mp4+sidecar"),
+    ).toBe(false);
+    expect(useSession.getState().pendingVideoBindings).toHaveLength(1);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(1);
+    expect(useSession.getState().lastOpenErrors[0].name).toBe("cam.mp4");
+  });
+
+  it("cancelVideoBinding drops a queued mp4", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("cam.mp4")]);
+    const binding = useSession.getState().pendingVideoBindings[0];
+    useSession.getState().cancelVideoBinding(binding.id);
+    expect(useSession.getState().pendingVideoBindings).toHaveLength(0);
+    expect(useSession.getState().sources).toHaveLength(0);
+  });
+
+  it("clear() empties the pending video bindings queue", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("cam.mp4")]);
+    expect(useSession.getState().pendingVideoBindings).toHaveLength(1);
+    await useSession.getState().clear();
+    expect(useSession.getState().pendingVideoBindings).toHaveLength(0);
+  });
 });
 
 describe("layout + bindings (T6.2)", () => {

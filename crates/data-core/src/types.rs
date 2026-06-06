@@ -78,6 +78,7 @@ pub enum SourceKind {
     Mcap,
     Mf4,
     Mp4Sidecar,
+    Tabular,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

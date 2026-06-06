@@ -10,6 +10,7 @@ pub mod mf4;
 pub mod mp4_sidecar;
 pub mod noop;
 pub mod reader;
+pub mod tabular;
 pub mod types;
 
 pub use mcap::{McapReader, McapVideoCursor};
@@ -21,6 +22,9 @@ pub use mf4_rs::error::MdfError;
 pub use mf4_rs::index::ByteRangeReader;
 pub use mp4_sidecar::{Mp4SampleIndex, Mp4SidecarReader};
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
+pub use tabular::{
+    TabularColumn, TabularFormat, TabularReader, TabularSchema, TimeBasis, TimeMode, TimeUnitScale,
+};
 pub use types::{
     Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceId, SourceKind,
     SourceMeta, TimeRange,
@@ -81,6 +85,15 @@ pub enum Error {
 
     #[error("Mp4SidecarReader requires two blobs; use Mp4SidecarReader::open_pair")]
     Mp4SidecarRequiresPair,
+
+    #[error("unsupported tabular format: {0} (expected 'csv' or 'parquet')")]
+    TabularUnsupportedFormat(String),
+
+    #[error("failed to parse tabular source: {0}")]
+    TabularParse(String),
+
+    #[error("tabular time column not found: {0}")]
+    TabularTimeColumnMissing(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

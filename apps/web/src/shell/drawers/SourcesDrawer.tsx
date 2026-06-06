@@ -10,9 +10,10 @@
 // `Drawer.module.css:.drawer` / `.host`; this module only owns the inner
 // content.
 
-import { useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useSession } from "../../state/store";
 import type { SourceKind } from "../../state/store";
+import { parseEpochOffsetNs } from "../../state/tabularImport";
 import { UrlLoad } from "../UrlLoad";
 import { colorFor } from "../../panels/palette";
 import { formatAbsolute, formatDuration } from "../../timeline/formatTime";
@@ -118,6 +119,15 @@ export function SourcesDrawer() {
               >
                 ×
               </button>
+              {/* Per-source time offset (Feature 2). Signal sources only —
+                  video alignment lives in the sidecar timestamps. Shown when
+                  the row is selected to keep the list dense. */}
+              {active && src.kind !== "mp4+sidecar" ? (
+                <SourceOffsetEditor
+                  sourceId={src.id}
+                  offsetNs={src.timeOffsetNs ?? 0n}
+                />
+              ) : null}
             </li>
           );
         })}
@@ -194,5 +204,69 @@ export function SourcesDrawer() {
         )}
       </section>
     </aside>
+  );
+}
+
+interface OffsetEditorProps {
+  sourceId: string;
+  offsetNs: bigint;
+}
+
+/**
+ * Inline editor for a signal source's time offset (Feature 2). Edits the
+ * offset as a decimal STRING so a full-precision ns value round-trips without
+ * a lossy `Number`, and commits to the store on blur / Enter (an unparseable
+ * value is rejected by `setSourceOffset`, so it's a no-op rather than a crash).
+ * The draft re-seeds from the store whenever the committed offset changes so an
+ * external update (dev hook, reset) stays reflected.
+ */
+function SourceOffsetEditor({ sourceId, offsetNs }: OffsetEditorProps) {
+  const setSourceOffset = useSession((st) => st.setSourceOffset);
+  const [draft, setDraft] = useState<string>(offsetNs.toString());
+  const inputId = useId();
+
+  // Reseed when the committed offset changes (external set, source swap).
+  useEffect(() => {
+    setDraft(offsetNs.toString());
+  }, [offsetNs]);
+
+  const commit = () => {
+    const parsed = parseEpochOffsetNs(draft);
+    if (parsed === null) {
+      // Invalid input: snap the field back to the committed value.
+      setDraft(offsetNs.toString());
+      return;
+    }
+    setSourceOffset(sourceId, draft);
+    // Normalise the field to the canonical committed form (e.g. "+5" → "5").
+    setDraft(parsed.toString());
+  };
+
+  const invalid = parseEpochOffsetNs(draft) === null;
+
+  return (
+    <div className={s.offsetRow}>
+      <label htmlFor={inputId} className={s.offsetLabel}>
+        Offset (ns)
+      </label>
+      <input
+        id={inputId}
+        type="text"
+        inputMode="numeric"
+        spellCheck={false}
+        className={s.offsetInput}
+        value={draft}
+        aria-invalid={invalid}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            commit();
+          }
+        }}
+        data-testid={`source-offset-${sourceId}`}
+      />
+    </div>
   );
 }

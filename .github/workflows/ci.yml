@@ -183,8 +183,12 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y ffmpeg
 
+      # pyarrow is pinned: the tabular Parquet fixtures embed the writer
+      # version in their footer, so an unpinned bump would change their bytes
+      # and trip the freshness check. Keep in sync with the version used to
+      # regenerate test-fixtures/tabular/*.parquet.
       - name: Install fixture generator deps
-        run: pip3 install numpy mcap asammdf
+        run: pip3 install numpy mcap asammdf pyarrow==24.0.0
 
       # Regenerate from scratch (produces the gitignored out.h264 the hash
       # check needs), then verify the committed out.h264 hash is fresh.

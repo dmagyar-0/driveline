@@ -12,9 +12,23 @@ arrow-buffer = "54"
 arrow-ipc = "54"
 thiserror = "2"
 mf4-rs = { git = "https://github.com/dmagyar-0/mf4-rs", rev = "ddbad6f1067f6b172b31c80fa03b091329df0c76" }
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 mp4 = "0.14"
+# CSV ingestion for the tabular reader. Small, pure-Rust, default features ok.
+csv = "1"
+# Parquet ingestion for the tabular reader. `default-features = false` keeps
+# the dependency surface small; `arrow` pulls the arrow-rs integration we
+# already use, `snap` covers Snappy (the common Alpamayo/parquet codec). `zstd`
+# is deliberately omitted because its `zstd-sys` C dependency does not link
+# under `wasm32-unknown-unknown` (same reason the mcap crate keeps it off for
+# wasm — see the note above). The `flate2` feature pulls a pure-Rust gzip
+# decoder via the miniz_oxide backend, which builds for wasm.
+parquet = { version = "54", default-features = false, features = ["arrow", "snap", "flate2"] }
+# `bytes::Bytes` is the in-memory `ChunkReader` the parquet reader accepts; it
+# is already a transitive dep of parquet/arrow and builds for wasm.
+bytes = "1"
 # Pure-Rust zstd decoder. Used to pre-decompress zstd-compressed MCAP
 # chunks before handing the buffer to the upstream `mcap` crate, so the
 # wasm build can read real-world MCAP files without pulling in the C

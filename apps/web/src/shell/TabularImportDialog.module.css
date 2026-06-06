@@ -1,0 +1,218 @@
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  background: var(--scrim-hud);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  width: min(440px, calc(100vw - var(--sp-8)));
+  max-height: calc(100vh - var(--sp-8));
+  overflow-y: auto;
+  padding: var(--sp-8);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-6);
+  box-shadow: var(--shadow-popover);
+}
+
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.title {
+  font-size: var(--fs-15);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-2);
+}
+
+.filename {
+  margin: 0;
+  font-size: var(--fs-13);
+  color: var(--color-fg-4);
+  word-break: break-all;
+}
+
+.queue {
+  color: var(--color-fg-5);
+}
+
+.columns {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-4);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-13);
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-4);
+  background: var(--color-bg-4);
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.table td {
+  padding: var(--sp-3) var(--sp-4);
+  border-bottom: 1px solid var(--color-border-subtle);
+  color: var(--color-fg-3);
+}
+
+.colName {
+  font-family: var(--font-mono);
+  color: var(--color-fg-2);
+}
+
+.colType {
+  color: var(--color-fg-4);
+}
+
+.colNumeric {
+  color: var(--color-fg-5);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.label {
+  font-size: var(--fs-13);
+  font-weight: var(--fw-semibold);
+  color: var(--color-fg-3);
+}
+
+.select,
+.input {
+  font-family: inherit;
+  font-size: var(--fs-13);
+  color: var(--color-fg-2);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  padding: var(--sp-3) var(--sp-4);
+  min-height: 36px;
+}
+
+.input {
+  font-family: var(--font-mono);
+}
+
+.select:focus-visible,
+.input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.modeRow {
+  display: flex;
+  gap: var(--sp-6);
+}
+
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-3);
+  font-size: var(--fs-13);
+  color: var(--color-fg-2);
+  cursor: pointer;
+}
+
+.radio input:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.preview {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin: 0;
+  padding: var(--sp-4);
+  background: var(--color-bg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-4);
+}
+
+.previewLabel {
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-fg-5);
+}
+
+.previewValue {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  color: var(--color-fg-2);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--sp-4);
+  margin-top: var(--sp-2);
+}
+
+.cancel,
+.confirm {
+  font-size: var(--fs-13);
+  border-radius: var(--radius-4);
+  padding: var(--sp-3) var(--sp-6);
+  min-height: 36px;
+  cursor: pointer;
+}
+
+.cancel {
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-2);
+}
+
+.cancel:hover:not(:disabled) {
+  background: var(--color-bg-6);
+  border-color: var(--color-border-hover);
+}
+
+.confirm {
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent-fg);
+  font-weight: var(--fw-semibold);
+}
+
+.confirm:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.cancel:disabled,
+.confirm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cancel:focus-visible,
+.confirm:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}

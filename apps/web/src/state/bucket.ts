@@ -14,10 +14,30 @@ export interface BucketError {
   reason: string;
 }
 
+/** Tabular formats (CSV / Parquet) need a user-chosen time basis before they
+ *  can open, so they're carried with their detected `format` string (the value
+ *  the wasm `tabular_*` endpoints expect) rather than opened eagerly. */
+export type TabularFormat = "csv" | "parquet";
+
+export interface TabularInput {
+  file: File;
+  format: TabularFormat;
+}
+
 export interface Buckets {
   mcap: File[];
   mf4: File[];
   mp4Pairs: Mp4Pair[];
+  /**
+   * `.mp4` drops with NO matching `.mp4.timestamps` sidecar in the same batch.
+   * These are no longer a hard error: their per-frame timestamps can be
+   * derived from an opened tabular source's time column (the Alpamayo camera
+   * case). `openFiles` reads each one's header bytes and queues a pending
+   * video-timestamp binding the `VideoTimestampDialog` resolves on confirm.
+   */
+  videoNeedsTimestamps: File[];
+  /** CSV / Parquet drops — deferred behind the import-config dialog. */
+  tabular: TabularInput[];
   errors: BucketError[];
 }
 
@@ -28,6 +48,7 @@ export function bucketFiles(files: File[]): Buckets {
   const mf4: File[] = [];
   const sidecars = new Map<string, File>(); // mp4 filename -> sidecar file
   const mp4s: File[] = [];
+  const tabular: TabularInput[] = [];
   const errors: BucketError[] = [];
 
   for (const f of files) {
@@ -44,26 +65,33 @@ export function bucketFiles(files: File[]): Buckets {
       mcap.push(f);
     } else if (lower.endsWith(".mf4")) {
       mf4.push(f);
+    } else if (lower.endsWith(".csv")) {
+      tabular.push({ file: f, format: "csv" });
+    } else if (lower.endsWith(".parquet") || lower.endsWith(".pq")) {
+      // `.pq` is a common short alias for Parquet.
+      tabular.push({ file: f, format: "parquet" });
     } else {
       errors.push({ name, reason: `unknown file type: ${name}` });
     }
   }
 
   const mp4Pairs: Mp4Pair[] = [];
+  const videoNeedsTimestamps: File[] = [];
   for (const mp4 of mp4s) {
     const ts = sidecars.get(mp4.name);
     if (ts) {
+      // Strict pairing is unchanged when a sidecar IS present.
       mp4Pairs.push({ mp4, ts });
       sidecars.delete(mp4.name);
     } else {
-      errors.push({
-        name: mp4.name,
-        reason: `missing sidecar ${mp4.name}.timestamps`,
-      });
+      // No sidecar in this batch: not an error any more. Defer it to the
+      // video-timestamp binding flow, where the user picks a tabular source
+      // whose time column supplies the per-frame timestamps.
+      videoNeedsTimestamps.push(mp4);
     }
   }
 
-  // Any sidecar left over has no matching mp4 in this drop.
+  // Any sidecar left over has no matching mp4 in this drop — still an error.
   for (const [mp4Name, ts] of sidecars) {
     errors.push({
       name: ts.name,
@@ -71,7 +99,7 @@ export function bucketFiles(files: File[]): Buckets {
     });
   }
 
-  return { mcap, mf4, mp4Pairs, errors };
+  return { mcap, mf4, mp4Pairs, videoNeedsTimestamps, tabular, errors };
 }
 
 /** A URL input classified by the reader that can open it. */

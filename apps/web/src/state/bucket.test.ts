@@ -22,12 +22,13 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it("reports a missing sidecar as an error", () => {
+  it("queues a sidecar-less mp4 for timestamp binding (not an error)", () => {
+    // Feature 1: a `.mp4` with no sidecar in the batch is no longer a hard
+    // error — it's deferred to the video-timestamp binding flow.
     const r = bucketFiles([f("drive.mp4")]);
     expect(r.mp4Pairs).toHaveLength(0);
-    expect(r.errors).toEqual([
-      { name: "drive.mp4", reason: "missing sidecar drive.mp4.timestamps" },
-    ]);
+    expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["drive.mp4"]);
+    expect(r.errors).toHaveLength(0);
   });
 
   it("reports an orphan sidecar as an error", () => {
@@ -68,9 +69,51 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it("pairs the matching mp4 and errors on the unpaired one", () => {
-    // Two mp4s but only one sidecar — the paired one succeeds, the
-    // other is reported as missing its sidecar.
+  it("buckets .csv into tabular as csv", () => {
+    const r = bucketFiles([f("signals.csv")]);
+    expect(r.tabular).toEqual([
+      { file: expect.any(File), format: "csv" },
+    ]);
+    expect(r.tabular[0].file.name).toBe("signals.csv");
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("buckets .parquet and .pq into tabular as parquet", () => {
+    const r = bucketFiles([f("a.parquet"), f("b.pq")]);
+    expect(r.tabular.map((t) => [t.file.name, t.format])).toEqual([
+      ["a.parquet", "parquet"],
+      ["b.pq", "parquet"],
+    ]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("matches tabular extensions case-insensitively", () => {
+    const r = bucketFiles([f("DATA.CSV"), f("RUN.PARQUET")]);
+    expect(r.tabular.map((t) => t.format)).toEqual(["csv", "parquet"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("keeps tabular files separate from the other buckets in one drop", () => {
+    const r = bucketFiles([
+      f("log.mcap"),
+      f("sensor.mf4"),
+      f("signals.csv"),
+      f("cols.parquet"),
+    ]);
+    expect(r.mcap).toHaveLength(1);
+    expect(r.mf4).toHaveLength(1);
+    expect(r.tabular).toHaveLength(2);
+    expect(r.mp4Pairs).toHaveLength(0);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("always returns a tabular array even when none are dropped", () => {
+    expect(bucketFiles([f("a.mcap")]).tabular).toEqual([]);
+  });
+
+  it("pairs the matching mp4 and queues the unpaired one for binding", () => {
+    // Two mp4s but only one sidecar — the paired one becomes a pair, the
+    // other is queued for the video-timestamp binding flow (not an error).
     const r = bucketFiles([
       f("a.mp4"),
       f("b.mp4"),
@@ -78,9 +121,24 @@ describe("bucketFiles", () => {
     ]);
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.mp4Pairs[0].mp4.name).toBe("a.mp4");
+    expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["b.mp4"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("keeps an orphan sidecar an error even with a sidecar-less mp4", () => {
+    // The mp4 defers to binding; the unrelated sidecar still errors.
+    const r = bucketFiles([f("cam.mp4"), f("other.mp4.timestamps")]);
+    expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["cam.mp4"]);
     expect(r.errors).toEqual([
-      { name: "b.mp4", reason: "missing sidecar b.mp4.timestamps" },
+      {
+        name: "other.mp4.timestamps",
+        reason: "orphan sidecar; no other.mp4 in drop",
+      },
     ]);
+  });
+
+  it("always returns a videoNeedsTimestamps array even when none are dropped", () => {
+    expect(bucketFiles([f("a.mcap")]).videoNeedsTimestamps).toEqual([]);
   });
 });
 
