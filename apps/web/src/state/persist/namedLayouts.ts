@@ -106,6 +106,9 @@ function validatePlotPanelSettingsMap(
     if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {
       return null;
     }
+    if (x.syncTimeAxis !== undefined && typeof x.syncTimeAxis !== "boolean") {
+      return null;
+    }
   }
   return v as Record<string, PlotPanelSettingsLite>;
 }

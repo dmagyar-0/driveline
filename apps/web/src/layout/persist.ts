@@ -52,6 +52,9 @@ export interface PlotPanelSettingsLite {
   axisAssignments?: Record<string, number>;
   // Stack the in-use y-axes into vertical bands. Optional (additive field).
   stackAxes?: boolean;
+  // Sync the time (x) axis with other synced plots. Optional (additive
+  // field); absent ⇒ synced (the default), so only `false` is persisted.
+  syncTimeAxis?: boolean;
 }
 
 export interface PersistedLayout {
@@ -173,6 +176,9 @@ function isPlotPanelSettingsMap(
       return false;
     }
     if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {
+      return false;
+    }
+    if (x.syncTimeAxis !== undefined && typeof x.syncTimeAxis !== "boolean") {
       return false;
     }
   }
