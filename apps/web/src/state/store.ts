@@ -64,6 +64,9 @@ import {
   type PendingFetch,
 } from "./mp4SampleCache";
 import { readMp4HeaderBytes } from "./mp4HeaderSlice";
+import { synthesizeSidecarBytes } from "./videoTimestampBinding";
+import { shiftFetchWindow, shiftRangeArrowTs } from "./offsetShift";
+import { parseEpochOffsetNs } from "./tabularImport";
 
 export type SourceKind = "mcap" | "mf4" | "mp4+sidecar" | "tabular";
 export type ChannelKind = ChannelKindWire;
@@ -124,6 +127,20 @@ export interface SourceMeta {
    * undefined; they keep their eager WASM-resident layout.
    */
   mp4Cache?: Mp4SampleCache;
+  /**
+   * Per-source time offset in nanoseconds (Feature 2). Applied ONLY at the
+   * `fetchChannelRange` boundary for SIGNAL sources (tabular/mcap/mf4): the
+   * reader is queried with `[start - O, end - O]` and the offset `O` is added
+   * back to every returned sample timestamp before it reaches a panel. A
+   * cheap `bigint` add — never on the cursor/video hot path.
+   *
+   * Video (`mp4+sidecar`) sources omit this: their alignment is baked into
+   * the derived/sidecar timestamps and the decode hot path must stay
+   * offset-free. Optional — an absent value is read as `0n` (the
+   * `fetchChannelRange` boundary and the offset editor both default it), so
+   * source literals that predate the field still type-check.
+   */
+  timeOffsetNs?: bigint;
 }
 
 export interface OpenResult {
@@ -150,6 +167,25 @@ export interface PendingTabularImport {
   schema: RawTabularSchema;
   /** The editable default basis derived from `schema.suggested`. */
   suggested: BasisDraft;
+}
+
+/**
+ * A dropped `.mp4` with NO `.mp4.timestamps` sidecar in the batch (Feature 1 —
+ * the Alpamayo camera case). It can't open until the user picks a tabular
+ * source whose converted time column supplies the per-frame timestamps, so
+ * `openFiles` reads its header bytes and queues this; `VideoTimestampDialog`
+ * resolves it on confirm by synthesizing a sidecar and reusing the tested
+ * `openMp4Sidecar` path. Queues FIFO behind any tabular imports so the
+ * dropdown of candidate sources is already populated.
+ */
+export interface PendingVideoBinding {
+  /** Stable queue key (monotonic), distinct from the eventual source id. */
+  id: string;
+  name: string;
+  /** The dropped mp4 `File` — re-read into the `Mp4SampleCache` on confirm. */
+  file: File;
+  /** `[ftyp][moov]` header bytes, sliced at drop time and handed to wasm. */
+  headerBytes: Uint8Array;
 }
 
 /**
@@ -369,6 +405,14 @@ export interface SessionState {
    * shifts it. Empty when there's nothing to configure. Reset by `clear()`.
    */
   pendingTabularImports: PendingTabularImport[];
+  /**
+   * FIFO queue of dropped sidecar-less `.mp4` files awaiting a timestamp
+   * source (Feature 1). The `VideoTimestampDialog` renders the head; confirming
+   * (with a chosen tabular source) or cancelling shifts it. Empty when there's
+   * nothing to bind. Reset by `clear()`. Ordered AFTER tabular imports in the
+   * drop flow so the dialog's source dropdown is populated.
+   */
+  pendingVideoBindings: PendingVideoBinding[];
   /** Drives a drop batch through bucket → per-source open → merge. CSV/Parquet
    *  files are inspected and queued into `pendingTabularImports` instead of
    *  opening eagerly (they need a time basis first). */
@@ -382,6 +426,28 @@ export interface SessionState {
   confirmTabularImport(id: string, basis: BasisDraft): Promise<void>;
   /** Cancel (drop) a queued tabular import by id. No-op on an unknown id. */
   cancelTabularImport(id: string): void;
+  /**
+   * Confirm a queued sidecar-less mp4 binding (Feature 1): fetch the chosen
+   * tabular source's converted ns time column, synthesize a `.mp4.timestamps`
+   * sidecar from it (row i → frame i), open the mp4 via the EXISTING
+   * `openMp4Sidecar` path, wrap it in an `Mp4SampleCache`, register the source,
+   * and dequeue. The mp4 reader validates that the sidecar line count equals
+   * the sample count, so a mismatched source surfaces as a clear error via
+   * `lastOpenErrors` and the binding stays queued for a retry. No-op on an
+   * unknown `id` or `tabularSourceId`.
+   */
+  confirmVideoBinding(id: string, tabularSourceId: string): Promise<void>;
+  /** Cancel (drop) a queued sidecar-less mp4 binding by id. No-op on unknown id. */
+  cancelVideoBinding(id: string): void;
+  /**
+   * Set a SIGNAL source's per-source time offset in nanoseconds (Feature 2),
+   * applied at the `fetchChannelRange` boundary. Accepts the offset as a
+   * decimal STRING so a full-precision ns value survives without a lossy
+   * `Number`; an unparseable string or an unknown / non-signal source id is a
+   * no-op. Video (`mp4+sidecar`) sources reject the offset (their decode path
+   * stays offset-free).
+   */
+  setSourceOffset(sourceId: string, offsetNs: string): void;
   /**
    * Open a single `.mcap`/`.mf4` from a URL. MCAP fetches the full body;
    * MF4 reads lazily over HTTP range requests through its index, so a large
@@ -762,6 +828,9 @@ export const useSession = create<SessionState>((set, get) => {
   // dialog confirm cycle; never reused so a dialog re-render can't target a
   // recycled slot).
   let tabularImportSeq = 0;
+  // Monotonic key for queued sidecar-less mp4 bindings (Feature 1). Never
+  // reused so a dialog re-render can't target a recycled slot.
+  let videoBindingSeq = 0;
   // Hydrate layout + bindings synchronously so the first render paints the
   // saved layout. Missing / malformed storage → `null` and empty maps; the
   // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
@@ -836,6 +905,7 @@ export const useSession = create<SessionState>((set, get) => {
     loadedRanges: {},
     pendingFetch: {},
     pendingTabularImports: [],
+    pendingVideoBindings: [],
 
     setWorker(w) {
       worker = w;
@@ -1425,33 +1495,43 @@ export const useSession = create<SessionState>((set, get) => {
       const perfStart = `fetch-range:${channelId}:start`;
       const perfEnd = `fetch-range:${channelId}:end`;
       mark(perfStart);
+      // Feature 2 — per-source time offset. Query the reader with the window
+      // shifted back by the offset, then shift every returned `ts` forward by
+      // the same offset so the source lines up with the session timeline. Both
+      // are cheap `bigint` ops off the cursor/video hot path; a 0n offset is a
+      // pass-through (no window shift, no Arrow re-encode).
+      const offset = source.timeOffsetNs ?? 0n;
+      const win = shiftFetchWindow(startNs, endNs, offset);
       try {
         if (source.kind === "mcap") {
-          return await worker.mcapFetchRange(
+          const bytes = await worker.mcapFetchRange(
             source.handle,
             channel.nativeId,
-            startNs,
-            endNs,
+            win.startNs,
+            win.endNs,
             includePrev,
           );
+          return shiftRangeArrowTs(bytes, offset);
         }
         if (source.kind === "mf4") {
-          return await worker.mf4FetchRange(
+          const bytes = await worker.mf4FetchRange(
             source.handle,
             channel.nativeId,
-            startNs,
-            endNs,
+            win.startNs,
+            win.endNs,
             includePrev,
           );
+          return shiftRangeArrowTs(bytes, offset);
         }
         if (source.kind === "tabular") {
-          return await worker.tabularFetchRange(
+          const bytes = await worker.tabularFetchRange(
             source.handle,
             channel.nativeId,
-            startNs,
-            endNs,
+            win.startNs,
+            win.endNs,
             includePrev,
           );
+          return shiftRangeArrowTs(bytes, offset);
         }
         throw new Error(`channel kind not plottable: ${source.kind}`);
       } finally {
@@ -1487,6 +1567,7 @@ export const useSession = create<SessionState>((set, get) => {
               handle,
               timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
               channels,
+              timeOffsetNs: 0n,
             });
             opened.push(f.name);
           } catch (e) {
@@ -1511,6 +1592,7 @@ export const useSession = create<SessionState>((set, get) => {
               handle,
               timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
               channels,
+              timeOffsetNs: 0n,
             });
             opened.push(f.name);
           } catch (e) {
@@ -1562,10 +1644,33 @@ export const useSession = create<SessionState>((set, get) => {
               timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
               channels,
               mp4Cache: cache,
+              // Video alignment is baked into the sidecar timestamps; the decode
+              // hot path stays offset-free, so this is always 0n.
+              timeOffsetNs: 0n,
             });
             opened.push(pair.mp4.name);
           } catch (e) {
             errors.push({ name: pair.mp4.name, reason: String(e) });
+          }
+        }
+
+        // Sidecar-less mp4s (Feature 1) can't open until the user picks a
+        // tabular source for their per-frame timestamps. Slice the header bytes
+        // now (the same cheap ftyp+moov walk the paired path uses) and queue a
+        // pending binding the `VideoTimestampDialog` resolves on confirm. We
+        // DON'T add them to `opened` — they're not loaded yet.
+        const newVideoBindings: PendingVideoBinding[] = [];
+        for (const mp4 of buckets.videoNeedsTimestamps) {
+          try {
+            const headerBytes = await readMp4HeaderBytes(mp4);
+            newVideoBindings.push({
+              id: `vts-${videoBindingSeq++}`,
+              name: mp4.name,
+              file: mp4,
+              headerBytes,
+            });
+          } catch (e) {
+            errors.push({ name: mp4.name, reason: String(e) });
           }
         }
 
@@ -1597,6 +1702,17 @@ export const useSession = create<SessionState>((set, get) => {
             pendingTabularImports: [
               ...get().pendingTabularImports,
               ...newPending,
+            ],
+          });
+        }
+        // Queue video bindings AFTER tabular imports so the dialog's source
+        // dropdown sees them — the tabular dialog renders first (its queue is
+        // non-empty), and the video dialog only shows once that queue drains.
+        if (newVideoBindings.length > 0) {
+          set({
+            pendingVideoBindings: [
+              ...get().pendingVideoBindings,
+              ...newVideoBindings,
             ],
           });
         }
@@ -1653,6 +1769,7 @@ export const useSession = create<SessionState>((set, get) => {
             handle,
             timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
             channels: tabularChannels(sourceId, summary),
+            timeOffsetNs: 0n,
           });
         } catch (e) {
           errors.push({ name: pendingImport.name, reason: String(e) });
@@ -1676,6 +1793,112 @@ export const useSession = create<SessionState>((set, get) => {
       const cur = get().pendingTabularImports;
       const next = cur.filter((p) => p.id !== id);
       if (next.length !== cur.length) set({ pendingTabularImports: next });
+    },
+
+    async confirmVideoBinding(id, tabularSourceId) {
+      const run = async () => {
+        if (!worker) throw new Error("session store: worker not initialised");
+        const w = worker;
+        const pendingBinding = get().pendingVideoBindings.find(
+          (p) => p.id === id,
+        );
+        // Unknown id (already confirmed/cancelled, or a stale dialog): no-op.
+        if (!pendingBinding) return;
+        const tabularSource = get().sources.find(
+          (s) => s.id === tabularSourceId && s.kind === "tabular",
+        );
+        if (!tabularSource) {
+          // The dialog only offers loaded tabular sources, so this is a stale /
+          // programmatic call — surface it and leave the binding queued.
+          set({
+            lastOpenErrors: [
+              {
+                name: pendingBinding.name,
+                reason: `unknown tabular source: ${tabularSourceId}`,
+              },
+            ],
+          });
+          return;
+        }
+
+        const errors: BucketError[] = [];
+        const newSources: SourceMeta[] = [];
+        try {
+          // The converted, ascending ns-UTC time column of the chosen tabular
+          // source — one entry per row. Row i becomes frame i in the sidecar.
+          const ts = await w.tabularTimeColumnNs(tabularSource.handle);
+          // Synthesize the `.mp4.timestamps` text (bigint → string, never
+          // narrowed) and reuse the EXACT paired-sidecar open path. The mp4
+          // reader validates line count == sample count and fails the open with
+          // a descriptive error on a mismatch, which we surface below.
+          const sidecarBytes = synthesizeSidecarBytes(ts);
+          let headerBytes: Uint8Array | null = pendingBinding.headerBytes;
+          const handle = await w.openMp4Sidecar(headerBytes, sidecarBytes);
+          const summary = await w.mp4SidecarSummary(handle);
+          const index: Mp4SidecarIndex = await w.mp4SidecarIndex(handle);
+          headerBytes = null;
+          const sourceId = uniqueSourceId(pendingBinding.name, get().sources);
+          const channels = mp4Channels(sourceId, summary);
+          const cache = new Mp4SampleCache(pendingBinding.file, index);
+          cache.onLoadedRangesChange((ranges) => {
+            const prev = get().loadedRanges;
+            set({ loadedRanges: { ...prev, [sourceId]: ranges } });
+          });
+          cache.onPendingFetchChange((p) => {
+            const prev = get().pendingFetch;
+            set({ pendingFetch: { ...prev, [sourceId]: p } });
+          });
+          newSources.push({
+            id: sourceId,
+            kind: "mp4+sidecar",
+            name: pendingBinding.name,
+            handle,
+            timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+            channels,
+            mp4Cache: cache,
+            timeOffsetNs: 0n,
+          });
+        } catch (e) {
+          errors.push({ name: pendingBinding.name, reason: String(e) });
+        }
+
+        commitOpenedSources(newSources, errors);
+        // Dequeue only on a successful open; a failure leaves the binding
+        // queued so the user can pick a different source and retry.
+        if (newSources.length > 0) {
+          set({
+            pendingVideoBindings: get().pendingVideoBindings.filter(
+              (p) => p.id !== id,
+            ),
+          });
+        }
+      };
+      const next = pending.then(run, run);
+      pending = next.catch(() => undefined);
+      await next;
+    },
+
+    cancelVideoBinding(id) {
+      const cur = get().pendingVideoBindings;
+      const next = cur.filter((p) => p.id !== id);
+      if (next.length !== cur.length) set({ pendingVideoBindings: next });
+    },
+
+    setSourceOffset(sourceId, offsetNs) {
+      const parsed = parseEpochOffsetNs(offsetNs);
+      if (parsed === null) return; // Unparseable string — ignore.
+      const prev = get().sources;
+      const src = prev.find((s) => s.id === sourceId);
+      // Unknown source, or a video source (offset is meaningless there — its
+      // alignment lives in the sidecar timestamps, and the decode hot path
+      // stays offset-free): no-op.
+      if (!src || src.kind === "mp4+sidecar") return;
+      if ((src.timeOffsetNs ?? 0n) === parsed) return;
+      set({
+        sources: prev.map((s) =>
+          s.id === sourceId ? { ...s, timeOffsetNs: parsed } : s,
+        ),
+      });
     },
 
     async openUrl(url) {
@@ -1709,6 +1932,7 @@ export const useSession = create<SessionState>((set, get) => {
                 handle,
                 timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
                 channels: mcapChannels(id, summary),
+                timeOffsetNs: 0n,
               });
             } else {
               const summary = await w.mf4Summary(handle);
@@ -1719,6 +1943,7 @@ export const useSession = create<SessionState>((set, get) => {
                 handle,
                 timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
                 channels: mf4Channels(id, summary),
+                timeOffsetNs: 0n,
               });
             }
             opened.push(name);
@@ -1790,6 +2015,7 @@ export const useSession = create<SessionState>((set, get) => {
           loadedRanges: {},
           pendingFetch: {},
           pendingTabularImports: [],
+          pendingVideoBindings: [],
         });
       };
       const next = pending.then(run, run);

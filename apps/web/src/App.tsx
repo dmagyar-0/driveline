@@ -275,6 +275,27 @@ declare global {
       // Cancel (drop) a queued import by id.
       cancel: (id: string) => void;
     };
+    // Feature 1 — sidecar-less mp4 timestamp binding. Lets Playwright drive the
+    // `VideoTimestampDialog` headlessly: read the pending queue, then bind (to a
+    // chosen tabular source) or cancel an entry without scraping the DOM. No
+    // BigInts cross this boundary (ids are strings).
+    __drivelineVideoTs?: {
+      // The pending sidecar-less-mp4 queue (head first). Bytes/File are omitted
+      // — tests assert on id + filename.
+      pending: () => Array<{ id: string; name: string }>;
+      // Bind a queued mp4 to a tabular source by their ids. Resolves once the
+      // source is registered (or the open failed, surfaced via lastOpenErrors).
+      bind: (mp4Id: string, tabularSourceId: string) => Promise<void>;
+      // Cancel (drop) a queued binding by id.
+      cancel: (mp4Id: string) => void;
+    };
+    // Feature 2 — set a SIGNAL source's per-source time offset. The offset is a
+    // decimal STRING so a full-precision ns value survives `page.evaluate`;
+    // an unparseable string or a non-signal source id is a no-op.
+    __drivelineSetSourceOffset?: (
+      sourceId: string,
+      offsetNs: string,
+    ) => void;
   }
 }
 
@@ -611,6 +632,18 @@ export function App() {
           useSession.getState().confirmTabularImport(id, basis),
         cancel: (id) => useSession.getState().cancelTabularImport(id),
       };
+      window.__drivelineVideoTs = {
+        pending: () =>
+          useSession.getState().pendingVideoBindings.map((p) => ({
+            id: p.id,
+            name: p.name,
+          })),
+        bind: (mp4Id, tabularSourceId) =>
+          useSession.getState().confirmVideoBinding(mp4Id, tabularSourceId),
+        cancel: (mp4Id) => useSession.getState().cancelVideoBinding(mp4Id),
+      };
+      window.__drivelineSetSourceOffset = (sourceId, offsetNs) =>
+        useSession.getState().setSourceOffset(sourceId, offsetNs);
     }
     setReady(true);
     return () => {
@@ -622,6 +655,8 @@ export function App() {
       if (import.meta.env.DEV) {
         delete window.__drivelineDevHooks;
         delete window.__drivelineTabular;
+        delete window.__drivelineVideoTs;
+        delete window.__drivelineSetSourceOffset;
       }
       useSession.getState().setWorker(null);
       dataCore.current = null;

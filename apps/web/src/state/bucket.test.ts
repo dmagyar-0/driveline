@@ -22,12 +22,13 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it("reports a missing sidecar as an error", () => {
+  it("queues a sidecar-less mp4 for timestamp binding (not an error)", () => {
+    // Feature 1: a `.mp4` with no sidecar in the batch is no longer a hard
+    // error — it's deferred to the video-timestamp binding flow.
     const r = bucketFiles([f("drive.mp4")]);
     expect(r.mp4Pairs).toHaveLength(0);
-    expect(r.errors).toEqual([
-      { name: "drive.mp4", reason: "missing sidecar drive.mp4.timestamps" },
-    ]);
+    expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["drive.mp4"]);
+    expect(r.errors).toHaveLength(0);
   });
 
   it("reports an orphan sidecar as an error", () => {
@@ -110,9 +111,9 @@ describe("bucketFiles", () => {
     expect(bucketFiles([f("a.mcap")]).tabular).toEqual([]);
   });
 
-  it("pairs the matching mp4 and errors on the unpaired one", () => {
-    // Two mp4s but only one sidecar — the paired one succeeds, the
-    // other is reported as missing its sidecar.
+  it("pairs the matching mp4 and queues the unpaired one for binding", () => {
+    // Two mp4s but only one sidecar — the paired one becomes a pair, the
+    // other is queued for the video-timestamp binding flow (not an error).
     const r = bucketFiles([
       f("a.mp4"),
       f("b.mp4"),
@@ -120,9 +121,24 @@ describe("bucketFiles", () => {
     ]);
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.mp4Pairs[0].mp4.name).toBe("a.mp4");
+    expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["b.mp4"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("keeps an orphan sidecar an error even with a sidecar-less mp4", () => {
+    // The mp4 defers to binding; the unrelated sidecar still errors.
+    const r = bucketFiles([f("cam.mp4"), f("other.mp4.timestamps")]);
+    expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["cam.mp4"]);
     expect(r.errors).toEqual([
-      { name: "b.mp4", reason: "missing sidecar b.mp4.timestamps" },
+      {
+        name: "other.mp4.timestamps",
+        reason: "orphan sidecar; no other.mp4 in drop",
+      },
     ]);
+  });
+
+  it("always returns a videoNeedsTimestamps array even when none are dropped", () => {
+    expect(bucketFiles([f("a.mcap")]).videoNeedsTimestamps).toEqual([]);
   });
 });
 

@@ -27,7 +27,48 @@
 .rowWrap {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-2);
+}
+
+/* Per-source offset editor (Feature 2). Drops onto its own line below the
+ * row via `flex-basis: 100%` so the dense source list stays readable. */
+.offsetRow {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-2) var(--sp-2) calc(8px + var(--sp-4));
+}
+
+.offsetLabel {
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-5);
+  white-space: nowrap;
+}
+
+.offsetInput {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12);
+  color: var(--color-fg-2);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  padding: var(--sp-2) var(--sp-3);
+  min-height: 28px;
+}
+
+.offsetInput:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+.offsetInput[aria-invalid="true"] {
+  border-color: var(--color-fg-error, var(--color-border-hover));
 }
 
 .row {

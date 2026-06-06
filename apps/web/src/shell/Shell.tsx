@@ -16,6 +16,7 @@ import { Drawer } from "./Drawer";
 import { FirstRun } from "./FirstRun";
 import { OpenErrorToast } from "./OpenErrorToast";
 import { TabularImportDialog } from "./TabularImportDialog";
+import { VideoTimestampDialog } from "./VideoTimestampDialog";
 import styles from "./Shell.module.css";
 
 export interface ShellProps {
@@ -96,6 +97,7 @@ export function Shell({
       {transport}
       <OpenErrorToast />
       <TabularImportDialog />
+      <VideoTimestampDialog />
       {dragActive && (
         <div className={styles.dragOverlay}>
           Drop .mcap, .mf4, .csv, .parquet, or .mp4 (+ .mp4.timestamps) to load

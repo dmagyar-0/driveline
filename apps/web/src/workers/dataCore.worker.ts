@@ -23,6 +23,7 @@ import init, {
   open_tabular,
   tabular_summary,
   tabular_fetch_range,
+  tabular_time_column_ns,
   close_tabular,
 } from "../wasm/wasm_bindings.js";
 import {
@@ -502,6 +503,15 @@ export const dataCoreApi = {
   ): Promise<Uint8Array> {
     await ready;
     return tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+  },
+  /**
+   * The converted, ascending ns-UTC time column of an opened tabular source,
+   * as a `BigInt64Array`. Used to derive per-frame video timestamps for a
+   * sidecar-less mp4 (row i → frame i); see `state/videoTimestampBinding.ts`.
+   */
+  async tabularTimeColumnNs(handle: number): Promise<BigInt64Array> {
+    await ready;
+    return tabular_time_column_ns(handle);
   },
   async closeTabular(handle: number): Promise<void> {
     await ready;
