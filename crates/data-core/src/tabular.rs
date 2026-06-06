@@ -708,6 +708,14 @@ impl TabularReader {
         &self.skipped
     }
 
+    /// The converted time column (ns-UTC), sorted ascending. Used to derive
+    /// per-frame video timestamps from a tabular camera-frames table: the
+    /// caller maps row i -> sample i (decode order), the same contract the
+    /// `.mp4.timestamps` sidecar uses.
+    pub fn time_ns(&self) -> &[i64] {
+        &self.table.ts_ns
+    }
+
     fn parse_csv(bytes: &[u8], basis: &TimeBasis) -> crate::Result<ParseResult> {
         let (headers, cols) = read_csv_columns(bytes)?;
         let time_idx = headers

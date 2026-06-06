@@ -725,3 +725,22 @@ pub fn tabular_fetch_range(
         Ok(out)
     })
 }
+
+/// The converted time column (ns-UTC, ascending) of a tabular source, as a
+/// `BigInt64Array`. Used to derive per-frame video timestamps from a
+/// camera-frames table (row i -> sample i) without a `.mp4.timestamps` sidecar.
+#[wasm_bindgen]
+pub fn tabular_time_column_ns(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
+    TABULAR_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid tabular handle"))?;
+        let ts = reader.time_ns();
+        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
+        for (i, &v) in ts.iter().enumerate() {
+            arr.set_index(i as u32, v);
+        }
+        Ok(arr)
+    })
+}
