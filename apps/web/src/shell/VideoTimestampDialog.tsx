@@ -27,13 +27,15 @@ export function VideoTimestampDialog() {
   );
   const head = useSession((st) => st.pendingVideoBindings[0] ?? null);
   const queueLen = useSession((st) => st.pendingVideoBindings.length);
-  const tabularSources = useSession((st) =>
-    st.sources.filter((src) => src.kind === "tabular"),
-  );
+  // Select the stable `sources` array reference and derive the tabular subset
+  // below — filtering inside the selector returns a fresh array every render,
+  // which makes useSyncExternalStore loop ("getSnapshot should be cached").
+  const sources = useSession((st) => st.sources);
   const confirmVideoBinding = useSession((st) => st.confirmVideoBinding);
   const cancelVideoBinding = useSession((st) => st.cancelVideoBinding);
 
   if (!head || tabularPending) return null;
+  const tabularSources = sources.filter((src) => src.kind === "tabular");
   // Remount per binding id so each gets fresh local state (and focus lands on
   // the first control again).
   return (
