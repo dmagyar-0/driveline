@@ -280,10 +280,16 @@ describe("PlotPanel", () => {
     // between tests — otherwise state left by one case (a wheel zoom window,
     // or a stack/axis assignment from the stacking tests) leaks into the
     // next panel mounted under the same id.
-    useSession.setState({ plotZoom: {}, plotPanelSettings: {} });
+    useSession.setState({
+      plotZoom: {},
+      plotPanelSettings: {},
+      sharedPlotZoomX: null,
+    });
     if (window.__drivelinePlotPanels) {
       delete window.__drivelinePlotPanels["test-panel"];
       delete window.__drivelinePlotPanels["drop-panel"];
+      delete window.__drivelinePlotPanels["sync-a"];
+      delete window.__drivelinePlotPanels["sync-b"];
     }
   });
 
@@ -610,7 +616,7 @@ describe("PlotPanel", () => {
     ]);
   });
 
-  it("applies an x-zoom window to the visible domain and reset clears it", async () => {
+  it("applies the shared x-zoom window to a synced panel and reset clears it", async () => {
     render(<PlotPanel panelId="test-panel" />);
     await waitFor(() =>
       Boolean(
@@ -620,17 +626,16 @@ describe("PlotPanel", () => {
     // No override yet → no reset button, domain pinned to the global range.
     expect(screen.queryByTestId("plot-reset-zoom")).toBeNull();
 
-    // Zoom the x-axis to the middle 10 ms of the 20 ms timeline.
+    // A synced panel (the default) follows the SHARED time window. Zoom the
+    // x-axis to the middle 10 ms of the 20 ms timeline via the shared store.
     await act(async () => {
-      useSession
-        .getState()
-        .setPlotZoomX("test-panel", {
-          startNs: 1_005_000_000n,
-          endNs: 1_015_000_000n,
-        });
+      useSession.getState().setSharedPlotZoomX({
+        startNs: 1_005_000_000n,
+        endNs: 1_015_000_000n,
+      });
     });
 
-    // The apply effect re-resolves the x-scale to the zoom window.
+    // The apply effect re-resolves the x-scale to the shared zoom window.
     await waitFor(() => {
       const x = window.__drivelinePlotPanels?.["test-panel"]?.xScaleSec;
       return !!x && Math.abs(x.min - 1.005) < 1e-4 && Math.abs(x.max - 1.015) < 1e-4;
@@ -638,16 +643,81 @@ describe("PlotPanel", () => {
     // The Reset-zoom button surfaces while zoomed.
     const reset = await screen.findByTestId("plot-reset-zoom");
 
-    // Clicking it clears the override and the domain snaps back to global.
+    // Clicking it clears the shared window and the domain snaps back.
     await act(async () => {
       fireEvent.click(reset);
     });
-    expect("test-panel" in useSession.getState().plotZoom).toBe(false);
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
     await waitFor(() => {
       const x = window.__drivelinePlotPanels?.["test-panel"]?.xScaleSec;
       return !!x && Math.abs(x.min - 1.0) < 1e-4 && Math.abs(x.max - 1.02) < 1e-4;
     });
     expect(screen.queryByTestId("plot-reset-zoom")).toBeNull();
+  });
+
+  it("two synced panels share one time window; an unsynced panel keeps its own", async () => {
+    useSession.setState({
+      plotBindings: { "sync-a": ["chan-a"], "sync-b": ["chan-a"] },
+    });
+    render(
+      <>
+        <PlotPanel panelId="sync-a" />
+        <PlotPanel panelId="sync-b" />
+      </>,
+    );
+    await waitFor(
+      () =>
+        Boolean(
+          window.__drivelinePlotPanels?.["sync-a"]?.seriesStats.length === 1 &&
+            window.__drivelinePlotPanels?.["sync-b"]?.seriesStats.length === 1,
+        ),
+    );
+
+    // Both panels are synced by default → setting the shared window moves
+    // BOTH visible domains to the same 5 ms slice.
+    await act(async () => {
+      useSession.getState().setSharedPlotZoomX({
+        startNs: 1_007_000_000n,
+        endNs: 1_012_000_000n,
+      });
+    });
+    await waitFor(() => {
+      const a = window.__drivelinePlotPanels?.["sync-a"]?.xScaleSec;
+      const b = window.__drivelinePlotPanels?.["sync-b"]?.xScaleSec;
+      return (
+        !!a &&
+        !!b &&
+        Math.abs(a.min - 1.007) < 1e-4 &&
+        Math.abs(a.max - 1.012) < 1e-4 &&
+        Math.abs(b.min - 1.007) < 1e-4 &&
+        Math.abs(b.max - 1.012) < 1e-4
+      );
+    });
+
+    // Opt sync-b out: it adopts the shared window as its own (no jump), then
+    // zooms independently. sync-a keeps following the shared window.
+    await act(async () => {
+      useSession.getState().setPlotSyncTimeAxis("sync-b", false);
+    });
+    expect(useSession.getState().plotZoom["sync-b"]?.x).toEqual({
+      startNs: 1_007_000_000n,
+      endNs: 1_012_000_000n,
+    });
+    await act(async () => {
+      // Widen only the shared window. sync-a follows; sync-b must not.
+      useSession.getState().setSharedPlotZoomX({
+        startNs: 1_002_000_000n,
+        endNs: 1_018_000_000n,
+      });
+    });
+    await waitFor(() => {
+      const a = window.__drivelinePlotPanels?.["sync-a"]?.xScaleSec;
+      return !!a && Math.abs(a.min - 1.002) < 1e-4 && Math.abs(a.max - 1.018) < 1e-4;
+    });
+    const b = window.__drivelinePlotPanels?.["sync-b"]?.xScaleSec;
+    expect(b && Math.abs(b.min - 1.007) < 1e-4 && Math.abs(b.max - 1.012) < 1e-4).toBe(
+      true,
+    );
   });
 
   it("wheel over the plot drawing area zooms the x-axis", async () => {
@@ -669,12 +739,36 @@ describe("PlotPanel", () => {
       fireEvent.wheel(area, { deltaY: -120, clientX: 200, clientY: 90 });
     });
 
-    const z = useSession.getState().plotZoom["test-panel"];
-    expect(z).toBeTruthy();
+    // A synced panel (the default) writes the wheel result to the SHARED
+    // window, not its own per-panel slice.
+    const shared = useSession.getState().sharedPlotZoomX;
+    expect(shared).not.toBeNull();
     // x narrowed to a sub-range of the 1.0–1.02 s timeline.
-    expect(z.x).not.toBeNull();
-    expect(z.x!.startNs).toBeGreaterThan(1_000_000_000n);
-    expect(z.x!.endNs).toBeLessThan(1_020_000_000n);
+    expect(shared!.startNs).toBeGreaterThan(1_000_000_000n);
+    expect(shared!.endNs).toBeLessThan(1_020_000_000n);
+    // The panel's own per-panel x stays empty while it follows the shared one.
+    expect(useSession.getState().plotZoom["test-panel"]?.x ?? null).toBeNull();
+  });
+
+  it("wheel on an unsynced panel zooms only its own x-axis", async () => {
+    useSession.getState().setPlotSyncTimeAxis("test-panel", false);
+    render(<PlotPanel panelId="test-panel" />);
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
+    );
+    const area = screen.getByRole("slider");
+    await act(async () => {
+      fireEvent.wheel(area, { deltaY: -120, clientX: 200, clientY: 90 });
+    });
+
+    // Unsynced → the window lands in this panel's own zoom, shared untouched.
+    const z = useSession.getState().plotZoom["test-panel"];
+    expect(z?.x).not.toBeNull();
+    expect(z!.x!.startNs).toBeGreaterThan(1_000_000_000n);
+    expect(z!.x!.endNs).toBeLessThan(1_020_000_000n);
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
   });
 
   it("applies a y-axis zoom window to the resolved y-scale", async () => {

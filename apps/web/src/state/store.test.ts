@@ -16,7 +16,13 @@ import {
   tableFromIPC,
   tableToIPC,
 } from "apache-arrow";
-import { MAX_SPEED, MIN_SPEED, useSession } from "./store";
+import {
+  MAX_SPEED,
+  MIN_SPEED,
+  effectivePlotZoomX,
+  isPlotTimeAxisSynced,
+  useSession,
+} from "./store";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import type {
   DataCoreApi,
@@ -1304,6 +1310,110 @@ describe("layout + bindings (T6.2)", () => {
     const before = useSession.getState().plotZoom;
     store.resetPlotZoom("plot-1");
     expect(useSession.getState().plotZoom).toBe(before);
+  });
+
+  it("setSharedPlotZoomX sets, clears, and skips redundant writes", () => {
+    const store = useSession.getState();
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
+    const win = { startNs: 100n, endNs: 900n };
+    store.setSharedPlotZoomX(win);
+    expect(useSession.getState().sharedPlotZoomX).toEqual(win);
+    // An equal-by-value window is a no-op (identity preserved) so synced
+    // panels don't re-resolve their scales on a redundant set.
+    store.setSharedPlotZoomX({ startNs: 100n, endNs: 900n });
+    expect(useSession.getState().sharedPlotZoomX).toBe(win);
+    // Clearing returns to the full range.
+    store.setSharedPlotZoomX(null);
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
+  });
+
+  it("isPlotTimeAxisSynced defaults to true and follows the flag", () => {
+    const s1 = useSession.getState();
+    // Absent settings ⇒ synced by default.
+    expect(isPlotTimeAxisSynced(s1, "plot-1")).toBe(true);
+    s1.setPlotSyncTimeAxis("plot-1", false);
+    expect(isPlotTimeAxisSynced(useSession.getState(), "plot-1")).toBe(false);
+  });
+
+  it("applyPlotZoomX routes to the shared window when synced, own when not", () => {
+    const store = useSession.getState();
+    const win = { startNs: 200n, endNs: 800n };
+    // Synced (default) → shared window, not the per-panel slice.
+    store.applyPlotZoomX("plot-1", win);
+    expect(useSession.getState().sharedPlotZoomX).toEqual(win);
+    expect("plot-1" in useSession.getState().plotZoom).toBe(false);
+
+    // Unsynced → the panel's own x window, shared untouched.
+    store.setSharedPlotZoomX(null);
+    store.setPlotSyncTimeAxis("plot-2", false);
+    store.applyPlotZoomX("plot-2", win);
+    expect(useSession.getState().plotZoom["plot-2"]?.x).toEqual(win);
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
+  });
+
+  it("effectivePlotZoomX returns shared when synced, own when not", () => {
+    const store = useSession.getState();
+    const shared = { startNs: 10n, endNs: 90n };
+    const own = { startNs: 30n, endNs: 60n };
+    store.setSharedPlotZoomX(shared);
+    // Two synced panels (the default) both resolve to the shared window.
+    expect(effectivePlotZoomX(useSession.getState(), "plot-1")).toEqual(shared);
+    expect(effectivePlotZoomX(useSession.getState(), "plot-2")).toEqual(shared);
+    // Opt plot-2 out (the disable-copy seeds its own x from the shared
+    // window), then set its own window explicitly. It now reports its own;
+    // plot-1 still follows the shared one.
+    store.setPlotSyncTimeAxis("plot-2", false);
+    store.setPlotZoomX("plot-2", own);
+    expect(effectivePlotZoomX(useSession.getState(), "plot-2")).toEqual(own);
+    expect(effectivePlotZoomX(useSession.getState(), "plot-1")).toEqual(shared);
+  });
+
+  it("setPlotSyncTimeAxis copies the shared window out on disable, drops own on enable", () => {
+    const store = useSession.getState();
+    const shared = { startNs: 5n, endNs: 95n };
+    store.setSharedPlotZoomX(shared);
+    // Disabling sync adopts the shared window as the panel's own (no jump)…
+    store.setPlotSyncTimeAxis("plot-1", false);
+    expect(useSession.getState().plotZoom["plot-1"]?.x).toEqual(shared);
+    expect(useSession.getState().plotPanelSettings["plot-1"]?.syncTimeAxis).toBe(
+      false,
+    );
+    // …and the shared window itself is left alone (other plots may use it).
+    expect(useSession.getState().sharedPlotZoomX).toEqual(shared);
+
+    // Re-enabling drops the panel's own x (it re-adopts the shared window)
+    // and stores the flag as a deletion (default posture).
+    store.setPlotSyncTimeAxis("plot-1", true);
+    expect(useSession.getState().plotZoom["plot-1"]?.x ?? null).toBeNull();
+    expect(
+      "syncTimeAxis" in (useSession.getState().plotPanelSettings["plot-1"] ?? {}),
+    ).toBe(false);
+
+    // No-op when the flag is unchanged (identity preserved).
+    const before = useSession.getState().plotPanelSettings;
+    store.setPlotSyncTimeAxis("plot-1", true);
+    expect(useSession.getState().plotPanelSettings).toBe(before);
+  });
+
+  it("clearPlotZoom clears the shared window only when the panel is synced", () => {
+    const store = useSession.getState();
+    // Synced panel: reset clears its own overrides AND the shared window.
+    store.setSharedPlotZoomX({ startNs: 1n, endNs: 9n });
+    store.setPlotZoomY("plot-1", 0, { min: 0, max: 1 });
+    store.clearPlotZoom("plot-1");
+    expect("plot-1" in useSession.getState().plotZoom).toBe(false);
+    expect(useSession.getState().sharedPlotZoomX).toBeNull();
+
+    // Unsynced panel: reset clears its own window but leaves the shared one.
+    store.setPlotSyncTimeAxis("plot-2", false);
+    store.setSharedPlotZoomX({ startNs: 2n, endNs: 8n });
+    store.setPlotZoomX("plot-2", { startNs: 3n, endNs: 7n });
+    store.clearPlotZoom("plot-2");
+    expect("plot-2" in useSession.getState().plotZoom).toBe(false);
+    expect(useSession.getState().sharedPlotZoomX).toEqual({
+      startNs: 2n,
+      endNs: 8n,
+    });
   });
 
   it("setChannelUnit overrides globally and reverts on null", () => {
