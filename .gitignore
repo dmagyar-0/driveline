@@ -58,4 +58,8 @@ sample-data/realworld/*
 # artefacts only, never committed.
 /apps/e2e/recordings
 
+# Driveline point-cloud Parquet emitted by `tools/alpamayo_lidar_to_driveline.py`
+# — multi-MB generated demo data (like the wasm bundle), never committed.
+*.lidar.parquet
+
 .claude/worktrees/

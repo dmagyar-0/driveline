@@ -1,6 +1,5 @@
-/* Phase 6 · ScenePanel placeholder styling. Mirrors PlotPanel's
- * `.panel` container so FlexLayout's tab body stays consistent across
- * kinds, but no chart/canvas surface is allocated yet. */
+/* ScenePanel · 3D point-cloud viewer. The WebGL canvas claims the panel
+ * area; overlays and pills float over it, mirroring MapPanel. */
 
 .panel {
   position: relative;
@@ -39,16 +38,92 @@
   line-height: 1.5;
 }
 
-.bound {
-  margin: 0;
-  font-size: var(--fs-12);
-  color: var(--color-fg-4);
+.canvasHost {
+  position: relative;
+  flex: 1;
+  min-height: 0;
 }
 
-.bound code {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  color: var(--color-fg-2);
-  background: var(--color-bg-4);
-  padding: 0 var(--sp-2);
-  border-radius: var(--radius-2);
+.canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* The renderer sizes the backing store to clientWidth/Height × dpr; the
+   * element itself fills the host. `touch-action: none` lets pointer-drag
+   * orbit work on trackpads/touch without the browser hijacking the gesture. */
+  touch-action: none;
+  cursor: grab;
+}
+
+.canvas:active {
+  cursor: grabbing;
+}
+
+.pointsPill {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  z-index: 2;
+  padding: 0 var(--sp-3);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-fg-3);
+  line-height: 1.6;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.hint {
+  position: absolute;
+  bottom: var(--sp-3);
+  left: var(--sp-3);
+  z-index: 2;
+  padding: 0 var(--sp-3);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-wide);
+  color: var(--color-fg-5);
+  line-height: 1.6;
+  pointer-events: none;
+}
+
+.statusOverlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  max-width: 80%;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4);
+  text-align: center;
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-6);
+  font-size: var(--fs-12);
+  line-height: 1.4;
+  color: var(--color-fg-3);
+  pointer-events: none;
+}
+
+.statusIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex-shrink: 0;
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-red, #f87171);
+  color: var(--color-bg-0, #0b0b0b);
+  font-weight: 700;
+  font-size: var(--fs-11);
 }

@@ -899,13 +899,11 @@ function VideoBody({ panelId }: BodyProps) {
   );
 }
 
-// Channel kinds a 3D scene can render. A point cloud is a per-frame array
-// of vertices, so the only existing wire kind that fits is `vector`
-// (scalars / enums / video can't describe 3D geometry). This is the single
-// place to widen when the data core lands a dedicated `point_cloud` kind —
-// add it here and the picker + auto-detect below light up with no other
-// change. See docs/06-ui-and-panels.md (ScenePanel).
-const SCENE_CHANNEL_KINDS: readonly ChannelKind[] = ["vector"];
+// Channel kinds a 3D scene can render. `point_cloud` is the dedicated
+// per-frame LiDAR geometry kind the data core emits (a whole spin per
+// sample); `vector` stays accepted as a fallback for 3D-vector channels.
+// Scalars / enums / video can't describe a cloud, so they're excluded.
+const SCENE_CHANNEL_KINDS: readonly ChannelKind[] = ["point_cloud", "vector"];
 
 function SceneBody({ panelId }: BodyProps) {
   const channels = useSession((st) => st.channels);
@@ -941,9 +939,9 @@ function SceneBody({ panelId }: BodyProps) {
       <section className={s.section}>
         <h4 className={s.sectionTitle}>Status</h4>
         <p className={s.empty} data-testid="panel-scene-status">
-          Renders a 3D point cloud from a vector channel — per-frame arrays of
-          XYZ vertices. Live rendering arrives with the point-cloud format from
-          the data core.
+          Renders a 3D point cloud — bind a point-cloud channel to orbit the
+          scene. Points are coloured by intensity and step with the cursor as
+          you scrub or play.
         </p>
       </section>
       <section className={s.section}>
@@ -997,8 +995,8 @@ function SceneBody({ panelId }: BodyProps) {
           {hasCompatible
             ? `${compatibleCount} compatible channel${
                 compatibleCount === 1 ? "" : "s"
-              } detected — only vector (point-cloud) channels can bind here.`
-            : "No vector (point-cloud) channels detected in the loaded sources yet."}
+              } detected — only point-cloud channels can bind here.`
+            : "No point-cloud channels detected in the loaded sources yet."}
         </p>
         {pickerAnchor !== null && (
           <ChannelPicker

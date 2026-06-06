@@ -291,7 +291,7 @@ describe("PanelDrawer", () => {
           .getAttribute("aria-disabled"),
       ).toBe("true");
       expect(screen.getByTestId("panel-scene-detect").textContent).toMatch(
-        /No vector .* channels detected/,
+        /No point-cloud channels detected/,
       );
     });
 
