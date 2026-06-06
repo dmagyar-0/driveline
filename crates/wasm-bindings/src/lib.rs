@@ -10,7 +10,8 @@ use std::cell::RefCell;
 
 use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
-    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, Reader, TimeRange,
+    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, Reader, TabularReader, TimeBasis,
+    TimeRange,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -63,6 +64,7 @@ thread_local! {
     static MP4_READERS: RefCell<Slab<Mp4SidecarReader>> = const { RefCell::new(Slab::new()) };
     static MCAP_READERS: RefCell<Slab<McapReader>> = const { RefCell::new(Slab::new()) };
     static VIDEO_STREAMS: RefCell<Slab<McapVideoStream>> = const { RefCell::new(Slab::new()) };
+    static TABULAR_READERS: RefCell<Slab<TabularReader>> = const { RefCell::new(Slab::new()) };
 }
 
 /// A live MCAP video stream: a lazy cursor plus the handle of the `McapReader`
@@ -608,5 +610,118 @@ pub fn mp4_sidecar_index(handle: u32) -> Result<JsValue, JsError> {
         js_sys::Reflect::set(&obj, &JsValue::from_str("pps"), &pps_arr.into())
             .map_err(|_| JsError::new("set pps"))?;
         Ok(JsValue::from(obj))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Tabular (CSV / Parquet)
+// ---------------------------------------------------------------------------
+
+/// Inspect a CSV or Parquet blob without retaining it: returns a
+/// `TabularSchema` JSON object `{ columns: [{ name, dtype, is_numeric }],
+/// suggested: TimeBasis }`. `TimeBasis` serialises as `{ time_column, unit,
+/// mode, epoch_offset_ns }` where `unit` is one of `"Nanos" | "Micros" |
+/// "Millis" | "Seconds"`, `mode` is `"Absolute" | "Relative"`, and
+/// `epoch_offset_ns` is a BigInt. `format` is `"csv"` or `"parquet"`.
+#[wasm_bindgen]
+pub fn tabular_inspect(bytes: &[u8], format: &str) -> Result<JsValue, JsError> {
+    let fmt = data_core::tabular::format_from_str(format)
+        .map_err(|e| JsError::new(&format!("tabular_inspect failed: {e}")))?;
+    let schema = data_core::tabular::inspect(bytes, fmt)
+        .map_err(|e| JsError::new(&format!("tabular_inspect failed: {e}")))?;
+    schema
+        .serialize(&bigint_serializer())
+        .map_err(|e| JsError::new(&format!("serialise tabular schema: {e}")))
+}
+
+/// Open a CSV or Parquet blob with an explicit `TimeBasis` (JSON, the same
+/// shape `tabular_inspect` emits under `suggested`) and register the resulting
+/// `TabularReader` in the thread-local slab. Returns the integer handle used by
+/// the other `tabular_*` endpoints. `format` is `"csv"` or `"parquet"`.
+#[wasm_bindgen]
+pub fn open_tabular(bytes: &[u8], format: &str, basis_json: &str) -> Result<u32, JsError> {
+    let fmt = data_core::tabular::format_from_str(format)
+        .map_err(|e| JsError::new(&format!("open tabular failed: {e}")))?;
+    let basis: TimeBasis = serde_json::from_str(basis_json)
+        .map_err(|e| JsError::new(&format!("open tabular failed: invalid basis JSON: {e}")))?;
+    let reader = TabularReader::open_with_basis(bytes, fmt, basis)
+        .map_err(|e| JsError::new(&format!("open tabular failed: {e}")))?;
+    let key = TABULAR_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the tabular reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_tabular(handle: u32) {
+    TABULAR_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the tabular reader's `SourceMeta` as a plain JS object. Every
+/// surfaced channel is a `Scalar` / `Float64` signal, so — like the MF4
+/// summary — no per-channel `kind`/`dtype` tag is emitted; the shape is
+/// `{ start_ns, end_ns, channels: [{ id, name, unit, sample_count, start_ns,
+/// end_ns }] }`.
+#[wasm_bindgen]
+pub fn tabular_summary(handle: u32) -> Result<JsValue, JsError> {
+    TABULAR_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid tabular handle"))?;
+        let meta = reader.meta();
+        let summary = Mf4Summary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| ChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    unit: c.unit.clone(),
+                    group: None,
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for `[start_ns, end_ns)` of the given tabular channel id
+/// (the column name). `include_prev` controls the step-hold leading-sample
+/// option documented in `docs/03-data-model.md` FetchOpts.
+#[wasm_bindgen]
+pub fn tabular_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    TABULAR_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid tabular handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
     })
 }
