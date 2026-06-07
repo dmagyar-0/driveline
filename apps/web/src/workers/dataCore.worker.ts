@@ -26,6 +26,7 @@ import init, {
   tabular_time_column_ns,
   close_tabular,
   open_lidar,
+  open_lidar_pcd,
   lidar_summary,
   lidar_fetch_range,
   lidar_spin_times,
@@ -532,6 +533,16 @@ export const dataCoreApi = {
   async openLidar(bytes: Uint8Array): Promise<number> {
     await ready;
     return open_lidar(bytes);
+  },
+  /**
+   * Open a PCD (Point Cloud Data) file — the PCL/ROS LiDAR interchange format.
+   * A PCD holds a single cloud, so the reader surfaces one point-cloud channel
+   * with one spin; every other `lidar*` method then works unchanged. Supports
+   * `ascii`, `binary`, and `binary_compressed` payloads.
+   */
+  async openLidarPcd(bytes: Uint8Array): Promise<number> {
+    await ready;
+    return open_lidar_pcd(bytes);
   },
   /**
    * `SourceMeta` for an open point-cloud reader, in the MF4-style shape

@@ -268,6 +268,15 @@ crosses into a new spin**, so playback/scrub steps the cloud without a
 per-tick fetch. See `tools/alpamayo_lidar_to_driveline.py` for the
 NVIDIA-Alpamayo (Draco) → `.lidar.parquet` converter.
 
+The same panel also opens **PCD** files (`*.pcd`, the PCL/ROS Point Cloud
+Data interchange format) natively — no conversion. `PointCloudReader::open_pcd`
+(`crates/data-core/src/pcd.rs`) parses `ascii`, `binary`, and
+`binary_compressed` (LZF) payloads; a PCD holds a single cloud, so it loads as
+a one-spin source rendered exactly like a Parquet spin. `x`/`y`/`z` are
+required; `intensity` colours the cloud when present, otherwise points are
+coloured by range from the sensor. `.pcd` drops are routed by `bucketFiles`
+(`format: "pcd"`) to the wasm `open_lidar_pcd` entry point.
+
 The PanelDrawer body auto-detects bindable channels by kind:
 `SCENE_CHANNEL_KINDS` (`["point_cloud", "vector"]`) filters the
 `ChannelPicker`, and `+ bind channel…` disables when none is loaded.

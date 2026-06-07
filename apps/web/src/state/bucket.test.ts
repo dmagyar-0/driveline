@@ -87,6 +87,25 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
+  it("routes .lidar.parquet to the lidar bucket, not tabular", () => {
+    const r = bucketFiles([f("spin.lidar.parquet"), f("cols.parquet")]);
+    expect(r.lidar.map((l) => [l.file.name, l.format])).toEqual([
+      ["spin.lidar.parquet", "parquet"],
+    ]);
+    // The plain `.parquet` still routes to tabular.
+    expect(r.tabular.map((t) => t.file.name)).toEqual(["cols.parquet"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("buckets .pcd into the lidar bucket as pcd", () => {
+    const r = bucketFiles([f("scan.pcd"), f("SCAN.PCD")]);
+    expect(r.lidar.map((l) => [l.file.name, l.format])).toEqual([
+      ["scan.pcd", "pcd"],
+      ["SCAN.PCD", "pcd"],
+    ]);
+    expect(r.errors).toHaveLength(0);
+  });
+
   it("matches tabular extensions case-insensitively", () => {
     const r = bucketFiles([f("DATA.CSV"), f("RUN.PARQUET")]);
     expect(r.tabular.map((t) => t.format)).toEqual(["csv", "parquet"]);

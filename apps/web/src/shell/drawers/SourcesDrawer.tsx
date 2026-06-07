@@ -23,10 +23,19 @@ import s from "./SourcesDrawer.module.css";
 
 const HEADING_ID = "drawer-sources-h";
 
-function kindLabel(k: SourceKind): "MCAP" | "MF4" | "MP4+TS" {
-  if (k === "mcap") return "MCAP";
-  if (k === "mf4") return "MF4";
-  return "MP4+TS";
+function kindLabel(k: SourceKind): string {
+  switch (k) {
+    case "mcap":
+      return "MCAP";
+    case "mf4":
+      return "MF4";
+    case "tabular":
+      return "TABLE";
+    case "lidar":
+      return "LIDAR";
+    default:
+      return "MP4+TS";
+  }
 }
 
 export function SourcesDrawer() {
