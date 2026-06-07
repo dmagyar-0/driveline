@@ -12,7 +12,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { BookmarkMarkers } from "./BookmarkMarkers";
 import { useSession } from "../state/store";
@@ -93,6 +95,28 @@ describe("BookmarkMarkers", () => {
     expect(mAfter.style.left).toBe("100%");
     expect(mBefore.getAttribute("data-out-of-range")).toBe("true");
     expect(mAfter.getAttribute("data-out-of-range")).toBe("true");
+  });
+
+  it("renders a band spanning [ns-before, ns+after] for a ranged event", () => {
+    seedRange(); // range is [0, 10s]
+    const id = useSession.getState().addBookmark(5_000_000_000n, "ranged"); // 50%
+    useSession.getState().setBookmarkRange(id, 1_000_000_000n, 2_000_000_000n); // 4s..7s → 40%..70%
+    render(<BookmarkMarkers />);
+    const band = screen.getByTestId(`bookmark-band-${id}`) as HTMLDivElement;
+    expect(band.style.left).toBe("40%");
+    expect(band.style.width).toBe("30%");
+    // The center line stays at the anchor.
+    expect(
+      (screen.getByTestId(`bookmark-marker-${id}`) as HTMLDivElement).style
+        .left,
+    ).toBe("50%");
+  });
+
+  it("renders no band for a point event", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(5_000_000_000n, "point");
+    render(<BookmarkMarkers />);
+    expect(screen.queryByTestId(`bookmark-band-${id}`)).toBeNull();
   });
 
   it("renders nothing when globalRange has zero span", () => {

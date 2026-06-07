@@ -38,28 +38,55 @@ export function BookmarkMarkers() {
   const span = globalRange.endNs - globalRange.startNs;
   if (span === 0n) return null;
 
+  const startNs = globalRange.startNs;
+  const endNs = globalRange.endNs;
+  const pctOf = (ns: bigint): number =>
+    clamp01(Number(ns - startNs) / Number(span)) * 100;
+
   return (
     <div className={s.markerLayer} data-testid="bookmark-marker-layer">
       {bookmarks.map((b) => {
-        const off = b.ns - globalRange.startNs;
-        const ratio = Number(off) / Number(span);
-        const outOfRange = b.ns < globalRange.startNs || b.ns > globalRange.endNs;
-        const pct = clamp01(ratio) * 100;
+        const pct = pctOf(b.ns);
+        const outOfRange = b.ns < startNs || b.ns > endNs;
+        const ranged = b.beforeNs > 0n || b.afterNs > 0n;
         const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
           e.stopPropagation();
           useSession.getState().setCursor(b.ns);
         };
+        // A band element for ranged events, drawn behind the center
+        // line. Width is the clamped %-span of [ns-before, ns+after];
+        // it shares the marker layer's `pointer-events: none` base and
+        // re-enables clicks (seek to the anchor) on the band itself.
+        const bandStartPct = ranged ? pctOf(b.ns - b.beforeNs) : pct;
+        const bandEndPct = ranged ? pctOf(b.ns + b.afterNs) : pct;
+        const bandWidthPct = Math.max(0, bandEndPct - bandStartPct);
         return (
-          <div
-            key={b.id}
-            className={s.marker}
-            data-testid={`bookmark-marker-${b.id}`}
-            data-out-of-range={outOfRange ? "true" : undefined}
-            style={{ left: `${pct}%`, background: b.color }}
-            onPointerDown={onPointerDown}
-            aria-hidden="true"
-            title={b.label}
-          />
+          <div key={b.id} className={s.markerGroup}>
+            {ranged ? (
+              <div
+                className={s.band}
+                data-testid={`bookmark-band-${b.id}`}
+                data-out-of-range={outOfRange ? "true" : undefined}
+                style={{
+                  left: `${bandStartPct}%`,
+                  width: `${bandWidthPct}%`,
+                  background: b.color,
+                }}
+                onPointerDown={onPointerDown}
+                aria-hidden="true"
+                title={b.label}
+              />
+            ) : null}
+            <div
+              className={s.marker}
+              data-testid={`bookmark-marker-${b.id}`}
+              data-out-of-range={outOfRange ? "true" : undefined}
+              style={{ left: `${pct}%`, background: b.color }}
+              onPointerDown={onPointerDown}
+              aria-hidden="true"
+              title={b.label}
+            />
+          </div>
         );
       })}
     </div>

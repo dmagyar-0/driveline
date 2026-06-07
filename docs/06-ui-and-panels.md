@@ -69,7 +69,7 @@ grid):
 | **ChannelsDrawer** | Search + collapsible per-source groups. Click-to-bind: with no panel selected, mints a plot panel; with a plot panel selected, calls `addPlotChannel`; with a video panel selected, calls `setVideoBinding`. |
 | **LayoutDrawer** | Saved layouts (`saveCurrentLayoutAs` / `restoreNamedLayout`) with `live` / `active` markers. `Add panel` section adds video / plot / 3D scene / map / table / enum. `Reset layout` row at the bottom. |
 | **PanelDrawer** | Configures the selected panel (settings rail flip from the tab chrome). Body switches on `panelKindOf(selectedPanelId)`. Plot bodies list bound channels with × remove + `+ add channel…`, plus a **Gap threshold** toggle+input (on: inter-sample gaps longer than N s render as breaks; off: all gaps render as step-holds). Video body shows decoder label, HUD toggle, and the bound channel. |
-| **EventsDrawer** | Bookmarks list with double-click rename, ×, and `+ bookmark at cursor` (one-click + "…" custom-label variant). Out-of-range rows render at 50 % opacity with a `title="Outside the current session's range"` tooltip and `aria-label` prefixed `Out of range — `. |
+| **EventsDrawer** ("Event Tagging") | Event list with double-click rename, ×, and `+ event at cursor` (one-click + "…" custom-label variant). Each row expands (caret) to an editor for an optional **before/after** time range (seconds → the event becomes a `[ns-before, ns+after]` band) and one control per configured **tag attribute** (a `<select>` for `select`, an `<input>` for `text`). Collapsed rows show set tag values as chips and a dot when ranged. A collapsible **Tag attributes** config editor (`EventTagConfigEditor`) at the foot adds/edits/removes attributes and imports/exports the whole taxonomy as JSON. Out-of-range rows render at 50 % opacity with a `title="Outside the current session's range"` tooltip and `aria-label` prefixed `Out of range — `. |
 
 Drawer state (active tab + collapsed flag) persists via
 `state/persist/ui.ts` (key `driveline.ui.v1`).
@@ -145,15 +145,16 @@ interface SessionState {
   namedLayouts: NamedLayout[];
   activeNamedLayoutId: string | null;
 
-  // bookmarks
+  // event tagging
   bookmarks: Bookmark[];
+  eventTagConfig: EventTagConfig;
 
   // UI shell
   activeRailTab: RailTab | null;
   railCollapsed: boolean;
   selectedPanelId: PanelId | null;
 
-  // actions (open/close, transport, bindings, layout, bookmarks, …)
+  // actions (open/close, transport, bindings, layout, event tagging, …)
 }
 ```
 
@@ -173,12 +174,16 @@ Persistence is sliced into adapters under `state/persist/`:
   `plotPanelSettings` (`driveline.layout.v3`; `plotPanelSettings` is an
   optional field, defaulting to `{}` for pre-Phase-8 saved layouts).
 - `namedLayouts.ts` — saved layouts (`driveline.layouts.named.v2`).
-- `bookmarks.ts` — bookmark list with BigInts encoded as decimal strings
-  (`driveline.bookmarks.v1`).
+- `bookmarks.ts` — event list with BigInts (`ns`, `beforeNs`, `afterNs`)
+  encoded as decimal strings and a `tags` map (`driveline.bookmarks.v2`).
+  A legacy `driveline.bookmarks.v1` payload is migrated forward on load
+  (range → 0, tags → `{}`).
+- `eventTagConfig.ts` — the tag-attribute schema (`driveline.eventTags.config.v1`);
+  hydrates to `DEFAULT_EVENT_TAG_CONFIG` when absent/malformed.
 - `ui.ts` — `activeRailTab`, `railCollapsed` (`driveline.ui.v1`).
 
-`clearSession()` deliberately preserves `layoutJson`, `namedLayouts`, and
-`bookmarks` — those slices outlive a single session.
+`clearSession()` deliberately preserves `layoutJson`, `namedLayouts`,
+`bookmarks`, and `eventTagConfig` — those slices outlive a single session.
 
 ## Scrub → cursor propagation
 
@@ -307,22 +312,41 @@ the value is drawn inside any segment wide enough to fit it.
 - Panel factory maps `component` to React component (see **Panels**).
 - New panels are minted via the LayoutDrawer's `Add panel` rows.
 
-## Bookmarks
+## Event tagging
 
-`Bookmark = { id, ns: bigint, label, color, createdAt }`. The store
-`bookmarks` slice is mutated through four actions:
+An *event* (the slice is still named `bookmarks` for compatibility) is
+`{ id, ns: bigint, beforeNs: bigint, afterNs: bigint, label, color,
+createdAt, tags: Record<attributeId, value> }`. `beforeNs`/`afterNs`
+default to `0n` (a point event); when either is set, the event covers
+`[ns - beforeNs, ns + afterNs]`. `tags` holds per-attribute values keyed
+by the ids in `eventTagConfig`.
+
+Store actions:
 
 - `addBookmarkAtCursor(label?)` — defaults the label to
   `bookmark @ <relative-time>`, freezes the colour at create-time via
-  `palette.ts:colorFor(id)`. Returns `null` when `globalRange === null`.
+  `palette.ts:colorFor(id)`, range `0/0`, `tags {}`. Returns `null` when
+  `globalRange === null`.
 - `addBookmark(ns, label?)` — test seam, no clamping.
 - `removeBookmark(id)`, `renameBookmark(id, label)`.
+- `setBookmarkRange(id, beforeNs, afterNs)` — negatives clamp to `0n`.
+- `setBookmarkTag(id, attributeId, value)` — an empty value clears the key.
+
+The **tag config** (`eventTagConfig: { attributes: TagAttribute[] }`,
+each `{ id, name, type: "select" | "text", options }`) is mutated through
+`setEventTagConfig` (whole-config replace, e.g. JSON import — prunes
+orphan tag values from every event), `addTagAttribute(name, type)`,
+`removeTagAttribute(id)` (also prunes), and `updateTagAttribute(id,
+patch)`. It hydrates to `DEFAULT_EVENT_TAG_CONFIG` (weather / road type /
+lighting / maneuver) on a fresh store.
 
 The transport scrubber renders `BookmarkMarkers.tsx` as a child of
 `.trackStrip` between `.trackFill` and `.thumb`. Markers are
-`pointer-events: none` except the individual 2 px markers; out-of-range
-bookmarks clamp to `[0, 100]%` at 50 % opacity. Bookmarks survive
-`clearSession()` (same posture as `layoutJson` / `namedLayouts`).
+`pointer-events: none` except the individual 2 px center lines; a ranged
+event also draws a translucent band spanning `[ns-before, ns+after]`.
+Out-of-range markers clamp to `[0, 100]%` at reduced opacity. Events and
+the tag config survive `clearSession()` (same posture as `layoutJson` /
+`namedLayouts`).
 
 ## Drag-and-drop ingest
 

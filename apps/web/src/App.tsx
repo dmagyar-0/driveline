@@ -28,6 +28,10 @@ import { attachLayoutPersistence } from "./layout/persist";
 import { attachUiPersistence } from "./state/persist/ui";
 import { attachNamedLayoutsPersistence } from "./state/persist/namedLayouts";
 import { attachBookmarksPersistence } from "./state/persist/bookmarks";
+import {
+  attachEventTagConfigPersistence,
+  type EventTagConfig,
+} from "./state/persist/eventTagConfig";
 import { attachUrlState } from "./state/urlState";
 import { installPerfHooks } from "./perf";
 import { Shell } from "./shell/Shell";
@@ -249,12 +253,22 @@ declare global {
       listBookmarks: () => Array<{
         id: string;
         ns: string;
+        beforeNs: string;
+        afterNs: string;
         label: string;
         color: string;
         createdAt: number;
+        tags: Record<string, string>;
       }>;
       removeBookmark: (id: string) => void;
       renameBookmark: (id: string, label: string) => void;
+      // Event Tagging — range + per-attribute tag values (ns as decimal
+      // strings, mirroring `listBookmarks`), plus read/replace of the
+      // attribute-schema config.
+      setBookmarkRange: (id: string, beforeNs: string, afterNs: string) => void;
+      setBookmarkTag: (id: string, attributeId: string, value: string) => void;
+      getEventTagConfig: () => EventTagConfig;
+      setEventTagConfig: (config: EventTagConfig) => void;
       // Issue #2 — decode-aware cursor gating.
       // `getVideoReadiness` returns the per-panel state of every
       // entry currently in the readiness registry; `getCursorGated`
@@ -350,6 +364,10 @@ export function App() {
     // Phase 8 — persist `bookmarks` to `driveline.bookmarks.v1`.
     // Bookmarks outlive a session (same posture as `namedLayouts`).
     const detachBookmarksPersistence = attachBookmarksPersistence(useSession);
+    // Phase 8 — persist the Event Tag config (attribute schema) to
+    // `driveline.eventTags.config.v1`. Outlives a session like bookmarks.
+    const detachEventTagConfigPersistence =
+      attachEventTagConfigPersistence(useSession);
     // Shareable deep-link URL state. Attached AFTER the localStorage
     // persistence so a `#v=...` fragment wins over hydrated storage: it
     // applies the shared view on mount, then keeps the URL fragment current
@@ -601,13 +619,25 @@ export function App() {
           useSession.getState().bookmarks.map((b) => ({
             id: b.id,
             ns: b.ns.toString(),
+            beforeNs: b.beforeNs.toString(),
+            afterNs: b.afterNs.toString(),
             label: b.label,
             color: b.color,
             createdAt: b.createdAt,
+            tags: { ...b.tags },
           })),
         removeBookmark: (id) => useSession.getState().removeBookmark(id),
         renameBookmark: (id, label) =>
           useSession.getState().renameBookmark(id, label),
+        setBookmarkRange: (id, beforeNs, afterNs) =>
+          useSession
+            .getState()
+            .setBookmarkRange(id, BigInt(beforeNs), BigInt(afterNs)),
+        setBookmarkTag: (id, attributeId, value) =>
+          useSession.getState().setBookmarkTag(id, attributeId, value),
+        getEventTagConfig: () => useSession.getState().eventTagConfig,
+        setEventTagConfig: (config) =>
+          useSession.getState().setEventTagConfig(config),
         getVideoReadiness: () => {
           const out: Array<{
             panelId: string;
@@ -666,6 +696,7 @@ export function App() {
       detachUiPersistence();
       detachNamedLayoutsPersistence();
       detachBookmarksPersistence();
+      detachEventTagConfigPersistence();
       detachUrlState();
       if (import.meta.env.DEV) {
         delete window.__drivelineDevHooks;

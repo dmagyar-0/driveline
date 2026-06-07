@@ -35,7 +35,7 @@
 .rowItem {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   align-items: center;
   gap: var(--sp-2);
 }
@@ -62,9 +62,129 @@
 }
 
 .meta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
   font-variant-numeric: tabular-nums;
   font-size: var(--fs-12);
   color: var(--color-fg-5);
+}
+
+/* Small dot before the relative time when an event spans a range. */
+.rangeDot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-accent-orange, #f97316);
+}
+
+/* Expand / collapse caret button — between the seek row and × remove. */
+.expandBtn {
+  background: transparent;
+  border: 0;
+  color: var(--color-fg-5);
+  cursor: pointer;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-3);
+  line-height: 1;
+}
+
+.expandBtn:hover {
+  background: var(--color-bg-5);
+  color: var(--color-fg-2);
+}
+
+.expandBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.expandCaret {
+  display: inline-block;
+  font-size: var(--fs-11);
+  transition: transform var(--motion-base);
+}
+
+.expandCaret[data-open="true"] {
+  transform: rotate(90deg);
+}
+
+/* Compact tag-value chips shown on a collapsed, tagged row. */
+.chips {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+
+.chip {
+  max-width: 12ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--sp-3);
+  background: var(--color-bg-4);
+  color: var(--color-fg-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-11);
+  line-height: 1.7;
+}
+
+/* Expanded per-event details: range + tag controls. */
+.details {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  margin-top: var(--sp-2);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-4);
+}
+
+.rangeRow,
+.tagGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.fieldLabel {
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
+}
+
+.numInput,
+.tagSelect,
+.tagText {
+  background: var(--color-bg-5);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-3);
+  padding: 2px var(--sp-3);
+  font: inherit;
+  font-size: var(--fs-12);
+}
+
+.numInput:focus-visible,
+.tagSelect:focus-visible,
+.tagText:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.noAttrs {
+  margin: 0;
+  font-size: var(--fs-11);
+  color: var(--color-fg-6);
 }
 
 .renameInput {
@@ -259,7 +379,8 @@
   .addBtn,
   .addCustomBtn,
   .removeBtn,
-  .nameInput {
+  .nameInput,
+  .expandCaret {
     transition: none;
   }
 }

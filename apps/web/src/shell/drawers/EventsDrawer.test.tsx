@@ -11,10 +11,13 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { EventsDrawer } from "./EventsDrawer";
 import { useSession } from "../../state/store";
+import { DEFAULT_EVENT_TAG_CONFIG } from "../../state/persist/eventTagConfig";
 
 function seedRange(): void {
   useSession.setState({
@@ -29,8 +32,15 @@ afterEach(async () => {
     useSession.getState().removeBookmark(b.id);
   }
   // Reset session state so a later test that wants no globalRange
-  // (the disabled-add case) doesn't see leftovers.
+  // (the disabled-add case) doesn't see leftovers, and restore the
+  // default tag taxonomy (mutated by the config-editor cases).
   useSession.setState({ globalRange: null, cursorNs: 0n });
+  useSession.getState().setEventTagConfig({
+    attributes: DEFAULT_EVENT_TAG_CONFIG.attributes.map((a) => ({
+      ...a,
+      options: [...a.options],
+    })),
+  });
 });
 
 describe("EventsDrawer", () => {
@@ -48,13 +58,11 @@ describe("EventsDrawer", () => {
     useSession.getState().addBookmark(3_000_000_000n, "second");
     render(<EventsDrawer />);
     const items = screen.getAllByTestId(/^bookmark-row-/);
-    expect(items.map((el) => el.querySelector("button")?.textContent)).toEqual(
-      [
-        expect.stringContaining("first"),
-        expect.stringContaining("second"),
-        expect.stringContaining("third"),
-      ],
-    );
+    expect(items.map((el) => el.querySelector("button")?.textContent)).toEqual([
+      expect.stringContaining("first"),
+      expect.stringContaining("second"),
+      expect.stringContaining("third"),
+    ]);
   });
 
   it("click on a row dispatches setCursor", () => {
@@ -138,5 +146,57 @@ describe("EventsDrawer", () => {
     const seek = screen.getByTestId(`bookmark-seek-${id}`);
     expect(seek.getAttribute("title")).toBe("midpoint");
     expect(seek.getAttribute("aria-label")).toBe("Seek to midpoint");
+  });
+
+  it("expanding a row reveals tag controls; selecting a value stores it", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(5_000_000_000n, "x");
+    render(<EventsDrawer />);
+    fireEvent.click(screen.getByTestId(`bookmark-expand-${id}`));
+    const select = screen.getByTestId(
+      `bookmark-tag-${id}-weather`,
+    ) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: "Rain" } });
+    expect(useSession.getState().bookmarks[0].tags).toEqual({
+      weather: "Rain",
+    });
+    // Collapse → the value shows as a chip.
+    fireEvent.click(screen.getByTestId(`bookmark-expand-${id}`));
+    const chips = screen.getByTestId(`bookmark-chips-${id}`);
+    expect(chips.textContent).toContain("Rain");
+  });
+
+  it("editing before/after on blur sets the range and flags data-ranged", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(5_000_000_000n, "x");
+    render(<EventsDrawer />);
+    fireEvent.click(screen.getByTestId(`bookmark-expand-${id}`));
+    const before = screen.getByTestId(
+      `bookmark-before-${id}`,
+    ) as HTMLInputElement;
+    fireEvent.change(before, { target: { value: "2" } });
+    fireEvent.blur(before);
+    const after = screen.getByTestId(
+      `bookmark-after-${id}`,
+    ) as HTMLInputElement;
+    fireEvent.change(after, { target: { value: "3" } });
+    fireEvent.blur(after);
+    const b = useSession.getState().bookmarks[0];
+    expect(b.beforeNs).toBe(2_000_000_000n);
+    expect(b.afterNs).toBe(3_000_000_000n);
+    expect(
+      screen.getByTestId(`bookmark-row-${id}`).getAttribute("data-ranged"),
+    ).toBe("true");
+  });
+
+  it("config editor adds a tag attribute", () => {
+    seedRange();
+    render(<EventsDrawer />);
+    const before = useSession.getState().eventTagConfig.attributes.length;
+    fireEvent.click(screen.getByTestId("event-tag-config-toggle"));
+    fireEvent.click(screen.getByTestId("tag-attr-add"));
+    expect(useSession.getState().eventTagConfig.attributes).toHaveLength(
+      before + 1,
+    );
   });
 });

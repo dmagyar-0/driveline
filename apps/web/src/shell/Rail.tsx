@@ -72,7 +72,7 @@ const RAIL_ITEMS: readonly RailItem[] = [
   },
   {
     id: "events",
-    label: "Events",
+    label: "Event tags",
     icon: (
       <svg {...ICON_PROPS}>
         <path d="M4 22V4M4 4h13l-2 5 2 5H4" />
