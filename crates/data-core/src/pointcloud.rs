@@ -85,6 +85,76 @@ impl PointCloudReader {
         &self.spin_ts
     }
 
+    /// Open a **PCD** (Point Cloud Data) file — the PCL/ROS interchange format
+    /// for LiDAR scans. A PCD holds a single cloud, so the resulting reader has
+    /// exactly one spin at `ts = 0`; the scene panel renders it like any other
+    /// point-cloud frame. See [`crate::pcd`] for the supported subset.
+    pub fn open_pcd(bytes: &[u8]) -> crate::Result<Self> {
+        let cloud = crate::pcd::parse_pcd(bytes)?;
+        // A single, timestamp-less frame parks at t = 0; `from_spins` gives it
+        // the default display duration so a cursor on it always resolves.
+        let spin = Spin {
+            ts_ns: 0,
+            positions: cloud.positions,
+            intensities: cloud.intensities,
+        };
+        Ok(Self::from_spins(vec![spin], "points".to_string()))
+    }
+
+    /// Build a reader from decoded spins, computing the channel meta and the
+    /// covering time range. Spins are sorted ascending (callers may pass them in
+    /// any order); `name` becomes both the channel id and display name. Shared
+    /// by [`Self::open`] (Parquet) and [`Self::open_pcd`].
+    fn from_spins(mut spins: Vec<Spin>, name: String) -> Self {
+        // Spins are normally written in order, but don't rely on it —
+        // `fetch_range` and `spin_times` both assume ascending ts.
+        spins.sort_by_key(|s| s.ts_ns);
+        let spin_ts: Vec<i64> = spins.iter().map(|s| s.ts_ns).collect();
+
+        // Cover the last spin's display duration so the cursor parked on the
+        // final frame still resolves to it. Infer the cadence from the median
+        // inter-spin gap; fall back to 100 ms for a single spin.
+        let period = infer_period_ns(&spin_ts);
+        let time_range = match (spin_ts.first(), spin_ts.last()) {
+            (Some(&a), Some(&b)) => TimeRange {
+                start_ns: a,
+                end_ns: b.saturating_add(period),
+            },
+            _ => TimeRange::empty(),
+        };
+
+        let max_points = spins.iter().map(Spin::point_count).max().unwrap_or(0) as u64;
+        let channel = Channel {
+            id: name.clone(),
+            source_id: String::new(),
+            name: name.clone(),
+            kind: ChannelKind::PointCloud,
+            // No scalar dtype — the renderer reads positions/intensities from
+            // the fetch batch directly.
+            dtype: None,
+            unit: None,
+            // For a point cloud, "sample_count" is the peak points-per-spin, so
+            // the UI can show how dense the cloud is. Spin count is the
+            // channel's frame count, surfaced via `spin_times`.
+            sample_count: max_points,
+            time_range,
+        };
+
+        let meta = SourceMeta {
+            id: String::new(),
+            kind: SourceKind::Lidar,
+            time_range,
+            channels: vec![channel],
+        };
+
+        PointCloudReader {
+            meta,
+            channel_id: name,
+            spins,
+            spin_ts,
+        }
+    }
+
     /// Read every row group into a single set of record batches.
     fn read_batches(bytes: &[u8]) -> crate::Result<(Arc<Schema>, Vec<RecordBatch>)> {
         let builder =
@@ -224,53 +294,7 @@ impl Reader for PointCloudReader {
             }
         }
 
-        // Spins are normally written in order, but don't rely on it —
-        // `fetch_range` and `spin_times` both assume ascending ts.
-        spins.sort_by_key(|s| s.ts_ns);
-        let spin_ts: Vec<i64> = spins.iter().map(|s| s.ts_ns).collect();
-
-        // Cover the last spin's display duration so the cursor parked on the
-        // final frame still resolves to it. Infer the cadence from the median
-        // inter-spin gap; fall back to 100 ms for a single spin.
-        let period = infer_period_ns(&spin_ts);
-        let time_range = match (spin_ts.first(), spin_ts.last()) {
-            (Some(&a), Some(&b)) => TimeRange {
-                start_ns: a,
-                end_ns: b.saturating_add(period),
-            },
-            _ => TimeRange::empty(),
-        };
-
-        let max_points = spins.iter().map(Spin::point_count).max().unwrap_or(0) as u64;
-        let channel = Channel {
-            id: name.clone(),
-            source_id: String::new(),
-            name: name.clone(),
-            kind: ChannelKind::PointCloud,
-            // No scalar dtype — the renderer reads positions/intensities from
-            // the fetch batch directly.
-            dtype: None,
-            unit: None,
-            // For a point cloud, "sample_count" is the peak points-per-spin, so
-            // the UI can show how dense the cloud is. Spin count is the
-            // channel's frame count, surfaced via `spin_times`.
-            sample_count: max_points,
-            time_range,
-        };
-
-        let meta = SourceMeta {
-            id: String::new(),
-            kind: SourceKind::Lidar,
-            time_range,
-            channels: vec![channel],
-        };
-
-        Ok(PointCloudReader {
-            meta,
-            channel_id: name,
-            spins,
-            spin_ts,
-        })
+        Ok(Self::from_spins(spins, name))
     }
 
     fn meta(&self) -> &SourceMeta {

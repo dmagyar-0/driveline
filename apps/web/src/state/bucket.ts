@@ -24,6 +24,16 @@ export interface TabularInput {
   format: TabularFormat;
 }
 
+/** Point-cloud (LiDAR) drops carry which reader opens them: a Driveline
+ *  point-cloud Parquet (`*.lidar.parquet`) or a PCL/ROS `.pcd` file. Both open
+ *  into the same 3D scene pipeline but call different wasm entry points. */
+export type LidarFormat = "parquet" | "pcd";
+
+export interface LidarInput {
+  file: File;
+  format: LidarFormat;
+}
+
 export interface Buckets {
   mcap: File[];
   mf4: File[];
@@ -39,12 +49,13 @@ export interface Buckets {
   /** CSV / Parquet drops — deferred behind the import-config dialog. */
   tabular: TabularInput[];
   /**
-   * Driveline point-cloud Parquet drops (`*.lidar.parquet`) — one row per
-   * LiDAR spin, opened straight into the 3D scene pipeline. Detected by the
-   * compound `.lidar.parquet` suffix so a plain `.parquet` still routes to the
-   * tabular (scalar) import flow.
+   * Point-cloud (LiDAR) drops opened straight into the 3D scene pipeline:
+   * Driveline point-cloud Parquet (`*.lidar.parquet`, one row per spin) and
+   * PCL/ROS `.pcd` files (a single cloud). The `.lidar.parquet` suffix is
+   * checked before the generic `.parquet` branch so a plain `.parquet` still
+   * routes to the tabular (scalar) import flow.
    */
-  lidar: File[];
+  lidar: LidarInput[];
   errors: BucketError[];
 }
 
@@ -57,7 +68,7 @@ export function bucketFiles(files: File[]): Buckets {
   const sidecars = new Map<string, File>(); // mp4 filename -> sidecar file
   const mp4s: File[] = [];
   const tabular: TabularInput[] = [];
-  const lidar: File[] = [];
+  const lidar: LidarInput[] = [];
   const errors: BucketError[] = [];
 
   for (const f of files) {
@@ -77,7 +88,10 @@ export function bucketFiles(files: File[]): Buckets {
     } else if (lower.endsWith(LIDAR_SUFFIX)) {
       // Point-cloud Parquet — checked before the generic `.parquet` branch so
       // a `*.lidar.parquet` routes to the 3D scene pipeline, not tabular.
-      lidar.push(f);
+      lidar.push({ file: f, format: "parquet" });
+    } else if (lower.endsWith(".pcd")) {
+      // PCL/ROS Point Cloud Data — a single LiDAR cloud per file.
+      lidar.push({ file: f, format: "pcd" });
     } else if (lower.endsWith(".csv")) {
       tabular.push({ file: f, format: "csv" });
     } else if (lower.endsWith(".parquet") || lower.endsWith(".pq")) {

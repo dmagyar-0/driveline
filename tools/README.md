@@ -37,3 +37,26 @@ Parquet reader is built without the zstd codec (size budget).
 Then drop the `.lidar.parquet` on the Driveline window and bind it to a Scene
 panel from the Panel drawer. Points are coloured by intensity and step with the
 cursor as you scrub or play.
+
+## PCD files (`*.pcd`) — no conversion needed
+
+Driveline opens **PCD** (Point Cloud Data, the PCL/ROS LiDAR interchange
+format) files directly: just drop a `.pcd` on the window and bind it to a Scene
+panel. A PCD holds a single cloud, so it loads as a one-frame point-cloud
+source. `ascii`, `binary`, and `binary_compressed` (LZF) payloads are all
+supported; `x`/`y`/`z` are required and an `intensity` field (when present)
+drives the colour (otherwise points are coloured by range).
+
+Public example clouds to try (the second is a real laser scan, ~460 k points,
+`binary_compressed` with intensity):
+
+```bash
+# A real LMS400 laser scan of a table scene
+curl -LO https://raw.githubusercontent.com/PointCloudLibrary/data/master/tutorials/table_scene_lms400.pcd
+# A smaller ascii model (x/y/z only — coloured by range)
+curl -LO https://raw.githubusercontent.com/PointCloudLibrary/data/master/tutorials/ism_train_cat.pcd
+```
+
+The `apps/e2e/tests/lidar-pcd.spec.ts` test generates a synthetic LiDAR-style
+scene (ground plane + a vehicle box + poles) inline and renders it, doubling as
+a runnable worked example — see `apps/e2e/tests/screenshots/lidar-pcd-scene.png`.

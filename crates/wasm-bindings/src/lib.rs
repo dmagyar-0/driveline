@@ -765,6 +765,20 @@ pub fn open_lidar(bytes: &[u8]) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
+/// Open a **PCD** (Point Cloud Data) file — the PCL/ROS LiDAR interchange
+/// format — and register the resulting `PointCloudReader` in the same slab as
+/// `open_lidar`. A PCD holds a single cloud, so the source surfaces one
+/// point-cloud channel with one spin (at `t = 0`); every other `lidar_*`
+/// endpoint then works unchanged. Supports `ascii`, `binary`, and
+/// `binary_compressed` payloads — see `data-core`'s `pcd` module.
+#[wasm_bindgen]
+pub fn open_lidar_pcd(bytes: &[u8]) -> Result<u32, JsError> {
+    let reader = PointCloudReader::open_pcd(bytes)
+        .map_err(|e| JsError::new(&format!("open pcd failed: {e}")))?;
+    let key = LIDAR_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
 /// Drop the lidar reader at `handle`. No-op if the handle is stale.
 #[wasm_bindgen]
 pub fn close_lidar(handle: u32) {

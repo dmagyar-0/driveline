@@ -1936,14 +1936,18 @@ export const useSession = create<SessionState>((set, get) => {
           }
         }
 
-        for (const f of buckets.lidar) {
+        for (const { file: f, format } of buckets.lidar) {
           try {
-            // Point-cloud Parquet opens eagerly (like a tabular source): the
+            // Point-cloud sources open eagerly (like a tabular source): the
             // bytes are decoded into per-spin buffers in wasm and the JS copy
-            // is dropped once `openLidar` returns. One point-cloud channel per
-            // source, bindable to a 3D scene panel.
+            // is dropped once the open returns. One point-cloud channel per
+            // source, bindable to a 3D scene panel. Parquet carries many spins;
+            // a `.pcd` carries a single cloud — both surface as `kind: "lidar"`.
             const bytes = await fileBytes(f);
-            const handle = await w.openLidar(bytes);
+            const handle =
+              format === "pcd"
+                ? await w.openLidarPcd(bytes)
+                : await w.openLidar(bytes);
             const summary = await w.lidarSummary(handle);
             const id = uniqueSourceId(f.name, [...existing, ...newSources]);
             const channels = lidarChannels(id, summary);

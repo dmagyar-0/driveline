@@ -9,6 +9,7 @@ pub mod mcap;
 pub mod mf4;
 pub mod mp4_sidecar;
 pub mod noop;
+pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
 pub mod tabular;
@@ -102,6 +103,9 @@ pub enum Error {
 
     #[error("point-cloud schema error: {0}")]
     PointCloudSchema(String),
+
+    #[error("failed to parse PCD point cloud: {0}")]
+    PcdParse(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
