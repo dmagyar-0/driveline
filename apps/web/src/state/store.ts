@@ -47,6 +47,13 @@ import {
   loadBookmarksFromStorage,
   type Bookmark,
 } from "./persist/bookmarks";
+import {
+  loadEventTagConfigFromStorage,
+  DEFAULT_EVENT_TAG_CONFIG,
+  type EventTagConfig,
+  type TagAttribute,
+  type TagAttributeType,
+} from "./persist/eventTagConfig";
 import { colorFor } from "../panels/palette";
 import { formatRelative, type TimeMode } from "../timeline/formatTime";
 import { mark, measure, timed } from "../perf";
@@ -384,13 +391,19 @@ export interface SessionState {
   // layoutJson compare.
   namedLayouts: NamedLayout[];
   activeNamedLayoutId: string | null;
-  // Bookmarks slice (Phase 8). User-placed time markers; persists to
-  // `driveline.bookmarks.v1` and outlives a session — `clear()` does
+  // Bookmarks (event-tag) slice (Phase 8). User-placed events; persists
+  // to `driveline.bookmarks.v2` and outlives a session — `clear()` does
   // not reset, mirroring `namedLayouts`. `ns` is `bigint`; the persist
-  // adapter encodes it as a decimal string. Display-time sorting
+  // adapter encodes it (and the optional `beforeNs`/`afterNs` range
+  // durations) as decimal strings. `tags` holds the per-event attribute
+  // values keyed by `eventTagConfig` attribute ids. Display-time sorting
   // happens in the drawer/marker components — storage and slice
   // preserve insertion order so renames target a stable index.
   bookmarks: Bookmark[];
+  // Event Tag config (Phase 8). The attribute schema (weather, road
+  // type, …) used to tag events. Editable in-app + importable JSON;
+  // persists to `driveline.eventTags.config.v1` and outlives a session.
+  eventTagConfig: EventTagConfig;
   /**
    * Errors from the most recent `openFiles` batch. The Sources drawer
    * renders these so a malformed MCAP/MF4 or an unknown extension is
@@ -690,6 +703,39 @@ export interface SessionState {
    */
   renameBookmark(id: string, label: string): void;
   /**
+   * Set an event's optional before/after range durations (nanoseconds).
+   * Both are clamped to `>= 0`; `0/0` is a point event. No-op on an
+   * unknown id or when neither value changes.
+   */
+  setBookmarkRange(id: string, beforeNs: bigint, afterNs: bigint): void;
+  /**
+   * Set (or, when `value` trims to empty, clear) one tag attribute value
+   * on an event. No-op on an unknown id or when the value is unchanged.
+   */
+  setBookmarkTag(id: string, attributeId: string, value: string): void;
+  /**
+   * Replace the whole Event Tag config. Tag values on existing events
+   * whose attribute id no longer exists are pruned in the same update.
+   */
+  setEventTagConfig(config: EventTagConfig): void;
+  /**
+   * Append a new tag attribute (id minted from `name`). Returns the id.
+   */
+  addTagAttribute(name: string, type: TagAttributeType): string;
+  /**
+   * Remove a tag attribute and prune its values from every event.
+   * No-op on an unknown id.
+   */
+  removeTagAttribute(attributeId: string): void;
+  /**
+   * Patch a tag attribute's display name / type / options in place.
+   * No-op on an unknown id.
+   */
+  updateTagAttribute(
+    attributeId: string,
+    patch: Partial<Pick<TagAttribute, "name" | "type" | "options">>,
+  ): void;
+  /**
    * Fetch an Arrow IPC batch for `channelId` over `[startNs, endNs)`.
    * Dispatches to the right reader based on the owning source's kind so
    * panels never see the worker shape directly.
@@ -727,6 +773,30 @@ function mintId(prefix: string): string {
   return typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : `${prefix}-${Math.random().toString(36).slice(2)}`;
+}
+
+// Drop tag values whose attribute id no longer exists in `config` from
+// every event. Shared by `setEventTagConfig` and `removeTagAttribute`;
+// preserves array/object references when nothing changes so the persist
+// subscriber and React selectors don't churn.
+function pruneOrphanTags(
+  get: () => SessionState,
+  set: (partial: Partial<SessionState>) => void,
+  config: EventTagConfig,
+): void {
+  const valid = new Set(config.attributes.map((a) => a.id));
+  const prev = get().bookmarks;
+  let changed = false;
+  const next = prev.map((b) => {
+    const drop = Object.keys(b.tags).filter((k) => !valid.has(k));
+    if (drop.length === 0) return b;
+    const tags = { ...b.tags };
+    for (const k of drop) delete tags[k];
+    changed = true;
+    return { ...b, tags };
+  });
+  if (!changed) return;
+  set({ bookmarks: next });
 }
 
 function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
@@ -934,6 +1004,7 @@ export const useSession = create<SessionState>((set, get) => {
   const hydratedUi = loadUiFromStorage();
   const hydratedNamedLayouts = loadNamedLayoutsFromStorage();
   const hydratedBookmarks = loadBookmarksFromStorage();
+  const hydratedEventTagConfig = loadEventTagConfigFromStorage();
 
   // Merge a freshly-opened batch of sources into the store and record any
   // errors. Shared by `openFiles` (drop / picker) and `openUrl` so both
@@ -998,6 +1069,7 @@ export const useSession = create<SessionState>((set, get) => {
     namedLayouts: hydratedNamedLayouts?.layouts ?? [],
     activeNamedLayoutId: hydratedNamedLayouts?.activeNamedLayoutId ?? null,
     bookmarks: hydratedBookmarks ?? [],
+    eventTagConfig: hydratedEventTagConfig ?? DEFAULT_EVENT_TAG_CONFIG,
     lastOpenErrors: [],
     loadedRanges: {},
     pendingFetch: {},
@@ -1580,9 +1652,12 @@ export const useSession = create<SessionState>((set, get) => {
       const entry: Bookmark = {
         id,
         ns: cursorNs,
+        beforeNs: 0n,
+        afterNs: 0n,
         label: finalLabel,
         color: colorFor(id),
         createdAt: Date.now(),
+        tags: {},
       };
       set({ bookmarks: [...get().bookmarks, entry] });
       return id;
@@ -1597,9 +1672,12 @@ export const useSession = create<SessionState>((set, get) => {
       const entry: Bookmark = {
         id,
         ns,
+        beforeNs: 0n,
+        afterNs: 0n,
         label: finalLabel,
         color: colorFor(id),
         createdAt: Date.now(),
+        tags: {},
       };
       set({ bookmarks: [...get().bookmarks, entry] });
       return id;
@@ -1630,6 +1708,91 @@ export const useSession = create<SessionState>((set, get) => {
       });
       if (!changed) return;
       set({ bookmarks: next });
+    },
+
+    setBookmarkRange(id, beforeNs, afterNs) {
+      const before = beforeNs < 0n ? 0n : beforeNs;
+      const after = afterNs < 0n ? 0n : afterNs;
+      const prev = get().bookmarks;
+      let changed = false;
+      const next = prev.map((b) => {
+        if (b.id !== id) return b;
+        if (b.beforeNs === before && b.afterNs === after) return b;
+        changed = true;
+        return { ...b, beforeNs: before, afterNs: after };
+      });
+      if (!changed) return;
+      set({ bookmarks: next });
+    },
+
+    setBookmarkTag(id, attributeId, value) {
+      const clear = value.trim().length === 0;
+      const prev = get().bookmarks;
+      let changed = false;
+      const next = prev.map((b) => {
+        if (b.id !== id) return b;
+        const has = attributeId in b.tags;
+        if (clear) {
+          if (!has) return b;
+          const tags = { ...b.tags };
+          delete tags[attributeId];
+          changed = true;
+          return { ...b, tags };
+        }
+        if (has && b.tags[attributeId] === value) return b;
+        changed = true;
+        return { ...b, tags: { ...b.tags, [attributeId]: value } };
+      });
+      if (!changed) return;
+      set({ bookmarks: next });
+    },
+
+    setEventTagConfig(config) {
+      set({ eventTagConfig: config });
+      pruneOrphanTags(get, set, config);
+    },
+
+    addTagAttribute(name, type) {
+      const id = mintId("attr");
+      const trimmed = name.trim();
+      const attr: TagAttribute = {
+        id,
+        name: trimmed.length > 0 ? trimmed : "New attribute",
+        type,
+        options: [],
+      };
+      set({
+        eventTagConfig: {
+          attributes: [...get().eventTagConfig.attributes, attr],
+        },
+      });
+      return id;
+    },
+
+    removeTagAttribute(attributeId) {
+      const prev = get().eventTagConfig.attributes;
+      const next = prev.filter((a) => a.id !== attributeId);
+      if (next.length === prev.length) return;
+      const config: EventTagConfig = { attributes: next };
+      set({ eventTagConfig: config });
+      pruneOrphanTags(get, set, config);
+    },
+
+    updateTagAttribute(attributeId, patch) {
+      const prev = get().eventTagConfig.attributes;
+      let changed = false;
+      const next = prev.map((a) => {
+        if (a.id !== attributeId) return a;
+        changed = true;
+        return {
+          ...a,
+          ...(patch.name !== undefined ? { name: patch.name } : {}),
+          ...(patch.type !== undefined ? { type: patch.type } : {}),
+          ...(patch.options !== undefined ? { options: patch.options } : {}),
+        };
+      });
+      if (!changed) return;
+      set({ eventTagConfig: { attributes: next } });
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {
@@ -2188,11 +2351,11 @@ export const useSession = create<SessionState>((set, get) => {
           }
         }
         // Wipe session + transport + per-panel bindings, but keep
-        // `layoutJson`, `namedLayouts`, and `bookmarks` so the user's
-        // dock layout, saved layouts, and bookmarks survive a clear
-        // (T6.2 — layout outlives a session, per
-        // docs/06-ui-and-panels.md:167; bookmarks follow the same
-        // posture per Phase 8).
+        // `layoutJson`, `namedLayouts`, `bookmarks`, and
+        // `eventTagConfig` so the user's dock layout, saved layouts,
+        // events, and tag taxonomy survive a clear (T6.2 — layout
+        // outlives a session, per docs/06-ui-and-panels.md:167;
+        // bookmarks + the event-tag config follow the same posture).
         set({
           sources: [],
           channels: [],

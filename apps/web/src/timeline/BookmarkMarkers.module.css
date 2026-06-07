@@ -14,6 +14,30 @@
   pointer-events: none;
 }
 
+/* Group wrapper carries no box so its band + line position against the
+ * absolutely-positioned `.markerLayer`. */
+.markerGroup {
+  display: contents;
+}
+
+/* Range band: a translucent fill spanning [ns-before, ns+after]. Drawn
+ * behind the center line (lower in DOM order than `.marker` here, but
+ * the line re-asserts via full opacity). No transform — `left`/`width`
+ * are set inline as percentages. */
+.band {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  pointer-events: auto;
+  cursor: pointer;
+  opacity: 0.28;
+  border-radius: 1px;
+}
+
+.band[data-out-of-range="true"] {
+  opacity: 0.16;
+}
+
 .marker {
   position: absolute;
   top: 0;

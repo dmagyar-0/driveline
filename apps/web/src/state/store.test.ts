@@ -24,6 +24,7 @@ import {
   useSession,
 } from "./store";
 import { MAX_PLOT_SERIES } from "../panels/palette";
+import { DEFAULT_EVENT_TAG_CONFIG } from "./persist/eventTagConfig";
 import type {
   DataCoreApi,
   McapSummary,
@@ -1919,6 +1920,113 @@ describe("bookmarks (Phase 8)", () => {
     expect(after.find((x) => x.id === b)).toBe(
       before.find((x) => x.id === b),
     );
+  });
+});
+
+describe("event tagging (Phase 8)", () => {
+  // `clear()` preserves `eventTagConfig`; the global beforeEach doesn't
+  // reset it, so restore the default taxonomy after each case here.
+  function resetConfig(): void {
+    useSession.getState().setEventTagConfig({
+      attributes: DEFAULT_EVENT_TAG_CONFIG.attributes.map((a) => ({
+        ...a,
+        options: [...a.options],
+      })),
+    });
+  }
+
+  it("setBookmarkRange clamps negatives and stores the durations", () => {
+    const id = useSession.getState().addBookmark(1_000n, "x");
+    useSession.getState().setBookmarkRange(id, -5n, 2_000n);
+    const b = useSession.getState().bookmarks[0];
+    expect(b.beforeNs).toBe(0n);
+    expect(b.afterNs).toBe(2_000n);
+  });
+
+  it("setBookmarkRange is a no-op for an unknown id (ref preserved)", () => {
+    useSession.getState().addBookmark(1_000n, "x");
+    const before = useSession.getState().bookmarks;
+    useSession.getState().setBookmarkRange("ghost", 1n, 1n);
+    expect(useSession.getState().bookmarks).toBe(before);
+  });
+
+  it("setBookmarkTag sets a value, then clears it with an empty string", () => {
+    const id = useSession.getState().addBookmark(1_000n, "x");
+    useSession.getState().setBookmarkTag(id, "weather", "Rain");
+    expect(useSession.getState().bookmarks[0].tags).toEqual({ weather: "Rain" });
+    useSession.getState().setBookmarkTag(id, "weather", "   ");
+    expect(useSession.getState().bookmarks[0].tags).toEqual({});
+  });
+
+  it("setBookmarkTag is a no-op for an unknown id", () => {
+    useSession.getState().addBookmark(1_000n, "x");
+    const before = useSession.getState().bookmarks;
+    useSession.getState().setBookmarkTag("ghost", "weather", "Rain");
+    expect(useSession.getState().bookmarks).toBe(before);
+  });
+
+  it("addTagAttribute appends and returns the new id", () => {
+    resetConfig();
+    const n = useSession.getState().eventTagConfig.attributes.length;
+    const id = useSession.getState().addTagAttribute("Surface", "select");
+    const attrs = useSession.getState().eventTagConfig.attributes;
+    expect(attrs).toHaveLength(n + 1);
+    expect(attrs[attrs.length - 1].id).toBe(id);
+    expect(attrs[attrs.length - 1].name).toBe("Surface");
+    resetConfig();
+  });
+
+  it("updateTagAttribute patches name / type / options in place", () => {
+    resetConfig();
+    useSession.getState().updateTagAttribute("weather", {
+      name: "Sky",
+      type: "text",
+      options: ["x"],
+    });
+    const attr = useSession
+      .getState()
+      .eventTagConfig.attributes.find((a) => a.id === "weather");
+    expect(attr?.name).toBe("Sky");
+    expect(attr?.type).toBe("text");
+    expect(attr?.options).toEqual(["x"]);
+    resetConfig();
+  });
+
+  it("removeTagAttribute drops the attribute and prunes its values", () => {
+    resetConfig();
+    const id = useSession.getState().addBookmark(1_000n, "x");
+    useSession.getState().setBookmarkTag(id, "weather", "Rain");
+    useSession.getState().setBookmarkTag(id, "road_type", "Highway");
+    useSession.getState().removeTagAttribute("weather");
+    expect(
+      useSession.getState().eventTagConfig.attributes.some((a) => a.id === "weather"),
+    ).toBe(false);
+    // The orphaned tag value is pruned; the still-valid one remains.
+    expect(useSession.getState().bookmarks[0].tags).toEqual({
+      road_type: "Highway",
+    });
+    resetConfig();
+  });
+
+  it("setEventTagConfig replaces the schema and prunes orphan tags", () => {
+    const id = useSession.getState().addBookmark(1_000n, "x");
+    useSession.getState().setBookmarkTag(id, "weather", "Rain");
+    useSession.getState().setEventTagConfig({
+      attributes: [{ id: "lighting", name: "Lighting", type: "text", options: [] }],
+    });
+    expect(useSession.getState().bookmarks[0].tags).toEqual({});
+    resetConfig();
+  });
+
+  it("clear() preserves eventTagConfig", async () => {
+    useSession.getState().setEventTagConfig({
+      attributes: [{ id: "only", name: "Only", type: "text", options: [] }],
+    });
+    await useSession.getState().clear();
+    expect(useSession.getState().eventTagConfig.attributes).toEqual([
+      { id: "only", name: "Only", type: "text", options: [] },
+    ]);
+    resetConfig();
   });
 });
 

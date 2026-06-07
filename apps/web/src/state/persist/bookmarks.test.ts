@@ -9,6 +9,8 @@ import {
 } from "./bookmarks";
 import type { useSession } from "../store";
 
+const BOOKMARKS_STORAGE_KEY_V1 = "driveline.bookmarks.v1";
+
 function makeStorage(): Storage {
   const map = new Map<string, string>();
   return {
@@ -31,56 +33,45 @@ const SAMPLE_BOOKMARKS: Bookmark[] = [
   {
     id: "uuid-a",
     ns: 1_500_000_000n,
+    beforeNs: 0n,
+    afterNs: 0n,
     label: "hard brake",
     color: "#f97316",
     createdAt: 1_700_000_000_000,
+    tags: {},
   },
   {
     id: "uuid-b",
     ns: 5_000_000_000n,
+    beforeNs: 2_000_000_000n,
+    afterNs: 3_000_000_000n,
     label: "lane change L",
     color: "#3b82f6",
     createdAt: 1_700_000_001_000,
+    tags: { weather: "Rain", road_type: "Highway" },
   },
 ];
 
-interface RawPersisted {
-  version: number;
-  bookmarks: Array<{
-    id: string;
-    ns: string;
-    label: string;
-    color: string;
-    createdAt: number;
-  }>;
-}
-
-function persistedFromBookmarks(bms: Bookmark[]): RawPersisted {
-  return {
-    version: 1,
-    bookmarks: bms.map((b) => ({
-      id: b.id,
-      ns: b.ns.toString(),
-      label: b.label,
-      color: b.color,
-      createdAt: b.createdAt,
-    })),
-  };
-}
-
-describe("bookmarks persist", () => {
-  it("round-trips save → load with BigInt encoding", () => {
+describe("bookmarks persist (v2)", () => {
+  it("round-trips save → load with BigInt + range + tags encoding", () => {
     const s = makeStorage();
     saveBookmarksToStorage(SAMPLE_BOOKMARKS, s);
     expect(loadBookmarksFromStorage(s)).toEqual(SAMPLE_BOOKMARKS);
   });
 
-  it("encodes ns as a decimal string in storage", () => {
+  it("encodes ns / beforeNs / afterNs as decimal strings in storage", () => {
     const s = makeStorage();
     saveBookmarksToStorage(SAMPLE_BOOKMARKS, s);
     const raw = JSON.parse(s.getItem(BOOKMARKS_STORAGE_KEY) ?? "null");
-    expect(raw.bookmarks[0].ns).toBe("1500000000");
-    expect(typeof raw.bookmarks[0].ns).toBe("string");
+    expect(raw.version).toBe(2);
+    expect(raw.bookmarks[1].ns).toBe("5000000000");
+    expect(raw.bookmarks[1].beforeNs).toBe("2000000000");
+    expect(raw.bookmarks[1].afterNs).toBe("3000000000");
+    expect(typeof raw.bookmarks[1].ns).toBe("string");
+    expect(raw.bookmarks[1].tags).toEqual({
+      weather: "Rain",
+      road_type: "Highway",
+    });
   });
 
   it("returns null when nothing is stored", () => {
@@ -93,11 +84,11 @@ describe("bookmarks persist", () => {
     expect(loadBookmarksFromStorage(s)).toBeNull();
   });
 
-  it("returns null when version mismatches", () => {
+  it("returns null when version is not 2 (and not the migratable v1)", () => {
     const s = makeStorage();
     s.setItem(
       BOOKMARKS_STORAGE_KEY,
-      JSON.stringify({ ...persistedFromBookmarks(SAMPLE_BOOKMARKS), version: 2 }),
+      JSON.stringify({ version: 3, bookmarks: [] }),
     );
     expect(loadBookmarksFromStorage(s)).toBeNull();
   });
@@ -106,7 +97,7 @@ describe("bookmarks persist", () => {
     const s = makeStorage();
     s.setItem(
       BOOKMARKS_STORAGE_KEY,
-      JSON.stringify({ version: 1, bookmarks: {} }),
+      JSON.stringify({ version: 2, bookmarks: {} }),
     );
     expect(loadBookmarksFromStorage(s)).toBeNull();
   });
@@ -116,14 +107,63 @@ describe("bookmarks persist", () => {
     s.setItem(
       BOOKMARKS_STORAGE_KEY,
       JSON.stringify({
-        version: 1,
+        version: 2,
         bookmarks: [
           {
             id: "x",
             ns: "not-a-number",
+            beforeNs: "0",
+            afterNs: "0",
             label: "x",
             color: "#fff",
             createdAt: 0,
+            tags: {},
+          },
+        ],
+      }),
+    );
+    expect(loadBookmarksFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when a range duration is negative", () => {
+    const s = makeStorage();
+    s.setItem(
+      BOOKMARKS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        bookmarks: [
+          {
+            id: "x",
+            ns: "0",
+            beforeNs: "-1",
+            afterNs: "0",
+            label: "x",
+            color: "#fff",
+            createdAt: 0,
+            tags: {},
+          },
+        ],
+      }),
+    );
+    expect(loadBookmarksFromStorage(s)).toBeNull();
+  });
+
+  it("returns null when a tag value is not a string", () => {
+    const s = makeStorage();
+    s.setItem(
+      BOOKMARKS_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        bookmarks: [
+          {
+            id: "x",
+            ns: "0",
+            beforeNs: "0",
+            afterNs: "0",
+            label: "x",
+            color: "#fff",
+            createdAt: 0,
+            tags: { weather: 5 },
           },
         ],
       }),
@@ -135,44 +175,15 @@ describe("bookmarks persist", () => {
     const s = makeStorage();
     s.setItem(
       BOOKMARKS_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        bookmarks: [{ id: "x", ns: "0" }],
-      }),
-    );
-    expect(loadBookmarksFromStorage(s)).toBeNull();
-  });
-
-  it("returns null when ns is a number rather than a string", () => {
-    const s = makeStorage();
-    s.setItem(
-      BOOKMARKS_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        bookmarks: [
-          { id: "x", ns: 1500000000, label: "x", color: "#fff", createdAt: 0 },
-        ],
-      }),
-    );
-    expect(loadBookmarksFromStorage(s)).toBeNull();
-  });
-
-  it("returns null when id is empty", () => {
-    const s = makeStorage();
-    s.setItem(
-      BOOKMARKS_STORAGE_KEY,
-      JSON.stringify({
-        version: 1,
-        bookmarks: [
-          { id: "", ns: "0", label: "x", color: "#fff", createdAt: 0 },
-        ],
-      }),
+      JSON.stringify({ version: 2, bookmarks: [{ id: "x", ns: "0" }] }),
     );
     expect(loadBookmarksFromStorage(s)).toBeNull();
   });
 
   it("no-ops when storage is undefined", () => {
-    expect(() => saveBookmarksToStorage(SAMPLE_BOOKMARKS, undefined)).not.toThrow();
+    expect(() =>
+      saveBookmarksToStorage(SAMPLE_BOOKMARKS, undefined),
+    ).not.toThrow();
     expect(loadBookmarksFromStorage(undefined)).toBeNull();
   });
 
@@ -186,14 +197,74 @@ describe("bookmarks persist", () => {
     const big: Bookmark = {
       id: "big",
       ns: 9_007_199_254_740_993n,
+      beforeNs: 0n,
+      afterNs: 0n,
       label: "huge",
       color: "#fff",
       createdAt: 0,
+      tags: {},
     };
     const s = makeStorage();
     saveBookmarksToStorage([big], s);
     const loaded = loadBookmarksFromStorage(s);
     expect(loaded?.[0].ns).toBe(9_007_199_254_740_993n);
+  });
+});
+
+describe("bookmarks v1 → v2 migration", () => {
+  it("migrates a legacy v1 payload, defaulting range to 0 and tags to {}", () => {
+    const s = makeStorage();
+    s.setItem(
+      BOOKMARKS_STORAGE_KEY_V1,
+      JSON.stringify({
+        version: 1,
+        bookmarks: [
+          { id: "old", ns: "42", label: "legacy", color: "#abc", createdAt: 7 },
+        ],
+      }),
+    );
+    expect(loadBookmarksFromStorage(s)).toEqual([
+      {
+        id: "old",
+        ns: 42n,
+        beforeNs: 0n,
+        afterNs: 0n,
+        label: "legacy",
+        color: "#abc",
+        createdAt: 7,
+        tags: {},
+      },
+    ]);
+  });
+
+  it("prefers a present v2 payload over the legacy v1 key", () => {
+    const s = makeStorage();
+    s.setItem(
+      BOOKMARKS_STORAGE_KEY_V1,
+      JSON.stringify({
+        version: 1,
+        bookmarks: [
+          { id: "old", ns: "1", label: "legacy", color: "#abc", createdAt: 1 },
+        ],
+      }),
+    );
+    saveBookmarksToStorage(SAMPLE_BOOKMARKS, s);
+    expect(loadBookmarksFromStorage(s)).toEqual(SAMPLE_BOOKMARKS);
+  });
+
+  it("fails closed on a malformed v2 payload without falling back to v1", () => {
+    const s = makeStorage();
+    s.setItem(
+      BOOKMARKS_STORAGE_KEY_V1,
+      JSON.stringify({
+        version: 1,
+        bookmarks: [
+          { id: "old", ns: "1", label: "legacy", color: "#abc", createdAt: 1 },
+        ],
+      }),
+    );
+    s.setItem(BOOKMARKS_STORAGE_KEY, "broken {");
+    expect(loadBookmarksFromStorage(s)).toBeNull();
   });
 });
 

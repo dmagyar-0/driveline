@@ -1,33 +1,62 @@
-// Phase 8 · Events drawer (bookmarks).
+// Phase 8 · Event Tagging drawer (formerly "Bookmarks").
 //
-// Replaces the inline `events` stub in `Drawer.tsx`. Reads the
-// `bookmarks` slice and `globalRange` via discrete single-key
-// selectors; rename state is local `useState`. Sort happens at render
-// only — storage and slice preserve insertion order so a rename
-// targets a stable index.
+// Reads the `bookmarks` slice, `globalRange`, and `eventTagConfig` via
+// discrete single-key selectors; rename / add / expand / range-draft
+// state is local `useState`. Sort happens at render only — storage and
+// slice preserve insertion order so a rename targets a stable index.
 //
-// The conditional rendering trap (frontend skill) is avoided: rename
-// is `editingId === b.id ? <Input/> : <Span/>`, never a chained
-// boolean. The add-button is `aria-disabled` + `disabled` when
-// `globalRange === null` because there is no meaningful cursor to
-// bookmark.
+// Each event row stays a single-click "seek" button (the first <button>
+// in the row, preserved for the existing tests) with a hover-revealed ×
+// remove and an expand caret. Expanding a row reveals the range editor
+// (optional before/after durations that turn the point into a
+// [ns-before, ns+after] band) and one control per configured tag
+// attribute (a <select> for `select`, an <input> for `text`).
+//
+// The conditional-rendering trap (frontend skill) is avoided: rename is
+// `editingId === b.id ? <Input/> : <Span/>`, never a chained boolean.
+// The add-button is `aria-disabled` + `disabled` when `globalRange ===
+// null` because there is no meaningful cursor to anchor an event to.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
 import { formatRelative } from "../../timeline/formatTime";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
+import { EventTagConfigEditor } from "./EventTagConfigEditor";
 import s from "./EventsDrawer.module.css";
 
 const HEADING_ID = "drawer-events-h";
 
+function secondsString(ns: bigint): string {
+  return String(Number(ns) / 1e9);
+}
+
+function nsFromSeconds(text: string): bigint | null {
+  const n = Number(text);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return BigInt(Math.round(n * 1e9));
+}
+
+interface RangeDraft {
+  // Only the field the user is editing is present; an absent field falls
+  // back to the bookmark's committed value on blur (editing `after`
+  // must not reset `before`, and vice-versa).
+  before?: string;
+  after?: string;
+}
+
 export function EventsDrawer() {
   const bookmarks = useSession((st) => st.bookmarks);
   const globalRange = useSession((st) => st.globalRange);
+  const attributes = useSession((st) => st.eventTagConfig.attributes);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingDraft, setEditingDraft] = useState<string>("");
   const [pendingLabel, setPendingLabel] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [rangeDrafts, setRangeDrafts] = useState<Record<string, RangeDraft>>(
+    {},
+  );
 
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const addInputRef = useRef<HTMLInputElement | null>(null);
@@ -83,6 +112,38 @@ export function EventsDrawer() {
   const onRemove = (id: string) => {
     useSession.getState().removeBookmark(id);
     if (editingId === id) cancelEdit();
+    if (expandedId === id) setExpandedId(null);
+  };
+
+  const toggleExpand = (id: string) =>
+    setExpandedId((cur) => (cur === id ? null : id));
+
+  const setRangeDraft = (id: string, patch: Partial<RangeDraft>) =>
+    setRangeDrafts((d) => ({ ...d, [id]: { ...d[id], ...patch } }));
+
+  const commitRange = (id: string) => {
+    const b = bookmarks.find((x) => x.id === id);
+    if (!b) return;
+    const draft = rangeDrafts[id];
+    // An untouched field (`undefined`) keeps the committed value; an
+    // empty string clears to a point (`0n`); anything else parses.
+    const resolve = (text: string | undefined, fallback: bigint): bigint => {
+      if (text === undefined) return fallback;
+      if (text.trim() === "") return 0n;
+      return nsFromSeconds(text) ?? fallback;
+    };
+    useSession
+      .getState()
+      .setBookmarkRange(
+        id,
+        resolve(draft?.before, b.beforeNs),
+        resolve(draft?.after, b.afterNs),
+      );
+    setRangeDrafts((d) => {
+      const next = { ...d };
+      delete next[id];
+      return next;
+    });
   };
 
   const onAddDefault = () => {
@@ -127,7 +188,7 @@ export function EventsDrawer() {
     >
       <section className={s.section}>
         <div className={drawerStyles.heading}>
-          <h3 id={HEADING_ID}>Bookmarks</h3>
+          <h3 id={HEADING_ID}>Event Tagging</h3>
           <span className={s.pill} data-testid="bookmarks-count-pill">
             {bookmarks.length}
           </span>
@@ -135,23 +196,30 @@ export function EventsDrawer() {
 
         {sorted.length === 0 ? (
           <p className={s.empty} data-testid="bookmarks-empty">
-            No bookmarks yet
+            No events yet
           </p>
         ) : (
           <ul className={s.list} data-testid="bookmarks-list">
             {sorted.map((b) => {
-              const meta = startNs !== null ? formatRelative(b.ns, startNs) : "—";
+              const meta =
+                startNs !== null ? formatRelative(b.ns, startNs) : "—";
               const outOfRange =
                 startNs !== null &&
                 endNs !== null &&
                 (b.ns < startNs || b.ns > endNs);
               const isEditing = editingId === b.id;
+              const isExpanded = expandedId === b.id;
+              const ranged = b.beforeNs > 0n || b.afterNs > 0n;
+              const tagValues = attributes
+                .map((a) => ({ a, v: b.tags[a.id] }))
+                .filter((t) => t.v !== undefined && t.v !== "");
               return (
                 <li
                   key={b.id}
                   className={s.rowItem}
                   data-testid={`bookmark-row-${b.id}`}
                   data-out-of-range={outOfRange ? "true" : undefined}
+                  data-ranged={ranged ? "true" : undefined}
                 >
                   {isEditing ? (
                     <div className={s.row} data-editing="true">
@@ -168,7 +236,7 @@ export function EventsDrawer() {
                         onChange={(e) => setEditingDraft(e.target.value)}
                         onKeyDown={onEditKey}
                         onBlur={commitEdit}
-                        aria-label="Bookmark label"
+                        aria-label="Event label"
                         data-testid={`bookmark-rename-input-${b.id}`}
                       />
                       <span
@@ -214,20 +282,160 @@ export function EventsDrawer() {
                         className={s.meta}
                         data-testid={`bookmark-meta-${b.id}`}
                       >
+                        {ranged ? (
+                          <span className={s.rangeDot} aria-hidden="true" />
+                        ) : null}
                         {meta}
                       </span>
                     </button>
                   )}
                   <button
                     type="button"
+                    className={s.expandBtn}
+                    aria-label={
+                      isExpanded
+                        ? `Collapse details for ${b.label}`
+                        : `Edit tags and range for ${b.label}`
+                    }
+                    aria-expanded={isExpanded}
+                    title="Tags & range"
+                    onClick={() => toggleExpand(b.id)}
+                    data-testid={`bookmark-expand-${b.id}`}
+                  >
+                    <span
+                      className={s.expandCaret}
+                      data-open={isExpanded ? "true" : undefined}
+                      aria-hidden="true"
+                    >
+                      ▸
+                    </span>
+                  </button>
+                  <button
+                    type="button"
                     className={s.removeBtn}
-                    aria-label={`Remove bookmark ${b.label}`}
+                    aria-label={`Remove event ${b.label}`}
                     title="Remove"
                     onClick={() => onRemove(b.id)}
                     data-testid={`bookmark-remove-${b.id}`}
                   >
                     ×
                   </button>
+
+                  {!isExpanded && tagValues.length > 0 ? (
+                    <div
+                      className={s.chips}
+                      data-testid={`bookmark-chips-${b.id}`}
+                    >
+                      {tagValues.map((t) => (
+                        <span
+                          key={t.a.id}
+                          className={s.chip}
+                          title={`${t.a.name}: ${t.v}`}
+                        >
+                          {t.v}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {isExpanded ? (
+                    <div
+                      className={s.details}
+                      data-testid={`bookmark-details-${b.id}`}
+                    >
+                      <div className={s.rangeRow}>
+                        <label className={s.field}>
+                          <span className={s.fieldLabel}>before (s)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            className={s.numInput}
+                            value={
+                              rangeDrafts[b.id]?.before ??
+                              secondsString(b.beforeNs)
+                            }
+                            onChange={(e) =>
+                              setRangeDraft(b.id, { before: e.target.value })
+                            }
+                            onBlur={() => commitRange(b.id)}
+                            data-testid={`bookmark-before-${b.id}`}
+                          />
+                        </label>
+                        <label className={s.field}>
+                          <span className={s.fieldLabel}>after (s)</span>
+                          <input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            className={s.numInput}
+                            value={
+                              rangeDrafts[b.id]?.after ??
+                              secondsString(b.afterNs)
+                            }
+                            onChange={(e) =>
+                              setRangeDraft(b.id, { after: e.target.value })
+                            }
+                            onBlur={() => commitRange(b.id)}
+                            data-testid={`bookmark-after-${b.id}`}
+                          />
+                        </label>
+                      </div>
+
+                      {attributes.length === 0 ? (
+                        <p className={s.noAttrs}>
+                          No tag attributes configured — add some below.
+                        </p>
+                      ) : (
+                        <div className={s.tagGrid}>
+                          {attributes.map((a) => (
+                            <label key={a.id} className={s.field}>
+                              <span className={s.fieldLabel}>{a.name}</span>
+                              {a.type === "select" ? (
+                                <select
+                                  className={s.tagSelect}
+                                  value={b.tags[a.id] ?? ""}
+                                  onChange={(e) =>
+                                    useSession
+                                      .getState()
+                                      .setBookmarkTag(
+                                        b.id,
+                                        a.id,
+                                        e.target.value,
+                                      )
+                                  }
+                                  data-testid={`bookmark-tag-${b.id}-${a.id}`}
+                                >
+                                  <option value="">—</option>
+                                  {a.options.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                      {opt}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <input
+                                  type="text"
+                                  className={s.tagText}
+                                  value={b.tags[a.id] ?? ""}
+                                  onChange={(e) =>
+                                    useSession
+                                      .getState()
+                                      .setBookmarkTag(
+                                        b.id,
+                                        a.id,
+                                        e.target.value,
+                                      )
+                                  }
+                                  data-testid={`bookmark-tag-${b.id}-${a.id}`}
+                                />
+                              )}
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
                 </li>
               );
             })}
@@ -245,11 +453,11 @@ export function EventsDrawer() {
               data-testid="bookmark-add-btn"
               title={
                 disabled
-                  ? "Load a fixture to bookmark the cursor"
-                  : "Add a bookmark at the current cursor"
+                  ? "Load a fixture to tag the cursor"
+                  : "Add an event at the current cursor"
               }
             >
-              + bookmark at cursor
+              + event at cursor
             </button>
             <button
               type="button"
@@ -257,7 +465,7 @@ export function EventsDrawer() {
               onClick={onAddCustomStart}
               disabled={disabled}
               aria-disabled={disabled}
-              aria-label="Add bookmark with custom label"
+              aria-label="Add event with custom label"
               data-testid="bookmark-add-custom-btn"
             >
               …
@@ -270,8 +478,8 @@ export function EventsDrawer() {
               type="text"
               className={s.nameInput}
               value={pendingLabel}
-              placeholder="bookmark label"
-              aria-label="Bookmark label"
+              placeholder="event label"
+              aria-label="Event label"
               onChange={(e) => setPendingLabel(e.target.value)}
               onKeyDown={onAddCustomKey}
               data-testid="bookmark-add-input"
@@ -288,12 +496,14 @@ export function EventsDrawer() {
               type="button"
               className={s.cancelBtn}
               onClick={onAddCustomCancel}
-              aria-label="Cancel adding bookmark"
+              aria-label="Cancel adding event"
             >
               ×
             </button>
           </div>
         )}
+
+        <EventTagConfigEditor />
       </section>
     </aside>
   );
