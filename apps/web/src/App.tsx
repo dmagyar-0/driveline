@@ -213,7 +213,14 @@ declare global {
       // strings so `page.evaluate` can return them.
       listSources: () => Array<{
         id: string;
-        kind: "mcap" | "mf4" | "mp4+sidecar" | "tabular" | "lidar" | "ros1";
+        kind:
+          | "mcap"
+          | "mf4"
+          | "mp4+sidecar"
+          | "tabular"
+          | "lidar"
+          | "ros1"
+          | "ros2db3";
         name: string;
         timeRange: { startNs: string; endNs: string };
         channelIds: string[];

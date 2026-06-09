@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
     McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader, Ros1BagReader,
-    TabularReader, TimeBasis, TimeRange,
+    Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -67,6 +67,7 @@ thread_local! {
     static TABULAR_READERS: RefCell<Slab<TabularReader>> = const { RefCell::new(Slab::new()) };
     static LIDAR_READERS: RefCell<Slab<PointCloudReader>> = const { RefCell::new(Slab::new()) };
     static ROS1_BAG_READERS: RefCell<Slab<Ros1BagReader>> = const { RefCell::new(Slab::new()) };
+    static ROS2_DB3_READERS: RefCell<Slab<Ros2Db3Reader>> = const { RefCell::new(Slab::new()) };
 }
 
 /// A live MCAP video stream: a lazy cursor plus the handle of the `McapReader`
@@ -531,6 +532,91 @@ pub fn ros1_bag_fetch_range(
         let reader = slab
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid ros1 bag handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
+    })
+}
+
+/// Parse a ROS 2 rosbag2 SQLite (`.db3`) blob and register a `Ros2Db3Reader`
+/// in the thread-local slab. Like `open_ros1_bag`, the whole file is decoded in
+/// memory (no ranged/OPFS path), so the JS caller can drop its copy of `data`
+/// once this returns. Returns the integer handle the other `ros2_db3_*`
+/// endpoints take.
+#[wasm_bindgen]
+pub fn open_ros2_db3(data: &[u8]) -> Result<u32, JsError> {
+    let reader =
+        Ros2Db3Reader::open(data).map_err(|e| JsError::new(&format!("open ros2 db3 failed: {e}")))?;
+    let key = ROS2_DB3_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the ROS 2 db3 reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_ros2_db3(handle: u32) {
+    ROS2_DB3_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the ROS 2 db3 reader's `SourceMeta` as a plain JS object. ROS 2 db3
+/// channels carry the same `kind` / optional `dtype` shape as mcap channels, so
+/// this reuses `McapSummary` / `McapChannelInfo`.
+#[wasm_bindgen]
+pub fn ros2_db3_summary(handle: u32) -> Result<JsValue, JsError> {
+    ROS2_DB3_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid ros2 db3 handle"))?;
+        let meta = reader.meta();
+        let summary = McapSummary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| McapChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    kind: channel_kind_str(c.kind),
+                    dtype: c.dtype.map(dtype_str),
+                    unit: c.unit.clone(),
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+#[wasm_bindgen]
+pub fn ros2_db3_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    ROS2_DB3_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid ros2 db3 handle"))?;
         let bytes = reader
             .fetch_range(
                 &channel_id.to_string(),
