@@ -239,6 +239,12 @@ const DEBOUNCE_MS = 400;
  * Guards against a feedback loop: writing the hash with `history.replaceState`
  * doesn't fire `hashchange` and we never re-read the hash on a store change,
  * so a self-write can't re-trigger an apply.
+ *
+ * Playback suppression: while `state.playing` is true, hash writes are
+ * suppressed (a "dirty" flag is set instead). On the playing→false transition,
+ * one write is scheduled through the existing 400 ms debounce so the final
+ * cursor position is captured without triggering ~2.5 writes/s during play
+ * (which approaches Chrome's history.replaceState throttle limit of ~100/30s).
  */
 export function attachUrlState(): () => void {
   applyViewStateFromUrl();
@@ -248,9 +254,13 @@ export function attachUrlState(): () => void {
   }
 
   let timer: ReturnType<typeof setTimeout> | null = null;
+  // Set to true when a store change arrives while playing, so the
+  // playing→false transition knows to schedule a deferred write.
+  let dirtyWhilePlaying = false;
 
   const writeHash = (): void => {
     timer = null;
+    dirtyWhilePlaying = false;
     const state = snapshotViewState();
     if (!hasMeaningfulState(state)) return;
     const next = `#${HASH_PREFIX}${encodeViewState(state)}`;
@@ -260,9 +270,27 @@ export function attachUrlState(): () => void {
     history.replaceState(history.state, "", next);
   };
 
-  const unsub = useSession.subscribe(() => {
+  const scheduleWrite = (): void => {
     if (timer !== null) return;
     timer = setTimeout(writeHash, DEBOUNCE_MS);
+  };
+
+  const unsub = useSession.subscribe((state, prev) => {
+    if (state.playing) {
+      // Suppress hash writes during playback; just mark dirty so we
+      // flush once play stops.
+      dirtyWhilePlaying = true;
+      return;
+    }
+    // playing → false transition: schedule the deferred write if anything
+    // changed while we were playing, or if this is a normal paused-state change.
+    if (prev.playing && dirtyWhilePlaying) {
+      scheduleWrite();
+      return;
+    }
+    // Normal paused-state changes (layout edits, binding changes, mode toggle,
+    // manual scrub while paused) go through the usual debounce.
+    scheduleWrite();
   });
 
   return () => {

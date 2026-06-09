@@ -266,11 +266,30 @@ function EnumLane({ channel, range }: EnumLaneProps) {
 
   // State at the cursor for the legend pill. `renderTick` threads the
   // segment update (a ref) through to this memo.
+  //
+  // Binary-search for the segment whose startNs ≤ cursorNs (segments are
+  // built in time order by segmentsFor). O(log n) instead of O(n) — a
+  // channel with many state transitions could have hundreds of segments.
   const currentSeg = useMemo(() => {
-    for (const seg of segmentsRef.current) {
-      if (cursorNs >= seg.startNs && cursorNs <= seg.endNs) return seg;
+    const segs = segmentsRef.current;
+    if (segs.length === 0) return null;
+    // Find the last segment with startNs ≤ cursorNs.
+    let lo = 0;
+    let hi = segs.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1;
+      if (segs[mid].startNs <= cursorNs) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
-    return null;
+    if (found === -1) return null;
+    const seg = segs[found];
+    // Confirm cursorNs falls within the segment's closed interval.
+    return cursorNs <= seg.endNs ? seg : null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursorNs, renderTick]);
 

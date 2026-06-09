@@ -764,24 +764,16 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // data extent, so `readResolvedScale` would zoom against the wrong span.
   const bandDataExtentRef = useRef<Map<number, PlotAxisWindow>>(new Map());
 
-  const publishSync = useCallback(() => {
-    const store =
-      (window.__drivelinePlotPanels ??= {});
-    const decoded = decodedRef.current;
-    const sampleAtCursor: PlotSyncSnapshot["sampleAtCursor"] = decoded.map(
-      ({ channelId, series }) => {
-        const idx = lastIndexAtOrBefore(series.rawTsNs, cursorNs);
-        if (idx < 0) return null;
-        return {
-          channelId,
-          tsNs: series.rawTsNs[idx],
-          value: series.ys[idx],
-        };
-      },
-    );
-    const range = lastRangeRef.current;
-    const seriesStats: PlotSeriesStats[] = decoded.map(
-      ({ channelId, series }) => {
+  // seriesStats are O(total samples) to compute — extract them once when
+  // decoded data changes and cache in a ref. publishSync reads the cached
+  // value; the cursor tick never recomputes min/max/mean.
+  const seriesStatsRef = useRef<PlotSeriesStats[]>([]);
+
+  // Recompute seriesStats from a decoded array. Called every time
+  // decodedRef.current is assigned (fetch effect + empty-data path).
+  const recomputeSeriesStats = useCallback(
+    (decoded: { channelId: string; series: PlotSeries }[]): void => {
+      seriesStatsRef.current = decoded.map(({ channelId, series }) => {
         let min = Infinity;
         let max = -Infinity;
         // P4 — accumulate mean over finite samples only, so a NaN gap
@@ -803,8 +795,34 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           mean: finiteCount > 0 ? sum / finiteCount : NaN,
           count: series.ys.length,
         };
+      });
+    },
+    [],
+  );
+
+  const publishSync = useCallback(() => {
+    const store =
+      (window.__drivelinePlotPanels ??= {});
+    const decoded = decodedRef.current;
+    // Read current cursorNs directly from the store so this callback does
+    // not need cursorNs in its dep list — keeping it stable across cursor
+    // ticks. The overlay effect that calls publishSync re-runs per tick so
+    // getState() is always fresh.
+    const cursorNs = useSession.getState().cursorNs;
+    const sampleAtCursor: PlotSyncSnapshot["sampleAtCursor"] = decoded.map(
+      ({ channelId, series }) => {
+        const idx = lastIndexAtOrBefore(series.rawTsNs, cursorNs);
+        if (idx < 0) return null;
+        return {
+          channelId,
+          tsNs: series.rawTsNs[idx],
+          value: series.ys[idx],
+        };
       },
     );
+    const range = lastRangeRef.current;
+    // seriesStats are pre-computed when data changes (see recomputeSeriesStats),
+    // not here — this path is on the cursor/hover hot path at ~60 Hz.
     const xScale = plotRef.current?.scales?.x;
     const xScaleSec =
       xScale && xScale.min != null && xScale.max != null
@@ -824,11 +842,11 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
         ? { startNs: range.startNs, endNs: range.endNs }
         : null,
       sampleAtCursor,
-      seriesStats,
+      seriesStats: seriesStatsRef.current,
       xScaleSec,
       yScale,
     };
-  }, [boundChannelIds, cursorNs, panelId]);
+  }, [boundChannelIds, panelId]);
 
   const resizePlotToContainer = useCallback(() => {
     const plot = plotRef.current;
@@ -874,13 +892,28 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // effective units (drive the axis labels), and each channel's transform
   // (P7 — different decoded ys ⇒ refetch). uPlot has no public API for
   // mutating scales/series in place, so each of these needs a fresh plot.
-  const seriesKey = `${boundChannelIds.join("|")}::g=${
-    gapThresholdSec ?? "off"
-  }::a=${boundChannels.map((c) => axisOf(c.id)).join(",")}::u=${boundChannels
-    .map((c) => effectiveUnit(c, unitOverrides) ?? "")
-    .join(",")}::t=${boundChannelIds
-    .map((id) => transformKey(transformFor(id)))
-    .join(",")}::s=${stackAxes ? "1" : "0"}`;
+  //
+  // Memoised so the four `.map().join()` passes don't run on every render
+  // (e.g. cursor ticks); the key only changes when its actual inputs change.
+  const seriesKey = useMemo(
+    () =>
+      `${boundChannelIds.join("|")}::g=${
+        gapThresholdSec ?? "off"
+      }::a=${boundChannels.map((c) => axisOf(c.id)).join(",")}::u=${boundChannels
+        .map((c) => effectiveUnit(c, unitOverrides) ?? "")
+        .join(",")}::t=${boundChannelIds
+        .map((id) => transformKey(transformFor(id)))
+        .join(",")}::s=${stackAxes ? "1" : "0"}`,
+    [
+      boundChannelIds,
+      boundChannels,
+      gapThresholdSec,
+      axisOf,
+      unitOverrides,
+      transformFor,
+      stackAxes,
+    ],
+  );
   useEffect(() => {
     const mount = plotMountRef.current;
     const container = containerRef.current;
@@ -1122,6 +1155,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
     // Clear decoded series so a post-rebuild cursor tick doesn't publish
     // stale samples keyed by the previous binding set.
     decodedRef.current = [];
+    seriesStatsRef.current = [];
     // Drop band data extents from the previous axis layout; the new scales'
     // `range` callbacks repopulate this on the first `setData`.
     bandDataExtentRef.current.clear();
@@ -1144,9 +1178,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // null (the build effect runs after layout effects), so the first run is a
   // no-op and the build/fetch path owns the initial draw.
   //
-  // `publishSync` changes identity every cursor tick (it closes over
-  // `cursorNs`), so this reads it through a ref instead of depending on it —
-  // otherwise the rescale would re-fire on every scrub.
+  // Mirror publishSync through a ref so the zoom layout-effect can call
+  // the latest version without adding it to the effect's dep list.
   const publishSyncRef = useRef(publishSync);
   publishSyncRef.current = publishSync;
   useLayoutEffect(() => {
@@ -1274,6 +1307,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       plot.setData(EMPTY_DATA);
       lastRangeRef.current = null;
       decodedRef.current = [];
+      recomputeSeriesStats([]);
       setDataEpoch((n) => n + 1);
       publishSync();
       return;
@@ -1315,6 +1349,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           channelId: c.id,
           series: decoded[i],
         }));
+        recomputeSeriesStats(decodedRef.current);
         setDataEpoch((n) => n + 1);
         publishSync();
       } catch (err) {
@@ -1345,7 +1380,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   useEffect(() => {
     // Re-publish the T6.1 sync snapshot every cursor tick so e2e
     // assertions see the latest `sampleAtCursor` without waiting on a
-    // fetch. Cheap: one binary search per bound channel.
+    // fetch. One binary search per bound channel; seriesStats are
+    // pre-computed on data change (not recomputed here).
     publishSync();
 
     const overlay = overlayRef.current;
@@ -1422,15 +1458,20 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // cheap enough to run every render (cursor scrub re-renders this panel
   // anyway). `dataEpoch` is a hidden dependency: it bumps when a fetch
   // swaps `decodedRef`, so the readout refreshes when new data lands.
+  //
+  // The Map is mutated in-place (stable ref) rather than allocated fresh
+  // each tick — safe because valueAtCursor is consumed only inline in this
+  // component's render, never passed as a prop to a memoized child or used
+  // in a dep array. React re-renders due to cursorNs changing regardless,
+  // so chip text always reflects the current value.
+  const valueAtCursorRef = useRef<Map<string, number>>(new Map());
   void dataEpoch;
-  const valueAtCursor = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const { channelId, series } of decodedRef.current) {
-      const idx = lastIndexAtOrBefore(series.rawTsNs, cursorNs);
-      if (idx >= 0) m.set(channelId, series.ys[idx]);
-    }
-    return m;
-  }, [cursorNs, dataEpoch]);
+  const valueAtCursor = valueAtCursorRef.current;
+  valueAtCursor.clear();
+  for (const { channelId, series } of decodedRef.current) {
+    const idx = lastIndexAtOrBefore(series.rawTsNs, cursorNs);
+    if (idx >= 0) valueAtCursor.set(channelId, series.ys[idx]);
+  }
 
   // Drag-to-scrub on the plot. Mirrors the Transport scrubber: pointer
   // capture so a drag that leaves the panel keeps tracking, and a single

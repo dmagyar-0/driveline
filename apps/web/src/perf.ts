@@ -45,7 +45,31 @@ function now(): number {
   return performance.now();
 }
 
+// Per-name counters for mark/measure retention. When a name exceeds the
+// threshold its entries are pruned to prevent unbounded accumulation during
+// long sessions (~650 k entries/hour from the playback tick alone).
+// E2e sessions are short (< 30 s / ~1800 ticks at 60 Hz), well under the
+// 10 000 threshold, so pruning never fires during tests.
+const RETAIN_THRESHOLD = 10_000;
+const markCounts = new Map<string, number>();
+const measureCounts = new Map<string, number>();
+
+function bumpAndMaybeClear(
+  counts: Map<string, number>,
+  name: string,
+  clearFn: (n: string) => void,
+): void {
+  const n = (counts.get(name) ?? 0) + 1;
+  if (n >= RETAIN_THRESHOLD) {
+    clearFn(name);
+    counts.set(name, 0);
+  } else {
+    counts.set(name, n);
+  }
+}
+
 export function mark(name: string): void {
+  bumpAndMaybeClear(markCounts, name, (n) => performance.clearMarks(n));
   performance.mark(name);
 }
 
@@ -53,6 +77,7 @@ export function mark(name: string): void {
 // not found" `DOMException` themselves. This is a best-effort perf seam — a
 // missing start mark should never fail user code.
 export function measure(name: string, startMark: string, endMark?: string): void {
+  bumpAndMaybeClear(measureCounts, name, (n) => performance.clearMeasures(n));
   try {
     if (endMark) performance.measure(name, startMark, endMark);
     else performance.measure(name, startMark);
