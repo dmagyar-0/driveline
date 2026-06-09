@@ -86,6 +86,18 @@ struct ChannelMeta {
     mcap_id: u16,
     /// Element count per sample for `Vector` channels (3 for Vector3); 0 otherwise.
     vector_len: usize,
+    /// For `Video` channels carrying ROS2 CDR (`ros2msg`) messages: the decoder
+    /// needed to pull the compressed bytes out of the CDR payload. `None` for
+    /// Foxglove-JSON video (and all non-video channels), which keep the legacy
+    /// JSON/raw-bytes path.
+    ros_video: Option<RosVideo>,
+}
+
+/// Decoder for a ROS2 (CDR) video channel: the message-definition registry and
+/// the top-level field path (`"data"`) carrying the compressed Annex-B bytes.
+struct RosVideo {
+    registry: Arc<crate::ros::MessageRegistry>,
+    data_path: String,
 }
 
 /// Routing metadata for a ROS2 (CDR) topic expanded into one Driveline channel
@@ -250,6 +262,30 @@ impl McapReader {
             }
 
             let vector_len = if kind == ChannelKind::Vector { 3 } else { 0 };
+
+            // ROS2 (CDR) video: the compressed bytes live in a top-level
+            // `uint8[] data` field of a `ros2msg` message (both
+            // `foxglove_msgs/CompressedVideo` and `sensor_msgs/CompressedImage`
+            // use this name). Build the CDR decoder so `decode_video_samples`
+            // can pull Annex-B out per message. On any parse failure we leave
+            // `ros_video = None` and fall back to the JSON/raw-bytes path.
+            let ros_video = if kind == ChannelKind::Video && ch.message_encoding == "cdr" {
+                ch.schema.as_deref().and_then(|schema| {
+                    if schema.encoding != "ros2msg" {
+                        return None;
+                    }
+                    let def_text = std::str::from_utf8(&schema.data).ok()?;
+                    let registry =
+                        crate::ros::MessageRegistry::parse(&schema.name, def_text).ok()?;
+                    Some(RosVideo {
+                        registry: Arc::new(registry),
+                        data_path: "data".to_string(),
+                    })
+                })
+            } else {
+                None
+            };
+
             channel_meta.insert(
                 ch.topic.clone(),
                 ChannelMeta {
@@ -257,6 +293,7 @@ impl McapReader {
                     dtype,
                     mcap_id: id,
                     vector_len,
+                    ros_video,
                 },
             );
         }
@@ -835,13 +872,34 @@ impl McapReader {
         mcap_id: u16,
     ) -> crate::Result<Vec<EncodedChunk>> {
         let buf = self.read_segment(seg_idx)?;
+        // Look up this channel's routing so we know whether it's a ROS2 (CDR)
+        // video channel (decode Annex-B out of the CDR `data` field) or a
+        // Foxglove-JSON/raw video channel (legacy path).
+        let ros_video = self
+            .channels
+            .values()
+            .find(|cm| cm.mcap_id == mcap_id)
+            .and_then(|cm| cm.ros_video.as_ref());
         let mut out: Vec<EncodedChunk> = Vec::new();
         for_each_message(buf.as_slice(), |cid, log_time, payload| {
             if cid != mcap_id {
                 return;
             }
-            let annex_b =
-                extract_video_bytes_from_json(payload).unwrap_or_else(|| payload.to_vec());
+            let annex_b = if let Some(rv) = ros_video {
+                // CDR video: pull the compressed bytes out of the message. Skip
+                // a message that fails to decode rather than emitting garbage.
+                match crate::ros::extract_bytes(
+                    &rv.registry,
+                    payload,
+                    crate::ros::Wire::Cdr,
+                    &rv.data_path,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(_) => return,
+                }
+            } else {
+                extract_video_bytes_from_json(payload).unwrap_or_else(|| payload.to_vec())
+            };
             let is_keyframe = is_keyframe(&annex_b);
             out.push(EncodedChunk {
                 pts_ns: log_time,
@@ -1035,6 +1093,8 @@ pub(crate) fn infer_channel_kind(
     // Exact matches for well-known video schemas (case-sensitive).
     const VIDEO_SCHEMA_NAMES: &[&str] = &[
         "foxglove.CompressedVideo",
+        "foxglove_msgs/CompressedVideo",
+        "foxglove_msgs/msg/CompressedVideo",
         "sensor_msgs/Image",
         "sensor_msgs/msg/Image",
         "sensor_msgs/CompressedImage",
