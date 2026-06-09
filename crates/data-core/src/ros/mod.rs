@@ -73,6 +73,10 @@ trait WireCursor<'a> {
     fn w_read_numeric(&mut self, p: PrimType) -> Result<Scalar, RosDecodeError>;
     /// Read the `u32` count prefix of a dynamic array/sequence.
     fn w_read_count(&mut self) -> Result<usize, RosDecodeError>;
+    /// Read exactly `n` raw bytes of a `uint8[]`/`byte[]` element run.
+    fn w_read_raw_bytes(&mut self, n: usize) -> Result<Vec<u8>, RosDecodeError>;
+    /// Read a `string` value (terminator handled per wire format).
+    fn w_read_string(&mut self) -> Result<String, RosDecodeError>;
     /// Structurally skip a whole field (any array kind), advancing the cursor.
     fn w_skip_field(
         &mut self,
@@ -90,6 +94,12 @@ impl<'a> WireCursor<'a> for CdrCursor<'a> {
         // CDR sequence length is a u32 aligned to 4.
         self.read_count_u32()
     }
+    fn w_read_raw_bytes(&mut self, n: usize) -> Result<Vec<u8>, RosDecodeError> {
+        self.read_raw_bytes(n)
+    }
+    fn w_read_string(&mut self) -> Result<String, RosDecodeError> {
+        self.read_string_value()
+    }
     fn w_skip_field(
         &mut self,
         reg: &MessageRegistry,
@@ -106,6 +116,12 @@ impl<'a> WireCursor<'a> for Ros1Cursor<'a> {
     }
     fn w_read_count(&mut self) -> Result<usize, RosDecodeError> {
         self.read_count()
+    }
+    fn w_read_raw_bytes(&mut self, n: usize) -> Result<Vec<u8>, RosDecodeError> {
+        self.read_raw_bytes(n)
+    }
+    fn w_read_string(&mut self) -> Result<String, RosDecodeError> {
+        self.read_string_value()
     }
     fn w_skip_field(
         &mut self,
@@ -139,6 +155,79 @@ pub fn extract(
     wire: Wire,
     path: &str,
 ) -> Result<Extracted, RosDecodeError> {
+    match walk_target(registry, payload, wire, path, Target::Numeric)? {
+        Leaf::Numeric(v) => Ok(v),
+        // Walk only ever produces the variant matching the requested Target.
+        _ => unreachable!("Target::Numeric yields Leaf::Numeric"),
+    }
+}
+
+/// Walk `payload` per `registry` (starting at its root type) to the `uint8[]`
+/// / `byte[]` (dynamic or fixed `uint8[N]`) field at `path` and return its raw
+/// bytes.
+///
+/// Errors with [`RosDecodeError::NotNumeric`] if the resolved field is not a
+/// `u8`-element array (that error variant is reused as the generic "wrong leaf
+/// kind" signal), and [`RosDecodeError::PathNotFound`] if the path does not
+/// resolve.
+pub fn extract_bytes(
+    registry: &MessageRegistry,
+    payload: &[u8],
+    wire: Wire,
+    path: &str,
+) -> Result<Vec<u8>, RosDecodeError> {
+    match walk_target(registry, payload, wire, path, Target::Bytes)? {
+        Leaf::Bytes(v) => Ok(v),
+        _ => unreachable!("Target::Bytes yields Leaf::Bytes"),
+    }
+}
+
+/// Walk `payload` per `registry` to the `string` field at `path` and return
+/// its value.
+///
+/// Errors with [`RosDecodeError::NotNumeric`] if the resolved field is not a
+/// scalar `string`, and [`RosDecodeError::PathNotFound`] if the path does not
+/// resolve.
+pub fn extract_string(
+    registry: &MessageRegistry,
+    payload: &[u8],
+    wire: Wire,
+    path: &str,
+) -> Result<String, RosDecodeError> {
+    match walk_target(registry, payload, wire, path, Target::Str)? {
+        Leaf::Str(v) => Ok(v),
+        _ => unreachable!("Target::Str yields Leaf::Str"),
+    }
+}
+
+/// What to decode once the target field is reached. Selected by the public
+/// extractor so the path-walking / field-skipping logic is shared.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    /// A numeric / numeric-vector leaf (existing [`extract`] behaviour).
+    Numeric,
+    /// A `uint8[]` / `byte[]` (dynamic) or `uint8[N]` (fixed) leaf.
+    Bytes,
+    /// A scalar `string` leaf.
+    Str,
+}
+
+/// The value produced at the target leaf, tagged to match the [`Target`].
+enum Leaf {
+    Numeric(Extracted),
+    Bytes(Vec<u8>),
+    Str(String),
+}
+
+/// Shared driver: parse the path into segments, build the right cursor for the
+/// wire format, and walk to the target field, decoding it per `target`.
+fn walk_target(
+    registry: &MessageRegistry,
+    payload: &[u8],
+    wire: Wire,
+    path: &str,
+    target: Target,
+) -> Result<Leaf, RosDecodeError> {
     let segments: Vec<&str> = path.split('.').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return Err(RosDecodeError::PathNotFound(path.to_string()));
@@ -147,30 +236,32 @@ pub fn extract(
     match wire {
         Wire::Cdr => {
             let mut cur = CdrCursor::new(payload)?;
-            walk(&mut cur, registry, &root, &segments)
+            walk(&mut cur, registry, &root, &segments, target)
         }
         Wire::Ros1 => {
             let mut cur = Ros1Cursor::new(payload);
-            walk(&mut cur, registry, &root, &segments)
+            walk(&mut cur, registry, &root, &segments, target)
         }
     }
 }
 
 /// Recursively walk `type_name`'s fields, skipping fields before the one named
-/// `segments[0]`, then either descending (more segments) or extracting (leaf).
+/// `segments[0]`, then either descending (more segments) or decoding the
+/// target leaf per `target`.
 fn walk<'a, C: WireCursor<'a>>(
     cur: &mut C,
     reg: &MessageRegistry,
     type_name: &str,
     segments: &[&str],
-) -> Result<Extracted, RosDecodeError> {
-    let target = segments[0];
+    target: Target,
+) -> Result<Leaf, RosDecodeError> {
+    let needle = segments[0];
     let fields = reg
         .fields(type_name)
         .ok_or_else(|| RosDecodeError::UnknownType(type_name.to_string()))?;
 
     for f in fields {
-        if f.name != target {
+        if f.name != needle {
             // Skip this whole field (any array kind), then continue.
             cur.w_skip_field(reg, &f.ty, f.array)?;
             continue;
@@ -180,24 +271,28 @@ fn walk<'a, C: WireCursor<'a>>(
         let is_leaf = segments.len() == 1;
 
         if is_leaf {
-            return extract_leaf(cur, reg, f);
+            return match target {
+                Target::Numeric => extract_leaf(cur, reg, f).map(Leaf::Numeric),
+                Target::Bytes => extract_bytes_leaf(cur, f).map(Leaf::Bytes),
+                Target::Str => extract_string_leaf(cur, f).map(Leaf::Str),
+            };
         }
 
         // Descend into a complex single field.
         match (&f.ty, f.array) {
             (FieldType::Complex(name), ArrayKind::Single) => {
-                return walk(cur, reg, name, &segments[1..]);
+                return walk(cur, reg, name, &segments[1..], target);
             }
             // Descending into arrays by path is not supported (no index syntax).
             _ => {
                 return Err(RosDecodeError::PathNotFound(format!(
-                    "cannot descend into `{target}` (not a single complex field)"
+                    "cannot descend into `{needle}` (not a single complex field)"
                 )));
             }
         }
     }
 
-    Err(RosDecodeError::PathNotFound(target.to_string()))
+    Err(RosDecodeError::PathNotFound(needle.to_string()))
 }
 
 /// Extract the value of a leaf field (`f`) at the current cursor position.
@@ -239,6 +334,46 @@ fn extract_leaf<'a, C: WireCursor<'a>>(
         }
         // Complex array leaf is not a single plottable signal.
         (FieldType::Complex(_), _) => Err(RosDecodeError::NotNumeric(f.name.clone())),
+    }
+}
+
+/// True for the one-byte primitives that make up a `uint8[]` / `byte[]`.
+fn is_u8_prim(p: PrimType) -> bool {
+    matches!(p, PrimType::U8 | PrimType::Byte | PrimType::Char)
+}
+
+/// Extract a `uint8[]` / `byte[]` (dynamic) or `uint8[N]` (fixed) leaf as raw
+/// bytes. Errors if `f` is not a `u8`-element array.
+fn extract_bytes_leaf<'a, C: WireCursor<'a>>(
+    cur: &mut C,
+    f: &FieldDef,
+) -> Result<Vec<u8>, RosDecodeError> {
+    match (&f.ty, f.array) {
+        (FieldType::Primitive(p), ArrayKind::Dynamic) if is_u8_prim(*p) => {
+            // CDR: align4 + u32 count, then `count` bytes (u8 align 1).
+            // ROS1: u32 count, then `count` bytes. `w_read_count` handles both.
+            let count = cur.w_read_count()?;
+            cur.w_read_raw_bytes(count)
+        }
+        (FieldType::Primitive(p), ArrayKind::Fixed(n)) if is_u8_prim(*p) => {
+            // No count prefix for fixed arrays in either wire format.
+            cur.w_read_raw_bytes(n)
+        }
+        // Anything else (scalar u8, non-u8 array, string, complex) is not a
+        // byte-array leaf.
+        _ => Err(RosDecodeError::NotNumeric(f.name.clone())),
+    }
+}
+
+/// Extract a scalar `string` leaf's value. Errors if `f` is not a single
+/// `string` field.
+fn extract_string_leaf<'a, C: WireCursor<'a>>(
+    cur: &mut C,
+    f: &FieldDef,
+) -> Result<String, RosDecodeError> {
+    match (&f.ty, f.array) {
+        (FieldType::Primitive(PrimType::String), ArrayKind::Single) => cur.w_read_string(),
+        _ => Err(RosDecodeError::NotNumeric(f.name.clone())),
     }
 }
 

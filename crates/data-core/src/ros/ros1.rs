@@ -122,6 +122,16 @@ impl<'a> Ros1Cursor<'a> {
         Ok(self.read_u32()? as usize)
     }
 
+    /// Read exactly `n` raw bytes (ROS1 is packed, so no padding).
+    pub(crate) fn read_raw_bytes(&mut self, n: usize) -> Result<Vec<u8>, RosDecodeError> {
+        Ok(self.take(n)?.to_vec())
+    }
+
+    /// Read a `string` value. Exposed for the string-extraction path.
+    pub(crate) fn read_string_value(&mut self) -> Result<String, RosDecodeError> {
+        self.read_string()
+    }
+
     #[allow(dead_code)]
     pub fn position(&self) -> usize {
         self.pos

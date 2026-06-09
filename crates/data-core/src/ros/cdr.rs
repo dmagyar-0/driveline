@@ -199,6 +199,17 @@ impl<'a> CdrCursor<'a> {
         self.read_u32().map(|v| v as usize)
     }
 
+    /// Read exactly `n` raw bytes (u8 has alignment 1 in CDR, so no padding).
+    pub(crate) fn read_raw_bytes(&mut self, n: usize) -> Result<Vec<u8>, RosDecodeError> {
+        Ok(self.take(n)?.to_vec())
+    }
+
+    /// Read a `string` value (drops the trailing NUL). Exposed for the
+    /// string-extraction path.
+    pub(crate) fn read_string_value(&mut self) -> Result<String, RosDecodeError> {
+        self.read_string()
+    }
+
     /// Current body offset (alignment position). Exposed for callers/tests.
     #[allow(dead_code)]
     pub fn position(&self) -> usize {

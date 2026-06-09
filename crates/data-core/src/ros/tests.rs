@@ -668,3 +668,200 @@ fn string_leaf_is_not_numeric() {
     let err = extract(&reg, &buf, Wire::Cdr, "name").unwrap_err();
     assert!(matches!(err, RosDecodeError::NotNumeric(_)));
 }
+
+// ===========================================================================
+// 6. extract_bytes / extract_string — byte-array and string leaves
+// ===========================================================================
+
+/// A video/image-like message: a Time header field, a frame_id string BEFORE
+/// the byte array (to prove the walker skips a preceding string + struct with
+/// correct alignment), a `uint8[] data` payload, and a trailing `string`
+/// codec. Defined inline as concatenated ros2msg text.
+const VIDEO_DEF: &str = "\
+builtin_interfaces/Time timestamp
+string frame_id
+uint8[] data
+string format
+================================================================================
+MSG: builtin_interfaces/Time
+int32 sec
+uint32 nanosec
+";
+
+/// A known H.264-Annex-B-ish payload (start code + a couple of NAL bytes).
+const DATA_BYTES: &[u8] = &[0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1f, 0xAB];
+const FRAME_ID: &str = "cam_front";
+const FORMAT: &str = "h264";
+
+fn build_video_cdr(le: bool) -> Vec<u8> {
+    let mut b = Buf::cdr(le);
+    // timestamp: builtin_interfaces/Time = int32 sec (align 4), uint32 nanosec
+    // (align 4). Body starts 4-aligned.
+    b.align(4);
+    b.u32(1_700_000_123); // sec
+    b.u32(456_000_000); // nanosec
+                        // frame_id: string, align 4 (offset 8 -> ok), len incl NUL, then bytes+NUL.
+    b.align(4);
+    b.u32((FRAME_ID.len() + 1) as u32);
+    b.raw(FRAME_ID.as_bytes());
+    b.u8(0x00);
+    // data: uint8[] dynamic sequence. align 4 for the u32 count, then count
+    // bytes (u8 align 1 -> no padding before the bytes).
+    b.align(4);
+    b.u32(DATA_BYTES.len() as u32);
+    b.raw(DATA_BYTES);
+    // format: string, align 4, len incl NUL.
+    b.align(4);
+    b.u32((FORMAT.len() + 1) as u32);
+    b.raw(FORMAT.as_bytes());
+    b.u8(0x00);
+    b.bytes
+}
+
+fn build_video_ros1() -> Vec<u8> {
+    let mut b = Buf::ros1();
+    // packed, LE, no padding.
+    b.u32(1_700_000_123); // sec
+    b.u32(456_000_000); // nanosec
+                        // frame_id: u32 len (no NUL) + bytes.
+    b.u32(FRAME_ID.len() as u32);
+    b.raw(FRAME_ID.as_bytes());
+    // data: uint8[] -> u32 count + bytes (no padding).
+    b.u32(DATA_BYTES.len() as u32);
+    b.raw(DATA_BYTES);
+    // format: u32 len (no NUL) + bytes.
+    b.u32(FORMAT.len() as u32);
+    b.raw(FORMAT.as_bytes());
+    b.bytes
+}
+
+#[test]
+fn extract_bytes_and_string_cdr() {
+    let reg = MessageRegistry::parse("video_msgs/Frame", VIDEO_DEF).unwrap();
+    for le in [true, false] {
+        let buf = build_video_cdr(le);
+        // The byte array is reached only after skipping the Time struct and the
+        // frame_id string with correct alignment.
+        assert_eq!(
+            extract_bytes(&reg, &buf, Wire::Cdr, "data").unwrap(),
+            DATA_BYTES.to_vec()
+        );
+        assert_eq!(
+            extract_string(&reg, &buf, Wire::Cdr, "format").unwrap(),
+            FORMAT
+        );
+        assert_eq!(
+            extract_string(&reg, &buf, Wire::Cdr, "frame_id").unwrap(),
+            FRAME_ID
+        );
+    }
+}
+
+#[test]
+fn extract_bytes_and_string_ros1() {
+    let reg = MessageRegistry::parse("video_msgs/Frame", VIDEO_DEF).unwrap();
+    let buf = build_video_ros1();
+    assert_eq!(
+        extract_bytes(&reg, &buf, Wire::Ros1, "data").unwrap(),
+        DATA_BYTES.to_vec()
+    );
+    assert_eq!(
+        extract_string(&reg, &buf, Wire::Ros1, "format").unwrap(),
+        FORMAT
+    );
+    assert_eq!(
+        extract_string(&reg, &buf, Wire::Ros1, "frame_id").unwrap(),
+        FRAME_ID
+    );
+}
+
+const FIXED_BYTES_DEF: &str = "\
+uint8 lead
+uint8[4] magic
+string tail
+";
+
+#[test]
+fn extract_bytes_fixed_array_cdr() {
+    let reg = MessageRegistry::parse("p/Fixed", FIXED_BYTES_DEF).unwrap();
+    let magic: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
+    let tail = "end";
+    for le in [true, false] {
+        let mut b = Buf::cdr(le);
+        // lead: uint8 align 1.
+        b.u8(0x55);
+        // magic: uint8[4], no count prefix, align 1 -> packed right after lead.
+        b.raw(&magic);
+        // tail: string align 4. body offset now 5 -> pad to 8.
+        b.align(4);
+        b.u32((tail.len() + 1) as u32);
+        b.raw(tail.as_bytes());
+        b.u8(0x00);
+        let buf = b.bytes;
+        assert_eq!(
+            extract_bytes(&reg, &buf, Wire::Cdr, "magic").unwrap(),
+            magic.to_vec()
+        );
+        assert_eq!(extract_string(&reg, &buf, Wire::Cdr, "tail").unwrap(), tail);
+    }
+}
+
+#[test]
+fn extract_bytes_fixed_array_ros1() {
+    let reg = MessageRegistry::parse("p/Fixed", FIXED_BYTES_DEF).unwrap();
+    let magic: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
+    let mut b = Buf::ros1();
+    b.u8(0x55);
+    b.raw(&magic); // fixed array: no count prefix.
+    b.u32(3).raw(b"end");
+    let buf = b.bytes;
+    assert_eq!(
+        extract_bytes(&reg, &buf, Wire::Ros1, "magic").unwrap(),
+        magic.to_vec()
+    );
+}
+
+#[test]
+fn extract_bytes_on_non_bytes_field_errors() {
+    let reg = MessageRegistry::parse("video_msgs/Frame", VIDEO_DEF).unwrap();
+    let buf = build_video_cdr(true);
+    // `format` is a string, not a uint8[].
+    let err = extract_bytes(&reg, &buf, Wire::Cdr, "format").unwrap_err();
+    assert!(matches!(err, RosDecodeError::NotNumeric(_)));
+}
+
+#[test]
+fn extract_string_on_non_string_field_errors() {
+    let reg = MessageRegistry::parse("video_msgs/Frame", VIDEO_DEF).unwrap();
+    let buf = build_video_cdr(true);
+    // `data` is a uint8[], not a string.
+    let err = extract_string(&reg, &buf, Wire::Cdr, "data").unwrap_err();
+    assert!(matches!(err, RosDecodeError::NotNumeric(_)));
+}
+
+#[test]
+fn extract_bytes_unknown_path_errors() {
+    let reg = MessageRegistry::parse("video_msgs/Frame", VIDEO_DEF).unwrap();
+    let buf = build_video_cdr(true);
+    let eb = extract_bytes(&reg, &buf, Wire::Cdr, "nope").unwrap_err();
+    assert!(matches!(eb, RosDecodeError::PathNotFound(_)));
+    let es = extract_string(&reg, &buf, Wire::Cdr, "nope").unwrap_err();
+    assert!(matches!(es, RosDecodeError::PathNotFound(_)));
+}
+
+#[test]
+fn extract_bytes_truncated_payload_errors() {
+    let reg = MessageRegistry::parse("video_msgs/Frame", VIDEO_DEF).unwrap();
+    let buf = build_video_cdr(true);
+    // Truncate so only a couple of the 9 `data` bytes remain: the count prefix
+    // promises more bytes than the buffer holds — must error, not panic.
+    let buf = &buf[..buf.len() - (FORMAT.len() + 1 + 4 + DATA_BYTES.len())];
+    let err = extract_bytes(&reg, buf, Wire::Cdr, "data").unwrap_err();
+    assert!(matches!(err, RosDecodeError::UnexpectedEof { .. }));
+
+    // ROS1 truncation too: leave only part of the data run.
+    let r1 = build_video_ros1();
+    let r1 = &r1[..r1.len() - (4 + FORMAT.len() + DATA_BYTES.len())];
+    let err = extract_bytes(&reg, r1, Wire::Ros1, "data").unwrap_err();
+    assert!(matches!(err, RosDecodeError::UnexpectedEof { .. }));
+}
