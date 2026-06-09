@@ -200,6 +200,26 @@ pub fn extract_string(
     }
 }
 
+/// Batch-fetch variant of [`extract`] for tight per-message loops. The caller
+/// pre-computes `root` and `segments` once before iterating over messages in a
+/// segment, avoiding repeated `path.split` + `registry.root().to_string()` per
+/// message.
+///
+/// Equivalent to `extract(registry, payload, wire, path)` where `root ==
+/// registry.root()` and `segments == path.split('.').filter(…)`.
+pub(crate) fn extract_prebuilt(
+    registry: &MessageRegistry,
+    payload: &[u8],
+    wire: Wire,
+    root: &str,
+    segments: &[&str],
+) -> Result<Extracted, RosDecodeError> {
+    match walk_target_prebuilt(registry, payload, wire, root, segments, Target::Numeric)? {
+        Leaf::Numeric(v) => Ok(v),
+        _ => unreachable!("Target::Numeric yields Leaf::Numeric"),
+    }
+}
+
 /// What to decode once the target field is reached. Selected by the public
 /// extractor so the path-walking / field-skipping logic is shared.
 #[derive(Debug, Clone, Copy)]
@@ -233,14 +253,28 @@ fn walk_target(
         return Err(RosDecodeError::PathNotFound(path.to_string()));
     }
     let root = registry.root().to_string();
+    walk_target_prebuilt(registry, payload, wire, &root, &segments, target)
+}
+
+/// Low-cost variant of [`walk_target`] for hot loops: the caller pre-computes
+/// `root` (via `registry.root().to_string()`) and `segments` (via
+/// `path.split('.').filter(…).collect()`) once per fetch, not per message.
+fn walk_target_prebuilt(
+    registry: &MessageRegistry,
+    payload: &[u8],
+    wire: Wire,
+    root: &str,
+    segments: &[&str],
+    target: Target,
+) -> Result<Leaf, RosDecodeError> {
     match wire {
         Wire::Cdr => {
             let mut cur = CdrCursor::new(payload)?;
-            walk(&mut cur, registry, &root, &segments, target)
+            walk(&mut cur, registry, root, segments, target)
         }
         Wire::Ros1 => {
             let mut cur = Ros1Cursor::new(payload);
-            walk(&mut cur, registry, &root, &segments, target)
+            walk(&mut cur, registry, root, segments, target)
         }
     }
 }

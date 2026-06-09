@@ -93,16 +93,16 @@ function mergeUnion(inputs: PlotSeries[]): AlignedSeries {
   // k-way merge with one cursor per input. xs are already sorted
   // non-decreasing (asserted in seriesFromArrow.test.ts).
   const k = inputs.length;
-  const cursors = new Int32Array(k);
+
+  // Pass 1: count the exact union length (outN) by running the k-way
+  // merge without materialising values. This is a cheap index-only scan
+  // that lets us allocate outXs and each outYs array at the exact right
+  // size, avoiding both the over-allocated upper-bound arrays and the
+  // trailing .slice() copy that the single-pass approach needed.
   let total = 0;
   for (let i = 0; i < k; i++) total += inputs[i].xs.length;
 
-  // Upper bound: strict union can be shorter when xs coincide; resize
-  // at the end rather than scan twice.
-  const outXs = new Float64Array(total);
-  const outYs: (number | null)[][] = [];
-  for (let i = 0; i < k; i++) outYs.push(new Array(total).fill(null));
-
+  const cursors = new Int32Array(k);
   let outN = 0;
   while (true) {
     let minX = Number.POSITIVE_INFINITY;
@@ -116,22 +116,50 @@ function mergeUnion(inputs: PlotSeries[]): AlignedSeries {
       }
     }
     if (!any) break;
-
-    outXs[outN] = minX;
     for (let i = 0; i < k; i++) {
-      const c = cursors[i];
-      if (c < inputs[i].xs.length && inputs[i].xs[c] === minX) {
-        const v = inputs[i].ys[c];
-        outYs[i][outN] = Number.isFinite(v) ? v : null;
-        cursors[i] = c + 1;
+      if (cursors[i] < inputs[i].xs.length && inputs[i].xs[cursors[i]] === minX) {
+        cursors[i]++;
       }
     }
     outN++;
   }
 
+  // Pass 2: allocate exactly-sized output arrays and fill them.
+  // outN is now exact — no trailing slice needed.
+  const outXs = new Float64Array(outN);
+  const outYs: (number | null)[][] = [];
+  for (let i = 0; i < k; i++) outYs.push(new Array(outN).fill(null));
+
+  cursors.fill(0);
+  let n = 0;
+  while (true) {
+    let minX = Number.POSITIVE_INFINITY;
+    let any = false;
+    for (let i = 0; i < k; i++) {
+      const c = cursors[i];
+      if (c < inputs[i].xs.length) {
+        const x = inputs[i].xs[c];
+        if (x < minX) minX = x;
+        any = true;
+      }
+    }
+    if (!any) break;
+
+    outXs[n] = minX;
+    for (let i = 0; i < k; i++) {
+      const c = cursors[i];
+      if (c < inputs[i].xs.length && inputs[i].xs[c] === minX) {
+        const v = inputs[i].ys[c];
+        outYs[i][n] = Number.isFinite(v) ? v : null;
+        cursors[i] = c + 1;
+      }
+    }
+    n++;
+  }
+
   return {
-    xs: outXs.subarray(0, outN),
-    ys: outYs.map((y) => y.slice(0, outN)),
+    xs: outXs,
+    ys: outYs,
   };
 }
 

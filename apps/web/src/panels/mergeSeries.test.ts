@@ -119,6 +119,31 @@ describe("mergeSeries", () => {
     expect(out.ys[1]).toEqual([null, 200, 300, 400, null]);
     expect(out.ys[2]).toEqual([null, null, null, null, 5000]);
   });
+
+  it("allocates output arrays at exact union length — no over-allocation", () => {
+    // 4 series × 3 samples, all timestamps disjoint → union length = 12.
+    // With coincident timestamps the union is shorter than the sum of
+    // input lengths (the old upper-bound allocation). Both cases verify
+    // that outYs[i].length === out.xs.length (exact, not padded).
+    const a = mk([1, 5, 9], [10, 50, 90]);
+    const b = mk([2, 6, 10], [20, 60, 100]);
+    const c = mk([3, 7, 11], [30, 70, 110]);
+    const d = mk([4, 8, 12], [40, 80, 120]);
+    const outDisjoint = mergeSeries([a, b, c, d]);
+    // Union is all 12 distinct timestamps.
+    expect(outDisjoint.xs.length).toBe(12);
+    for (const ys of outDisjoint.ys) {
+      expect(ys.length).toBe(12);
+    }
+
+    // Now all series share the same timestamps → union = 3, not 4×3 = 12.
+    const shared = mk([1, 2, 3], [0, 0, 0]);
+    const outCoinc = mergeSeries([shared, shared, shared, shared]);
+    expect(outCoinc.xs.length).toBe(3);
+    for (const ys of outCoinc.ys) {
+      expect(ys.length).toBe(3);
+    }
+  });
 });
 
 describe("mergeSeries · gap-threshold mode (Phase 8)", () => {

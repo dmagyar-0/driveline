@@ -301,7 +301,35 @@ impl<'a> CdrCursor<'a> {
     }
 }
 
+/// Return the fixed wire size (bytes) of a primitive, or `None` for
+/// variable-length types (String, Wstring). Used by `skip_field` to
+/// bulk-advance the cursor over primitive arrays without a per-element loop.
+///
+/// CDR alignment rule: for a uniform primitive array, aligning once to the
+/// element's alignment before the first element is sufficient — subsequent
+/// elements stay aligned because `element_size % element_alignment == 0`.
+/// (Time/Duration are two `u32` fields totalling 8 bytes with align 4;
+/// `8 % 4 == 0`, so the bulk-skip is also correct for them.)
+fn prim_fixed_size(p: PrimType) -> Option<usize> {
+    Some(match p {
+        PrimType::Bool | PrimType::Byte | PrimType::Char | PrimType::I8 | PrimType::U8 => 1,
+        PrimType::I16 | PrimType::U16 => 2,
+        PrimType::I32 | PrimType::U32 | PrimType::F32 => 4,
+        // time/duration are two u32 on the wire (8 bytes, align 4).
+        PrimType::Time | PrimType::Duration => 8,
+        PrimType::I64 | PrimType::U64 | PrimType::F64 => 8,
+        // Variable-length — cannot bulk-skip.
+        PrimType::String | PrimType::Wstring => return None,
+    })
+}
+
 /// Skip an entire field (respecting its array kind) without collecting values.
+///
+/// For arrays of fixed-width primitive element types the inner loop is replaced
+/// with a single alignment step plus a bounds-checked pointer advance
+/// (`count * size` bytes), avoiding ~O(count) individual alignment/read calls.
+/// Variable-length primitives (strings) and complex (nested) types still fall
+/// back to the per-element loop because their wire size is not known up-front.
 pub(crate) fn skip_field<'a>(
     cur: &mut CdrCursor<'a>,
     reg: &MessageRegistry,
@@ -311,6 +339,22 @@ pub(crate) fn skip_field<'a>(
     match array {
         ArrayKind::Single => skip_one(cur, reg, ty),
         ArrayKind::Fixed(n) => {
+            // Fast path: fixed-width primitive arrays.
+            if let FieldType::Primitive(p) = ty {
+                if let Some(elem_size) = prim_fixed_size(*p) {
+                    cur.align_to(prim_align(*p));
+                    let total = n
+                        .checked_mul(elem_size)
+                        .ok_or(RosDecodeError::UnexpectedEof {
+                            offset: cur.base + cur.pos,
+                            needed: usize::MAX,
+                            remaining: cur.body.len().saturating_sub(cur.pos),
+                        })?;
+                    cur.ensure(total)?;
+                    cur.pos += total;
+                    return Ok(());
+                }
+            }
             for _ in 0..n {
                 skip_one(cur, reg, ty)?;
             }
@@ -318,6 +362,23 @@ pub(crate) fn skip_field<'a>(
         }
         ArrayKind::Dynamic => {
             let count = cur.read_u32()? as usize;
+            // Fast path: fixed-width primitive arrays.
+            if let FieldType::Primitive(p) = ty {
+                if let Some(elem_size) = prim_fixed_size(*p) {
+                    cur.align_to(prim_align(*p));
+                    let total =
+                        count
+                            .checked_mul(elem_size)
+                            .ok_or(RosDecodeError::UnexpectedEof {
+                                offset: cur.base + cur.pos,
+                                needed: usize::MAX,
+                                remaining: cur.body.len().saturating_sub(cur.pos),
+                            })?;
+                    cur.ensure(total)?;
+                    cur.pos += total;
+                    return Ok(());
+                }
+            }
             for _ in 0..count {
                 skip_one(cur, reg, ty)?;
             }

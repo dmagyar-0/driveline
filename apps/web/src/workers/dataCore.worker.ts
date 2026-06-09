@@ -349,7 +349,9 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return mf4_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = mf4_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * Open a dropped `.mcap` lazily. Like the MF4 path, the file is streamed
@@ -439,16 +441,18 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
-   * Open a ROS 1 bag (rosbag v2.0) from its full bytes — like the lidar /
-   * tabular path, the whole file is decoded in wasm memory (no OPFS/ranged
-   * path), so the JS caller can drop its `bytes` once this returns.
+   * Open a ROS 1 bag (rosbag v2.0). The whole file is decoded in wasm memory
+   * (no OPFS/ranged path). Passing a `File` keeps the bytes on the worker
+   * side — no structured-clone copy across the Comlink boundary.
    */
-  async openRos1Bag(bytes: Uint8Array): Promise<number> {
+  async openRos1Bag(file: File): Promise<number> {
     await ready;
-    return open_ros1_bag(bytes);
+    return open_ros1_bag(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * `SourceMeta` for an open ROS 1 bag. ROS 1 bag channels carry the same
@@ -467,20 +471,22 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return ros1_bag_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = ros1_bag_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   async closeRos1Bag(handle: number): Promise<void> {
     await ready;
     close_ros1_bag(handle);
   },
   /**
-   * Open a ROS 2 rosbag2 SQLite (`.db3`) bag from its full bytes — like the
-   * lidar / tabular / ros1 path, the whole file is decoded in wasm memory (no
-   * OPFS/ranged path), so the JS caller can drop its `bytes` once this returns.
+   * Open a ROS 2 rosbag2 SQLite (`.db3`) bag. The whole file is decoded in
+   * wasm memory (no OPFS/ranged path). Passing a `File` keeps the bytes on
+   * the worker side — no structured-clone copy across the Comlink boundary.
    */
-  async openRos2Db3(bytes: Uint8Array): Promise<number> {
+  async openRos2Db3(file: File): Promise<number> {
     await ready;
-    return open_ros2_db3(bytes);
+    return open_ros2_db3(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * `SourceMeta` for an open ROS 2 db3 bag. ROS 2 db3 channels carry the same
@@ -499,17 +505,29 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return ros2_db3_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = ros2_db3_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   async closeRos2Db3(handle: number): Promise<void> {
     await ready;
     close_ros2_db3(handle);
   },
+  /**
+   * Open an mp4+sidecar pair. `mp4Bytes` is the pre-sliced `ftyp`+`moov` header
+   * (a small `Uint8Array`). `sidecar` is either:
+   *   - a `File` (the `.mp4.timestamps` drop path) — read here, zero main-thread copy
+   *   - a `Uint8Array` (synthesized by `confirmVideoBinding`) — used directly
+   */
   async openMp4Sidecar(
     mp4Bytes: Uint8Array,
-    sidecarBytes: Uint8Array,
+    sidecar: Uint8Array | File,
   ): Promise<number> {
     await ready;
+    const sidecarBytes =
+      sidecar instanceof File
+        ? new Uint8Array(await sidecar.arrayBuffer())
+        : sidecar;
     return open_mp4_sidecar(mp4Bytes, sidecarBytes);
   },
   async closeMp4Sidecar(handle: number): Promise<void> {
@@ -526,40 +544,58 @@ export const dataCoreApi = {
    * the `mdat` bytes never cross this boundary. JS holds the index +
    * the original `File` blob and reads sample bodies on demand via
    * `File.slice()`. See `apps/web/src/state/mp4SampleCache.ts`.
+   *
+   * All typed arrays are fresh from wasm for this call — transfer them to
+   * avoid a structured-clone copy. The worker never touches these buffers
+   * after returning; the main-thread `Mp4SampleCache` owns them.
    */
   async mp4SidecarIndex(handle: number): Promise<Mp4SidecarIndex> {
     await ready;
-    return normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+    const idx = normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+    return Comlink.transfer(idx, [
+      idx.ptsNs.buffer,
+      idx.offsets.buffer,
+      idx.sizes.buffer,
+      idx.isSync.buffer,
+      idx.sps.buffer,
+      idx.pps.buffer,
+    ]);
   },
   /**
-   * Inspect a CSV / Parquet blob without retaining it: returns the
+   * Inspect a CSV / Parquet file without retaining it: returns the
    * `TabularSchema` (`{ columns, suggested }`) the import dialog drives its
    * column list and default time-basis from. `format` is `"csv"` or
-   * `"parquet"`. The bytes are NOT held in wasm — the JS caller keeps them
-   * (in the pending-import slice) and re-passes them to `openTabular` on
-   * confirm.
+   * `"parquet"`. Accepting a `File` keeps the bytes on the worker side —
+   * no structured-clone copy. The file is re-read by `openTabular` on confirm.
    */
   async tabularInspect(
-    bytes: Uint8Array,
+    file: File,
     format: string,
   ): Promise<RawTabularSchema> {
     await ready;
-    return tabular_inspect(bytes, format) as RawTabularSchema;
+    return tabular_inspect(
+      new Uint8Array(await file.arrayBuffer()),
+      format,
+    ) as RawTabularSchema;
   },
   /**
-   * Open a CSV / Parquet blob with an explicit `TimeBasis` (JSON string) and
-   * register the resulting reader in the wasm slab. Returns the integer
-   * handle the other `tabular*` methods take. Like the mp4-sidecar path the
-   * bytes are passed wholesale (no OPFS copy); the wasm reader owns them for
-   * the source's lifetime, freed by `closeTabular`.
+   * Open a CSV / Parquet file with an explicit `TimeBasis` (JSON string) and
+   * register the resulting reader in the wasm slab. Returns the integer handle
+   * the other `tabular*` methods take. Accepting a `File` keeps the bytes on
+   * the worker side — no structured-clone copy; the wasm reader owns the
+   * decoded data for the source's lifetime, freed by `closeTabular`.
    */
   async openTabular(
-    bytes: Uint8Array,
+    file: File,
     format: string,
     basisJson: string,
   ): Promise<number> {
     await ready;
-    return open_tabular(bytes, format, basisJson);
+    return open_tabular(
+      new Uint8Array(await file.arrayBuffer()),
+      format,
+      basisJson,
+    );
   },
   /**
    * `SourceMeta` for an open tabular reader, in the MF4-style shape
@@ -580,41 +616,46 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * The converted, ascending ns-UTC time column of an opened tabular source,
    * as a `BigInt64Array`. Used to derive per-frame video timestamps for a
    * sidecar-less mp4 (row i → frame i); see `state/videoTimestampBinding.ts`.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
    */
   async tabularTimeColumnNs(handle: number): Promise<BigInt64Array> {
     await ready;
-    return tabular_time_column_ns(handle);
+    const col = tabular_time_column_ns(handle);
+    return Comlink.transfer(col, [col.buffer]);
   },
   async closeTabular(handle: number): Promise<void> {
     await ready;
     close_tabular(handle);
   },
   /**
-   * Open a Driveline point-cloud Parquet (one row per LiDAR spin). Like the
-   * tabular path the whole blob is passed wholesale (no OPFS copy) and the
-   * wasm reader owns the decoded per-spin buffers for the source's lifetime,
-   * freed by `closeLidar`. The JS caller can drop its `bytes` once this
-   * returns.
+   * Open a Driveline point-cloud Parquet (one row per LiDAR spin). The wasm
+   * reader owns the decoded per-spin buffers for the source's lifetime, freed
+   * by `closeLidar`. Accepting a `File` keeps the bytes on the worker side —
+   * no structured-clone copy across the Comlink boundary.
    */
-  async openLidar(bytes: Uint8Array): Promise<number> {
+  async openLidar(file: File): Promise<number> {
     await ready;
-    return open_lidar(bytes);
+    return open_lidar(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * Open a PCD (Point Cloud Data) file — the PCL/ROS LiDAR interchange format.
    * A PCD holds a single cloud, so the reader surfaces one point-cloud channel
    * with one spin; every other `lidar*` method then works unchanged. Supports
-   * `ascii`, `binary`, and `binary_compressed` payloads.
+   * `ascii`, `binary`, and `binary_compressed` payloads. Accepting a `File`
+   * keeps the bytes on the worker side — no structured-clone copy.
    */
-  async openLidarPcd(bytes: Uint8Array): Promise<number> {
+  async openLidarPcd(file: File): Promise<number> {
     await ready;
-    return open_lidar_pcd(bytes);
+    return open_lidar_pcd(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * `SourceMeta` for an open point-cloud reader, in the MF4-style shape
@@ -630,6 +671,8 @@ export const dataCoreApi = {
    * passes a zero/one-width window + `includePrev` to fetch exactly the spin
    * active at the cursor. Schema: `{ ts, positions: List<f32>, intensities:
    * List<f32> }`, one row per spin.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
    */
   async lidarFetchRange(
     handle: number,
@@ -639,16 +682,20 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return lidar_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = lidar_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * Ascending spin start timestamps (ns) for a point-cloud source, one per
    * frame. The scene panel binary-searches this locally so it only refetches
    * point data when the active spin changes.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
    */
   async lidarSpinTimes(handle: number): Promise<BigInt64Array> {
     await ready;
-    return lidar_spin_times(handle);
+    const times = lidar_spin_times(handle);
+    return Comlink.transfer(times, [times.buffer]);
   },
   async closeLidar(handle: number): Promise<void> {
     await ready;
@@ -668,11 +715,61 @@ export const dataCoreApi = {
   ): Promise<EncodedChunkWire[]> {
     await ready;
     const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
-    return raw.map(normaliseEncodedChunk);
+    const chunks = raw.map(normaliseEncodedChunk);
+    // Collect unique underlying ArrayBuffers (wasm may theoretically back
+    // multiple chunks from a single allocation; deduplicate via Set so each
+    // buffer appears in the transfer list at most once).
+    // Cast to ArrayBuffer: wasm-allocated Uint8Array buffers are never
+    // SharedArrayBuffers; the cast satisfies the Comlink.transfer overload.
+    const buffers = new Set<ArrayBuffer>(
+      chunks.map((c) => c.data.buffer as ArrayBuffer),
+    );
+    return Comlink.transfer(chunks, [...buffers]);
   },
   async closeMcapVideoStream(streamId: number): Promise<void> {
     await ready;
     mcap_video_close(streamId);
+  },
+  /**
+   * Worker-to-worker MCAP video bridge. Exposes a minimal
+   * `{ openMcapVideoStream, mcapVideoNextBatch, closeMcapVideoStream }` API
+   * on the provided `MessagePort` so the videoDecode worker can talk to the
+   * dataCore worker directly — without routing video chunk batches through
+   * the main thread.
+   *
+   * Why not open a second dataCore inside the videoDecode worker? Because the
+   * wasm slab is per-worker-instance: a fresh wasm init in videoDecode would
+   * have an empty slab, making `sourceHandle` invalid there. This bridge
+   * reuses the existing slab so all handle-keyed state (OPFS sync handles,
+   * channel reader state) remains valid.
+   *
+   * Lifecycle: the port is closed by the videoDecode worker (or its owner)
+   * when the panel unmounts. `Comlink.expose` on a closed/detached port is
+   * inert — no explicit teardown is needed on this side beyond port.close()
+   * at the caller.
+   */
+  connectMcapVideoBridge(port: MessagePort): void {
+    // Re-expose the MCAP video stream methods on the provided port.
+    // mcapVideoNextBatch wraps the chunk buffers in Comlink.transfer so the
+    // worker-to-worker hop is also zero-copy.
+    Comlink.expose(
+      {
+        openMcapVideoStream: (h: number, c: string, p: bigint) =>
+          mcap_video_open(h, c, p),
+        mcapVideoNextBatch: async (streamId: number, maxN: number) => {
+          await ready;
+          const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
+          const chunks = raw.map(normaliseEncodedChunk);
+          // Cast to ArrayBuffer: wasm buffers are never SharedArrayBuffers.
+          const buffers = new Set<ArrayBuffer>(
+            chunks.map((ch) => ch.data.buffer as ArrayBuffer),
+          );
+          return Comlink.transfer(chunks, [...buffers]);
+        },
+        closeMcapVideoStream: (streamId: number) => mcap_video_close(streamId),
+      },
+      port,
+    );
   },
 };
 

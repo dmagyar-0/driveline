@@ -16,3 +16,42 @@ codegen-units = 1
 # offsets/ranges must never wrap silently. (The actual unchecked-arithmetic
 # audit lives in data-core; this is belt-and-suspenders.)
 overflow-checks = true
+# Panics trap on wasm32 either way; dropping the unwind/fmt machinery only
+# shrinks the shipped binary.
+panic = "abort"
+
+# The overflow-check posture above is about *our* offset/time arithmetic.
+# Third-party decode/decompress crates spend their time in tight integer
+# loops that are wrap-audited upstream — keep them on their upstream
+# defaults (unchecked) and speed-optimise the decompression hot spots,
+# which dominate `fetch_range` latency. First-party crates keep checks on.
+[profile.release.package.ruzstd]
+overflow-checks = false
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+overflow-checks = false
+opt-level = 3
+
+[profile.release.package.snap]
+overflow-checks = false
+opt-level = 3
+
+[profile.release.package.csv-core]
+overflow-checks = false
+opt-level = 3
+
+[profile.release.package.parquet]
+overflow-checks = false
+
+[profile.release.package.arrow-array]
+overflow-checks = false
+
+[profile.release.package.arrow-buffer]
+overflow-checks = false
+
+[profile.release.package.arrow-data]
+overflow-checks = false
+
+[profile.release.package.arrow-ipc]
+overflow-checks = false

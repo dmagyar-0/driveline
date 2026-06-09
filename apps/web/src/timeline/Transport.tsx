@@ -3,11 +3,11 @@
 // clamping, end-of-session auto-pause, and speed bounds live in the store
 // (see `state/store.ts:170-201`).
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, memo } from "react";
 import { useSession } from "../state/store";
 import type { TimeRange } from "../state/store";
 import { formatAbsolute, formatDuration, formatRelative } from "./formatTime";
-import { BookmarkMarkers } from "./BookmarkMarkers";
+import { BookmarkMarkers as BookmarkMarkersInner } from "./BookmarkMarkers";
 import {
   getReadinessSnapshot,
   subscribeReadiness,
@@ -110,6 +110,12 @@ function useDecodeWaiting(): boolean {
 
   return visible;
 }
+
+// BookmarkMarkers takes no props and self-subscribes to the store via
+// its own selectors. Wrapping in memo prevents the 60 Hz cursorNs
+// re-renders from cascading into it (it only re-renders when bookmarks
+// or globalRange change).
+const BookmarkMarkers = memo(BookmarkMarkersInner);
 
 const SPEED_OPTIONS = [0.25, 0.5, 1, 2, 4] as const;
 const ONE_SEC_NS = 1_000_000_000n;
@@ -279,9 +285,29 @@ export function Transport() {
 
   const fillPct = globalRange ? percentOf(cursorNs, globalRange) : 0;
   const isFetching = Object.values(pendingFetch).some((p) => p !== null);
-  const bufferedSegments: Array<{ key: string; left: number; width: number }> =
-    [];
-  if (globalRange) {
+
+  // startLabel / endLabel depend only on globalRange — memoize so the
+  // 60 Hz cursorNs re-renders don't recompute them every frame.
+  const startLabel = useMemo(
+    () =>
+      globalRange
+        ? formatRelative(globalRange.startNs, globalRange.startNs)
+        : "--:--.---",
+    [globalRange],
+  );
+  const endLabel = useMemo(
+    () =>
+      globalRange
+        ? formatDuration(globalRange.endNs - globalRange.startNs)
+        : "--:--.---",
+    [globalRange],
+  );
+
+  // bufferedSegments depends on loadedRanges + globalRange, not on cursorNs.
+  // Memoize to avoid rebuilding the array on every cursor tick.
+  const bufferedSegments = useMemo(() => {
+    const out: Array<{ key: string; left: number; width: number }> = [];
+    if (!globalRange) return out;
     for (const [sid, ranges] of Object.entries(loadedRanges)) {
       for (let i = 0; i < ranges.length; i++) {
         const r = ranges[i];
@@ -289,26 +315,18 @@ export function Transport() {
         const right = percentOf(r.endNs, globalRange);
         const width = Math.max(0, right - left);
         if (width <= 0) continue;
-        bufferedSegments.push({
-          key: `${sid}:${i}`,
-          left,
-          width,
-        });
+        out.push({ key: `${sid}:${i}`, left, width });
       }
     }
-  }
+    return out;
+  }, [loadedRanges, globalRange]);
+
   const readout = globalRange
     ? mode === "relative"
       ? `${formatRelative(cursorNs, globalRange.startNs)} / ${formatDuration(
           globalRange.endNs - globalRange.startNs,
         )}`
       : formatAbsolute(cursorNs)
-    : "--:--.---";
-  const startLabel = globalRange
-    ? formatRelative(globalRange.startNs, globalRange.startNs)
-    : "--:--.---";
-  const endLabel = globalRange
-    ? formatDuration(globalRange.endNs - globalRange.startNs)
     : "--:--.---";
 
   return (

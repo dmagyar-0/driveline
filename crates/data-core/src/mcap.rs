@@ -182,6 +182,11 @@ const VALUE_CACHE_CAP: usize = 256;
 /// One parsed-sample cache entry: `((segment index, mcap channel id), time-sorted samples)`.
 type ValueCacheEntry = ((usize, u16), Rc<Vec<(i64, ParsedValue)>>);
 
+/// One ROS2-expanded-channel cache entry: `((segment index, Driveline channel
+/// id), time-sorted samples)`. Keyed by the full leaf channel id rather than
+/// the mcap channel id so different leaves of the same topic don't collide.
+type Ros2ValueCacheEntry = ((usize, String), Rc<Vec<(i64, ParsedValue)>>);
+
 pub struct McapReader {
     /// Source of record bytes. `RefCell` because reads take `&mut R` while the
     /// public methods only have `&self`. Never holds the whole file.
@@ -202,6 +207,12 @@ pub struct McapReader {
     /// channel id)`. Time-sorted within each entry. Makes repeated pan/seek
     /// fetches over the same window cheap (no re-parse).
     value_cache: RefCell<VecDeque<ValueCacheEntry>>,
+    /// FIFO cache of parsed signal samples for ROS2-expanded leaf channels,
+    /// keyed by `(segment index, Driveline channel id)`. Separate from
+    /// `value_cache` so different leaves of the same mcap topic don't collide
+    /// (they share the same mcap channel id but differ by leaf path). Shares
+    /// the same capacity limit as `value_cache`.
+    ros2_value_cache: RefCell<VecDeque<Ros2ValueCacheEntry>>,
 }
 
 impl McapReader {
@@ -492,6 +503,7 @@ impl McapReader {
             segments,
             chunk_cache: RefCell::new(VecDeque::new()),
             value_cache: RefCell::new(VecDeque::new()),
+            ros2_value_cache: RefCell::new(VecDeque::new()),
         })
     }
 
@@ -560,6 +572,68 @@ impl McapReader {
         Ok(samples)
     }
 
+    /// Parsed signal samples for one ROS2-expanded leaf channel within one
+    /// segment, time-sorted, served from (and populating) the bounded ROS2
+    /// value cache. Keyed by `(segment index, Driveline channel id)` so
+    /// different leaves of the same mcap topic don't collide. The `exp`,
+    /// `leaf_segments`, and `root_type` arguments supply the pre-computed path
+    /// walk state so this method pays no per-message allocation.
+    fn parsed_for_ros2(
+        &self,
+        seg_idx: usize,
+        channel_id: &str,
+        exp: &RosExpanded,
+        leaf_segments: &[&str],
+        root_type: &str,
+    ) -> crate::Result<Rc<Vec<(i64, ParsedValue)>>> {
+        let key = (seg_idx, channel_id.to_string());
+        let cached = self
+            .ros2_value_cache
+            .borrow()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| v.clone());
+        if let Some(hit) = cached {
+            return Ok(hit);
+        }
+        let buf = self.read_segment(seg_idx)?;
+        let mcap_id = exp.mcap_id;
+        let mut samples: Vec<(i64, ParsedValue)> = Vec::new();
+        for_each_message(buf.as_slice(), |cid, log_time, payload| {
+            if cid != mcap_id {
+                return;
+            }
+            match crate::ros::extract_prebuilt(
+                &exp.registry,
+                payload,
+                crate::ros::Wire::Cdr,
+                root_type,
+                leaf_segments,
+            ) {
+                Ok(crate::ros::Extracted::Scalar(f)) => {
+                    samples.push((log_time, ParsedValue::Scalar(f)));
+                }
+                // A Scalar leaf (dims == 1) over an integer field surfaces
+                // as Enum from the decoder; widen to f64 for the scalar batch.
+                Ok(crate::ros::Extracted::Enum(v)) => {
+                    samples.push((log_time, ParsedValue::Scalar(v as f64)));
+                }
+                Ok(crate::ros::Extracted::Vector(v)) => {
+                    samples.push((log_time, ParsedValue::Vector(v)));
+                }
+                Err(_) => {}
+            }
+        });
+        samples.sort_by_key(|s| s.0);
+        let samples = Rc::new(samples);
+        let mut cache = self.ros2_value_cache.borrow_mut();
+        cache.push_back((key, samples.clone()));
+        while cache.len() > VALUE_CACHE_CAP {
+            cache.pop_front();
+        }
+        Ok(samples)
+    }
+
     pub fn fetch_range(
         &self,
         channel_id: &ChannelId,
@@ -598,7 +672,14 @@ impl McapReader {
             .iter()
             .flat_map(|s| s.iter().map(|(t, v)| (*t, v)))
             .collect();
-        merged.sort_by_key(|r| r.0);
+        // Per-segment runs are already time-sorted; only sort the merged slice
+        // if a boundary inversion is detected (last of run i > first of run i+1).
+        let needs_sort = seg_parsed
+            .windows(2)
+            .any(|w| matches!((w[0].last(), w[1].first()), (Some(a), Some(b)) if a.0 > b.0));
+        if needs_sort {
+            merged.sort_by_key(|r| r.0);
+        }
 
         let timestamps: Vec<i64> = merged.iter().map(|r| r.0).collect();
         let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
@@ -617,7 +698,7 @@ impl McapReader {
         match cm.kind {
             ChannelKind::Scalar => {
                 let vals: Vec<f64> = val_refs.iter().map(|v| parsed_scalar_as_f64(v)).collect();
-                build_scalar_ipc_raw(ts_slice, &vals)
+                build_scalar_ipc_raw(ts_slice.to_vec(), vals)
             }
             ChannelKind::Vector => {
                 let n = if cm.vector_len > 0 { cm.vector_len } else { 3 };
@@ -663,6 +744,11 @@ impl McapReader {
     /// messages over the selected segments and decode the leaf value out of
     /// each with the shared ROS decoder. Honors `include_prev` like the JSON
     /// path; individual messages that fail to decode are skipped.
+    ///
+    /// Decoded samples are cached per `(segment, Driveline channel id)` in
+    /// `ros2_value_cache` so that repeated fetches over the same window (e.g.
+    /// ten plotted leaves of the same topic) re-decode each segment's messages
+    /// at most once per leaf rather than once per fetch.
     fn fetch_range_ros2(
         &self,
         channel_id: &ChannelId,
@@ -674,42 +760,39 @@ impl McapReader {
 
         let idxs = self.select_segments(mcap_id, range, opts.include_prev);
 
-        // Decode (log_time, value) for every message of this topic in the
-        // selected segments. Re-uses `read_segment` (chunk cache); the JSON
-        // value cache is keyed for the foxglove path and bypassed here.
-        let mut samples: Vec<(i64, ParsedValue)> = Vec::new();
-        for i in idxs {
-            let buf = self.read_segment(i)?;
-            for_each_message(buf.as_slice(), |cid, log_time, payload| {
-                if cid != mcap_id {
-                    return;
-                }
-                match crate::ros::extract(
-                    &exp.registry,
-                    payload,
-                    crate::ros::Wire::Cdr,
-                    &exp.leaf_path,
-                ) {
-                    Ok(crate::ros::Extracted::Scalar(f)) => {
-                        samples.push((log_time, ParsedValue::Scalar(f)));
-                    }
-                    // A Scalar leaf (dims == 1) over an integer field surfaces
-                    // as Enum from the decoder; widen to f64 for the scalar batch.
-                    Ok(crate::ros::Extracted::Enum(v)) => {
-                        samples.push((log_time, ParsedValue::Scalar(v as f64)));
-                    }
-                    Ok(crate::ros::Extracted::Vector(v)) => {
-                        samples.push((log_time, ParsedValue::Vector(v)));
-                    }
-                    // Skip a message that fails to decode rather than failing
-                    // the whole range.
-                    Err(_) => {}
-                }
-            });
-        }
-        samples.sort_by_key(|s| s.0);
+        // Pre-compute the path segments and root type once per fetch so that
+        // `parsed_for_ros2` (and the inner `extract_prebuilt` calls) pay only
+        // O(1) per call instead of per-message.
+        let leaf_segments: Vec<&str> = exp.leaf_path.split('.').filter(|s| !s.is_empty()).collect();
+        let root_type = exp.registry.root().to_string();
 
-        let timestamps: Vec<i64> = samples.iter().map(|s| s.0).collect();
+        // Pull the selected segments' parsed samples (cached) and merge into a
+        // single time-sorted view. The `Rc`s are held in `seg_parsed` so the
+        // borrowed refs in `merged` stay valid.
+        let mut seg_parsed: Vec<Rc<Vec<(i64, ParsedValue)>>> = Vec::with_capacity(idxs.len());
+        for i in idxs {
+            seg_parsed.push(self.parsed_for_ros2(
+                i,
+                channel_id,
+                exp,
+                &leaf_segments,
+                &root_type,
+            )?);
+        }
+        let mut merged: Vec<(i64, &ParsedValue)> = seg_parsed
+            .iter()
+            .flat_map(|s| s.iter().map(|(t, v)| (*t, v)))
+            .collect();
+        // Per-segment runs are already time-sorted; only sort the merged slice
+        // if a boundary inversion is detected (last of run i > first of run i+1).
+        let needs_sort = seg_parsed
+            .windows(2)
+            .any(|w| matches!((w[0].last(), w[1].first()), (Some(a), Some(b)) if a.0 > b.0));
+        if needs_sort {
+            merged.sort_by_key(|r| r.0);
+        }
+
+        let timestamps: Vec<i64> = merged.iter().map(|r| r.0).collect();
         let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
         let end_idx = timestamps
             .partition_point(|&t| t < range.end_ns)
@@ -721,12 +804,12 @@ impl McapReader {
         };
 
         let ts_slice = &timestamps[lo..end_idx];
-        let val_refs: Vec<&ParsedValue> = samples[lo..end_idx].iter().map(|s| &s.1).collect();
+        let val_refs: Vec<&ParsedValue> = merged[lo..end_idx].iter().map(|r| r.1).collect();
 
         match exp.kind {
             ChannelKind::Scalar => {
                 let vals: Vec<f64> = val_refs.iter().map(|v| parsed_scalar_as_f64(v)).collect();
-                build_scalar_ipc_raw(ts_slice, &vals)
+                build_scalar_ipc_raw(ts_slice.to_vec(), vals)
             }
             ChannelKind::Vector => {
                 let n = if exp.width > 0 { exp.width } else { 3 };
@@ -1272,10 +1355,13 @@ fn parsed_scalar_as_f64(v: &ParsedValue) -> f64 {
     }
 }
 
-fn build_scalar_ipc_raw(timestamps: &[i64], values: &[f64]) -> crate::Result<ArrowIpc> {
+/// Build a scalar Arrow IPC buffer from owned timestamp and value vectors.
+/// Takes ownership so the vecs can be moved directly into Arrow arrays without
+/// an extra `to_vec()` copy at the call site.
+fn build_scalar_ipc_raw(timestamps: Vec<i64>, values: Vec<f64>) -> crate::Result<ArrowIpc> {
     let schema = scalar_schema();
-    let ts = TimestampNanosecondArray::from(timestamps.to_vec()).with_timezone("UTC");
-    let val = Float64Array::from(values.to_vec());
+    let ts = TimestampNanosecondArray::from(timestamps).with_timezone("UTC");
+    let val = Float64Array::from(values);
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts), Arc::new(val)])?;
     write_ipc(schema, batch)
 }
