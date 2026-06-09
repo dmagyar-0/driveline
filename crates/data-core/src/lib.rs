@@ -12,6 +12,7 @@ pub mod noop;
 pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
+pub mod ros;
 pub mod tabular;
 pub mod types;
 
