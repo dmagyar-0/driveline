@@ -51,6 +51,11 @@ export default defineConfig({
     format: "es",
     plugins: () => [wasm(), topLevelAwait()],
   },
+  build: {
+    // The app hard-requires Chrome/Edge/Firefox 130+ (WebCodecs gate in
+    // `main.tsx`), so skip downlevel transforms for older engines.
+    target: "es2022",
+  },
   server: {
     port: 5173,
     strictPort: true,
