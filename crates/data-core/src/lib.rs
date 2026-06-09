@@ -15,6 +15,7 @@ pub mod reader;
 pub mod ros;
 pub mod ros1_bag;
 pub mod ros2_db3;
+pub mod sqlite;
 pub mod tabular;
 pub mod types;
 

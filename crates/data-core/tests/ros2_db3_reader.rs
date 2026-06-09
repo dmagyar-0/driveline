@@ -164,7 +164,10 @@ fn fetch_linear_accel_z_decodes_near_gravity() {
 
     for v in scalar_values(&batch) {
         assert!(v.is_finite(), "z-accel not finite");
-        assert!((8.0..=11.5).contains(&v), "linear_acceleration.z {v} not near gravity");
+        assert!(
+            (8.0..=11.5).contains(&v),
+            "linear_acceleration.z {v} not near gravity"
+        );
     }
 
     // Timestamps ascending.
@@ -185,7 +188,10 @@ fn fetch_temperature_in_sane_range() {
     assert_eq!(batch.num_rows(), 10, "expected 10 temperature samples");
     for v in scalar_values(&batch) {
         assert!(v.is_finite());
-        assert!((10.0..=30.0).contains(&v), "temperature {v} out of plausible range");
+        assert!(
+            (10.0..=30.0).contains(&v),
+            "temperature {v} out of plausible range"
+        );
     }
 }
 
@@ -270,7 +276,10 @@ fn include_prev_adds_leading_sample() {
     );
     let ts_plain = scalar_ts(&plain);
     let ts_prev = scalar_ts(&with_prev);
-    assert!(ts_prev[0] < ts_plain[0], "leading sample precedes window start");
+    assert!(
+        ts_prev[0] < ts_plain[0],
+        "leading sample precedes window start"
+    );
 }
 
 #[test]
@@ -284,6 +293,146 @@ fn unknown_channel_errors() {
         )
         .unwrap_err();
     assert!(matches!(err, data_core::Error::ChannelNotFound(_)));
+}
+
+/// Read the `.db3` fixture path under `test-fixtures/ros/`.
+fn read_db3(name: &str) -> Vec<u8> {
+    let path = format!(
+        "{}/../../test-fixtures/ros/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
+}
+
+/// End-to-end: open the real synth_imu.db3 bytes via the in-crate SQLite
+/// reader (no JSON subsample) and assert the expanded channels + decoded
+/// values, with the FULL message counts.
+#[test]
+fn open_real_db3_expands_channels_and_decodes() {
+    let bytes = read_db3("synth_imu.db3");
+    let r = Ros2Db3Reader::open(&bytes).expect("open synth_imu.db3");
+    assert_eq!(r.meta().kind, SourceKind::Mcap);
+
+    let ids: Vec<&str> = r.meta().channels.iter().map(|c| c.id.as_str()).collect();
+    for expected in [
+        "/imu/data.linear_acceleration.z",
+        "/imu/data.angular_velocity",
+        "/temperature.data",
+    ] {
+        assert!(ids.contains(&expected), "missing {expected:?}; got {ids:?}");
+    }
+
+    // angular_velocity is a geometry_msgs/Vector3 -> 3-wide Vector.
+    let angvel = r
+        .meta()
+        .channels
+        .iter()
+        .find(|c| c.id == "/imu/data.angular_velocity")
+        .expect("angular_velocity");
+    assert_eq!(angvel.kind, ChannelKind::Vector);
+
+    // FULL counts (not the 30-row JSON subsample): /imu/data has 100 msgs,
+    // /temperature has 10.
+    let z = r
+        .meta()
+        .channels
+        .iter()
+        .find(|c| c.id == "/imu/data.linear_acceleration.z")
+        .unwrap();
+    assert_eq!(z.sample_count, 100, "all 100 IMU messages");
+
+    // Decode linear_acceleration.z ~ gravity, full count.
+    let zbatch = parse_ipc(
+        &r.fetch_range(
+            &"/imu/data.linear_acceleration.z".to_string(),
+            r.meta().time_range,
+            FetchOpts::default(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(zbatch.num_rows(), 100, "decoded all 100 IMU samples");
+    for v in scalar_values(&zbatch) {
+        assert!(
+            v.is_finite() && (8.0..=11.5).contains(&v),
+            "z accel {v} not near gravity"
+        );
+    }
+    let ts = scalar_ts(&zbatch);
+    assert!(ts.windows(2).all(|w| w[0] <= w[1]), "ts ascending");
+
+    // Temperature in a sane range, full count.
+    let tbatch = parse_ipc(
+        &r.fetch_range(
+            &"/temperature.data".to_string(),
+            r.meta().time_range,
+            FetchOpts::default(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(tbatch.num_rows(), 10, "all 10 temperature samples");
+    for v in scalar_values(&tbatch) {
+        assert!(
+            v.is_finite() && (10.0..=30.0).contains(&v),
+            "temperature {v} out of range"
+        );
+    }
+}
+
+/// Half-open bounds + include_prev behave on the real-bag reader.
+#[test]
+fn open_real_db3_bounds_and_include_prev() {
+    let bytes = read_db3("synth_imu.db3");
+    let r = Ros2Db3Reader::open(&bytes).expect("open synth_imu.db3");
+    let id = "/imu/data.linear_acceleration.z".to_string();
+
+    let full = r
+        .meta()
+        .channels
+        .iter()
+        .find(|c| c.id == id)
+        .unwrap()
+        .time_range;
+    let all = parse_ipc(&r.fetch_range(&id, full, FetchOpts::default()).unwrap());
+    let all_ts = scalar_ts(&all);
+    assert!(all_ts.len() >= 3);
+
+    // Half-open end: [start, second_ts) yields exactly the first sample.
+    let range = TimeRange {
+        start_ns: all_ts[0],
+        end_ns: all_ts[1],
+    };
+    let got = parse_ipc(&r.fetch_range(&id, range, FetchOpts::default()).unwrap());
+    assert_eq!(scalar_ts(&got), vec![all_ts[0]]);
+
+    // include_prev adds exactly one leading sample.
+    let mid = TimeRange {
+        start_ns: all_ts[all_ts.len() / 2],
+        end_ns: full.end_ns,
+    };
+    let plain = parse_ipc(&r.fetch_range(&id, mid, FetchOpts::default()).unwrap());
+    let with_prev = parse_ipc(
+        &r.fetch_range(&id, mid, FetchOpts { include_prev: true })
+            .unwrap(),
+    );
+    assert_eq!(with_prev.num_rows(), plain.num_rows() + 1);
+}
+
+/// The upstream `test_msgs` bag opens; its `test_msgs/*` types are not in the
+/// bundled typestore but their definitions are embedded in
+/// `message_definitions`, so channels surface from the real `.db3` bytes.
+#[test]
+fn open_real_cdr_test_db3() {
+    let bytes = read_db3("ros2_cdr_test.db3");
+    let r = Ros2Db3Reader::open(&bytes).expect("open ros2_cdr_test.db3");
+    assert_eq!(r.meta().kind, SourceKind::Mcap);
+    // BasicTypes / Arrays expand into numeric leaves on /test_topic and
+    // /array_topic; at least some channels must surface.
+    assert!(!r.meta().channels.is_empty(), "expected expanded channels");
+    let ids: Vec<&str> = r.meta().channels.iter().map(|c| c.id.as_str()).collect();
+    assert!(
+        ids.iter().any(|id| id.starts_with("/test_topic.")),
+        "expected /test_topic channels; got {ids:?}"
+    );
 }
 
 #[test]
@@ -311,11 +460,18 @@ fn embedded_def_resolves_topic_typestore_does_not_know() {
     .expect("open_rows with embedded def");
 
     let ids: Vec<&str> = r.meta().channels.iter().map(|c| c.id.as_str()).collect();
-    assert!(ids.contains(&"/custom.value"), "embedded-def leaf missing: {ids:?}");
+    assert!(
+        ids.contains(&"/custom.value"),
+        "embedded-def leaf missing: {ids:?}"
+    );
 
     let batch = parse_ipc(
-        &r.fetch_range(&"/custom.value".to_string(), r.meta().time_range, FetchOpts::default())
-            .unwrap(),
+        &r.fetch_range(
+            &"/custom.value".to_string(),
+            r.meta().time_range,
+            FetchOpts::default(),
+        )
+        .unwrap(),
     );
     let vals = scalar_values(&batch);
     assert_eq!(vals, vec![42.5]);

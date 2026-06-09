@@ -1,18 +1,15 @@
 //! `Ros2Db3Reader`: a reader for ROS2 rosbag2 **SQLite** (`.db3`) bags.
 //!
-//! ## Why this reader does not parse a file
+//! ## How the bag is read
 //!
-//! SQLite cannot be parsed on our `wasm32-unknown-unknown` target (no C deps,
-//! no filesystem). So the SQLite query lives on the JS side (sql.js): JS reads
-//! the rosbag2 `topics` / `messages` (and optional `message_definitions`)
-//! tables, then hands the already-extracted rows to this reader, which decodes
-//! the per-message CDR payloads with the shared dynamic decoder in
-//! [`crate::ros`] plus the bundled typestore in [`crate::ros::lookup_typedef`].
-//!
-//! Because of that, the [`Reader`] trait's `open(bytes)` does not fit — there
-//! is no single byte blob to parse. [`Ros2Db3Reader::open`] therefore returns
-//! [`crate::Error::Ros2Db3`]; construct the reader via
-//! [`Ros2Db3Reader::open_rows`] instead.
+//! rosbag2 `.db3` bags are SQLite files. Driveline ships a minimal, read-only,
+//! pure-Rust SQLite reader ([`crate::sqlite`]) that parses the file directly
+//! from its bytes on `wasm32-unknown-unknown` (no C deps, no `sql.js`).
+//! [`Ros2Db3Reader::open`] uses it to read the rosbag2 `topics` / `messages`
+//! (and optional `message_definitions`) tables, then delegates to
+//! [`Ros2Db3Reader::open_rows`], which decodes the per-message CDR payloads
+//! with the shared dynamic decoder in [`crate::ros`] plus the bundled typestore
+//! in [`crate::ros::lookup_typedef`].
 //!
 //! ## Channel shape
 //!
@@ -40,6 +37,7 @@ use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 use crate::reader::{ArrowIpc, Reader};
 use crate::ros::{extract, lookup_typedef, numeric_leaves, Extracted, MessageRegistry, Wire};
+use crate::sqlite::{column_index, SqliteDb, Value};
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
 };
@@ -170,9 +168,7 @@ impl Ros2Db3Reader {
         let mut embedded: HashMap<String, &str> = HashMap::new();
         for (name, def) in embedded_defs {
             embedded.entry(name.clone()).or_insert(def.as_str());
-            embedded
-                .entry(normalize(name))
-                .or_insert(def.as_str());
+            embedded.entry(normalize(name)).or_insert(def.as_str());
         }
 
         let mut by_topic: HashMap<String, Topic> = HashMap::new();
@@ -336,14 +332,165 @@ fn write_ipc(schema: Arc<Schema>, batch: RecordBatch) -> crate::Result<ArrowIpc>
     Ok(buf)
 }
 
+/// Extract the `open_rows` arguments from a parsed rosbag2 SQLite database.
+///
+/// Maps tables to rows as follows:
+/// - `topics`: each row contributes `(name, type)` to `topics`, keyed by the
+///   topic's `id` *column* (not the SQLite rowid) so `messages.topic_id` can be
+///   resolved to a dense `0..T` index.
+/// - `messages`: `(topic_id, timestamp, data)` per row. Messages are sorted by
+///   timestamp so each topic's samples are ascending (defensive — `open_rows`
+///   re-sorts per topic anyway).
+/// - `message_definitions` (optional): `(topic_type, encoded_message_definition)`.
+struct ExtractedRows {
+    topics: Vec<(String, String)>,
+    msg_topic_idx: Vec<u32>,
+    msg_ts_ns: Vec<i64>,
+    blob_data: Vec<u8>,
+    blob_offsets: Vec<u32>,
+    embedded_defs: Vec<(String, String)>,
+}
+
+/// Resolve a column index by name, with a positional fallback when the
+/// `CREATE TABLE` SQL could not be parsed.
+fn col_idx(cols: &Option<HashMap<String, usize>>, name: &str, fallback: usize) -> usize {
+    cols.as_ref()
+        .and_then(|m| m.get(name).copied())
+        .unwrap_or(fallback)
+}
+
+fn extract_rows(db: &SqliteDb) -> crate::Result<ExtractedRows> {
+    // Column maps (name-based with positional fallback for the known schema).
+    let topics_cols = db.columns("topics").ok().map(|c| column_index(&c));
+    // Known rosbag2 `topics` positions: id, name, type, ...
+    let ti_id = col_idx(&topics_cols, "id", 0);
+    let ti_name = col_idx(&topics_cols, "name", 1);
+    let ti_type = col_idx(&topics_cols, "type", 2);
+
+    let topic_rows = db
+        .rows("topics")
+        .map_err(|e| err(format!("reading topics: {e}")))?;
+
+    // Build the dense topic list and an id-column -> index map.
+    let mut topics: Vec<(String, String)> = Vec::with_capacity(topic_rows.len());
+    let mut id_to_idx: HashMap<i64, u32> = HashMap::new();
+    for (rowid, cols) in &topic_rows {
+        let name = cols
+            .get(ti_name)
+            .and_then(Value::as_str)
+            .ok_or_else(|| err("topics.name missing or not text"))?
+            .to_string();
+        let ty = cols
+            .get(ti_type)
+            .and_then(Value::as_str)
+            .ok_or_else(|| err("topics.type missing or not text"))?
+            .to_string();
+        // Prefer the `id` column; fall back to the SQLite rowid.
+        let id = cols.get(ti_id).and_then(Value::as_i64).unwrap_or(*rowid);
+        let idx = topics.len() as u32;
+        id_to_idx.insert(id, idx);
+        topics.push((name, ty));
+    }
+
+    // messages: topic_id, timestamp, data.
+    let messages_cols = db.columns("messages").ok().map(|c| column_index(&c));
+    let mi_topic = col_idx(&messages_cols, "topic_id", 1);
+    let mi_ts = col_idx(&messages_cols, "timestamp", 2);
+    let mi_data = col_idx(&messages_cols, "data", 3);
+
+    let mut message_rows = db
+        .rows("messages")
+        .map_err(|e| err(format!("reading messages: {e}")))?;
+
+    // Sort by timestamp (then rowid for stability) so per-topic series are
+    // ascending. `open_rows` re-sorts per topic, but this keeps behaviour
+    // deterministic regardless of physical row order.
+    message_rows.sort_by_key(|(rowid, cols)| {
+        let ts = cols.get(mi_ts).and_then(Value::as_i64).unwrap_or(0);
+        (ts, *rowid)
+    });
+
+    let mut msg_topic_idx: Vec<u32> = Vec::with_capacity(message_rows.len());
+    let mut msg_ts_ns: Vec<i64> = Vec::with_capacity(message_rows.len());
+    let mut blob_data: Vec<u8> = Vec::new();
+    let mut blob_offsets: Vec<u32> = Vec::with_capacity(message_rows.len() + 1);
+    blob_offsets.push(0);
+
+    for (_rowid, cols) in &message_rows {
+        let topic_id = cols
+            .get(mi_topic)
+            .and_then(Value::as_i64)
+            .ok_or_else(|| err("messages.topic_id missing or not integer"))?;
+        let &idx = id_to_idx.get(&topic_id).ok_or_else(|| {
+            err(format!(
+                "messages.topic_id {topic_id} has no matching topic"
+            ))
+        })?;
+        let ts = cols
+            .get(mi_ts)
+            .and_then(Value::as_i64)
+            .ok_or_else(|| err("messages.timestamp missing or not integer"))?;
+        let data = cols
+            .get(mi_data)
+            .and_then(Value::as_blob)
+            .ok_or_else(|| err("messages.data missing or not a blob"))?;
+
+        msg_topic_idx.push(idx);
+        msg_ts_ns.push(ts);
+        blob_data.extend_from_slice(data);
+        blob_offsets.push(blob_data.len() as u32);
+    }
+
+    // Optional message_definitions: (topic_type, encoded_message_definition).
+    let mut embedded_defs: Vec<(String, String)> = Vec::new();
+    if db.has_table("message_definitions") {
+        let def_cols = db
+            .columns("message_definitions")
+            .ok()
+            .map(|c| column_index(&c));
+        // Known positions: id, topic_type, encoding, encoded_message_definition, ...
+        let di_type = col_idx(&def_cols, "topic_type", 1);
+        let di_def = col_idx(&def_cols, "encoded_message_definition", 3);
+        let def_rows = db
+            .rows("message_definitions")
+            .map_err(|e| err(format!("reading message_definitions: {e}")))?;
+        for (_rowid, cols) in &def_rows {
+            let (Some(ty), Some(def)) = (
+                cols.get(di_type).and_then(Value::as_str),
+                cols.get(di_def).and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            embedded_defs.push((ty.to_string(), def.to_string()));
+        }
+    }
+
+    Ok(ExtractedRows {
+        topics,
+        msg_topic_idx,
+        msg_ts_ns,
+        blob_data,
+        blob_offsets,
+        embedded_defs,
+    })
+}
+
 impl Reader for Ros2Db3Reader {
-    /// ROS2 db3 bags are not opened from a byte slice — see the module docs.
-    /// Construct via [`Ros2Db3Reader::open_rows`].
-    fn open(_bytes: &[u8]) -> crate::Result<Self> {
-        Err(err(
-            "ROS2 db3 (SQLite) cannot be opened from a byte slice on wasm32; \
-             use Ros2Db3Reader::open_rows with rows extracted in JS (sql.js)",
-        ))
+    /// Open a rosbag2 `.db3` (SQLite) bag directly from its bytes. Parses the
+    /// `topics` / `messages` / optional `message_definitions` tables with the
+    /// in-crate [`crate::sqlite`] reader, then delegates to
+    /// [`Ros2Db3Reader::open_rows`].
+    fn open(bytes: &[u8]) -> crate::Result<Self> {
+        let db = SqliteDb::open(bytes).map_err(|e| err(e.to_string()))?;
+        let rows = extract_rows(&db)?;
+        Ros2Db3Reader::open_rows(
+            &rows.topics,
+            &rows.msg_topic_idx,
+            &rows.msg_ts_ns,
+            &rows.blob_data,
+            &rows.blob_offsets,
+            &rows.embedded_defs,
+        )
     }
 
     fn meta(&self) -> &SourceMeta {
@@ -505,11 +652,14 @@ mod tests {
     fn unknown_type_topic_is_skipped() {
         let topics = vec![("/weird".to_string(), "made_up_pkg/msg/Nope".to_string())];
         // One 4-byte payload (content irrelevant — topic is skipped).
-        let r =
-            Ros2Db3Reader::open_rows(&topics, &[0], &[1], &[0, 0, 0, 0], &[0, 4], &[]).unwrap();
+        let r = Ros2Db3Reader::open_rows(&topics, &[0], &[1], &[0, 0, 0, 0], &[0, 4], &[]).unwrap();
         assert!(r.meta().channels.is_empty());
         let err = r
-            .fetch_range(&"/weird.data".to_string(), r.meta().time_range, FetchOpts::default())
+            .fetch_range(
+                &"/weird.data".to_string(),
+                r.meta().time_range,
+                FetchOpts::default(),
+            )
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }
