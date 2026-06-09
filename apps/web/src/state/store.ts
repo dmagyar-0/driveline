@@ -75,7 +75,14 @@ import { synthesizeSidecarBytes } from "./videoTimestampBinding";
 import { shiftFetchWindow, shiftRangeArrowTs } from "./offsetShift";
 import { parseEpochOffsetNs } from "./tabularImport";
 
-export type SourceKind = "mcap" | "mf4" | "mp4+sidecar" | "tabular" | "lidar";
+export type SourceKind =
+  | "mcap"
+  | "mf4"
+  | "mp4+sidecar"
+  | "tabular"
+  | "lidar"
+  | "ros1"
+  | "ros2db3";
 export type ChannelKind = ChannelKindWire;
 
 export interface TimeRange {
@@ -1823,6 +1830,26 @@ export const useSession = create<SessionState>((set, get) => {
           );
           return shiftRangeArrowTs(bytes, offset);
         }
+        if (source.kind === "ros1") {
+          const bytes = await worker.ros1BagFetchRange(
+            source.handle,
+            channel.nativeId,
+            win.startNs,
+            win.endNs,
+            includePrev,
+          );
+          return shiftRangeArrowTs(bytes, offset);
+        }
+        if (source.kind === "ros2db3") {
+          const bytes = await worker.ros2Db3FetchRange(
+            source.handle,
+            channel.nativeId,
+            win.startNs,
+            win.endNs,
+            includePrev,
+          );
+          return shiftRangeArrowTs(bytes, offset);
+        }
         if (source.kind === "mf4") {
           const bytes = await worker.mf4FetchRange(
             source.handle,
@@ -1899,6 +1926,57 @@ export const useSession = create<SessionState>((set, get) => {
             newSources.push({
               id,
               kind: "mcap",
+              name: f.name,
+              handle,
+              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+              channels,
+              timeOffsetNs: 0n,
+            });
+            opened.push(f.name);
+          } catch (e) {
+            errors.push({ name: f.name, reason: String(e) });
+          }
+        }
+
+        for (const f of buckets.ros1) {
+          try {
+            // ROS 1 bags open whole-file in wasm memory (no OPFS/ranged path),
+            // so pass the bytes like the lidar/tabular path. The wire summary
+            // shape is identical to mcap, so reuse `mcapChannels`.
+            const bytes = await fileBytes(f);
+            const handle = await w.openRos1Bag(bytes);
+            const summary = await w.ros1BagSummary(handle);
+            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+            const channels = mcapChannels(id, summary);
+            newSources.push({
+              id,
+              kind: "ros1",
+              name: f.name,
+              handle,
+              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+              channels,
+              timeOffsetNs: 0n,
+            });
+            opened.push(f.name);
+          } catch (e) {
+            errors.push({ name: f.name, reason: String(e) });
+          }
+        }
+
+        for (const f of buckets.ros2db3) {
+          try {
+            // ROS 2 rosbag2 `.db3` bags open whole-file in wasm memory (no
+            // OPFS/ranged path), so pass the bytes like the lidar/tabular/ros1
+            // path. The wire summary shape is identical to mcap, so reuse
+            // `mcapChannels`.
+            const bytes = await fileBytes(f);
+            const handle = await w.openRos2Db3(bytes);
+            const summary = await w.ros2Db3Summary(handle);
+            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+            const channels = mcapChannels(id, summary);
+            newSources.push({
+              id,
+              kind: "ros2db3",
               name: f.name,
               handle,
               timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
@@ -2335,6 +2413,8 @@ export const useSession = create<SessionState>((set, get) => {
         for (const s of get().sources) {
           try {
             if (s.kind === "mcap") await w.closeMcap(s.handle);
+            else if (s.kind === "ros1") await w.closeRos1Bag(s.handle);
+            else if (s.kind === "ros2db3") await w.closeRos2Db3(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
             else if (s.kind === "tabular") await w.closeTabular(s.handle);
             else if (s.kind === "lidar") await w.closeLidar(s.handle);
@@ -2404,6 +2484,8 @@ export const useSession = create<SessionState>((set, get) => {
           const w = worker;
           try {
             if (src.kind === "mcap") await w.closeMcap(src.handle);
+            else if (src.kind === "ros1") await w.closeRos1Bag(src.handle);
+            else if (src.kind === "ros2db3") await w.closeRos2Db3(src.handle);
             else if (src.kind === "mf4") await w.closeMf4(src.handle);
             else if (src.kind === "tabular") await w.closeTabular(src.handle);
             else if (src.kind === "lidar") await w.closeLidar(src.handle);

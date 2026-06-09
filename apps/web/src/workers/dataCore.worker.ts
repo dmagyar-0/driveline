@@ -31,6 +31,14 @@ import init, {
   lidar_fetch_range,
   lidar_spin_times,
   close_lidar,
+  open_ros1_bag,
+  close_ros1_bag,
+  ros1_bag_summary,
+  ros1_bag_fetch_range,
+  open_ros2_db3,
+  close_ros2_db3,
+  ros2_db3_summary,
+  ros2_db3_fetch_range,
 } from "../wasm/wasm_bindings.js";
 import {
   normaliseEncodedChunk,
@@ -432,6 +440,70 @@ export const dataCoreApi = {
   ): Promise<Uint8Array> {
     await ready;
     return mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
+  },
+  /**
+   * Open a ROS 1 bag (rosbag v2.0) from its full bytes — like the lidar /
+   * tabular path, the whole file is decoded in wasm memory (no OPFS/ranged
+   * path), so the JS caller can drop its `bytes` once this returns.
+   */
+  async openRos1Bag(bytes: Uint8Array): Promise<number> {
+    await ready;
+    return open_ros1_bag(bytes);
+  },
+  /**
+   * `SourceMeta` for an open ROS 1 bag. ROS 1 bag channels carry the same
+   * `kind` / optional `dtype` shape as mcap channels, so the wire summary is
+   * identical and reuses `normaliseMcap`.
+   */
+  async ros1BagSummary(handle: number): Promise<McapSummary> {
+    await ready;
+    return normaliseMcap(ros1_bag_summary(handle) as RawMcapSummary);
+  },
+  async ros1BagFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    return ros1_bag_fetch_range(handle, channelId, startNs, endNs, includePrev);
+  },
+  async closeRos1Bag(handle: number): Promise<void> {
+    await ready;
+    close_ros1_bag(handle);
+  },
+  /**
+   * Open a ROS 2 rosbag2 SQLite (`.db3`) bag from its full bytes — like the
+   * lidar / tabular / ros1 path, the whole file is decoded in wasm memory (no
+   * OPFS/ranged path), so the JS caller can drop its `bytes` once this returns.
+   */
+  async openRos2Db3(bytes: Uint8Array): Promise<number> {
+    await ready;
+    return open_ros2_db3(bytes);
+  },
+  /**
+   * `SourceMeta` for an open ROS 2 db3 bag. ROS 2 db3 channels carry the same
+   * `kind` / optional `dtype` shape as mcap channels, so the wire summary is
+   * identical and reuses `normaliseMcap`.
+   */
+  async ros2Db3Summary(handle: number): Promise<McapSummary> {
+    await ready;
+    return normaliseMcap(ros2_db3_summary(handle) as RawMcapSummary);
+  },
+  async ros2Db3FetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    return ros2_db3_fetch_range(handle, channelId, startNs, endNs, includePrev);
+  },
+  async closeRos2Db3(handle: number): Promise<void> {
+    await ready;
+    close_ros2_db3(handle);
   },
   async openMp4Sidecar(
     mp4Bytes: Uint8Array,

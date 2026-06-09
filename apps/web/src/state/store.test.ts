@@ -53,6 +53,8 @@ function arrowTs(bytes: Uint8Array): bigint[] {
 
 interface Summaries {
   mcap: McapSummary;
+  ros1: McapSummary;
+  ros2db3: McapSummary;
   mf4: Mf4Summary;
   mp4: Mp4SidecarSummary;
 }
@@ -72,6 +74,38 @@ function defaultSummaries(): Summaries {
           sample_count: 3,
           start_ns: 1_000n,
           end_ns: 2_000n,
+        },
+      ],
+    },
+    ros1: {
+      start_ns: 4_000n,
+      end_ns: 5_000n,
+      channels: [
+        {
+          id: "/imu",
+          name: "imu",
+          kind: "scalar",
+          dtype: "f64",
+          unit: null,
+          sample_count: 4,
+          start_ns: 4_000n,
+          end_ns: 5_000n,
+        },
+      ],
+    },
+    ros2db3: {
+      start_ns: 6_000n,
+      end_ns: 7_000n,
+      channels: [
+        {
+          id: "/odom",
+          name: "odom",
+          kind: "scalar",
+          dtype: "f64",
+          unit: null,
+          sample_count: 5,
+          start_ns: 6_000n,
+          end_ns: 7_000n,
         },
       ],
     },
@@ -163,6 +197,52 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
         `mcapFetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
       );
       return new Uint8Array([0xaa]);
+    },
+    async openRos1Bag() {
+      openLog.push("ros1");
+      await maybeBlock();
+      return nextHandle++;
+    },
+    async closeRos1Bag(h: number) {
+      closeLog.push(`ros1:${h}`);
+    },
+    async ros1BagSummary() {
+      return summaries.ros1;
+    },
+    async ros1BagFetchRange(
+      handle: number,
+      channelId: string,
+      startNs: bigint,
+      endNs: bigint,
+      includePrev: boolean,
+    ) {
+      openLog.push(
+        `ros1BagFetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+      );
+      return new Uint8Array([0xcc]);
+    },
+    async openRos2Db3() {
+      openLog.push("ros2db3");
+      await maybeBlock();
+      return nextHandle++;
+    },
+    async closeRos2Db3(h: number) {
+      closeLog.push(`ros2db3:${h}`);
+    },
+    async ros2Db3Summary() {
+      return summaries.ros2db3;
+    },
+    async ros2Db3FetchRange(
+      handle: number,
+      channelId: string,
+      startNs: bigint,
+      endNs: bigint,
+      includePrev: boolean,
+    ) {
+      openLog.push(
+        `ros2Db3FetchRange:${handle}:${channelId}:${startNs}:${endNs}:${includePrev}`,
+      );
+      return new Uint8Array([0xdd]);
     },
     async openMf4() {
       openLog.push("mf4");
@@ -786,6 +866,38 @@ describe("fetchChannelRange", () => {
     expect(bytes).toEqual(new Uint8Array([0xaa]));
     expect(worker.openLog).toContain(
       `mcapFetchRange:${mcapSource.handle}:/a:100:200:false`,
+    );
+  });
+
+  it("routes ros1 channels to ros1BagFetchRange", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("drive.bag")]);
+    const ros1Source = useSession.getState().sources[0];
+    expect(ros1Source.kind).toBe("ros1");
+    const channelId = ros1Source.channels[0].id;
+    const bytes = await useSession
+      .getState()
+      .fetchChannelRange(channelId, 100n, 200n, false);
+    expect(bytes).toEqual(new Uint8Array([0xcc]));
+    expect(worker.openLog).toContain(
+      `ros1BagFetchRange:${ros1Source.handle}:/imu:100:200:false`,
+    );
+  });
+
+  it("routes ros2db3 channels to ros2Db3FetchRange", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("drive.db3")]);
+    const ros2Source = useSession.getState().sources[0];
+    expect(ros2Source.kind).toBe("ros2db3");
+    const channelId = ros2Source.channels[0].id;
+    const bytes = await useSession
+      .getState()
+      .fetchChannelRange(channelId, 100n, 200n, false);
+    expect(bytes).toEqual(new Uint8Array([0xdd]));
+    expect(worker.openLog).toContain(
+      `ros2Db3FetchRange:${ros2Source.handle}:/odom:100:200:false`,
     );
   });
 

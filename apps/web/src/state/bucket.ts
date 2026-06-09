@@ -37,6 +37,10 @@ export interface LidarInput {
 export interface Buckets {
   mcap: File[];
   mf4: File[];
+  /** ROS 1 bag (`.bag`, rosbag v2.0) drops — opened whole-file in memory. */
+  ros1: File[];
+  /** ROS 2 rosbag2 SQLite (`.db3`) drops — opened whole-file in memory. */
+  ros2db3: File[];
   mp4Pairs: Mp4Pair[];
   /**
    * `.mp4` drops with NO matching `.mp4.timestamps` sidecar in the same batch.
@@ -65,6 +69,8 @@ const LIDAR_SUFFIX = ".lidar.parquet";
 export function bucketFiles(files: File[]): Buckets {
   const mcap: File[] = [];
   const mf4: File[] = [];
+  const ros1: File[] = [];
+  const ros2db3: File[] = [];
   const sidecars = new Map<string, File>(); // mp4 filename -> sidecar file
   const mp4s: File[] = [];
   const tabular: TabularInput[] = [];
@@ -85,6 +91,10 @@ export function bucketFiles(files: File[]): Buckets {
       mcap.push(f);
     } else if (lower.endsWith(".mf4")) {
       mf4.push(f);
+    } else if (lower.endsWith(".bag")) {
+      ros1.push(f);
+    } else if (lower.endsWith(".db3")) {
+      ros2db3.push(f);
     } else if (lower.endsWith(LIDAR_SUFFIX)) {
       // Point-cloud Parquet — checked before the generic `.parquet` branch so
       // a `*.lidar.parquet` routes to the 3D scene pipeline, not tabular.
@@ -126,7 +136,17 @@ export function bucketFiles(files: File[]): Buckets {
     });
   }
 
-  return { mcap, mf4, mp4Pairs, videoNeedsTimestamps, tabular, lidar, errors };
+  return {
+    mcap,
+    mf4,
+    ros1,
+    ros2db3,
+    mp4Pairs,
+    videoNeedsTimestamps,
+    tabular,
+    lidar,
+    errors,
+  };
 }
 
 /** A URL input classified by the reader that can open it. */

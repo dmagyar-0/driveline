@@ -83,6 +83,8 @@ pub enum SourceKind {
     Mf4,
     Mp4Sidecar,
     Tabular,
+    /// A ROS1 `.bag` (rosbag v2.0). See `Ros1BagReader`.
+    Ros1,
     /// A Driveline point-cloud Parquet (one row per LiDAR spin). See
     /// `PointCloudReader`.
     Lidar,

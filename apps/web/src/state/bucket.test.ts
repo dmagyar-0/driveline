@@ -39,8 +39,22 @@ describe("bucketFiles", () => {
     ]);
   });
 
+  it("buckets .bag files into the ros1 bucket", () => {
+    const r = bucketFiles([f("drive.bag"), f("RUN.BAG")]);
+    expect(r.ros1.map((x) => x.name)).toEqual(["drive.bag", "RUN.BAG"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("buckets .db3 files into the ros2db3 bucket", () => {
+    const r = bucketFiles([f("drive.db3"), f("RUN.DB3")]);
+    expect(r.ros2db3.map((x) => x.name)).toEqual(["drive.db3", "RUN.DB3"]);
+    expect(r.errors).toHaveLength(0);
+  });
+
   it("reports unknown extensions as errors", () => {
     const r = bucketFiles([f("notes.txt")]);
+    expect(r.ros1).toHaveLength(0);
+    expect(r.ros2db3).toHaveLength(0);
     expect(r.errors).toEqual([
       { name: "notes.txt", reason: "unknown file type: notes.txt" },
     ]);

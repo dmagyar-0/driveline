@@ -12,6 +12,10 @@ pub mod noop;
 pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
+pub mod ros;
+pub mod ros1_bag;
+pub mod ros2_db3;
+pub mod sqlite;
 pub mod tabular;
 pub mod types;
 
@@ -25,6 +29,8 @@ pub use mf4_rs::index::ByteRangeReader;
 pub use mp4_sidecar::{Mp4SampleIndex, Mp4SidecarReader};
 pub use pointcloud::PointCloudReader;
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
+pub use ros1_bag::Ros1BagReader;
+pub use ros2_db3::Ros2Db3Reader;
 pub use tabular::{
     TabularColumn, TabularFormat, TabularReader, TabularSchema, TimeBasis, TimeMode, TimeUnitScale,
 };
@@ -106,6 +112,12 @@ pub enum Error {
 
     #[error("failed to parse PCD point cloud: {0}")]
     PcdParse(String),
+
+    #[error("ros1 bag error: {0}")]
+    Ros1Bag(String),
+
+    #[error("ros2 db3 error: {0}")]
+    Ros2Db3(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
