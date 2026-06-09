@@ -85,6 +85,50 @@ let session: SessionState | null = null;
 // Sink port set before open() lands; adopted by the session at open() time.
 let pendingSink: MessagePort | null = null;
 
+// ---------------------------------------------------------------------------
+// isConfigSupported cache
+// ---------------------------------------------------------------------------
+//
+// `VideoDecoder.isConfigSupported()` is an async call that must complete
+// before `decoder.configure()`. In practice it resolves quickly, but on
+// EVERY seek/open it adds a GPU-driver round-trip (100–200 µs on a warm
+// path, potentially several ms after a GPU reset). The codec config for a
+// given video source is derived from the SPS+PPS embedded in the bitstream
+// and does NOT change within a session. Caching the result avoids this
+// round-trip on all but the first open per unique config.
+//
+// Cache key: `<codec>:<descriptionByteLength>:<checksum>` where the
+// checksum is the 32-bit unsigned sum of all description bytes (mod 2^32).
+// This is stronger than codec + byteLength alone (a different AVC config of
+// the same length with the same codec string would still be distinct), yet
+// cheap: a description is ≤ 50 bytes. Collision risk within a single browser
+// session is negligible. Null description (Annex-B / mcap path) maps to the
+// constant key segment ":0:0" so it doesn't collide with any real avcC.
+//
+// The cache is module-level (lives for the worker's lifetime). It is never
+// cleared — a truly unsupported codec remains cached as `false`, which is
+// correct (it won't suddenly become supported mid-session). A codec marked
+// supported can be safely reused across seeks for the same source.
+const configSupportedCache = new Map<string, boolean>();
+
+function descriptionChecksum(description: Uint8Array): number {
+  let sum = 0;
+  for (let i = 0; i < description.length; i++) {
+    sum = (sum + description[i]) >>> 0; // keep as unsigned 32-bit
+  }
+  return sum;
+}
+
+function configCacheKey(
+  codec: string,
+  description: Uint8Array | null | undefined,
+): string {
+  if (!description || description.byteLength === 0) {
+    return `${codec}:0:0`;
+  }
+  return `${codec}:${description.byteLength}:${descriptionChecksum(description)}`;
+}
+
 // Latched fatal decode error from the `VideoDecoder({ error })` callback.
 // A mid-stream decode fault (corrupt NAL, GPU reset, unsupported feature)
 // fires the async error callback OUTSIDE any open/seek/close body, so it
@@ -243,8 +287,15 @@ async function configureFromFirstKeyframe(
     optimizeForLatency: false,
     ...(framing === "avcc" && description ? { description } : {}),
   };
-  const supported = await VideoDecoder.isConfigSupported(baseConfig);
-  if (!supported.supported) {
+  const cacheKey = configCacheKey(codec, baseConfig.description as Uint8Array | null | undefined);
+  let supported = configSupportedCache.get(cacheKey);
+  if (supported === undefined) {
+    // First time we've seen this config: ask the browser and cache the answer.
+    const result = await VideoDecoder.isConfigSupported(baseConfig);
+    supported = result.supported ?? false;
+    configSupportedCache.set(cacheKey, supported);
+  }
+  if (!supported) {
     throw new Error(
       `videoDecode: codec not supported by this browser: ${codec}`,
     );
@@ -558,13 +609,28 @@ export const videoDecodeApi = {
         // If the decoder is already closed, restart fresh below.
       }
       const prevStreamId = session.streamId;
+      // Close the pre-target frame held from the previous stream so the GPU
+      // pool does not leak a VideoFrame across the seek boundary.
+      if (session.pendingPreTargetFrame) {
+        session.pendingPreTargetFrame.close();
+        session.pendingPreTargetFrame = null;
+      }
+      // Null out session BEFORE the manual stream close so that the
+      // `closeInternal()` call at the top of `openInternal()` sees a null
+      // session and returns immediately — preventing a second `ops.close` on
+      // the same stream id (double-close: one here, one inside closeInternal).
+      session = null;
       try {
         await ops.close(prevStreamId);
       } catch {
         // ignore
       }
       await openInternal(sourceKind, sourceHandle, channelId, targetNs);
-      if (session && pendingSink) session.sink = pendingSink;
+      // Re-read the module-level `session` — TypeScript narrowed it to `null`
+      // above (from our explicit `session = null`), but `openInternal` may
+      // have assigned a fresh SessionState to it. The cast re-widens the type.
+      const newSession = session as SessionState | null;
+      if (newSession && pendingSink) newSession.sink = pendingSink;
     });
   },
   async close(): Promise<void> {

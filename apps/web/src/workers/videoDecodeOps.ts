@@ -130,6 +130,71 @@ interface Mp4StreamSlot {
 let nextMp4StreamId = 1;
 const mp4Streams = new Map<number, Mp4StreamSlot>();
 
+// ---------------------------------------------------------------------------
+// mp4 index cache
+// ---------------------------------------------------------------------------
+//
+// `mp4Port.mp4Index(handle)` is a Comlink RPC that structured-clones 4 typed
+// arrays covering every sample in the file (ptsNs, offsets, sizes, isSync).
+// For a typical 10-minute clip that's ≥ 18 000 entries × ~3 typed arrays ×
+// ~8 bytes = several hundred KB crossing the postMessage boundary on EVERY
+// seek/open. The index is immutable for the lifetime of the source — only the
+// panel's disposal path on the main thread can change the underlying cache,
+// and that always triggers a new `open()` with a different handle.
+//
+// We cache the last MAX_CACHED_HANDLES indices keyed by handle. When the
+// cache is full, the least-recently-used entry is evicted (LRU-ish: a linear
+// scan is fine for 4 entries). There is no explicit invalidation on source
+// closure — the videoDecode worker has no close-source signal — but:
+//  1. The LRU bound keeps the footprint fixed regardless of session count.
+//  2. If the same handle is ever reused for a different source (not possible
+//     in the current wasm slab model — handle ids are monotonically
+//     increasing and never recycled within a session), the stale entry would
+//     serve incorrect data. The LRU eviction order makes this a non-issue in
+//     practice, and a future close-source signal could add explicit removal.
+//
+// Safety: the arrays arrive via structured clone (not transfer) so the main
+// thread retains its own copies; caching our copy is safe.
+const MAX_CACHED_HANDLES = 4;
+
+interface Mp4IndexCacheEntry {
+  handle: number;
+  index: Mp4LazyIndex;
+  lastUsed: number;
+}
+
+// Module-level (not per-ops-instance) because a single videoDecode worker
+// serves one panel and rebuilds `makeMp4LazyOps` on every source open.
+let mp4IndexCacheTick = 0;
+const mp4IndexCache: Mp4IndexCacheEntry[] = [];
+
+function getCachedMp4Index(handle: number): Mp4LazyIndex | undefined {
+  const entry = mp4IndexCache.find((e) => e.handle === handle);
+  if (!entry) return undefined;
+  entry.lastUsed = ++mp4IndexCacheTick;
+  return entry.index;
+}
+
+function setCachedMp4Index(handle: number, index: Mp4LazyIndex): void {
+  // Check if already present (race: two opens of the same handle before the
+  // first one completes would both fetch; the second store is a no-op update).
+  const existing = mp4IndexCache.find((e) => e.handle === handle);
+  if (existing) {
+    existing.index = index;
+    existing.lastUsed = ++mp4IndexCacheTick;
+    return;
+  }
+  // Evict LRU when at capacity.
+  if (mp4IndexCache.length >= MAX_CACHED_HANDLES) {
+    let lruIdx = 0;
+    for (let i = 1; i < mp4IndexCache.length; i++) {
+      if (mp4IndexCache[i].lastUsed < mp4IndexCache[lruIdx].lastUsed) lruIdx = i;
+    }
+    mp4IndexCache.splice(lruIdx, 1);
+  }
+  mp4IndexCache.push({ handle, index, lastUsed: ++mp4IndexCacheTick });
+}
+
 export function videoStreamOps(
   dc: Comlink.Remote<DataCorePortApi>,
   kind: VideoSourceKind,
@@ -163,7 +228,15 @@ export function makeMp4LazyOps(
 ): VideoStreamOps {
   return {
     async open(handle, channelId, fromPtsNs) {
-      const index = await mp4Port.mp4Index(handle);
+      // Serve from the module-level index cache when available — avoids a
+      // main-thread RPC + structured clone of the full typed-array index on
+      // every seek/open. The index is immutable for a source handle's
+      // lifetime; see the cache comment above `MAX_CACHED_HANDLES`.
+      let index = getCachedMp4Index(handle);
+      if (!index) {
+        index = await mp4Port.mp4Index(handle);
+        setCachedMp4Index(handle, index);
+      }
       const cursor = pickStartCursor(index, fromPtsNs);
       const streamId = nextMp4StreamId++;
       // Surface a "fetching" indicator if the start sample isn't already

@@ -349,7 +349,9 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return mf4_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = mf4_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * Open a dropped `.mcap` lazily. Like the MF4 path, the file is streamed
@@ -439,7 +441,9 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * Open a ROS 1 bag (rosbag v2.0) from its full bytes — like the lidar /
@@ -467,7 +471,9 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return ros1_bag_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = ros1_bag_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   async closeRos1Bag(handle: number): Promise<void> {
     await ready;
@@ -499,7 +505,9 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return ros2_db3_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = ros2_db3_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   async closeRos2Db3(handle: number): Promise<void> {
     await ready;
@@ -526,10 +534,22 @@ export const dataCoreApi = {
    * the `mdat` bytes never cross this boundary. JS holds the index +
    * the original `File` blob and reads sample bodies on demand via
    * `File.slice()`. See `apps/web/src/state/mp4SampleCache.ts`.
+   *
+   * All typed arrays are fresh from wasm for this call — transfer them to
+   * avoid a structured-clone copy. The worker never touches these buffers
+   * after returning; the main-thread `Mp4SampleCache` owns them.
    */
   async mp4SidecarIndex(handle: number): Promise<Mp4SidecarIndex> {
     await ready;
-    return normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+    const idx = normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+    return Comlink.transfer(idx, [
+      idx.ptsNs.buffer,
+      idx.offsets.buffer,
+      idx.sizes.buffer,
+      idx.isSync.buffer,
+      idx.sps.buffer,
+      idx.pps.buffer,
+    ]);
   },
   /**
    * Inspect a CSV / Parquet blob without retaining it: returns the
@@ -580,16 +600,21 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * The converted, ascending ns-UTC time column of an opened tabular source,
    * as a `BigInt64Array`. Used to derive per-frame video timestamps for a
    * sidecar-less mp4 (row i → frame i); see `state/videoTimestampBinding.ts`.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
    */
   async tabularTimeColumnNs(handle: number): Promise<BigInt64Array> {
     await ready;
-    return tabular_time_column_ns(handle);
+    const col = tabular_time_column_ns(handle);
+    return Comlink.transfer(col, [col.buffer]);
   },
   async closeTabular(handle: number): Promise<void> {
     await ready;
@@ -630,6 +655,8 @@ export const dataCoreApi = {
    * passes a zero/one-width window + `includePrev` to fetch exactly the spin
    * active at the cursor. Schema: `{ ts, positions: List<f32>, intensities:
    * List<f32> }`, one row per spin.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
    */
   async lidarFetchRange(
     handle: number,
@@ -639,16 +666,20 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    return lidar_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = lidar_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
    * Ascending spin start timestamps (ns) for a point-cloud source, one per
    * frame. The scene panel binary-searches this locally so it only refetches
    * point data when the active spin changes.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
    */
   async lidarSpinTimes(handle: number): Promise<BigInt64Array> {
     await ready;
-    return lidar_spin_times(handle);
+    const times = lidar_spin_times(handle);
+    return Comlink.transfer(times, [times.buffer]);
   },
   async closeLidar(handle: number): Promise<void> {
     await ready;
@@ -668,11 +699,61 @@ export const dataCoreApi = {
   ): Promise<EncodedChunkWire[]> {
     await ready;
     const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
-    return raw.map(normaliseEncodedChunk);
+    const chunks = raw.map(normaliseEncodedChunk);
+    // Collect unique underlying ArrayBuffers (wasm may theoretically back
+    // multiple chunks from a single allocation; deduplicate via Set so each
+    // buffer appears in the transfer list at most once).
+    // Cast to ArrayBuffer: wasm-allocated Uint8Array buffers are never
+    // SharedArrayBuffers; the cast satisfies the Comlink.transfer overload.
+    const buffers = new Set<ArrayBuffer>(
+      chunks.map((c) => c.data.buffer as ArrayBuffer),
+    );
+    return Comlink.transfer(chunks, [...buffers]);
   },
   async closeMcapVideoStream(streamId: number): Promise<void> {
     await ready;
     mcap_video_close(streamId);
+  },
+  /**
+   * Worker-to-worker MCAP video bridge. Exposes a minimal
+   * `{ openMcapVideoStream, mcapVideoNextBatch, closeMcapVideoStream }` API
+   * on the provided `MessagePort` so the videoDecode worker can talk to the
+   * dataCore worker directly — without routing video chunk batches through
+   * the main thread.
+   *
+   * Why not open a second dataCore inside the videoDecode worker? Because the
+   * wasm slab is per-worker-instance: a fresh wasm init in videoDecode would
+   * have an empty slab, making `sourceHandle` invalid there. This bridge
+   * reuses the existing slab so all handle-keyed state (OPFS sync handles,
+   * channel reader state) remains valid.
+   *
+   * Lifecycle: the port is closed by the videoDecode worker (or its owner)
+   * when the panel unmounts. `Comlink.expose` on a closed/detached port is
+   * inert — no explicit teardown is needed on this side beyond port.close()
+   * at the caller.
+   */
+  connectMcapVideoBridge(port: MessagePort): void {
+    // Re-expose the MCAP video stream methods on the provided port.
+    // mcapVideoNextBatch wraps the chunk buffers in Comlink.transfer so the
+    // worker-to-worker hop is also zero-copy.
+    Comlink.expose(
+      {
+        openMcapVideoStream: (h: number, c: string, p: bigint) =>
+          mcap_video_open(h, c, p),
+        mcapVideoNextBatch: async (streamId: number, maxN: number) => {
+          await ready;
+          const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
+          const chunks = raw.map(normaliseEncodedChunk);
+          // Cast to ArrayBuffer: wasm buffers are never SharedArrayBuffers.
+          const buffers = new Set<ArrayBuffer>(
+            chunks.map((ch) => ch.data.buffer as ArrayBuffer),
+          );
+          return Comlink.transfer(chunks, [...buffers]);
+        },
+        closeMcapVideoStream: (streamId: number) => mcap_video_close(streamId),
+      },
+      port,
+    );
   },
 };
 

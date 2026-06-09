@@ -134,6 +134,9 @@ export function VideoPanel({
 
   // HUD refs. We keep them off React state so metric updates don't churn
   // the reconciler; the rAF loop writes directly into the HUD DOM.
+  // Task 3 — cache last written HUD/stats strings to skip identical DOM writes.
+  const lastHudTextRef = useRef<string>("");
+  const lastStatsTextRef = useRef<string>("");
   const lastFrameIndexRef = useRef<number>(0);
   const lastDecodeQueueRef = useRef<number>(0);
   const droppedFramesRef = useRef<number>(0);
@@ -313,19 +316,21 @@ export function VideoPanel({
 
     let cancelled = false;
     const startNs = globalRange?.startNs ?? 0n;
-    // Bridge the main-thread dataCore Remote into this panel's videoDecode
-    // worker. Spawning a fresh dataCore inside the videoDecode worker would
-    // give it an empty wasm slab, making `sourceHandle` invalid there.
+    // Worker-to-worker MCAP video bridge. `connectMcapVideoBridge` exposes
+    // `{ openMcapVideoStream, mcapVideoNextBatch, closeMcapVideoStream }` on
+    // bridge.port1 directly inside the dataCore worker, so MCAP chunk batches
+    // travel dataCore→videoDecode without touching the main thread.
+    //
+    // Spawning a fresh dataCore inside the videoDecode worker is not an option:
+    // a new wasm init gives it an empty slab, making `sourceHandle` invalid
+    // there. This bridge reuses the live slab and its OPFS sync handles.
     const dc = useSession.getState().getWorker();
     const bridge = new MessageChannel();
-    const relay = {
-      openMcapVideoStream: (h: number, c: string, p: bigint) =>
-        dc!.openMcapVideoStream(h, c, p),
-      mcapVideoNextBatch: (s: number, m: number) =>
-        dc!.mcapVideoNextBatch(s, m),
-      closeMcapVideoStream: (s: number) => dc!.closeMcapVideoStream(s),
-    };
-    Comlink.expose(relay, bridge.port1);
+    // Pass bridge.port1 into the dataCore worker; it will Comlink.expose the
+    // MCAP stream API on that port. bridge.port2 goes to the videoDecode worker.
+    void dc?.connectMcapVideoBridge(
+      Comlink.transfer(bridge.port1, [bridge.port1]),
+    );
 
     // Lazy mp4 bridge: encoded sample bytes for `mp4+sidecar` sources
     // come from `Mp4SampleCache` on the main thread, not from the
@@ -470,13 +475,18 @@ export function VideoPanel({
       };
       window.__drivelineVideoHud = snapshot;
       if (hudOnRef.current && hudDomRef.current) {
-        hudDomRef.current.textContent =
+        const hudText =
           `PTS         ${formatPts(snapshot.ptsNs)}\n` +
           `frame #     ${snapshot.frameIndex}\n` +
           `decodeQueue ${snapshot.decodeQueue}\n` +
           `blitQueue   ${snapshot.blitQueueLen} / ${MAX_QUEUE}\n` +
           `dropped     ${snapshot.dropped}\n` +
           `codec       ${snapshot.codec ?? "—"}`;
+        // Mirror the className guard below — skip the DOM write when unchanged.
+        if (hudText !== lastHudTextRef.current) {
+          lastHudTextRef.current = hudText;
+          hudDomRef.current.textContent = hudText;
+        }
       }
       // Subtle always-on stats strip. Lag is `cursor - lastBlitPts`,
       // i.e. how far behind the cursor the visible frame is — usually
@@ -495,10 +505,16 @@ export function VideoPanel({
           lagText = `${lagMs}ms`;
           lagWarn = lagMs > 66; // > 2 frames at 30fps
         }
-        stats.textContent =
+        const statsText =
           `drop ${snapshot.dropped}` +
           `  lag ${lagText}` +
           `  q ${snapshot.blitQueueLen}/${MAX_QUEUE}`;
+        // Only write textContent when the string changed, mirroring the
+        // className guard below.
+        if (statsText !== lastStatsTextRef.current) {
+          lastStatsTextRef.current = statsText;
+          stats.textContent = statsText;
+        }
         const warn = snapshot.dropped > 0 || lagWarn;
         const cls = warn ? `${styles.stats} ${styles.statsWarn}` : styles.stats;
         if (stats.className !== cls) stats.className = cls;
@@ -620,6 +636,8 @@ export function VideoPanel({
       lastBlitPtsRef.current = null;
       seekPendingBlitRef.current = false;
       decodeErrorRef.current = null;
+      lastHudTextRef.current = "";
+      lastStatsTextRef.current = "";
       // Issue #2 — drop our entry from the readiness registry so the
       // playback rAF doesn't keep gating on an unmounted panel.
       waitingSinceMsRef.current = null;
