@@ -30,6 +30,7 @@ use arrow_array::{Array, Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::ProjectionMask;
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{ArrowIpc, Reader};
@@ -207,48 +208,45 @@ impl TabularFormat {
     }
 }
 
-/// Parse a string token as an integer if it is a clean integer literal,
-/// otherwise as a float. Returns `None` if neither parses (so the column is
-/// non-numeric / has missing data).
-fn parse_numeric(tok: &str) -> Option<NumCell> {
-    let t = tok.trim();
-    if t.is_empty() {
-        return None;
-    }
-    if let Ok(i) = t.parse::<i64>() {
-        return Some(NumCell::Int(i));
-    }
-    if let Ok(f) = t.parse::<f64>() {
-        return Some(NumCell::Float(f));
-    }
-    None
-}
-
-#[derive(Clone, Copy)]
-enum NumCell {
-    Int(i64),
-    Float(f64),
-}
-
-impl NumCell {
-    fn as_f64(self) -> f64 {
-        match self {
-            NumCell::Int(i) => i as f64,
-            NumCell::Float(f) => f,
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
-// CSV
+// CSV — single-pass column classification
 // ---------------------------------------------------------------------------
 
-/// Read a CSV into per-column string vectors plus the header order.
-fn read_csv_columns(bytes: &[u8]) -> crate::Result<(Vec<String>, Vec<Vec<String>>)> {
+/// Per-column classification accumulated during a single CSV scan.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ColKind {
+    /// All non-empty cells have been clean `i64` literals so far.
+    Integer,
+    /// At least one cell required a float parse; all non-empty cells numeric.
+    Float,
+    /// At least one cell failed to parse as any number.
+    NonNumeric,
+}
+
+/// Result of a single-pass CSV scan.
+///
+/// `f64_cols[i]` holds f64 values for every column (NaN for empty or
+/// non-parseable cells). `i64_cols[i]` is only valid/populated while
+/// `kinds[i] == ColKind::Integer`; it is cleared when a column demotes to
+/// Float or NonNumeric.
+struct CsvParsed {
+    headers: Vec<String>,
+    f64_cols: Vec<Vec<f64>>,
+    i64_cols: Vec<Vec<i64>>,
+    kinds: Vec<ColKind>,
+}
+
+/// Read and classify a CSV in a **single pass** over `ByteRecord`s.
+///
+/// No per-cell `String` allocation: each byte slice is interpreted with
+/// `std::str::from_utf8`. A non-UTF-8 cell demotes its column to
+/// `NonNumeric`.
+fn read_csv_single_pass(bytes: &[u8]) -> crate::Result<CsvParsed> {
     let mut rdr = csv::ReaderBuilder::new()
         .has_headers(true)
         .flexible(true)
         .from_reader(Cursor::new(bytes));
+
     let headers: Vec<String> = rdr
         .headers()
         .map_err(|e| crate::Error::TabularParse(e.to_string()))?
@@ -258,59 +256,134 @@ fn read_csv_columns(bytes: &[u8]) -> crate::Result<(Vec<String>, Vec<Vec<String>
     if headers.is_empty() {
         return Err(crate::Error::TabularParse("CSV has no header row".into()));
     }
-    let mut cols: Vec<Vec<String>> = vec![Vec::new(); headers.len()];
-    for rec in rdr.records() {
-        let rec = rec.map_err(|e| crate::Error::TabularParse(e.to_string()))?;
-        for (i, col) in cols.iter_mut().enumerate() {
-            col.push(rec.get(i).unwrap_or("").to_string());
+
+    let ncols = headers.len();
+    let mut f64_cols: Vec<Vec<f64>> = vec![Vec::new(); ncols];
+    let mut i64_cols: Vec<Vec<i64>> = vec![Vec::new(); ncols];
+    let mut kinds: Vec<ColKind> = vec![ColKind::Integer; ncols];
+
+    let mut raw = csv::ByteRecord::new();
+    loop {
+        match rdr.read_byte_record(&mut raw) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(e) => return Err(crate::Error::TabularParse(e.to_string())),
+        }
+        for i in 0..ncols {
+            let cell = raw.get(i).unwrap_or(b"");
+            let cell = trim_ascii(cell);
+
+            if cell.is_empty() {
+                // Missing value: push placeholder but do not demote the column.
+                f64_cols[i].push(f64::NAN);
+                if kinds[i] == ColKind::Integer {
+                    i64_cols[i].push(0);
+                }
+                continue;
+            }
+
+            // Require valid UTF-8; non-UTF-8 bytes demote the column.
+            let s = match std::str::from_utf8(cell) {
+                Ok(s) => s,
+                Err(_) => {
+                    kinds[i] = ColKind::NonNumeric;
+                    i64_cols[i].clear();
+                    f64_cols[i].push(f64::NAN);
+                    continue;
+                }
+            };
+
+            match kinds[i] {
+                ColKind::NonNumeric => {
+                    f64_cols[i].push(f64::NAN);
+                }
+                ColKind::Integer => {
+                    if let Ok(iv) = s.parse::<i64>() {
+                        f64_cols[i].push(iv as f64);
+                        i64_cols[i].push(iv);
+                    } else if let Ok(fv) = s.parse::<f64>() {
+                        // Demote to Float; discard the i64 accumulator.
+                        kinds[i] = ColKind::Float;
+                        i64_cols[i].clear();
+                        f64_cols[i].push(fv);
+                    } else {
+                        kinds[i] = ColKind::NonNumeric;
+                        i64_cols[i].clear();
+                        f64_cols[i].push(f64::NAN);
+                    }
+                }
+                ColKind::Float => {
+                    if let Ok(fv) = s.parse::<f64>() {
+                        f64_cols[i].push(fv);
+                    } else {
+                        kinds[i] = ColKind::NonNumeric;
+                        f64_cols[i].push(f64::NAN);
+                    }
+                }
+            }
         }
     }
-    Ok((headers, cols))
+
+    // A column where every cell was empty or NaN is non-numeric (nothing to
+    // plot).
+    for i in 0..ncols {
+        if kinds[i] != ColKind::NonNumeric && f64_cols[i].iter().all(|v| v.is_nan()) {
+            kinds[i] = ColKind::NonNumeric;
+        }
+    }
+
+    Ok(CsvParsed {
+        headers,
+        f64_cols,
+        i64_cols,
+        kinds,
+    })
 }
 
-/// True if every non-empty cell parses as numeric (and at least one does).
-fn csv_column_is_numeric(cells: &[String]) -> bool {
-    let mut any = false;
-    for c in cells {
-        if c.trim().is_empty() {
-            continue;
-        }
-        match parse_numeric(c) {
-            Some(_) => any = true,
-            None => return false,
-        }
+/// Trim leading/trailing ASCII whitespace from a byte slice without allocating.
+fn trim_ascii(b: &[u8]) -> &[u8] {
+    let start = b
+        .iter()
+        .position(|&c| !c.is_ascii_whitespace())
+        .unwrap_or(b.len());
+    let end = b
+        .iter()
+        .rposition(|&c| !c.is_ascii_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    if start <= end {
+        &b[start..end]
+    } else {
+        b""
     }
-    any
-}
-
-/// True if every non-empty cell parses as a clean integer (and at least one
-/// does). Used to keep absolute-epoch time columns in the i64 domain.
-fn csv_column_is_integer(cells: &[String]) -> bool {
-    let mut any = false;
-    for c in cells {
-        let t = c.trim();
-        if t.is_empty() {
-            continue;
-        }
-        match t.parse::<i64>() {
-            Ok(_) => any = true,
-            Err(_) => return false,
-        }
-    }
-    any
 }
 
 // ---------------------------------------------------------------------------
 // Parquet
 // ---------------------------------------------------------------------------
 
-/// Read all row groups of a Parquet file into a single concatenated set of
-/// Arrow record batches, returning the schema and the batches.
-fn read_parquet_batches(bytes: &[u8]) -> crate::Result<(Arc<Schema>, Vec<RecordBatch>)> {
-    let builder = ParquetRecordBatchReaderBuilder::try_new(bytes_to_owned(bytes))
+/// Read the specified row groups (all if `row_groups` is `None`) from a
+/// Parquet file with a column projection applied, returning the projected
+/// schema and record batches.
+///
+/// `owned` is a `bytes::Bytes` wrapping the file data; callers must create
+/// it with a single `bytes::Bytes::copy_from_slice` so the copy happens at
+/// most once per public entry point.
+fn read_parquet_batches(
+    owned: bytes::Bytes,
+    mask: ProjectionMask,
+    row_groups: Option<Vec<usize>>,
+) -> crate::Result<(Arc<Schema>, Vec<RecordBatch>)> {
+    let builder = ParquetRecordBatchReaderBuilder::try_new(owned)
         .map_err(|e| crate::Error::TabularParse(e.to_string()))?;
     let schema = builder.schema().clone();
+    let builder = if let Some(rgs) = row_groups {
+        builder.with_row_groups(rgs)
+    } else {
+        builder
+    };
     let reader = builder
+        .with_projection(mask)
         .build()
         .map_err(|e| crate::Error::TabularParse(e.to_string()))?;
     let mut batches = Vec::new();
@@ -318,12 +391,6 @@ fn read_parquet_batches(bytes: &[u8]) -> crate::Result<(Arc<Schema>, Vec<RecordB
         batches.push(batch.map_err(|e| crate::Error::TabularParse(e.to_string()))?);
     }
     Ok((schema, batches))
-}
-
-/// `ParquetRecordBatchReaderBuilder::try_new` wants something implementing
-/// `ChunkReader`; `bytes::Bytes` does. Copy the slice into an owned `Bytes`.
-fn bytes_to_owned(bytes: &[u8]) -> bytes::Bytes {
-    bytes::Bytes::copy_from_slice(bytes)
 }
 
 /// Is this Arrow dtype something we can read as a numeric value column?
@@ -543,13 +610,15 @@ fn build_suggested(
     }
 }
 
+/// Inspect a CSV: single pass to classify columns and derive the suggested basis.
 fn inspect_csv(bytes: &[u8]) -> crate::Result<TabularSchema> {
-    let (headers, cols) = read_csv_columns(bytes)?;
-    let mut columns = Vec::with_capacity(headers.len());
+    let parsed = read_csv_single_pass(bytes)?;
+    let mut columns = Vec::with_capacity(parsed.headers.len());
     let mut integer_names = std::collections::HashSet::new();
-    for (name, cells) in headers.iter().zip(cols.iter()) {
-        let is_numeric = csv_column_is_numeric(cells);
-        let is_integer = is_numeric && csv_column_is_integer(cells);
+    for (i, name) in parsed.headers.iter().enumerate() {
+        let kind = parsed.kinds[i];
+        let is_numeric = kind != ColKind::NonNumeric;
+        let is_integer = kind == ColKind::Integer;
         if is_integer {
             integer_names.insert(name.clone());
         }
@@ -568,24 +637,68 @@ fn inspect_csv(bytes: &[u8]) -> crate::Result<TabularSchema> {
     }
 
     let first_value = |name: &str| -> Option<f64> {
-        let idx = headers.iter().position(|h| h == name)?;
-        cols[idx]
-            .iter()
-            .find_map(|c| parse_numeric(c).map(|n| n.as_f64()))
+        let idx = parsed.headers.iter().position(|h| h == name)?;
+        parsed.f64_cols[idx].iter().copied().find(|v| !v.is_nan())
     };
     let suggested = build_suggested(&columns, &integer_names, first_value);
     Ok(TabularSchema { columns, suggested })
 }
 
+/// Derive a [`TimeBasis`] suggestion from an already-scanned [`CsvParsed`],
+/// avoiding a second scan when `open` calls inspect + parse in one shot.
+fn csv_basis_from_parsed(parsed: &CsvParsed) -> TimeBasis {
+    let mut columns: Vec<TabularColumn> = Vec::with_capacity(parsed.headers.len());
+    let mut integer_names = std::collections::HashSet::new();
+    for (i, name) in parsed.headers.iter().enumerate() {
+        let kind = parsed.kinds[i];
+        let is_numeric = kind != ColKind::NonNumeric;
+        if kind == ColKind::Integer {
+            integer_names.insert(name.clone());
+        }
+        columns.push(TabularColumn {
+            name: name.clone(),
+            dtype: String::new(), // not needed for basis derivation
+            is_numeric,
+        });
+    }
+    let first_value = |name: &str| -> Option<f64> {
+        let idx = parsed.headers.iter().position(|h| h == name)?;
+        parsed.f64_cols[idx].iter().copied().find(|v| !v.is_nan())
+    };
+    build_suggested(&columns, &integer_names, first_value)
+}
+
+/// Inspect a Parquet file using only the footer schema and (at most) row-group
+/// 0 for sample values — no full decode.
+///
+/// Column classification is derived entirely from Arrow schema dtypes; no
+/// column data is read. A first representative value per numeric column is
+/// obtained by reading **row group 0 only**, projecting only numeric columns,
+/// and stopping after the first batch. This avoids decoding the entire file
+/// just to populate the UI dialog.
 fn inspect_parquet(bytes: &[u8]) -> crate::Result<TabularSchema> {
-    let (schema, batches) = read_parquet_batches(bytes)?;
+    // One copy shared by both builder constructions below.
+    let owned = bytes::Bytes::copy_from_slice(bytes);
+
+    // Read the Arrow schema from the Parquet footer — no column data decoded.
+    let builder = ParquetRecordBatchReaderBuilder::try_new(owned.clone())
+        .map_err(|e| crate::Error::TabularParse(e.to_string()))?;
+    let schema = builder.schema().clone();
+    let parquet_schema = builder.parquet_schema();
+    let num_row_groups = builder.metadata().num_row_groups();
+
     let mut columns = Vec::with_capacity(schema.fields().len());
     let mut integer_names = std::collections::HashSet::new();
-    for field in schema.fields() {
+    let mut numeric_root_indices: Vec<usize> = Vec::new();
+
+    for (i, field) in schema.fields().iter().enumerate() {
         let dt = field.data_type();
         let is_numeric = parquet_dtype_is_numeric(dt);
-        if is_numeric && parquet_dtype_is_integer(dt) {
-            integer_names.insert(field.name().clone());
+        if is_numeric {
+            numeric_root_indices.push(i);
+            if parquet_dtype_is_integer(dt) {
+                integer_names.insert(field.name().clone());
+            }
         }
         columns.push(TabularColumn {
             name: field.name().clone(),
@@ -594,9 +707,26 @@ fn inspect_parquet(bytes: &[u8]) -> crate::Result<TabularSchema> {
         });
     }
 
+    // Fetch one representative value per numeric column from row group 0 only.
+    // This is enough to guess the time unit and is far cheaper than decoding
+    // all row groups.
+    let sample_batches: Vec<RecordBatch> = if !numeric_root_indices.is_empty() && num_row_groups > 0
+    {
+        let mask = ProjectionMask::roots(parquet_schema, numeric_root_indices.iter().copied());
+        let (_, batches) = read_parquet_batches(owned, mask, Some(vec![0]))?;
+        // Take only the first batch — enough for a representative sample.
+        batches.into_iter().take(1).collect()
+    } else {
+        vec![]
+    };
+
+    // After projection the batch schema contains only numeric columns in their
+    // original relative order. Re-derive column indices in that projected schema.
+    let projected_schema = sample_batches.first().map(|b| b.schema());
     let first_value = |name: &str| -> Option<f64> {
-        let idx = schema.index_of(name).ok()?;
-        let col = parquet_column_as_f64(&batches, idx)?;
+        let ps = projected_schema.as_ref()?;
+        let proj_idx = ps.index_of(name).ok()?;
+        let col = parquet_column_as_f64(&sample_batches, proj_idx)?;
         col.into_iter().find(|x| !x.is_nan())
     };
     let suggested = build_suggested(&columns, &integer_names, first_value);
@@ -623,20 +753,174 @@ impl TabularReader {
         format: TabularFormat,
         basis: TimeBasis,
     ) -> crate::Result<Self> {
-        let (raw_time, value_cols, mut skipped) = match format {
+        let (raw_time, value_cols, skipped) = match format {
             TabularFormat::Csv => Self::parse_csv(bytes, &basis)?,
             TabularFormat::Parquet => Self::parse_parquet(bytes, &basis)?,
         };
+        Self::finish_open(raw_time, value_cols, skipped, basis)
+    }
 
+    /// Column names that were present but not surfaced as channels (non-numeric
+    /// columns and the time column itself).
+    pub fn skipped_columns(&self) -> &[String] {
+        &self.skipped
+    }
+
+    /// The converted time column (ns-UTC), sorted ascending. Used to derive
+    /// per-frame video timestamps from a tabular camera-frames table: the
+    /// caller maps row i -> sample i (decode order), the same contract the
+    /// `.mp4.timestamps` sidecar uses.
+    pub fn time_ns(&self) -> &[i64] {
+        &self.table.ts_ns
+    }
+
+    fn parse_csv(bytes: &[u8], basis: &TimeBasis) -> crate::Result<ParseResult> {
+        // Single pass: classify columns and accumulate typed values together —
+        // no second scan of the file.
+        let parsed = read_csv_single_pass(bytes)?;
+        let time_idx = parsed
+            .headers
+            .iter()
+            .position(|h| h == &basis.time_column)
+            .ok_or_else(|| crate::Error::TabularTimeColumnMissing(basis.time_column.clone()))?;
+
+        // Keep the time column in the integer domain when all cells are clean
+        // integers so absolute-epoch precision is preserved through i64.
+        let raw_time = if parsed.kinds[time_idx] == ColKind::Integer {
+            RawTime::Int(parsed.i64_cols[time_idx].clone())
+        } else {
+            RawTime::Float(parsed.f64_cols[time_idx].clone())
+        };
+
+        let mut value_cols = Vec::new();
+        let mut skipped = Vec::new();
+        for (i, name) in parsed.headers.iter().enumerate() {
+            if i == time_idx {
+                continue;
+            }
+            if parsed.kinds[i] != ColKind::NonNumeric {
+                value_cols.push((name.clone(), parsed.f64_cols[i].clone()));
+            } else {
+                skipped.push(name.clone());
+            }
+        }
+        Ok((raw_time, value_cols, skipped))
+    }
+
+    fn parse_parquet(bytes: &[u8], basis: &TimeBasis) -> crate::Result<ParseResult> {
+        // One copy for this call — shared across both builder constructions.
+        let owned = bytes::Bytes::copy_from_slice(bytes);
+
+        // Peek at the full schema from the Parquet footer (no column data
+        // decoded yet) to determine which columns are worth decoding.
+        let probe = ParquetRecordBatchReaderBuilder::try_new(owned.clone())
+            .map_err(|e| crate::Error::TabularParse(e.to_string()))?;
+        let full_schema = probe.schema().clone();
+        let parquet_schema = probe.parquet_schema();
+
+        let time_idx = full_schema
+            .index_of(&basis.time_column)
+            .map_err(|_| crate::Error::TabularTimeColumnMissing(basis.time_column.clone()))?;
+
+        // Select root indices for the time column + every numeric value column.
+        // String/binary columns are intentionally excluded so they are never
+        // materialised.
+        let keep_indices: Vec<usize> = (0..full_schema.fields().len())
+            .filter(|&i| {
+                i == time_idx || parquet_dtype_is_numeric(full_schema.field(i).data_type())
+            })
+            .collect();
+
+        let mask = ProjectionMask::roots(parquet_schema, keep_indices.iter().copied());
+
+        // Decode only the projected columns across all row groups.
+        let (proj_schema, batches) = read_parquet_batches(owned, mask, None)?;
+
+        // After projection the batch schema contains only the selected columns
+        // in their original relative order; re-derive time column index.
+        let proj_time_idx = proj_schema
+            .index_of(&basis.time_column)
+            .map_err(|_| crate::Error::TabularTimeColumnMissing(basis.time_column.clone()))?;
+
+        let time_dt = proj_schema.field(proj_time_idx).data_type();
+        let raw_time = if parquet_dtype_is_integer(time_dt) {
+            RawTime::Int(parquet_column_as_i64(&batches, proj_time_idx).unwrap_or_default())
+        } else {
+            RawTime::Float(parquet_column_as_f64(&batches, proj_time_idx).unwrap_or_default())
+        };
+
+        let mut value_cols = Vec::new();
+        let mut skipped = Vec::new();
+
+        // Iterate the full schema to collect skipped names accurately; look up
+        // values in the projected schema.
+        for (full_i, field) in full_schema.fields().iter().enumerate() {
+            if full_i == time_idx {
+                continue;
+            }
+            if parquet_dtype_is_numeric(field.data_type()) {
+                if let Ok(proj_i) = proj_schema.index_of(field.name()) {
+                    if let Some(vals) = parquet_column_as_f64(&batches, proj_i) {
+                        value_cols.push((field.name().clone(), vals));
+                        continue;
+                    }
+                }
+            }
+            skipped.push(field.name().clone());
+        }
+        Ok((raw_time, value_cols, skipped))
+    }
+
+    /// Build a `TabularReader` directly from an already-scanned [`CsvParsed`]
+    /// and a [`TimeBasis`], avoiding a redundant second scan of the file.
+    fn open_with_csv_parsed(parsed: CsvParsed, basis: TimeBasis) -> crate::Result<Self> {
+        let time_idx = parsed
+            .headers
+            .iter()
+            .position(|h| h == &basis.time_column)
+            .ok_or_else(|| crate::Error::TabularTimeColumnMissing(basis.time_column.clone()))?;
+
+        let raw_time = if parsed.kinds[time_idx] == ColKind::Integer {
+            RawTime::Int(parsed.i64_cols[time_idx].clone())
+        } else {
+            RawTime::Float(parsed.f64_cols[time_idx].clone())
+        };
+
+        let mut value_cols = Vec::new();
+        let mut skipped = Vec::new();
+        for (i, name) in parsed.headers.iter().enumerate() {
+            if i == time_idx {
+                continue;
+            }
+            if parsed.kinds[i] != ColKind::NonNumeric {
+                value_cols.push((name.clone(), parsed.f64_cols[i].clone()));
+            } else {
+                skipped.push(name.clone());
+            }
+        }
+        Self::finish_open(raw_time, value_cols, skipped, basis)
+    }
+
+    /// Shared tail of all open paths: sort by time and build the `TabularReader`.
+    fn finish_open(
+        raw_time: RawTime,
+        value_cols: Vec<(String, Vec<f64>)>,
+        mut skipped: Vec<String>,
+        basis: TimeBasis,
+    ) -> crate::Result<Self> {
         let n = raw_time.len();
         let ts_unsorted = raw_time.to_ns(&basis);
 
-        // Sort by time, carrying every value column along. Most logs are
-        // already ordered, but we don't rely on it — `fetch_range` binary
-        // searches.
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by_key(|&i| ts_unsorted[i]);
-        let already_sorted = order.iter().enumerate().all(|(i, &j)| i == j);
+        // Most logs arrive already ordered; check that first so the common
+        // case skips the permutation build entirely.
+        let already_sorted = ts_unsorted.windows(2).all(|w| w[0] <= w[1]);
+        let order: Vec<usize> = if already_sorted {
+            vec![] // never accessed when already_sorted is true
+        } else {
+            let mut o: Vec<usize> = (0..n).collect();
+            o.sort_by_key(|&i| ts_unsorted[i]);
+            o
+        };
 
         let ts_ns: Vec<i64> = if already_sorted {
             ts_unsorted
@@ -702,94 +986,6 @@ impl TabularReader {
         })
     }
 
-    /// Column names that were present but not surfaced as channels (non-numeric
-    /// columns and the time column itself).
-    pub fn skipped_columns(&self) -> &[String] {
-        &self.skipped
-    }
-
-    /// The converted time column (ns-UTC), sorted ascending. Used to derive
-    /// per-frame video timestamps from a tabular camera-frames table: the
-    /// caller maps row i -> sample i (decode order), the same contract the
-    /// `.mp4.timestamps` sidecar uses.
-    pub fn time_ns(&self) -> &[i64] {
-        &self.table.ts_ns
-    }
-
-    fn parse_csv(bytes: &[u8], basis: &TimeBasis) -> crate::Result<ParseResult> {
-        let (headers, cols) = read_csv_columns(bytes)?;
-        let time_idx = headers
-            .iter()
-            .position(|h| h == &basis.time_column)
-            .ok_or_else(|| crate::Error::TabularTimeColumnMissing(basis.time_column.clone()))?;
-
-        // Read the time column in integer domain when it is clean integers,
-        // preserving absolute-epoch precision.
-        let raw_time = if csv_column_is_integer(&cols[time_idx]) {
-            RawTime::Int(
-                cols[time_idx]
-                    .iter()
-                    .map(|c| c.trim().parse::<i64>().unwrap_or(0))
-                    .collect(),
-            )
-        } else {
-            RawTime::Float(
-                cols[time_idx]
-                    .iter()
-                    .map(|c| parse_numeric(c).map(|n| n.as_f64()).unwrap_or(f64::NAN))
-                    .collect(),
-            )
-        };
-
-        let mut value_cols = Vec::new();
-        let mut skipped = Vec::new();
-        for (i, name) in headers.iter().enumerate() {
-            if i == time_idx {
-                continue;
-            }
-            if csv_column_is_numeric(&cols[i]) {
-                let vals: Vec<f64> = cols[i]
-                    .iter()
-                    .map(|c| parse_numeric(c).map(|n| n.as_f64()).unwrap_or(f64::NAN))
-                    .collect();
-                value_cols.push((name.clone(), vals));
-            } else {
-                skipped.push(name.clone());
-            }
-        }
-        Ok((raw_time, value_cols, skipped))
-    }
-
-    fn parse_parquet(bytes: &[u8], basis: &TimeBasis) -> crate::Result<ParseResult> {
-        let (schema, batches) = read_parquet_batches(bytes)?;
-        let time_idx = schema
-            .index_of(&basis.time_column)
-            .map_err(|_| crate::Error::TabularTimeColumnMissing(basis.time_column.clone()))?;
-
-        let time_dt = schema.field(time_idx).data_type();
-        let raw_time = if parquet_dtype_is_integer(time_dt) {
-            RawTime::Int(parquet_column_as_i64(&batches, time_idx).unwrap_or_default())
-        } else {
-            RawTime::Float(parquet_column_as_f64(&batches, time_idx).unwrap_or_default())
-        };
-
-        let mut value_cols = Vec::new();
-        let mut skipped = Vec::new();
-        for (i, field) in schema.fields().iter().enumerate() {
-            if i == time_idx {
-                continue;
-            }
-            if parquet_dtype_is_numeric(field.data_type()) {
-                if let Some(vals) = parquet_column_as_f64(&batches, i) {
-                    value_cols.push((field.name().clone(), vals));
-                    continue;
-                }
-            }
-            skipped.push(field.name().clone());
-        }
-        Ok((raw_time, value_cols, skipped))
-    }
-
     fn scalar_schema() -> Arc<Schema> {
         Arc::new(Schema::new(vec![
             Field::new(
@@ -809,14 +1005,35 @@ impl Reader for TabularReader {
     ///
     /// `Reader::open` is format-agnostic by signature; we sniff CSV vs Parquet
     /// from the magic bytes (`PAR1` header for Parquet, else CSV).
+    ///
+    /// For CSV the bytes are scanned exactly once: the single-pass result is
+    /// used both to derive the suggested basis *and* to build the parse output,
+    /// so `open` performs no more work than `open_with_basis` alone.  For
+    /// Parquet, `inspect_parquet` reads only the footer + one partial row
+    /// group; the full parse then reads all row groups with a projection that
+    /// skips non-numeric columns — the two steps are lightweight and
+    /// non-redundant.
     fn open(bytes: &[u8]) -> crate::Result<Self> {
         let format = if bytes.len() >= 4 && &bytes[..4] == b"PAR1" {
             TabularFormat::Parquet
         } else {
             TabularFormat::Csv
         };
-        let schema = inspect(bytes, format)?;
-        Self::open_with_basis(bytes, format, schema.suggested)
+
+        match format {
+            TabularFormat::Csv => {
+                // Single pass: derive basis and open in one scan.
+                let parsed = read_csv_single_pass(bytes)?;
+                let basis = csv_basis_from_parsed(&parsed);
+                Self::open_with_csv_parsed(parsed, basis)
+            }
+            TabularFormat::Parquet => {
+                // inspect reads footer + row-group-0 first batch (lightweight);
+                // open_with_basis does a full projected parse.
+                let schema = inspect_parquet(bytes)?;
+                Self::open_with_basis(bytes, format, schema.suggested)
+            }
+        }
     }
 
     fn meta(&self) -> &SourceMeta {

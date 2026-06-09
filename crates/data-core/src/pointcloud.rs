@@ -331,19 +331,37 @@ impl Reader for PointCloudReader {
 
         let schema = Self::fetch_schema();
 
+        // Pre-compute total point count so builders can reserve capacity up
+        // front rather than growing incrementally.
+        let total_points: usize = idxs.iter().map(|&i| self.spins[i].point_count()).sum();
+
         let mut ts_vals: Vec<i64> = Vec::with_capacity(idxs.len());
-        let mut pos_builder = ListBuilder::new(Float32Builder::new());
-        let mut int_builder = ListBuilder::new(Float32Builder::new());
+        // `with_capacity(items, values)`: outer list rows + total value slots.
+        let mut pos_builder =
+            ListBuilder::with_capacity(Float32Builder::with_capacity(total_points * 3), idxs.len());
+        let mut int_builder =
+            ListBuilder::with_capacity(Float32Builder::with_capacity(total_points), idxs.len());
+
+        // Reusable scratch buffer for normalised intensities; avoids a new heap
+        // allocation per spin. Sized to the largest spin we will process.
+        let max_pts = idxs
+            .iter()
+            .map(|&i| self.spins[i].point_count())
+            .max()
+            .unwrap_or(0);
+        let mut int_scratch: Vec<f32> = Vec::with_capacity(max_pts);
+
         for &i in &idxs {
             let spin = &self.spins[i];
             ts_vals.push(spin.ts_ns);
             pos_builder.values().append_slice(&spin.positions);
             pos_builder.append(true);
-            // Normalise intensity to 0..1 for the renderer, one spin's worth at
-            // a time (idle spins stay as compact u8 in memory).
-            for &b in &spin.intensities {
-                int_builder.values().append_value(b as f32 / 255.0);
-            }
+            // Normalise intensity to 0..1 for the renderer in bulk: build a
+            // temporary f32 slice then append_slice, replacing ~N individual
+            // append_value calls with a single memcpy-backed slice append.
+            int_scratch.clear();
+            int_scratch.extend(spin.intensities.iter().map(|&b| b as f32 / 255.0));
+            int_builder.values().append_slice(&int_scratch);
             int_builder.append(true);
         }
 
@@ -356,7 +374,9 @@ impl Reader for PointCloudReader {
             vec![Arc::new(ts_array), Arc::new(pos_array), Arc::new(int_array)],
         )?;
 
-        let mut buf = Vec::new();
+        // Pre-size the IPC output buffer: each point contributes 3×f32 (pos)
+        // + 1×f32 (intensity) = 16 bytes; add ~2 KiB of header/schema slack.
+        let mut buf = Vec::with_capacity(total_points * 16 + 2048);
         {
             let mut w = FileWriter::try_new(&mut buf, &schema)?;
             w.write(&batch)?;
