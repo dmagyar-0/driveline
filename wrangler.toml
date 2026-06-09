@@ -1,0 +1,7 @@
+# Cloudflare Pages config for the Driveline web app.
+# Used by `wrangler pages deploy` in .github/workflows/deploy.yml.
+# Driveline is a fully static, client-side SPA: no Functions, no server, and
+# (per docs/07-build-and-tooling.md) no COOP/COEP headers required.
+name = "driveline"
+pages_build_output_dir = "apps/web/dist"
+compatibility_date = "2026-06-09"
