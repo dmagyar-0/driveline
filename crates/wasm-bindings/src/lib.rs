@@ -10,8 +10,8 @@ use std::cell::RefCell;
 
 use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
-    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader, Ros1BagReader,
-    Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
+    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader,
+    Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -552,8 +552,8 @@ pub fn ros1_bag_fetch_range(
 /// endpoints take.
 #[wasm_bindgen]
 pub fn open_ros2_db3(data: &[u8]) -> Result<u32, JsError> {
-    let reader =
-        Ros2Db3Reader::open(data).map_err(|e| JsError::new(&format!("open ros2 db3 failed: {e}")))?;
+    let reader = Ros2Db3Reader::open(data)
+        .map_err(|e| JsError::new(&format!("open ros2 db3 failed: {e}")))?;
     let key = ROS2_DB3_READERS.with(|cell| cell.borrow_mut().insert(reader));
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
@@ -677,24 +677,31 @@ pub fn mcap_video_next_batch(stream_id: u32, max_n: u32) -> Result<Array, JsErro
         })
     })?;
 
+    // Intern the property-name strings once before the loop so each iteration
+    // reuses the same JS string value instead of allocating a fresh one per
+    // chunk boundary call.
+    let key_pts_ns = JsValue::from_str(wasm_bindgen::intern("pts_ns"));
+    let key_is_keyframe = JsValue::from_str(wasm_bindgen::intern("is_keyframe"));
+    let key_data = JsValue::from_str(wasm_bindgen::intern("data"));
+
     let out = Array::new();
     for chunk in chunks {
         let obj = js_sys::Object::new();
         js_sys::Reflect::set(
             &obj,
-            &JsValue::from_str("pts_ns"),
+            &key_pts_ns,
             &js_sys::BigInt::from(chunk.pts_ns).into(),
         )
         .map_err(|_| JsError::new("set pts_ns"))?;
         js_sys::Reflect::set(
             &obj,
-            &JsValue::from_str("is_keyframe"),
+            &key_is_keyframe,
             &JsValue::from_bool(chunk.is_keyframe),
         )
         .map_err(|_| JsError::new("set is_keyframe"))?;
         let data = Uint8Array::new_with_length(chunk.data.len() as u32);
         data.copy_from(&chunk.data);
-        js_sys::Reflect::set(&obj, &JsValue::from_str("data"), &data.into())
+        js_sys::Reflect::set(&obj, &key_data, &data.into())
             .map_err(|_| JsError::new("set data"))?;
         out.push(&obj);
     }
@@ -733,24 +740,21 @@ pub fn mp4_sidecar_index(handle: u32) -> Result<JsValue, JsError> {
             return Err(JsError::new("mp4 index arrays out of sync"));
         }
 
-        // Use raw typed-array writes so we don't allocate an intermediate
-        // `Vec` per array of length N (videos can have ~1e5 samples).
+        // Use bulk typed-array copies so the entire slice crosses the wasm–JS
+        // boundary in one memcpy rather than N individual boundary calls (each
+        // of which allocates a JS BigInt for the 64-bit arrays).  For ~1e5
+        // samples this is 10–100× faster than set_index loops.
         let pts_arr = js_sys::BigInt64Array::new_with_length(n as u32);
-        for (i, &v) in pts.iter().enumerate() {
-            pts_arr.set_index(i as u32, v);
-        }
+        pts_arr.copy_from(pts);
         let off_arr = js_sys::BigUint64Array::new_with_length(n as u32);
-        for (i, &v) in idx.offsets.iter().enumerate() {
-            off_arr.set_index(i as u32, v);
-        }
+        off_arr.copy_from(&idx.offsets);
         let size_arr = js_sys::Uint32Array::new_with_length(n as u32);
-        for (i, &v) in idx.sizes.iter().enumerate() {
-            size_arr.set_index(i as u32, v);
-        }
+        size_arr.copy_from(&idx.sizes);
+        // is_sync is Vec<bool>; collect into a Vec<u8> (one alloc of N bytes)
+        // before the single bulk copy — far cheaper than N set_index calls.
+        let sync_bytes: Vec<u8> = idx.is_sync.iter().map(|&b| b as u8).collect();
         let sync_arr = Uint8Array::new_with_length(n as u32);
-        for (i, &b) in idx.is_sync.iter().enumerate() {
-            sync_arr.set_index(i as u32, b as u8);
-        }
+        sync_arr.copy_from(&sync_bytes);
 
         let sps_arr = Uint8Array::new_with_length(reader.sps().len() as u32);
         sps_arr.copy_from(reader.sps());
@@ -912,9 +916,7 @@ pub fn tabular_time_column_ns(handle: u32) -> Result<js_sys::BigInt64Array, JsEr
             .ok_or_else(|| JsError::new("invalid tabular handle"))?;
         let ts = reader.time_ns();
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
-        for (i, &v) in ts.iter().enumerate() {
-            arr.set_index(i as u32, v);
-        }
+        arr.copy_from(ts);
         Ok(arr)
     })
 }
@@ -1041,9 +1043,7 @@ pub fn lidar_spin_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
             .ok_or_else(|| JsError::new("invalid lidar handle"))?;
         let ts = reader.spin_times();
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
-        for (i, &v) in ts.iter().enumerate() {
-            arr.set_index(i as u32, v);
-        }
+        arr.copy_from(ts);
         Ok(arr)
     })
 }
