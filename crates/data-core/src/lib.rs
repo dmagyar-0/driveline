@@ -13,6 +13,7 @@ pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
 pub mod ros;
+pub mod ros1_bag;
 pub mod tabular;
 pub mod types;
 
@@ -26,6 +27,7 @@ pub use mf4_rs::index::ByteRangeReader;
 pub use mp4_sidecar::{Mp4SampleIndex, Mp4SidecarReader};
 pub use pointcloud::PointCloudReader;
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
+pub use ros1_bag::Ros1BagReader;
 pub use tabular::{
     TabularColumn, TabularFormat, TabularReader, TabularSchema, TimeBasis, TimeMode, TimeUnitScale,
 };
@@ -107,6 +109,9 @@ pub enum Error {
 
     #[error("failed to parse PCD point cloud: {0}")]
     PcdParse(String),
+
+    #[error("ros1 bag error: {0}")]
+    Ros1Bag(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -88,6 +88,22 @@ struct ChannelMeta {
     vector_len: usize,
 }
 
+/// Routing metadata for a ROS2 (CDR) topic expanded into one Driveline channel
+/// per numeric leaf. Keyed by the expanded channel id (`"{topic}.{path}"`).
+/// The `registry` is `Arc`-shared across every leaf of the same topic.
+struct RosExpanded {
+    /// MCAP channel id of the underlying topic, used to filter messages.
+    mcap_id: u16,
+    /// Shared message-definition registry for the topic's root type.
+    registry: Arc<crate::ros::MessageRegistry>,
+    /// Dot-separated leaf path passed to `crate::ros::extract`.
+    leaf_path: String,
+    /// Driveline kind for this leaf: `Scalar`, `Vector`, or `Enum`.
+    kind: ChannelKind,
+    /// Element count per sample for `Vector` leaves; 0 otherwise.
+    width: usize,
+}
+
 /// A decodable run of records: either one chunk (chunked file) or the whole
 /// data section (unchunked file). `start_time`/`end_time` are the inclusive
 /// min/max message `log_time` covered (i64::MIN/MAX for the unchunked
@@ -161,6 +177,10 @@ pub struct McapReader {
     meta: SourceMeta,
     /// Topic → routing metadata.
     channels: HashMap<ChannelId, ChannelMeta>,
+    /// Expanded ROS2 channel id (`"{topic}.{path}"`) → ROS routing metadata.
+    /// Disjoint from `channels`: a ROS2-expanded topic surfaces its leaves
+    /// here, not as a single `Bytes` channel.
+    ros_expanded: HashMap<ChannelId, RosExpanded>,
     /// Decodable segments, sorted by `start_time`.
     segments: Vec<Segment>,
     /// FIFO cache of decompressed chunk record buffers, keyed by segment index.
@@ -195,12 +215,40 @@ impl McapReader {
         ids.sort_unstable();
 
         let mut channel_meta: HashMap<ChannelId, ChannelMeta> = HashMap::with_capacity(ids.len());
+        let mut ros_expanded: HashMap<ChannelId, RosExpanded> = HashMap::new();
+        // Topics (mcap ids) that were expanded into ROS2 leaf channels and so
+        // must NOT also surface as their own default (Bytes) channel.
+        let mut ros_topics: std::collections::HashSet<u16> = std::collections::HashSet::new();
         for &id in &ids {
             let ch = &summary.channels[&id];
             let (kind, dtype) = match ch.schema.as_deref() {
                 Some(s) => infer_channel_kind(&s.name, &s.encoding),
                 None => (ChannelKind::Bytes, None),
             };
+
+            // ROS2-over-MCAP expansion: `message_encoding=="cdr"` with a
+            // `ros2msg` schema, excluding channels already classified as Video
+            // (sensor_msgs/Image et al. keep their existing video path). On any
+            // parse failure (IDL, malformed def) we fall back to the default
+            // `ChannelMeta` below — the channel just behaves as it did before.
+            if kind != ChannelKind::Video && ch.message_encoding == "cdr" {
+                if let Some(schema) = ch.schema.as_deref() {
+                    if schema.encoding == "ros2msg" {
+                        if let Ok(leaves) =
+                            try_expand_ros2(&schema.name, &schema.data, &ch.topic, id)
+                        {
+                            if !leaves.is_empty() {
+                                ros_topics.insert(id);
+                                for (cid, exp) in leaves {
+                                    ros_expanded.insert(cid, exp);
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
+
             let vector_len = if kind == ChannelKind::Vector { 3 } else { 0 };
             channel_meta.insert(
                 ch.topic.clone(),
@@ -314,14 +362,9 @@ impl McapReader {
             }
         };
 
-        // Public channel list.
-        let mut channels: Vec<Channel> = Vec::with_capacity(ids.len());
-        for &id in &ids {
-            let ch = &summary.channels[&id];
-            let topic = ch.topic.clone();
-            let cm = &channel_meta[&topic];
-            let sample_count = counts.get(&id).copied().unwrap_or(0);
-            let time_range = if sample_count == 0 {
+        // Per-channel time range helper, shared by the default and ROS2 paths.
+        let time_range_for = |id: u16, sample_count: u64| -> TimeRange {
+            if sample_count == 0 {
                 TimeRange::empty()
             } else if let Some(&(lo, hi)) = ranges.get(&id) {
                 TimeRange {
@@ -329,8 +372,6 @@ impl McapReader {
                     end_ns: hi.saturating_add(1),
                 }
             } else {
-                // Chunked approximation: the summary has no per-channel range,
-                // so report the file-global span.
                 match global {
                     Some((lo, hi)) => TimeRange {
                         start_ns: lo,
@@ -338,7 +379,22 @@ impl McapReader {
                     },
                     None => TimeRange::empty(),
                 }
-            };
+            }
+        };
+
+        // Public channel list.
+        let mut channels: Vec<Channel> = Vec::with_capacity(ids.len());
+        for &id in &ids {
+            // ROS2-expanded topics surface their leaves below, not as one
+            // default channel.
+            if ros_topics.contains(&id) {
+                continue;
+            }
+            let ch = &summary.channels[&id];
+            let topic = ch.topic.clone();
+            let cm = &channel_meta[&topic];
+            let sample_count = counts.get(&id).copied().unwrap_or(0);
+            let time_range = time_range_for(id, sample_count);
             channels.push(Channel {
                 id: topic,
                 source_id: String::new(),
@@ -346,6 +402,33 @@ impl McapReader {
                 kind: cm.kind,
                 dtype: cm.dtype,
                 unit: ch.metadata.get("unit").cloned(),
+                sample_count,
+                time_range,
+            });
+        }
+
+        // ROS2-expanded leaf channels, in a deterministic order (sorted by
+        // expanded id). Each shares its underlying topic's per-message count
+        // and time range. `id == "{topic}.{path}"` matches the ROS1 bag / db3
+        // path convention so the same signal is addressable across readers.
+        let mut ros_ids: Vec<&ChannelId> = ros_expanded.keys().collect();
+        ros_ids.sort();
+        for cid in ros_ids {
+            let exp = &ros_expanded[cid];
+            let sample_count = counts.get(&exp.mcap_id).copied().unwrap_or(0);
+            let time_range = time_range_for(exp.mcap_id, sample_count);
+            let dtype = if exp.kind == ChannelKind::Enum {
+                Some(DType::I32)
+            } else {
+                Some(DType::F64)
+            };
+            channels.push(Channel {
+                id: cid.clone(),
+                source_id: String::new(),
+                name: exp.leaf_path.clone(),
+                kind: exp.kind,
+                dtype,
+                unit: None,
                 sample_count,
                 time_range,
             });
@@ -368,6 +451,7 @@ impl McapReader {
                 channels,
             },
             channels: channel_meta,
+            ros_expanded,
             segments,
             chunk_cache: RefCell::new(VecDeque::new()),
             value_cache: RefCell::new(VecDeque::new()),
@@ -445,6 +529,12 @@ impl McapReader {
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
+        // ROS2-expanded leaf channels decode CDR on the fly via the shared ROS
+        // decoder; everything else takes the existing JSON/foxglove path.
+        if self.ros_expanded.contains_key(channel_id) {
+            return self.fetch_range_ros2(channel_id, range, opts);
+        }
+
         let cm = self
             .channels
             .get(channel_id)
@@ -458,31 +548,7 @@ impl McapReader {
         }
         let mcap_id = cm.mcap_id;
 
-        // Select the segments overlapping [start, end). When `include_prev`
-        // is set we also pull the latest preceding segment so a step-hold
-        // renderer's leading sample (strictly before `start`) is available.
-        let mut idxs: Vec<usize> = (0..self.segments.len())
-            .filter(|&i| {
-                let s = &self.segments[i];
-                s.end_time >= range.start_ns
-                    && s.start_time < range.end_ns
-                    && s.has_channel(mcap_id)
-            })
-            .collect();
-        if opts.include_prev {
-            if let Some(prev) = (0..self.segments.len())
-                .filter(|&i| {
-                    let s = &self.segments[i];
-                    s.start_time < range.start_ns && s.has_channel(mcap_id)
-                })
-                .max_by_key(|&i| self.segments[i].start_time)
-            {
-                if !idxs.contains(&prev) {
-                    idxs.push(prev);
-                }
-            }
-        }
-        idxs.sort_unstable();
+        let idxs = self.select_segments(mcap_id, range, opts.include_prev);
 
         // Pull the selected segments' parsed samples (cached) and merge into a
         // single time-sorted view. The `Rc`s are held in `seg_parsed` so the
@@ -524,6 +590,112 @@ impl McapReader {
             ChannelKind::Video | ChannelKind::Bytes | ChannelKind::PointCloud => {
                 unreachable!("guarded above")
             }
+        }
+    }
+
+    /// Select segment indices overlapping `[start, end)` that bear `mcap_id`,
+    /// optionally including the latest strictly-preceding segment so a
+    /// step-hold renderer's leading sample is available. Sorted ascending.
+    fn select_segments(&self, mcap_id: u16, range: TimeRange, include_prev: bool) -> Vec<usize> {
+        let mut idxs: Vec<usize> = (0..self.segments.len())
+            .filter(|&i| {
+                let s = &self.segments[i];
+                s.end_time >= range.start_ns
+                    && s.start_time < range.end_ns
+                    && s.has_channel(mcap_id)
+            })
+            .collect();
+        if include_prev {
+            if let Some(prev) = (0..self.segments.len())
+                .filter(|&i| {
+                    let s = &self.segments[i];
+                    s.start_time < range.start_ns && s.has_channel(mcap_id)
+                })
+                .max_by_key(|&i| self.segments[i].start_time)
+            {
+                if !idxs.contains(&prev) {
+                    idxs.push(prev);
+                }
+            }
+        }
+        idxs.sort_unstable();
+        idxs
+    }
+
+    /// Fetch a ROS2-expanded leaf channel: read the underlying topic's CDR
+    /// messages over the selected segments and decode the leaf value out of
+    /// each with the shared ROS decoder. Honors `include_prev` like the JSON
+    /// path; individual messages that fail to decode are skipped.
+    fn fetch_range_ros2(
+        &self,
+        channel_id: &ChannelId,
+        range: TimeRange,
+        opts: FetchOpts,
+    ) -> crate::Result<ArrowIpc> {
+        let exp = &self.ros_expanded[channel_id];
+        let mcap_id = exp.mcap_id;
+
+        let idxs = self.select_segments(mcap_id, range, opts.include_prev);
+
+        // Decode (log_time, value) for every message of this topic in the
+        // selected segments. Re-uses `read_segment` (chunk cache); the JSON
+        // value cache is keyed for the foxglove path and bypassed here.
+        let mut samples: Vec<(i64, ParsedValue)> = Vec::new();
+        for i in idxs {
+            let buf = self.read_segment(i)?;
+            for_each_message(buf.as_slice(), |cid, log_time, payload| {
+                if cid != mcap_id {
+                    return;
+                }
+                match crate::ros::extract(
+                    &exp.registry,
+                    payload,
+                    crate::ros::Wire::Cdr,
+                    &exp.leaf_path,
+                ) {
+                    Ok(crate::ros::Extracted::Scalar(f)) => {
+                        samples.push((log_time, ParsedValue::Scalar(f)));
+                    }
+                    // A Scalar leaf (dims == 1) over an integer field surfaces
+                    // as Enum from the decoder; widen to f64 for the scalar batch.
+                    Ok(crate::ros::Extracted::Enum(v)) => {
+                        samples.push((log_time, ParsedValue::Scalar(v as f64)));
+                    }
+                    Ok(crate::ros::Extracted::Vector(v)) => {
+                        samples.push((log_time, ParsedValue::Vector(v)));
+                    }
+                    // Skip a message that fails to decode rather than failing
+                    // the whole range.
+                    Err(_) => {}
+                }
+            });
+        }
+        samples.sort_by_key(|s| s.0);
+
+        let timestamps: Vec<i64> = samples.iter().map(|s| s.0).collect();
+        let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
+        let end_idx = timestamps
+            .partition_point(|&t| t < range.end_ns)
+            .max(start_idx);
+        let lo = if opts.include_prev && start_idx > 0 {
+            start_idx - 1
+        } else {
+            start_idx
+        };
+
+        let ts_slice = &timestamps[lo..end_idx];
+        let val_refs: Vec<&ParsedValue> = samples[lo..end_idx].iter().map(|s| &s.1).collect();
+
+        match exp.kind {
+            ChannelKind::Scalar => {
+                let vals: Vec<f64> = val_refs.iter().map(|v| parsed_scalar_as_f64(v)).collect();
+                build_scalar_ipc_raw(ts_slice, &vals)
+            }
+            ChannelKind::Vector => {
+                let n = if exp.width > 0 { exp.width } else { 3 };
+                build_vector_ipc(ts_slice, &val_refs, n)
+            }
+            _ => Err(crate::Error::UnsupportedKind),
         }
     }
 
@@ -808,6 +980,48 @@ fn parse_value(kind: ChannelKind, payload: &[u8]) -> Option<ParsedValue> {
         ChannelKind::Enum => parse_enum_json(payload).map(ParsedValue::Enum),
         _ => None,
     }
+}
+
+/// Attempt to expand a ROS2 (`ros2msg`) schema into one `RosExpanded` routing
+/// entry per numeric leaf. Returns the `(expanded_channel_id, RosExpanded)`
+/// pairs, or an error if the definition fails to parse (IDL / malformed) — the
+/// caller falls back to the channel's default behaviour in that case.
+///
+/// `schema_name` is the ROS root type (e.g. `sensor_msgs/msg/Imu`),
+/// `def_bytes` the UTF-8 concatenated `.msg` text, `topic` the MCAP topic
+/// (which prefixes every expanded id), `mcap_id` the underlying channel id.
+fn try_expand_ros2(
+    schema_name: &str,
+    def_bytes: &[u8],
+    topic: &str,
+    mcap_id: u16,
+) -> Result<Vec<(ChannelId, RosExpanded)>, crate::ros::RosDecodeError> {
+    let def_text = std::str::from_utf8(def_bytes)
+        .map_err(|_| crate::ros::RosDecodeError::PathNotFound("non-utf8 schema".into()))?;
+    let registry = crate::ros::MessageRegistry::parse(schema_name, def_text)?;
+    let registry = Arc::new(registry);
+
+    let mut out: Vec<(ChannelId, RosExpanded)> = Vec::new();
+    for leaf in crate::ros::numeric_leaves(&registry) {
+        // dims == 0 is a dynamic numeric array: not a single plottable signal.
+        let (kind, width) = match leaf.dims {
+            0 => continue,
+            1 => (ChannelKind::Scalar, 0),
+            n => (ChannelKind::Vector, n),
+        };
+        let id = format!("{topic}.{}", leaf.path);
+        out.push((
+            id,
+            RosExpanded {
+                mcap_id,
+                registry: registry.clone(),
+                leaf_path: leaf.path,
+                kind,
+                width,
+            },
+        ));
+    }
+    Ok(out)
 }
 
 /// Infer the Driveline `ChannelKind` (and optional `DType`) from an MCAP

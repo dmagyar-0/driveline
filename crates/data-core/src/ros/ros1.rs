@@ -14,8 +14,8 @@
 //! Because there is no padding, the byte offsets of fields differ from the CDR
 //! encoding of the same message — that difference is exercised by the tests.
 
-use super::error::RosDecodeError;
 use super::cdr::Scalar;
+use super::error::RosDecodeError;
 use super::msgdef::{ArrayKind, FieldType, MessageRegistry, PrimType};
 
 /// A cursor over a ROS1 packed body (little-endian, no header, no padding).

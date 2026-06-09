@@ -4,8 +4,8 @@
 //! relevant wire rule (CDR alignment relative to the body start; string length
 //! includes the NUL in CDR but not in ROS1) so a reviewer can audit the layout.
 
-use super::*;
 use super::msgdef::{ArrayKind, FieldType, MessageRegistry, PrimType};
+use super::*;
 
 // ---------------------------------------------------------------------------
 // Test message definitions (concatenated ros2msg / ros1 text)
@@ -80,12 +80,20 @@ impl Buf {
         self
     }
     fn u16(&mut self, v: u16) -> &mut Self {
-        let b = if self.le { v.to_le_bytes() } else { v.to_be_bytes() };
+        let b = if self.le {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        };
         self.bytes.extend_from_slice(&b);
         self
     }
     fn u32(&mut self, v: u32) -> &mut Self {
-        let b = if self.le { v.to_le_bytes() } else { v.to_be_bytes() };
+        let b = if self.le {
+            v.to_le_bytes()
+        } else {
+            v.to_be_bytes()
+        };
         self.bytes.extend_from_slice(&b);
         self
     }
@@ -162,7 +170,10 @@ float64 z
     let reg = MessageRegistry::parse("my_pkg/msg/Foo", def).unwrap();
     assert_eq!(reg.root(), "my_pkg/Foo");
     let foo = reg.fields("my_pkg/Foo").unwrap();
-    assert_eq!(foo[0].ty, FieldType::Complex("geometry_msgs/Vector3".into()));
+    assert_eq!(
+        foo[0].ty,
+        FieldType::Complex("geometry_msgs/Vector3".into())
+    );
     assert!(reg.fields("geometry_msgs/Vector3").is_some());
 }
 

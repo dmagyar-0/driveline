@@ -21,11 +21,11 @@ pub mod cdr;
 pub mod error;
 pub mod msgdef;
 pub mod ros1;
+pub mod typestore;
 
 pub use error::RosDecodeError;
-pub use msgdef::{
-    ArrayKind, ConstDef, FieldDef, FieldType, MessageRegistry, PrimType,
-};
+pub use msgdef::{ArrayKind, ConstDef, FieldDef, FieldType, MessageRegistry, PrimType};
+pub use typestore::lookup as lookup_typedef;
 
 use cdr::{CdrCursor, Scalar};
 use ros1::Ros1Cursor;
@@ -403,17 +403,15 @@ fn numeric_struct_width(
             {
                 total += 1;
             }
-            (FieldType::Complex(name), ArrayKind::Single) => match numeric_struct_width(
-                reg,
-                name,
-                stack,
-            ) {
-                Some(w) => total += w,
-                None => {
-                    stack.pop();
-                    return None;
+            (FieldType::Complex(name), ArrayKind::Single) => {
+                match numeric_struct_width(reg, name, stack) {
+                    Some(w) => total += w,
+                    None => {
+                        stack.pop();
+                        return None;
+                    }
                 }
-            },
+            }
             _ => {
                 stack.pop();
                 return None;
