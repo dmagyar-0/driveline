@@ -1,0 +1,3 @@
+# SPA fallback: serve index.html for any path so deep links / refreshes load
+# the app instead of a 404. Static assets are matched first by Cloudflare.
+/*  /index.html  200

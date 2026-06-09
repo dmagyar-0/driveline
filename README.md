@@ -17,6 +17,27 @@ pnpm wasm:build         # REQUIRED before pnpm dev on a fresh checkout
 pnpm dev                # http://localhost:5173
 ```
 
+## Deploy
+
+Driveline is a fully static, client-side SPA, so it deploys to any static
+host. CI publishes it to **Cloudflare Pages** via
+[`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml): pushes to
+`main` ship a production deploy; a manual **Run workflow** (workflow_dispatch)
+from any branch ships a preview deploy.
+
+One-time setup — add two repo secrets under **Settings → Secrets and
+variables → Actions**:
+
+- `CLOUDFLARE_API_TOKEN` — a token with the **Cloudflare Pages: Edit**
+  permission ([create one here](https://dash.cloudflare.com/profile/api-tokens)).
+- `CLOUDFLARE_ACCOUNT_ID` — your account id (Cloudflare dashboard → any
+  domain → right sidebar, or the URL after `dash.cloudflare.com/`).
+
+The workflow creates the `driveline` Pages project automatically on first run.
+No COOP/COEP headers are needed (see
+[`docs/07-build-and-tooling.md`](./docs/07-build-and-tooling.md)); the only
+production requirement is HTTPS, which Pages provides.
+
 ## Tests
 
 To run the full test suite locally — including the Playwright e2e — first
