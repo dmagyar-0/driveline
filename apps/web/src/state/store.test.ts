@@ -198,7 +198,7 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       );
       return new Uint8Array([0xaa]);
     },
-    async openRos1Bag() {
+    async openRos1Bag(_file: File) {
       openLog.push("ros1");
       await maybeBlock();
       return nextHandle++;
@@ -221,7 +221,7 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       );
       return new Uint8Array([0xcc]);
     },
-    async openRos2Db3() {
+    async openRos2Db3(_file: File) {
       openLog.push("ros2db3");
       await maybeBlock();
       return nextHandle++;
@@ -267,15 +267,25 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       );
       return new Uint8Array([0xbb]);
     },
-    async openMp4Sidecar(_mp4Bytes: Uint8Array, sidecarBytes?: Uint8Array) {
+    async openMp4Sidecar(_mp4Bytes: Uint8Array, sidecar?: Uint8Array | File) {
       openLog.push("mp4");
       await maybeBlock();
       // Mimic the real reader's line-count validation (docs/05-video-pipeline
       // §Sidecar format): a synthesized sidecar whose line count != the mp4
       // sample count fails the open. Only the Feature-1 path passes a sidecar
-      // whose lines are `<i>\t<ts>`; the paired-path test fixtures pass opaque
-      // bytes (`[1,2,3]`), which produce no parseable lines — skip those so the
-      // existing paired-open tests keep working.
+      // whose lines are `<i>\t<ts>`; the paired-path test fixtures pass a File
+      // with opaque bytes (`[1,2,3]`), which produce no parseable lines — skip
+      // those so the existing paired-open tests keep working.
+      //
+      // When sidecar is a File, read its bytes for validation (matches the real
+      // worker path). When it's a Uint8Array (synthesized sidecar from
+      // confirmVideoBinding), use it directly.
+      let sidecarBytes: Uint8Array | undefined;
+      if (sidecar instanceof File) {
+        sidecarBytes = new Uint8Array(await sidecar.arrayBuffer());
+      } else {
+        sidecarBytes = sidecar;
+      }
       if (sidecarBytes && sidecarBytes.length > 0) {
         const text = new TextDecoder().decode(sidecarBytes);
         const lines = text
@@ -313,7 +323,7 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
         pps: new Uint8Array(0),
       };
     },
-    async tabularInspect() {
+    async tabularInspect(_file: File) {
       return {
         columns: [{ name: "t", dtype: "f64", is_numeric: true }],
         suggested: {
@@ -324,7 +334,7 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
         },
       };
     },
-    async openTabular() {
+    async openTabular(_file: File) {
       openLog.push("tabular");
       await maybeBlock();
       return nextHandle++;

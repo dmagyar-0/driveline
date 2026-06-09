@@ -175,8 +175,13 @@ export interface PendingTabularImport {
   id: string;
   name: string;
   format: TabularFormat;
-  /** Raw file bytes, re-passed to `openTabular` on confirm. */
-  bytes: Uint8Array;
+  /**
+   * The original dropped `File`. Passed to the worker on confirm instead of
+   * buffering the bytes in the JS heap for the dialog's lifetime — the worker
+   * re-reads it there, so peak memory drops from ~2× file size to near zero
+   * between inspect and confirm.
+   */
+  file: File;
   /** Inspected schema: column list + suggested basis (drives the dialog). */
   schema: RawTabularSchema;
   /** The editable default basis derived from `schema.suggested`. */
@@ -907,10 +912,6 @@ function lidarChannels(sourceId: string, s: Mf4Summary): Channel[] {
   }));
 }
 
-async function fileBytes(f: File): Promise<Uint8Array> {
-  return new Uint8Array(await f.arrayBuffer());
-}
-
 // Binding-pruning helpers used by `removeSource`. Each returns the *same*
 // reference when nothing changed so Zustand selectors subscribed to an
 // untouched binding map don't see a spurious update.
@@ -1004,6 +1005,12 @@ export const useSession = create<SessionState>((set, get) => {
   // Monotonic key for queued sidecar-less mp4 bindings (Feature 1). Never
   // reused so a dialog re-render can't target a recycled slot.
   let videoBindingSeq = 0;
+  // In-flight dedup for `fetchChannelRange`. Two panels bound to the same
+  // channel that fire concurrent fetches for the same window share one worker
+  // round-trip. Keyed by `${channelId}|${startNs}|${endNs}|${includePrev}`.
+  // Entries are deleted when the promise settles (finally). No result cache —
+  // offset-shift invalidation makes that a separate design task.
+  const inFlightFetches = new Map<string, Promise<Uint8Array>>();
   // Hydrate layout + bindings synchronously so the first render paints the
   // saved layout. Missing / malformed storage → `null` and empty maps; the
   // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
@@ -1809,6 +1816,18 @@ export const useSession = create<SessionState>((set, get) => {
       if (!channel) throw new Error(`unknown channel: ${channelId}`);
       const source = sources.find((s) => s.id === channel.sourceId);
       if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+
+      // In-flight dedup: two panels bound to the same channel that issue
+      // concurrent fetches for the same window share one worker round-trip.
+      // The key encodes the channel, window, and includePrev flag so distinct
+      // callers with different windows are never conflated.
+      // Callers only pass the returned Uint8Array to read-only parsers
+      // (tableFromIPC / seriesFromArrow / decodePointCloud) — no caller
+      // transfers or mutates the buffer, so sharing is safe.
+      const dedupKey = `${channelId}|${startNs}|${endNs}|${includePrev}`;
+      const existing = inFlightFetches.get(dedupKey);
+      if (existing) return existing;
+
       const perfStart = `fetch-range:${channelId}:start`;
       const perfEnd = `fetch-range:${channelId}:end`;
       mark(perfStart);
@@ -1819,75 +1838,82 @@ export const useSession = create<SessionState>((set, get) => {
       // pass-through (no window shift, no Arrow re-encode).
       const offset = source.timeOffsetNs ?? 0n;
       const win = shiftFetchWindow(startNs, endNs, offset);
-      try {
-        if (source.kind === "mcap") {
-          const bytes = await worker.mcapFetchRange(
-            source.handle,
-            channel.nativeId,
-            win.startNs,
-            win.endNs,
-            includePrev,
-          );
-          return shiftRangeArrowTs(bytes, offset);
+
+      const fetchPromise = (async (): Promise<Uint8Array> => {
+        try {
+          if (source.kind === "mcap") {
+            const bytes = await worker.mcapFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+            return shiftRangeArrowTs(bytes, offset);
+          }
+          if (source.kind === "ros1") {
+            const bytes = await worker.ros1BagFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+            return shiftRangeArrowTs(bytes, offset);
+          }
+          if (source.kind === "ros2db3") {
+            const bytes = await worker.ros2Db3FetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+            return shiftRangeArrowTs(bytes, offset);
+          }
+          if (source.kind === "mf4") {
+            const bytes = await worker.mf4FetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+            return shiftRangeArrowTs(bytes, offset);
+          }
+          if (source.kind === "tabular") {
+            const bytes = await worker.tabularFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+            return shiftRangeArrowTs(bytes, offset);
+          }
+          if (source.kind === "lidar") {
+            // Point-cloud batches carry a List<Float32> geometry schema, not the
+            // scalar `{ts,value}` shape `shiftRangeArrowTs` rewrites — and lidar
+            // sources never carry a time offset (always 0n), so pass the bytes
+            // through unmodified. The window is already un-shifted (offset 0).
+            return worker.lidarFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+          }
+          throw new Error(`channel kind not plottable: ${source.kind}`);
+        } finally {
+          mark(perfEnd);
+          measure(`fetch-range:${channelId}`, perfStart, perfEnd);
+          inFlightFetches.delete(dedupKey);
         }
-        if (source.kind === "ros1") {
-          const bytes = await worker.ros1BagFetchRange(
-            source.handle,
-            channel.nativeId,
-            win.startNs,
-            win.endNs,
-            includePrev,
-          );
-          return shiftRangeArrowTs(bytes, offset);
-        }
-        if (source.kind === "ros2db3") {
-          const bytes = await worker.ros2Db3FetchRange(
-            source.handle,
-            channel.nativeId,
-            win.startNs,
-            win.endNs,
-            includePrev,
-          );
-          return shiftRangeArrowTs(bytes, offset);
-        }
-        if (source.kind === "mf4") {
-          const bytes = await worker.mf4FetchRange(
-            source.handle,
-            channel.nativeId,
-            win.startNs,
-            win.endNs,
-            includePrev,
-          );
-          return shiftRangeArrowTs(bytes, offset);
-        }
-        if (source.kind === "tabular") {
-          const bytes = await worker.tabularFetchRange(
-            source.handle,
-            channel.nativeId,
-            win.startNs,
-            win.endNs,
-            includePrev,
-          );
-          return shiftRangeArrowTs(bytes, offset);
-        }
-        if (source.kind === "lidar") {
-          // Point-cloud batches carry a List<Float32> geometry schema, not the
-          // scalar `{ts,value}` shape `shiftRangeArrowTs` rewrites — and lidar
-          // sources never carry a time offset (always 0n), so pass the bytes
-          // through unmodified. The window is already un-shifted (offset 0).
-          return worker.lidarFetchRange(
-            source.handle,
-            channel.nativeId,
-            win.startNs,
-            win.endNs,
-            includePrev,
-          );
-        }
-        throw new Error(`channel kind not plottable: ${source.kind}`);
-      } finally {
-        mark(perfEnd);
-        measure(`fetch-range:${channelId}`, perfStart, perfEnd);
-      }
+      })();
+
+      inFlightFetches.set(dedupKey, fetchPromise);
+      return fetchPromise;
     },
 
     async lidarSpinTimes(channelId) {
@@ -1940,11 +1966,10 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const f of buckets.ros1) {
           try {
-            // ROS 1 bags open whole-file in wasm memory (no OPFS/ranged path),
-            // so pass the bytes like the lidar/tabular path. The wire summary
-            // shape is identical to mcap, so reuse `mcapChannels`.
-            const bytes = await fileBytes(f);
-            const handle = await w.openRos1Bag(bytes);
+            // ROS 1 bags open whole-file in wasm memory (no OPFS/ranged path).
+            // Pass the `File` directly — the worker reads it there, so no
+            // structured-clone of the full bytes crosses the Comlink boundary.
+            const handle = await w.openRos1Bag(f);
             const summary = await w.ros1BagSummary(handle);
             const id = uniqueSourceId(f.name, [...existing, ...newSources]);
             const channels = mcapChannels(id, summary);
@@ -1966,11 +1991,9 @@ export const useSession = create<SessionState>((set, get) => {
         for (const f of buckets.ros2db3) {
           try {
             // ROS 2 rosbag2 `.db3` bags open whole-file in wasm memory (no
-            // OPFS/ranged path), so pass the bytes like the lidar/tabular/ros1
-            // path. The wire summary shape is identical to mcap, so reuse
-            // `mcapChannels`.
-            const bytes = await fileBytes(f);
-            const handle = await w.openRos2Db3(bytes);
+            // OPFS/ranged path). Pass the `File` directly — the worker reads
+            // it there; no full-file clone crosses the Comlink boundary.
+            const handle = await w.openRos2Db3(f);
             const summary = await w.ros2Db3Summary(handle);
             const id = uniqueSourceId(f.name, [...existing, ...newSources]);
             const channels = mcapChannels(id, summary);
@@ -2016,16 +2039,15 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const { file: f, format } of buckets.lidar) {
           try {
-            // Point-cloud sources open eagerly (like a tabular source): the
-            // bytes are decoded into per-spin buffers in wasm and the JS copy
-            // is dropped once the open returns. One point-cloud channel per
-            // source, bindable to a 3D scene panel. Parquet carries many spins;
-            // a `.pcd` carries a single cloud — both surface as `kind: "lidar"`.
-            const bytes = await fileBytes(f);
+            // Point-cloud sources open eagerly: decoded into per-spin buffers
+            // in wasm. Pass the `File` directly — the worker reads it there so
+            // no full-file clone crosses the Comlink boundary. Parquet carries
+            // many spins; a `.pcd` carries a single cloud — both surface as
+            // `kind: "lidar"`.
             const handle =
               format === "pcd"
-                ? await w.openLidarPcd(bytes)
-                : await w.openLidar(bytes);
+                ? await w.openLidarPcd(f)
+                : await w.openLidar(f);
             const summary = await w.lidarSummary(handle);
             const id = uniqueSourceId(f.name, [...existing, ...newSources]);
             const channels = lidarChannels(id, summary);
@@ -2048,26 +2070,27 @@ export const useSession = create<SessionState>((set, get) => {
 
         for (const pair of buckets.mp4Pairs) {
           try {
-            // Only the `ftyp` + `moov` boxes are needed by the WASM
-            // parser — `mdat` (the actual encoded video, often
-            // multi-GB) is never dereferenced during `open_pair`.
-            // Reading the whole mp4 here would allocate a contiguous
-            // gigabytes-sized `Uint8Array` on the main thread before
-            // the lazy sample cache could take over, OOMing tabs on
-            // long recordings. `readMp4HeaderBytes` walks the box
-            // structure via `File.slice()` and returns just the
-            // header, typically a few MB even for 2 GB sources.
+            // Only the `ftyp` + `moov` boxes are needed by the WASM parser —
+            // `mdat` (the actual encoded video, often multi-GB) is never
+            // dereferenced during `open_pair`. `readMp4HeaderBytes` walks the
+            // box structure via `File.slice()` and returns just the header,
+            // typically a few MB even for 2 GB sources.
+            //
+            // The sidecar `.mp4.timestamps` is passed as a `File` so the
+            // worker reads its bytes there — no main-thread allocation.
             let mp4HeaderBytes: Uint8Array | null = await readMp4HeaderBytes(
               pair.mp4,
             );
-            let tsBytes: Uint8Array | null = await fileBytes(pair.ts);
-            const handle = await w.openMp4Sidecar(mp4HeaderBytes, tsBytes);
-            const summary = await w.mp4SidecarSummary(handle);
-            const index: Mp4SidecarIndex = await w.mp4SidecarIndex(handle);
-            // Release transient ingest buffers as soon as WASM has the
-            // index — peak memory during open drops back to steady state.
+            const handle = await w.openMp4Sidecar(mp4HeaderBytes, pair.ts);
+            // `summary` and `index` both depend only on the handle — run them
+            // in parallel (two independent worker round-trips).
+            const [summary, index] = (await Promise.all([
+              w.mp4SidecarSummary(handle),
+              w.mp4SidecarIndex(handle),
+            ])) as [Mp4SidecarSummary, Mp4SidecarIndex];
+            // Release the transient header buffer — peak memory during open
+            // drops back to steady state once WASM owns the index.
             mp4HeaderBytes = null;
-            tsBytes = null;
             const id = uniqueSourceId(pair.mp4.name, [
               ...existing,
               ...newSources,
@@ -2121,19 +2144,22 @@ export const useSession = create<SessionState>((set, get) => {
         }
 
         // CSV / Parquet can't open until the user picks a time basis. Inspect
-        // each one (without retaining the bytes in wasm), then queue a pending
-        // import the dialog will turn into a source on confirm. We DON'T add
-        // them to `opened` here — they're not loaded yet.
+        // each one (without retaining its bytes), then queue a pending import
+        // the dialog will turn into a source on confirm. The original `File`
+        // is stored in the queue (not a byte copy) so the JS heap holds no
+        // large allocation between inspect and confirm. We DON'T add them to
+        // `opened` here — they're not loaded yet.
         const newPending: PendingTabularImport[] = [];
         for (const t of buckets.tabular) {
           try {
-            const bytes = await fileBytes(t.file);
-            const schema = await w.tabularInspect(bytes, t.format);
+            // Pass the `File` to the worker — bytes are read there, zero
+            // main-thread allocation for the inspect call.
+            const schema = await w.tabularInspect(t.file, t.format);
             newPending.push({
               id: `tab-${tabularImportSeq++}`,
               name: t.file.name,
               format: t.format,
-              bytes,
+              file: t.file,
               schema,
               suggested: draftFromSchema(schema),
             });
@@ -2201,8 +2227,10 @@ export const useSession = create<SessionState>((set, get) => {
         const errors: BucketError[] = [];
         const newSources: SourceMeta[] = [];
         try {
+          // Pass the `File` to the worker — bytes are read there, so the
+          // JS heap never holds a second copy alongside the pending queue entry.
           const handle = await w.openTabular(
-            pendingImport.bytes,
+            pendingImport.file,
             pendingImport.format,
             basisToJson(timeBasis),
           );

@@ -446,13 +446,13 @@ export const dataCoreApi = {
     return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
-   * Open a ROS 1 bag (rosbag v2.0) from its full bytes — like the lidar /
-   * tabular path, the whole file is decoded in wasm memory (no OPFS/ranged
-   * path), so the JS caller can drop its `bytes` once this returns.
+   * Open a ROS 1 bag (rosbag v2.0). The whole file is decoded in wasm memory
+   * (no OPFS/ranged path). Passing a `File` keeps the bytes on the worker
+   * side — no structured-clone copy across the Comlink boundary.
    */
-  async openRos1Bag(bytes: Uint8Array): Promise<number> {
+  async openRos1Bag(file: File): Promise<number> {
     await ready;
-    return open_ros1_bag(bytes);
+    return open_ros1_bag(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * `SourceMeta` for an open ROS 1 bag. ROS 1 bag channels carry the same
@@ -480,13 +480,13 @@ export const dataCoreApi = {
     close_ros1_bag(handle);
   },
   /**
-   * Open a ROS 2 rosbag2 SQLite (`.db3`) bag from its full bytes — like the
-   * lidar / tabular / ros1 path, the whole file is decoded in wasm memory (no
-   * OPFS/ranged path), so the JS caller can drop its `bytes` once this returns.
+   * Open a ROS 2 rosbag2 SQLite (`.db3`) bag. The whole file is decoded in
+   * wasm memory (no OPFS/ranged path). Passing a `File` keeps the bytes on
+   * the worker side — no structured-clone copy across the Comlink boundary.
    */
-  async openRos2Db3(bytes: Uint8Array): Promise<number> {
+  async openRos2Db3(file: File): Promise<number> {
     await ready;
-    return open_ros2_db3(bytes);
+    return open_ros2_db3(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * `SourceMeta` for an open ROS 2 db3 bag. ROS 2 db3 channels carry the same
@@ -513,11 +513,21 @@ export const dataCoreApi = {
     await ready;
     close_ros2_db3(handle);
   },
+  /**
+   * Open an mp4+sidecar pair. `mp4Bytes` is the pre-sliced `ftyp`+`moov` header
+   * (a small `Uint8Array`). `sidecar` is either:
+   *   - a `File` (the `.mp4.timestamps` drop path) — read here, zero main-thread copy
+   *   - a `Uint8Array` (synthesized by `confirmVideoBinding`) — used directly
+   */
   async openMp4Sidecar(
     mp4Bytes: Uint8Array,
-    sidecarBytes: Uint8Array,
+    sidecar: Uint8Array | File,
   ): Promise<number> {
     await ready;
+    const sidecarBytes =
+      sidecar instanceof File
+        ? new Uint8Array(await sidecar.arrayBuffer())
+        : sidecar;
     return open_mp4_sidecar(mp4Bytes, sidecarBytes);
   },
   async closeMp4Sidecar(handle: number): Promise<void> {
@@ -552,34 +562,40 @@ export const dataCoreApi = {
     ]);
   },
   /**
-   * Inspect a CSV / Parquet blob without retaining it: returns the
+   * Inspect a CSV / Parquet file without retaining it: returns the
    * `TabularSchema` (`{ columns, suggested }`) the import dialog drives its
    * column list and default time-basis from. `format` is `"csv"` or
-   * `"parquet"`. The bytes are NOT held in wasm — the JS caller keeps them
-   * (in the pending-import slice) and re-passes them to `openTabular` on
-   * confirm.
+   * `"parquet"`. Accepting a `File` keeps the bytes on the worker side —
+   * no structured-clone copy. The file is re-read by `openTabular` on confirm.
    */
   async tabularInspect(
-    bytes: Uint8Array,
+    file: File,
     format: string,
   ): Promise<RawTabularSchema> {
     await ready;
-    return tabular_inspect(bytes, format) as RawTabularSchema;
+    return tabular_inspect(
+      new Uint8Array(await file.arrayBuffer()),
+      format,
+    ) as RawTabularSchema;
   },
   /**
-   * Open a CSV / Parquet blob with an explicit `TimeBasis` (JSON string) and
-   * register the resulting reader in the wasm slab. Returns the integer
-   * handle the other `tabular*` methods take. Like the mp4-sidecar path the
-   * bytes are passed wholesale (no OPFS copy); the wasm reader owns them for
-   * the source's lifetime, freed by `closeTabular`.
+   * Open a CSV / Parquet file with an explicit `TimeBasis` (JSON string) and
+   * register the resulting reader in the wasm slab. Returns the integer handle
+   * the other `tabular*` methods take. Accepting a `File` keeps the bytes on
+   * the worker side — no structured-clone copy; the wasm reader owns the
+   * decoded data for the source's lifetime, freed by `closeTabular`.
    */
   async openTabular(
-    bytes: Uint8Array,
+    file: File,
     format: string,
     basisJson: string,
   ): Promise<number> {
     await ready;
-    return open_tabular(bytes, format, basisJson);
+    return open_tabular(
+      new Uint8Array(await file.arrayBuffer()),
+      format,
+      basisJson,
+    );
   },
   /**
    * `SourceMeta` for an open tabular reader, in the MF4-style shape
@@ -621,25 +637,25 @@ export const dataCoreApi = {
     close_tabular(handle);
   },
   /**
-   * Open a Driveline point-cloud Parquet (one row per LiDAR spin). Like the
-   * tabular path the whole blob is passed wholesale (no OPFS copy) and the
-   * wasm reader owns the decoded per-spin buffers for the source's lifetime,
-   * freed by `closeLidar`. The JS caller can drop its `bytes` once this
-   * returns.
+   * Open a Driveline point-cloud Parquet (one row per LiDAR spin). The wasm
+   * reader owns the decoded per-spin buffers for the source's lifetime, freed
+   * by `closeLidar`. Accepting a `File` keeps the bytes on the worker side —
+   * no structured-clone copy across the Comlink boundary.
    */
-  async openLidar(bytes: Uint8Array): Promise<number> {
+  async openLidar(file: File): Promise<number> {
     await ready;
-    return open_lidar(bytes);
+    return open_lidar(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * Open a PCD (Point Cloud Data) file — the PCL/ROS LiDAR interchange format.
    * A PCD holds a single cloud, so the reader surfaces one point-cloud channel
    * with one spin; every other `lidar*` method then works unchanged. Supports
-   * `ascii`, `binary`, and `binary_compressed` payloads.
+   * `ascii`, `binary`, and `binary_compressed` payloads. Accepting a `File`
+   * keeps the bytes on the worker side — no structured-clone copy.
    */
-  async openLidarPcd(bytes: Uint8Array): Promise<number> {
+  async openLidarPcd(file: File): Promise<number> {
     await ready;
-    return open_lidar_pcd(bytes);
+    return open_lidar_pcd(new Uint8Array(await file.arrayBuffer()));
   },
   /**
    * `SourceMeta` for an open point-cloud reader, in the MF4-style shape
