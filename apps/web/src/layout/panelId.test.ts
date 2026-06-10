@@ -19,6 +19,14 @@ describe("panelKindOf", () => {
     expect(panelKindOf("widget-1")).toBeNull();
     expect(panelKindOf("")).toBeNull();
   });
+
+  it("returns null for non-string ids instead of throwing", () => {
+    // Regression: `panelKindOf(undefined)` used to crash on `.startsWith`,
+    // and with no error boundary above the drawers that unmounted the whole
+    // app. Untyped callers (dev hooks via page.evaluate) can pass these.
+    expect(panelKindOf(null)).toBeNull();
+    expect(panelKindOf(undefined)).toBeNull();
+  });
 });
 
 describe("panelNameFor", () => {

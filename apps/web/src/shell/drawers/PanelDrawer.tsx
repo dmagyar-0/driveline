@@ -64,7 +64,13 @@ import s from "./PanelDrawer.module.css";
 const HEADING_ID = "drawer-panel-h";
 
 export function PanelDrawer() {
-  const selectedPanelId = useSession((st) => st.selectedPanelId);
+  // `selectedPanelId` is typed `string | null`, but the store can be written
+  // from untyped JS (the dev hooks run via page.evaluate). Anything
+  // non-string reads as "nothing selected" here — the `=== null` branches
+  // below are the only guards between a bad id and a render crash.
+  const selectedPanelId = useSession((st) =>
+    typeof st.selectedPanelId === "string" ? st.selectedPanelId : null,
+  );
   const layoutJson = useSession((st) => st.layoutJson);
 
   const kind: PanelKind | null =

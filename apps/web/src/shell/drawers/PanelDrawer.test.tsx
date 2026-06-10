@@ -123,6 +123,28 @@ describe("PanelDrawer", () => {
     expect(screen.queryByTestId("drawer-panel-name")).toBeNull();
   });
 
+  it("stores undefined from setSelectedPanelId as null and stays on the empty state", () => {
+    // Regression: the `setSelectedPanelId` dev hook is driven from untyped
+    // JS (page.evaluate), so `undefined` can arrive where the types say
+    // `string | null`. It used to land in the store verbatim, slip past the
+    // drawer's `=== null` guard, and crash `panelKindOf` — unmounting the
+    // whole app. The action now coerces non-strings to null.
+    useSession.getState().setSelectedPanelId(undefined);
+    render(<PanelDrawer />);
+    expect(useSession.getState().selectedPanelId).toBeNull();
+    expect(screen.getByTestId("panel-drawer-empty")).toBeTruthy();
+  });
+
+  it("renders the empty state even if the store itself holds undefined", () => {
+    // Defence in depth: bypass the (now hardened) action and corrupt the
+    // state directly. The drawer must treat any non-string id as "nothing
+    // selected" rather than crash.
+    useSession.setState({ selectedPanelId: undefined });
+    render(<PanelDrawer />);
+    expect(screen.getByTestId("panel-drawer-empty")).toBeTruthy();
+    expect(screen.queryByTestId("drawer-panel-name")).toBeNull();
+  });
+
   it("renders the plot body for a selected plot panel", () => {
     useSession.getState().setSelectedPanelId("plot-1");
     useSession.getState().addPlotChannel("plot-1", "chan-a");

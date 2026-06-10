@@ -1,0 +1,66 @@
+/* Full-viewport fallback for the top-level error boundary. Same posture
+   as the unsupported-browser splash — one readable card, no chrome — but
+   on the app's dark surface ramp since it replaces a running instrument. */
+
+.crash {
+  min-height: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-9);
+  background: var(--color-bg-1);
+}
+
+.card {
+  max-width: 36rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-6);
+  padding: var(--sp-9);
+  background: var(--color-bg-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-6);
+}
+
+.title {
+  font-size: var(--fs-18);
+  color: var(--color-error-dark);
+}
+
+.message {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  line-height: var(--lh-snug);
+  color: var(--color-fg-2);
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  font-size: var(--fs-14);
+  color: var(--color-fg-4);
+}
+
+.reload {
+  align-self: flex-start;
+  min-height: 44px;
+  padding: 0 var(--sp-8);
+  font: inherit;
+  font-size: var(--fs-14);
+  font-weight: var(--fw-medium);
+  color: var(--color-fg-1);
+  background: var(--color-bg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+}
+
+.reload:hover {
+  background: var(--color-bg-6);
+  border-color: var(--color-border-hover);
+}
+
+.reload:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}

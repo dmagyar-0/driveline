@@ -25,7 +25,12 @@ export type PanelKind =
   | "value"
   | "enum";
 
-export function panelKindOf(id: string): PanelKind | null {
+export function panelKindOf(id: string | null | undefined): PanelKind | null {
+  // Selection state can legitimately be empty, and untyped callers (the
+  // `setSelectedPanelId` dev hook is driven from Playwright's JS) can hand
+  // over `undefined` where the types say `string`. Any non-string id means
+  // "no kind" — never a `startsWith` crash.
+  if (typeof id !== "string") return null;
   if (id.startsWith(`${PLOT_PREFIX}-`)) return "plot";
   if (id.startsWith(`${VIDEO_PREFIX}-`)) return "video";
   if (id.startsWith(`${SCENE_PREFIX}-`)) return "scene";

@@ -2,6 +2,7 @@ import "./styles/tokens.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { AppErrorBoundary } from "./AppErrorBoundary";
 import {
   isWebCodecsSupported,
   renderUnsupportedSplash,
@@ -15,7 +16,9 @@ if (!isWebCodecsSupported()) {
 } else {
   createRoot(root).render(
     <StrictMode>
-      <App />
+      <AppErrorBoundary>
+        <App />
+      </AppErrorBoundary>
     </StrictMode>,
   );
 }
