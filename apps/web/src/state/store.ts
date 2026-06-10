@@ -2422,7 +2422,12 @@ export const useSession = create<SessionState>((set, get) => {
             }
             opened.push(name);
           } catch (e) {
-            errors.push({ name: trimmed, reason: String(e) });
+            // Show the bare message (the worker phrases CORS/range failures
+            // for the user); `String(e)` would prefix the error class name.
+            errors.push({
+              name: trimmed,
+              reason: e instanceof Error ? e.message : String(e),
+            });
           }
 
           commitOpenedSources(newSources, errors);

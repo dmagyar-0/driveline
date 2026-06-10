@@ -55,6 +55,7 @@ import {
   type RawMp4Summary,
 } from "./normalise";
 import type { RawTabularSchema } from "../state/tabularImport";
+import { UrlFetchBlockedError, urlProbeSize, urlReadRange } from "./urlRange";
 
 /**
  * Per-sample table for an mp4+sidecar source. Returned by
@@ -193,72 +194,6 @@ async function openMf4SyncAccess(
   await file.stream().pipeTo(writable);
   const access = await fh.createSyncAccessHandle();
   return { access, fileName };
-}
-
-/**
- * Probe a remote file over HTTP and return its total byte length.
- *
- * Both the MF4 and MCAP readers decode synchronously inside wasm, so the lazy
- * ranged path needs a *synchronous* reader (the OPFS path uses a sync access
- * handle). For a URL we use synchronous `XMLHttpRequest` — permitted inside a
- * Worker — issuing `Range` requests. This probe asks for a single byte and
- * reads the total size out of the `Content-Range` header, which doubles as a
- * check that the server actually honours range requests (status 206). A server
- * that ignores `Range` (200, whole body) can't back a lazy reader, so we fail
- * loudly here; the MCAP caller catches this and falls back to a whole-body
- * fetch.
- */
-function urlProbeSize(url: string): number {
-  const xhr = new XMLHttpRequest();
-  xhr.open("GET", url, false); // synchronous — only legal off the main thread
-  xhr.setRequestHeader("Range", "bytes=0-0");
-  xhr.send();
-  if (xhr.status !== 206) {
-    throw new Error(
-      `URL does not support HTTP range requests ` +
-        `(got status ${xhr.status}, expected 206). The server must send ` +
-        `'Accept-Ranges: bytes' and honour the Range header.`,
-    );
-  }
-  // "bytes 0-0/123456" → total is the part after the slash.
-  const contentRange = xhr.getResponseHeader("Content-Range");
-  const total = contentRange?.split("/")[1];
-  if (!total || total === "*" || !Number.isFinite(Number(total))) {
-    throw new Error(
-      `URL range response missing a usable total size ` +
-        `(Content-Range: ${contentRange ?? "<none>"}).`,
-    );
-  }
-  return Number(total);
-}
-
-/**
- * Synchronous ranged read against `url`, used as the wasm `readRange`
- * callback for a URL-backed source. wasm invokes this once per data block /
- * chunk while decoding, so only the bytes actually plotted (or the video
- * chunks actually played) are ever fetched.
- */
-function urlReadRange(url: string, offset: number, length: number): Uint8Array {
-  const xhr = new XMLHttpRequest();
-  xhr.open("GET", url, false);
-  xhr.responseType = "arraybuffer"; // allowed for sync XHR inside a Worker
-  xhr.setRequestHeader("Range", `bytes=${offset}-${offset + length - 1}`);
-  xhr.send();
-  if (xhr.status !== 206 && xhr.status !== 200) {
-    throw new Error(`url readRange failed at ${offset}: status ${xhr.status}`);
-  }
-  let buf = new Uint8Array(xhr.response as ArrayBuffer);
-  // A non-conforming server may answer a Range with the whole body (200);
-  // slice the requested window out of it rather than failing.
-  if (xhr.status === 200 && buf.length >= offset + length) {
-    buf = buf.subarray(offset, offset + length);
-  }
-  if (buf.length !== length) {
-    throw new Error(
-      `url short read at ${offset}: wanted ${length}, got ${buf.length}`,
-    );
-  }
-  return buf;
 }
 
 export const dataCoreApi = {
@@ -402,9 +337,19 @@ export const dataCoreApi = {
     let fileSize: number;
     try {
       fileSize = urlProbeSize(url);
-    } catch {
-      // Range unsupported (or probe failed): fetch the whole body once.
-      const res = await fetch(url);
+    } catch (e) {
+      // A CORS/network block dooms the whole-body fetch too — surface the
+      // actionable message instead of retrying into the same wall.
+      if (e instanceof UrlFetchBlockedError) throw e;
+      // Range genuinely unsupported (e.g. status 200, or no usable size):
+      // fetch the whole body once.
+      let res: Response;
+      try {
+        res = await fetch(url);
+      } catch {
+        // `fetch` rejects with an opaque TypeError on a CORS/network block.
+        throw new UrlFetchBlockedError(url);
+      }
       if (!res.ok) {
         throw new Error(`fetch ${url} failed: ${res.status} ${res.statusText}`);
       }
