@@ -3,6 +3,9 @@
   width: 100%;
   height: 100%;
   background: var(--color-bg-0);
+  /* Clip the canvas when it's magnified/panned so the scaled frame doesn't
+   * spill over the panel edges into neighbouring FlexLayout tabs. */
+  overflow: hidden;
 }
 
 .canvas {
@@ -34,6 +37,28 @@
   color: var(--color-fg-1);
 }
 
+/* Reset-zoom button — mirrors the HUD toggle styling but anchored top-left
+ * so the two controls don't overlap. Only rendered while magnified. */
+.zoomReset {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 3;
+  padding: 2px 6px;
+  font-size: var(--fs-11);
+  font-family: var(--font-mono);
+  background: var(--scrim-toggle);
+  color: var(--color-fg-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  cursor: pointer;
+}
+
+.zoomReset:hover {
+  border-color: var(--color-fg-5);
+  color: var(--color-fg-1);
+}
+
 .hud {
   position: absolute;
   top: 30px;
@@ -42,7 +67,10 @@
   padding: 6px 8px;
   background: var(--scrim-hud);
   color: var(--color-fg-2);
-  font: 11px/1.35 ui-monospace, Menlo, monospace;
+  font:
+    11px/1.35 ui-monospace,
+    Menlo,
+    monospace;
   border: 1px solid var(--color-border-subtle);
   border-radius: 4px;
   pointer-events: none;
@@ -66,7 +94,9 @@
   user-select: none;
   white-space: nowrap;
   opacity: 0.7;
-  transition: opacity 0.15s ease, color 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    color 0.15s ease;
 }
 
 .stats:hover {
