@@ -11,7 +11,7 @@
 // blit queue, dropped frames, codec) and guards that skip seeks that
 // duplicate the open target or the last-issued target.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
@@ -90,10 +90,23 @@ export interface VideoHudSnapshot {
 const SEEK_DEBOUNCE_MS = 50;
 const MAX_QUEUE = 16;
 
+// Video zoom bounds. 1× is "fit" (the object-fit: contain default); we let
+// the user magnify up to 8× to inspect a plate, a sign, a far-off cut-in.
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 8;
+// Per-keystroke zoom multiplier for the +/- accelerators.
+const ZOOM_KEY_STEP = 1.25;
+// Wheel sensitivity. deltaY is in (roughly) pixels; exp() makes zoom
+// feel uniform regardless of starting magnification.
+const ZOOM_WHEEL_SENSITIVITY = 0.0015;
+
 declare global {
   interface Window {
     __drivelineVideoLastBlitPtsNs?: bigint | null;
     __drivelineVideoHud?: VideoHudSnapshot;
+    /** Current video zoom factor (1 = fit). Mirrors the most recently
+     *  interacted panel so Playwright can assert zoom/reset behaviour. */
+    __drivelineVideoZoom?: number;
   }
 }
 
@@ -145,6 +158,87 @@ export function VideoPanel({
   const hudDomRef = useRef<HTMLDivElement | null>(null);
   const hudOnRef = useRef<boolean>(false);
   const statsDomRef = useRef<HTMLDivElement | null>(null);
+
+  // Video zoom (pan + magnify of the rendered frame). This is panel-local
+  // UI chrome, NOT on the cursor hot path, so it never touches the store.
+  // We drive the canvas transform imperatively through refs so a wheel-zoom
+  // or a pan-drag doesn't re-render the React tree (and so it never fights
+  // the rAF blit loop, which keeps drawing into the same canvas underneath
+  // the CSS transform). The only React state is the `zoomed` bit, which
+  // toggles the "Reset zoom" affordance — it flips at most twice per
+  // interaction (1× → >1× and back), never per wheel tick.
+  const zoomScaleRef = useRef<number>(1);
+  const zoomTxRef = useRef<number>(0);
+  const zoomTyRef = useRef<number>(0);
+  const panActiveRef = useRef<boolean>(false);
+  const panStartRef = useRef<{
+    x: number;
+    y: number;
+    tx: number;
+    ty: number;
+  } | null>(null);
+  const [zoomed, setZoomed] = useState<boolean>(false);
+
+  // Write the current pan/zoom to the canvas. transform-origin is the panel
+  // centre so 1× sits exactly where object-fit: contain put it. We also set
+  // the cursor (grab/grabbing) so the panning affordance reads on hover.
+  const applyZoomTransform = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const s = zoomScaleRef.current;
+    canvas.style.transformOrigin = "center";
+    canvas.style.transform = `translate(${zoomTxRef.current}px, ${zoomTyRef.current}px) scale(${s})`;
+    canvas.style.cursor =
+      s > 1 ? (panActiveRef.current ? "grabbing" : "grab") : "";
+    window.__drivelineVideoZoom = s;
+  }, []);
+
+  // Keep the magnified frame covering the panel — clamp the translation so
+  // you can't pan the image off into the letterbox void. At scale s the
+  // content overhangs each edge by (s−1)·half, which is the max pan.
+  const clampPan = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const s = zoomScaleRef.current;
+    const maxX = ((s - 1) * canvas.clientWidth) / 2;
+    const maxY = ((s - 1) * canvas.clientHeight) / 2;
+    zoomTxRef.current = Math.max(-maxX, Math.min(maxX, zoomTxRef.current));
+    zoomTyRef.current = Math.max(-maxY, Math.min(maxY, zoomTyRef.current));
+  }, []);
+
+  // Zoom toward an anchor point (qcx, qcy) given relative to the panel
+  // centre, keeping the content under that anchor stationary. `next` is the
+  // desired absolute scale; we clamp it to [MIN_ZOOM, MAX_ZOOM].
+  const zoomToward = useCallback(
+    (next: number, qcx: number, qcy: number) => {
+      const s0 = zoomScaleRef.current;
+      const s1 = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, next));
+      if (s1 === s0) return;
+      // Solve for the translation that pins the anchor across the scale
+      // change: t1 = q − (s1/s0)·(q − t0).
+      zoomTxRef.current = qcx - (s1 / s0) * (qcx - zoomTxRef.current);
+      zoomTyRef.current = qcy - (s1 / s0) * (qcy - zoomTyRef.current);
+      zoomScaleRef.current = s1;
+      if (s1 === MIN_ZOOM) {
+        zoomTxRef.current = 0;
+        zoomTyRef.current = 0;
+      }
+      clampPan();
+      applyZoomTransform();
+      setZoomed(s1 > MIN_ZOOM);
+    },
+    [applyZoomTransform, clampPan],
+  );
+
+  const resetZoom = useCallback(() => {
+    zoomScaleRef.current = 1;
+    zoomTxRef.current = 0;
+    zoomTyRef.current = 0;
+    panActiveRef.current = false;
+    panStartRef.current = null;
+    applyZoomTransform();
+    setZoomed(false);
+  }, [applyZoomTransform]);
 
   // Issue #2 — readiness bookkeeping. Reused across rAF ticks so the
   // hot path doesn't allocate per frame. `lastFrameIndexAtWaitStartRef`
@@ -677,6 +771,58 @@ export function VideoPanel({
     return () => unsub();
   }, [panelId]);
 
+  // Wheel-to-zoom. Registered as a native, non-passive listener because
+  // React's synthetic onWheel is passive — `preventDefault` there is a
+  // no-op and the page/panel would scroll instead of zooming. The anchor
+  // is the pointer position relative to the panel centre so the pixel under
+  // the cursor stays put as you spin the wheel.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const qcx = e.clientX - rect.left - rect.width / 2;
+      const qcy = e.clientY - rect.top - rect.height / 2;
+      const factor = Math.exp(-e.deltaY * ZOOM_WHEEL_SENSITIVITY);
+      zoomToward(zoomScaleRef.current * factor, qcx, qcy);
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, [zoomToward]);
+
+  // Drag-to-pan when magnified. Pointer capture keeps the gesture alive even
+  // if the pointer leaves the panel mid-drag.
+  const onCanvasPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (zoomScaleRef.current <= 1) return;
+    panActiveRef.current = true;
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      tx: zoomTxRef.current,
+      ty: zoomTyRef.current,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    applyZoomTransform();
+  };
+  const onCanvasPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const start = panStartRef.current;
+    if (!panActiveRef.current || !start) return;
+    zoomTxRef.current = start.tx + (e.clientX - start.x);
+    zoomTyRef.current = start.ty + (e.clientY - start.y);
+    clampPan();
+    applyZoomTransform();
+  };
+  const onCanvasPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!panActiveRef.current) return;
+    panActiveRef.current = false;
+    panStartRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    applyZoomTransform();
+  };
+
   const onRetry = () => {
     // Re-issue a seek against the current cursor. The seek pipeline
     // tears down + reconfigures the decoder, which is exactly what a
@@ -786,8 +932,26 @@ export function VideoPanel({
   // we don't want to hijack the key when the drop zone or a form input
   // owns focus.
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "h" && e.key !== "H") return;
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Keyboard zoom accelerators — the wheel/drag gestures aren't reachable
+    // without a pointer, so mirror them on the keyboard. Anchored at the
+    // panel centre (0, 0). `+`/`=` in, `-`/`_` out, `0` reset to fit.
+    if (e.key === "+" || e.key === "=") {
+      e.preventDefault();
+      zoomToward(zoomScaleRef.current * ZOOM_KEY_STEP, 0, 0);
+      return;
+    }
+    if (e.key === "-" || e.key === "_") {
+      e.preventDefault();
+      zoomToward(zoomScaleRef.current / ZOOM_KEY_STEP, 0, 0);
+      return;
+    }
+    if (e.key === "0") {
+      e.preventDefault();
+      resetZoom();
+      return;
+    }
+    if (e.key !== "h" && e.key !== "H") return;
     e.preventDefault();
     toggleHud();
   };
@@ -798,7 +962,24 @@ export function VideoPanel({
         ref={canvasRef}
         data-testid="video-panel-canvas"
         className={styles.canvas}
+        onPointerDown={onCanvasPointerDown}
+        onPointerMove={onCanvasPointerMove}
+        onPointerUp={onCanvasPointerUp}
+        onPointerCancel={onCanvasPointerUp}
       />
+      {/* Reset-zoom affordance — only mounted while magnified, so it stays
+       *  out of the way during normal playback. Top-left to clear the HUD
+       *  toggle (top-right) and the stats strip (bottom-right). */}
+      {zoomed && (
+        <button
+          type="button"
+          data-testid="video-zoom-reset"
+          className={styles.zoomReset}
+          onClick={resetZoom}
+        >
+          Reset zoom
+        </button>
+      )}
       <button
         type="button"
         data-testid="video-hud-toggle"
