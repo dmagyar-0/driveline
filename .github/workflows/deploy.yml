@@ -42,7 +42,9 @@ jobs:
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
         with:
-          version: latest
+          # Pinned: unpinned `latest` broke 2026-06-10 (resolved to a wasm-pack
+          # that can't parse workspace-inherited keys). Keep workflows in sync.
+          version: v0.15.0
 
       - name: Cache cargo
         uses: actions/cache@v4
