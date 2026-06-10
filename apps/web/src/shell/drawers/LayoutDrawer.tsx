@@ -17,6 +17,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
+import type { PanelKind } from "../../layout/panelId";
+import { PanelKindIcon, panelKindName } from "../../layout/PanelKindIcon";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./LayoutDrawer.module.css";
@@ -46,7 +48,7 @@ interface Props {
 }
 
 interface AddRow {
-  label: string;
+  kind: PanelKind;
   testid: string;
   onClick: () => void;
 }
@@ -217,13 +219,13 @@ export function LayoutDrawer({
         <ul className={s.addList} data-testid="layout-add-list">
           {(
             [
-              { label: "+ video", testid: "add-video-panel", onClick: addVideoPanel },
-              { label: "+ plot", testid: "add-plot-panel", onClick: addPlotPanel },
-              { label: "+ 3D scene", testid: "add-scene-panel", onClick: addScenePanel },
-              { label: "+ map", testid: "add-map-panel", onClick: addMapPanel },
-              { label: "+ table", testid: "add-table-panel", onClick: addTablePanel },
-              { label: "+ value", testid: "add-value-panel", onClick: addValuePanel },
-              { label: "+ enum", testid: "add-enum-panel", onClick: addEnumPanel },
+              { kind: "video", testid: "add-video-panel", onClick: addVideoPanel },
+              { kind: "plot", testid: "add-plot-panel", onClick: addPlotPanel },
+              { kind: "scene", testid: "add-scene-panel", onClick: addScenePanel },
+              { kind: "map", testid: "add-map-panel", onClick: addMapPanel },
+              { kind: "table", testid: "add-table-panel", onClick: addTablePanel },
+              { kind: "value", testid: "add-value-panel", onClick: addValuePanel },
+              { kind: "enum", testid: "add-enum-panel", onClick: addEnumPanel },
             ] as readonly AddRow[]
           ).map((row) => (
             <li key={row.testid}>
@@ -233,7 +235,10 @@ export function LayoutDrawer({
                 onClick={row.onClick}
                 data-testid={row.testid}
               >
-                {row.label}
+                <span className={s.addIcon}>
+                  <PanelKindIcon kind={row.kind} size={16} />
+                </span>
+                <span>{panelKindName(row.kind)}</span>
               </button>
             </li>
           ))}
