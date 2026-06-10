@@ -673,8 +673,11 @@ export interface SessionState {
   /** Resize the left settings drawer; the value is clamped to the
    *  drawer-width bounds before it lands in the store. */
   setDrawerWidth(px: number): void;
-  /** Mark a panel as selected for the Panel drawer (Phase 7). */
-  setSelectedPanelId(id: string | null): void;
+  /** Mark a panel as selected for the Panel drawer (Phase 7). Any
+   *  non-string id (`undefined` from an untyped dev-hook caller included)
+   *  is stored as `null` so `selectedPanelId` keeps its `string | null`
+   *  contract. */
+  setSelectedPanelId(id: string | null | undefined): void;
   /**
    * Snapshot the current `layoutJson` + binding maps into a new
    * `NamedLayout` entry. Returns the freshly-minted id so callers (and
@@ -1584,8 +1587,9 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setSelectedPanelId(id) {
-      if (get().selectedPanelId === id) return;
-      set({ selectedPanelId: id });
+      const next = typeof id === "string" ? id : null;
+      if (get().selectedPanelId === next) return;
+      set({ selectedPanelId: next });
     },
 
     saveCurrentLayoutAs(name) {
