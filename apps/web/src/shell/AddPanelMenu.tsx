@@ -12,6 +12,12 @@
 // because the footer sits at the bottom of the drawer.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { PanelKind } from "../layout/panelId";
+import {
+  PanelKindIcon,
+  panelKindBlurb,
+  panelKindName,
+} from "../layout/PanelKindIcon";
 import s from "./AddPanelMenu.module.css";
 
 interface Props {
@@ -27,7 +33,7 @@ interface Props {
 }
 
 interface PanelOption {
-  label: string;
+  kind: PanelKind;
   testid: string;
   add: () => void;
 }
@@ -49,13 +55,13 @@ export function AddPanelMenu({
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
 
   const options: readonly PanelOption[] = [
-    { label: "Video", testid: "add-panel-video", add: addVideoPanel },
-    { label: "Plot", testid: "add-panel-plot", add: addPlotPanel },
-    { label: "3D scene", testid: "add-panel-scene", add: addScenePanel },
-    { label: "Map", testid: "add-panel-map", add: addMapPanel },
-    { label: "Table", testid: "add-panel-table", add: addTablePanel },
-    { label: "Value", testid: "add-panel-value", add: addValuePanel },
-    { label: "Enum", testid: "add-panel-enum", add: addEnumPanel },
+    { kind: "video", testid: "add-panel-video", add: addVideoPanel },
+    { kind: "plot", testid: "add-panel-plot", add: addPlotPanel },
+    { kind: "scene", testid: "add-panel-scene", add: addScenePanel },
+    { kind: "map", testid: "add-panel-map", add: addMapPanel },
+    { kind: "table", testid: "add-panel-table", add: addTablePanel },
+    { kind: "value", testid: "add-panel-value", add: addValuePanel },
+    { kind: "enum", testid: "add-panel-enum", add: addEnumPanel },
   ];
 
   // Close on outside click and Escape while open. Escape returns focus
@@ -153,7 +159,13 @@ export function AddPanelMenu({
               onClick={() => choose(o.add)}
               data-testid={o.testid}
             >
-              {o.label}
+              <span className={s.itemIcon}>
+                <PanelKindIcon kind={o.kind} size={18} />
+              </span>
+              <span className={s.itemText}>
+                <span className={s.itemLabel}>{panelKindName(o.kind)}</span>
+                <span className={s.itemBlurb}>{panelKindBlurb(o.kind)}</span>
+              </span>
             </button>
           ))}
         </div>

@@ -51,6 +51,12 @@ import {
   panelNameFor,
   type PanelKind,
 } from "../../layout/panelId";
+import {
+  PANEL_KINDS,
+  PanelKindIcon,
+  panelKindBlurb,
+  panelKindName,
+} from "../../layout/PanelKindIcon";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
 import s from "./PanelDrawer.module.css";
@@ -78,24 +84,61 @@ export function PanelDrawer() {
     >
       <div className={drawerStyles.heading}>
         <h3 id={HEADING_ID}>Panel</h3>
-        {kind !== null && (
-          <span className={s.kindPill} data-testid="drawer-panel-kind">
-            {kindLabel(kind)}
-          </span>
-        )}
       </div>
 
       {selectedPanelId === null ? (
         <Empty />
-      ) : (
+      ) : kind === null ? (
         <>
           <p className={s.subtitle} data-testid="drawer-panel-name">
             {panelName}
           </p>
+          <UnknownKind />
+        </>
+      ) : (
+        <>
+          <KindCard kind={kind} panelName={panelName} />
           <PanelBody kind={kind} panelId={selectedPanelId} />
         </>
       )}
     </aside>
+  );
+}
+
+/**
+ * Identity card for the selected panel: kind glyph, the panel's own
+ * name, the kind badge, and a one-line "what this panel shows" blurb.
+ * Gives each settings page a visual anchor so the kind is readable at
+ * a glance instead of from a lone text pill.
+ */
+function KindCard({
+  kind,
+  panelName,
+}: {
+  kind: PanelKind;
+  panelName: string | null;
+}) {
+  return (
+    <header className={s.kindCard} data-testid="drawer-panel-card">
+      <span className={s.kindIcon}>
+        <PanelKindIcon kind={kind} size={22} />
+      </span>
+      <div className={s.kindHead}>
+        <div className={s.kindTitleRow}>
+          <span
+            className={s.kindName}
+            data-testid="drawer-panel-name"
+            title={panelName ?? undefined}
+          >
+            {panelName}
+          </span>
+          <span className={s.kindPill} data-testid="drawer-panel-kind">
+            {kindLabel(kind)}
+          </span>
+        </div>
+        <p className={s.kindBlurb}>{panelKindBlurb(kind)}</p>
+      </div>
+    </header>
   );
 }
 
@@ -131,10 +174,32 @@ function PanelBody({
 
 function Empty() {
   return (
-    <p className={s.empty} data-testid="panel-drawer-empty">
-      Select a panel to configure it. Click any panel in the workspace or use
-      the Channels drawer.
-    </p>
+    <>
+      <p className={s.empty} data-testid="panel-drawer-empty">
+        Select a panel to configure it. Click any panel in the workspace or
+        use the Channels drawer.
+      </p>
+      {/* Kind legend: doubles as the "what do these panel types mean"
+          reference while nothing is selected. */}
+      <section className={s.section} aria-label="Panel types">
+        <div className={s.sectionHeader}>
+          <h4 className={s.sectionTitle}>Panel types</h4>
+        </div>
+        <ul className={s.legend}>
+          {PANEL_KINDS.map((k) => (
+            <li key={k} className={s.legendRow}>
+              <span className={s.legendIcon}>
+                <PanelKindIcon kind={k} size={17} />
+              </span>
+              <span className={s.legendText}>
+                <span className={s.legendName}>{panelKindName(k)}</span>
+                <span className={s.legendBlurb}>{panelKindBlurb(k)}</span>
+              </span>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </>
   );
 }
 
@@ -217,9 +282,11 @@ function PlotBody({ panelId }: BodyProps) {
                     ×
                   </button>
                 </div>
-                <PlotChannelAxisPicker panelId={panelId} channelId={c.id} />
-                <PlotChannelUnitInput channel={c} />
-                <PlotTransformPicker panelId={panelId} channelId={c.id} />
+                <div className={s.channelFields}>
+                  <PlotChannelAxisPicker panelId={panelId} channelId={c.id} />
+                  <PlotChannelUnitInput channel={c} />
+                  <PlotTransformPicker panelId={panelId} channelId={c.id} />
+                </div>
               </li>
             ))}
           </ul>
@@ -405,23 +472,21 @@ function PlotChannelAxisPicker({
     useSession.getState().setPlotChannelAxis(panelId, channelId, next);
 
   return (
-    <div className={s.transformRow}>
-      <label className={s.transformLabel}>
-        <span className={s.transformLabelText}>Y-axis</span>
-        <select
-          className={s.transformSelect}
-          value={axis}
-          onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
-          data-testid={`panel-plot-axis-${channelId}`}
-        >
-          {Array.from({ length: MAX_PLOT_Y_AXES }, (_, i) => (
-            <option key={i} value={i}>
-              Axis {i + 1}
-            </option>
-          ))}
-        </select>
-      </label>
-    </div>
+    <label className={s.field}>
+      <span className={s.fieldLabel}>Y-axis</span>
+      <select
+        className={s.fieldControl}
+        value={axis}
+        onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
+        data-testid={`panel-plot-axis-${channelId}`}
+      >
+        {Array.from({ length: MAX_PLOT_Y_AXES }, (_, i) => (
+          <option key={i} value={i}>
+            Axis {i + 1}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -454,12 +519,12 @@ function PlotChannelUnitInput({ channel }: { channel: Channel }) {
   };
 
   return (
-    <div className={s.transformRow}>
-      <label className={s.transformLabel}>
-        <span className={s.transformLabelText}>Unit</span>
+    <div className={s.field}>
+      <label className={s.fieldStack}>
+        <span className={s.fieldLabel}>Unit</span>
         <input
           type="text"
-          className={s.transformSelect}
+          className={`${s.fieldControl} ${hasOverride ? s.fieldControlWithReset : ""}`}
           value={draft}
           placeholder={channel.unit ?? "none"}
           onChange={(e) => setDraft(e.target.value)}
@@ -477,7 +542,7 @@ function PlotChannelUnitInput({ channel }: { channel: Channel }) {
       {hasOverride && (
         <button
           type="button"
-          className={s.removeBtn}
+          className={s.unitResetBtn}
           onClick={reset}
           aria-label={`Reset unit for ${channel.name}`}
           title="Reset to file-inferred unit"
@@ -531,11 +596,11 @@ function PlotTransformPicker({
   };
 
   return (
-    <div className={s.transformRow}>
-      <label className={s.transformLabel}>
-        <span className={s.transformLabelText}>Transform</span>
+    <div className={s.fieldWide}>
+      <label className={s.fieldStack}>
+        <span className={s.fieldLabel}>Transform</span>
         <select
-          className={s.transformSelect}
+          className={s.fieldControl}
           value={kind}
           onChange={(e) => onKindChange(e.target.value)}
           data-testid={`panel-plot-transform-${channelId}`}
@@ -638,51 +703,47 @@ function PlotSeriesStatsSection({
       <div className={s.sectionHeader}>
         <h4 className={s.sectionTitle}>Statistics</h4>
       </div>
-      <table className={s.statsTable} data-testid="panel-plot-stats">
-        <thead>
-          <tr>
-            <th scope="col" className={s.statsChannelCol}>
-              Channel
-            </th>
-            <th scope="col">min</th>
-            <th scope="col">max</th>
-            <th scope="col">mean</th>
-            <th scope="col">cur</th>
-          </tr>
-        </thead>
-        <tbody>
-          {bound.map((c) => {
-            const stat = statsById.get(c.id);
-            const cur = currentById.get(c.id);
-            return (
-              <tr key={c.id} data-testid={`panel-plot-stats-${c.id}`}>
-                <th scope="row" className={s.statsChannel}>
-                  <span
-                    className={s.statsSwatch}
-                    style={{ background: colorFor(c.id) }}
-                    aria-hidden="true"
-                  />
-                  <span className={s.name} title={c.name}>
-                    {channelLabel(c, unitOverrides)}
-                  </span>
-                </th>
-                <td className={s.statsNum}>
-                  {stat ? formatStat(stat.min) : "—"}
-                </td>
-                <td className={s.statsNum}>
-                  {stat ? formatStat(stat.max) : "—"}
-                </td>
-                <td className={s.statsNum}>
-                  {stat ? formatStat(stat.mean) : "—"}
-                </td>
-                <td className={s.statsNum}>
-                  {cur === undefined ? "—" : formatStat(cur)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      {/* One block per channel (name row + labelled 4-up grid) instead of
+          a five-column table: the table overflowed the 220px drawer and
+          clipped mean/cur behind a horizontal scrollbar. */}
+      <ul className={s.statsList} data-testid="panel-plot-stats">
+        {bound.map((c) => {
+          const stat = statsById.get(c.id);
+          const cur = currentById.get(c.id);
+          const cells: ReadonlyArray<[string, string]> = [
+            ["min", stat ? formatStat(stat.min) : "—"],
+            ["max", stat ? formatStat(stat.max) : "—"],
+            ["mean", stat ? formatStat(stat.mean) : "—"],
+            ["cur", cur === undefined ? "—" : formatStat(cur)],
+          ];
+          return (
+            <li
+              key={c.id}
+              className={s.statsItem}
+              data-testid={`panel-plot-stats-${c.id}`}
+            >
+              <span className={s.statsChannel}>
+                <span
+                  className={s.statsSwatch}
+                  style={{ background: colorFor(c.id) }}
+                  aria-hidden="true"
+                />
+                <span className={s.name} title={c.name}>
+                  {channelLabel(c, unitOverrides)}
+                </span>
+              </span>
+              <dl className={s.statsGrid}>
+                {cells.map(([label, value]) => (
+                  <div key={label} className={s.stat}>
+                    <dt className={s.statLabel}>{label}</dt>
+                    <dd className={s.statValue}>{value}</dd>
+                  </div>
+                ))}
+              </dl>
+            </li>
+          );
+        })}
+      </ul>
     </section>
   );
 }
