@@ -63,11 +63,21 @@
   border-radius: var(--radius-3);
 }
 
+/* Row holding "Load files…" + "Try the demo". Owns the top spacing the
+ * lone load button used to carry. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-4);
+  margin-top: var(--sp-3);
+}
+
 .loadBtn {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-4);
-  margin-top: var(--sp-3);
   padding: 9px 18px;
   background: var(--color-accent-orange);
   border: 1px solid var(--color-accent-orange);
@@ -89,6 +99,85 @@
 .loadBtn:focus-visible {
   outline: var(--focus-ring);
   outline-offset: var(--focus-offset);
+}
+
+/* Secondary CTA: outline twin of .loadBtn. */
+.demoBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: 9px 18px;
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-fg-2);
+  font-size: var(--fs-14);
+  font-weight: var(--fw-semibold);
+  border-radius: var(--radius-4);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-base),
+    color var(--motion-base);
+}
+
+.demoBtn:hover {
+  border-color: var(--color-accent-orange);
+  color: var(--color-accent-orange);
+}
+
+.demoBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: var(--focus-offset);
+}
+
+/* Replaces .actions while the demo downloads / opens. */
+.demoProgress {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  max-width: 440px;
+  margin-top: var(--sp-3);
+}
+
+.progressTrack {
+  width: 100%;
+  height: 4px;
+  background: var(--color-bg-4);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  width: 100%;
+  background: var(--color-accent-orange);
+  transform-origin: left;
+  transform: scaleX(0);
+  transition: transform 120ms linear;
+}
+
+.progressText {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  color: var(--color-fg-5);
+}
+
+.demoError {
+  max-width: 440px;
+  font-size: var(--fs-12);
+  color: var(--color-error-dark);
+}
+
+.demoNote {
+  max-width: 440px;
+  font-size: var(--fs-11);
+  color: var(--color-fg-6);
+  line-height: var(--lh-body);
+}
+
+.demoLink {
+  color: var(--color-fg-4);
 }
 
 .urlRow {
@@ -142,7 +231,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .loadBtn {
+  .loadBtn,
+  .demoBtn,
+  .progressFill {
     transition: none;
   }
 }

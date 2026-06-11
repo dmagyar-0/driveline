@@ -34,6 +34,7 @@ import {
 } from "./state/persist/eventTagConfig";
 import { attachUrlState } from "./state/urlState";
 import { installPerfHooks } from "./perf";
+import { loadDemoSession } from "./demo/demoSession";
 import { Shell } from "./shell/Shell";
 
 export interface OpenMf4Result {
@@ -696,6 +697,16 @@ export function App() {
       };
       window.__drivelineSetSourceOffset = (sourceId, offsetNs) =>
         useSession.getState().setSourceOffset(sourceId, offsetNs);
+    }
+    // Public deep-link: `?demo` starts the baked demo session on an empty
+    // boot (the share-link view state lives in the hash, so the query is
+    // ours). The loader waits for worker registration itself and no-ops if
+    // a session already exists, so racing init here is safe.
+    if (
+      new URLSearchParams(window.location.search).has("demo") &&
+      useSession.getState().sources.length === 0
+    ) {
+      void loadDemoSession();
     }
     setReady(true);
     return () => {
