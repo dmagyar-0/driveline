@@ -162,6 +162,35 @@ export interface OpenResult {
   errors: BucketError[];
 }
 
+/** Lifecycle of the baked-in "Try the demo" load (see `demo/demoSession.ts`).
+ *  `idle` covers both "never started" and "finished" — once the demo opens,
+ *  `sources` is non-empty and the FirstRun overlay (the only consumer) is
+ *  gone anyway. */
+export type DemoLoadPhase = "idle" | "fetching" | "opening" | "error";
+
+export interface DemoLoadState {
+  phase: DemoLoadPhase;
+  /** Bytes received across all demo assets — drives the progress bar. */
+  receivedBytes: number;
+  totalBytes: number;
+  error: string | null;
+}
+
+/** A complete workspace (layout + every binding map) applied in ONE `set` —
+ *  the demo loader's equivalent of `restoreNamedLayout`, minus the named-
+ *  layouts bookkeeping. Maps replace wholesale, so unused kinds pass `{}`. */
+export interface WorkspaceSnapshot {
+  layoutJson: unknown;
+  videoBindings: Record<string, string | null>;
+  plotBindings: Record<string, string[]>;
+  sceneBindings: Record<string, string | null>;
+  mapBindings: Record<string, MapBinding | null>;
+  tableBindings: Record<string, string[]>;
+  valueBindings: Record<string, string[]>;
+  enumBindings: Record<string, string[]>;
+  plotPanelSettings: Record<string, PlotPanelSettings>;
+}
+
 /**
  * A dropped CSV / Parquet file awaiting a user-chosen time basis. Unlike the
  * other formats, a tabular source can't open until the user confirms how its
@@ -453,6 +482,21 @@ export interface SessionState {
    * drop flow so the dialog's source dropdown is populated.
    */
   pendingVideoBindings: PendingVideoBinding[];
+  /**
+   * Progress/error state of the baked-in demo load. Written only by
+   * `demo/demoSession.ts` (throttled while fetching); FirstRun renders the
+   * progress bar and error row from it. Reset by `clear()`.
+   */
+  demoLoad: DemoLoadState;
+  /** Shallow-merge a patch into `demoLoad`. */
+  setDemoLoad(patch: Partial<DemoLoadState>): void;
+  /**
+   * Replace the dock layout and every per-panel binding map atomically —
+   * one `set`, mirroring `restoreNamedLayout`, so the FlexLayout rebuild
+   * effect sees the new JSON alongside its bindings. Used by the demo
+   * loader after its sources open.
+   */
+  applyDemoWorkspace(snapshot: WorkspaceSnapshot): void;
   /** Drives a drop batch through bucket → per-source open → merge. CSV/Parquet
    *  files are inspected and queued into `pendingTabularImports` instead of
    *  opening eagerly (they need a time basis first). */
@@ -1092,6 +1136,7 @@ export const useSession = create<SessionState>((set, get) => {
     pendingFetch: {},
     pendingTabularImports: [],
     pendingVideoBindings: [],
+    demoLoad: { phase: "idle", receivedBytes: 0, totalBytes: 0, error: null },
 
     setWorker(w) {
       worker = w;
@@ -1645,6 +1690,29 @@ export const useSession = create<SessionState>((set, get) => {
         enumBindings: { ...entry.enumBindings },
         plotPanelSettings: { ...(entry.plotPanelSettings ?? {}) },
         activeNamedLayoutId: id,
+      });
+    },
+
+    setDemoLoad(patch) {
+      set({ demoLoad: { ...get().demoLoad, ...patch } });
+    },
+
+    applyDemoWorkspace(snapshot) {
+      // Single `set` for the same reason as `restoreNamedLayout`: the
+      // persist adapter writes one snapshot and FlexLayout's external-
+      // rebuild effect sees the new JSON together with its bindings.
+      set({
+        layoutJson: snapshot.layoutJson,
+        videoBindings: { ...snapshot.videoBindings },
+        plotBindings: { ...snapshot.plotBindings },
+        sceneBindings: { ...snapshot.sceneBindings },
+        mapBindings: { ...snapshot.mapBindings },
+        tableBindings: { ...snapshot.tableBindings },
+        valueBindings: { ...snapshot.valueBindings },
+        enumBindings: { ...snapshot.enumBindings },
+        plotPanelSettings: { ...snapshot.plotPanelSettings },
+        activeNamedLayoutId: null,
+        selectedPanelId: null,
       });
     },
 
@@ -2503,6 +2571,12 @@ export const useSession = create<SessionState>((set, get) => {
           pendingFetch: {},
           pendingTabularImports: [],
           pendingVideoBindings: [],
+          demoLoad: {
+            phase: "idle",
+            receivedBytes: 0,
+            totalBytes: 0,
+            error: null,
+          },
         });
       };
       const next = pending.then(run, run);
