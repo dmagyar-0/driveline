@@ -62,15 +62,28 @@ vi.hoisted(() => {
   };
 });
 
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 
 // React 19 RTL requires this flag so `act(...)` wrappers don't log
 // "environment not configured" noise.
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 import { PlotPanel, type PlotSyncSnapshot } from "./PlotPanel";
 import { CHANNEL_DND_MIME } from "./channelDrag";
 import { useSession } from "../state/store";
-import type { DataCoreApi, Mf4Summary, McapSummary, Mp4SidecarSummary } from "../workerClient";
+import type {
+  DataCoreApi,
+  Mf4Summary,
+  McapSummary,
+  Mp4SidecarSummary,
+} from "../workerClient";
 
 import { tableFromArrays, tableToIPC } from "apache-arrow";
 
@@ -250,7 +263,11 @@ describe("PlotPanel", () => {
         globalCompositeOperation: "source-over",
         imageSmoothingEnabled: true,
         imageSmoothingQuality: "low",
-        measureText: () => ({ width: 0, actualBoundingBoxAscent: 0, actualBoundingBoxDescent: 0 }),
+        measureText: () => ({
+          width: 0,
+          actualBoundingBoxAscent: 0,
+          actualBoundingBoxDescent: 0,
+        }),
         getLineDash: () => [],
       },
       {
@@ -263,7 +280,8 @@ describe("PlotPanel", () => {
           return noop;
         },
         set(target, prop, value) {
-          (target as unknown as Record<string, unknown>)[prop as string] = value;
+          (target as unknown as Record<string, unknown>)[prop as string] =
+            value;
           return true;
         },
       },
@@ -363,7 +381,9 @@ describe("PlotPanel", () => {
       return Boolean(snap && snap.seriesStats.length === 2);
     });
 
-    const snap = window.__drivelinePlotPanels!["test-panel"] as PlotSyncSnapshot;
+    const snap = window.__drivelinePlotPanels![
+      "test-panel"
+    ] as PlotSyncSnapshot;
     expect(snap.boundChannelIds).toEqual(["chan-a", "chan-b"]);
 
     const byId = Object.fromEntries(
@@ -388,11 +408,10 @@ describe("PlotPanel", () => {
 
   it("republishes sampleAtCursor when cursorNs moves", async () => {
     render(<PlotPanel panelId="test-panel" />);
-    await waitFor(
-      () =>
-        Boolean(
-          window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
-        ),
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
     );
 
     // Advance the cursor to 1.01 s — the second fixture row.
@@ -402,12 +421,12 @@ describe("PlotPanel", () => {
 
     await waitFor(() => {
       const s = window.__drivelinePlotPanels?.["test-panel"];
-      return (
-        !!s && s.sampleAtCursor[0]?.tsNs === 1_010_000_000n
-      );
+      return !!s && s.sampleAtCursor[0]?.tsNs === 1_010_000_000n;
     });
 
-    const snap = window.__drivelinePlotPanels!["test-panel"] as PlotSyncSnapshot;
+    const snap = window.__drivelinePlotPanels![
+      "test-panel"
+    ] as PlotSyncSnapshot;
     expect(snap.cursorNs).toBe(1_010_000_000n);
     expect(snap.sampleAtCursor[0]?.value).toBe(2);
     expect(snap.sampleAtCursor[1]?.value).toBe(2);
@@ -415,11 +434,10 @@ describe("PlotPanel", () => {
 
   it("renders the value-at-cursor in each channel chip", async () => {
     const { findByTestId } = render(<PlotPanel panelId="test-panel" />);
-    await waitFor(
-      () =>
-        Boolean(
-          window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
-        ),
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["test-panel"]?.seriesStats.length === 2,
+      ),
     );
 
     // Cursor seeded at 1.0 s → first fixture row, value 1.
@@ -453,7 +471,9 @@ describe("PlotPanel", () => {
       return Boolean(snap && snap.xScaleSec);
     });
 
-    const snap = window.__drivelinePlotPanels!["test-panel"] as PlotSyncSnapshot;
+    const snap = window.__drivelinePlotPanels![
+      "test-panel"
+    ] as PlotSyncSnapshot;
     expect(snap.xScaleSec).not.toBeNull();
     // Domain spans the global range (1.0–11.0 s), not the data (1.0–1.02 s).
     expect(snap.xScaleSec!.min).toBeCloseTo(1.0, 6);
@@ -503,7 +523,9 @@ describe("PlotPanel", () => {
       ),
     );
 
-    const snap = window.__drivelinePlotPanels!["test-panel"] as PlotSyncSnapshot;
+    const snap = window.__drivelinePlotPanels![
+      "test-panel"
+    ] as PlotSyncSnapshot;
     // Both series publish; the good channel's stats stay finite, the NaN
     // channel's min/max collapse to NaN (it genuinely has no values).
     const byId = Object.fromEntries(
@@ -638,7 +660,9 @@ describe("PlotPanel", () => {
     // The apply effect re-resolves the x-scale to the shared zoom window.
     await waitFor(() => {
       const x = window.__drivelinePlotPanels?.["test-panel"]?.xScaleSec;
-      return !!x && Math.abs(x.min - 1.005) < 1e-4 && Math.abs(x.max - 1.015) < 1e-4;
+      return (
+        !!x && Math.abs(x.min - 1.005) < 1e-4 && Math.abs(x.max - 1.015) < 1e-4
+      );
     });
     // The Reset-zoom button surfaces while zoomed.
     const reset = await screen.findByTestId("plot-reset-zoom");
@@ -650,7 +674,9 @@ describe("PlotPanel", () => {
     expect(useSession.getState().sharedPlotZoomX).toBeNull();
     await waitFor(() => {
       const x = window.__drivelinePlotPanels?.["test-panel"]?.xScaleSec;
-      return !!x && Math.abs(x.min - 1.0) < 1e-4 && Math.abs(x.max - 1.02) < 1e-4;
+      return (
+        !!x && Math.abs(x.min - 1.0) < 1e-4 && Math.abs(x.max - 1.02) < 1e-4
+      );
     });
     expect(screen.queryByTestId("plot-reset-zoom")).toBeNull();
   });
@@ -665,12 +691,11 @@ describe("PlotPanel", () => {
         <PlotPanel panelId="sync-b" />
       </>,
     );
-    await waitFor(
-      () =>
-        Boolean(
-          window.__drivelinePlotPanels?.["sync-a"]?.seriesStats.length === 1 &&
-            window.__drivelinePlotPanels?.["sync-b"]?.seriesStats.length === 1,
-        ),
+    await waitFor(() =>
+      Boolean(
+        window.__drivelinePlotPanels?.["sync-a"]?.seriesStats.length === 1 &&
+        window.__drivelinePlotPanels?.["sync-b"]?.seriesStats.length === 1,
+      ),
     );
 
     // Both panels are synced by default → setting the shared window moves
@@ -712,12 +737,14 @@ describe("PlotPanel", () => {
     });
     await waitFor(() => {
       const a = window.__drivelinePlotPanels?.["sync-a"]?.xScaleSec;
-      return !!a && Math.abs(a.min - 1.002) < 1e-4 && Math.abs(a.max - 1.018) < 1e-4;
+      return (
+        !!a && Math.abs(a.min - 1.002) < 1e-4 && Math.abs(a.max - 1.018) < 1e-4
+      );
     });
     const b = window.__drivelinePlotPanels?.["sync-b"]?.xScaleSec;
-    expect(b && Math.abs(b.min - 1.007) < 1e-4 && Math.abs(b.max - 1.012) < 1e-4).toBe(
-      true,
-    );
+    expect(
+      b && Math.abs(b.min - 1.007) < 1e-4 && Math.abs(b.max - 1.012) < 1e-4,
+    ).toBe(true);
   });
 
   it("wheel over the plot drawing area zooms the x-axis", async () => {

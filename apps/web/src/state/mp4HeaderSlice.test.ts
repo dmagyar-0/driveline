@@ -63,10 +63,12 @@ function instrumentedFile(bytes: Uint8Array): {
   const file = new File([bytes as BlobPart], "test.mp4");
   const reads: Array<[number, number]> = [];
   const orig = file.slice.bind(file);
-  vi.spyOn(file, "slice").mockImplementation((start = 0, end = bytes.length) => {
-    reads.push([Number(start), Number(end)]);
-    return orig(start, end);
-  });
+  vi.spyOn(file, "slice").mockImplementation(
+    (start = 0, end = bytes.length) => {
+      reads.push([Number(start), Number(end)]);
+      return orig(start, end);
+    },
+  );
   return { file, reads };
 }
 

@@ -68,9 +68,7 @@ function validateNullableStringMap(
   return v as Record<string, string | null>;
 }
 
-function validateStringArrayMap(
-  v: unknown,
-): Record<string, string[]> | null {
+function validateStringArrayMap(v: unknown): Record<string, string[]> | null {
   if (!isPlainObject(v)) return null;
   for (const k of Object.keys(v)) {
     if (!isStringArray(v[k])) return null;

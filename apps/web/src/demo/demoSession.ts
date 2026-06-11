@@ -161,8 +161,7 @@ async function waitForWorker(): Promise<void> {
 function channelId(sourceId: string, name: string): string | null {
   const { channels } = useSession.getState();
   return (
-    channels.find((c) => c.sourceId === sourceId && c.name === name)?.id ??
-    null
+    channels.find((c) => c.sourceId === sourceId && c.name === name)?.id ?? null
   );
 }
 
@@ -195,7 +194,9 @@ function applyDemoWorkspaceFromSession(): void {
     plotBindings: {
       // /vehicle/speed (MCAP) next to WheelSpeedFL (MF4): two formats, one
       // axis — both m/s.
-      [PLOT_SPEED_PANEL]: [speed, wheelFl].filter((c): c is string => c !== null),
+      [PLOT_SPEED_PANEL]: [speed, wheelFl].filter(
+        (c): c is string => c !== null,
+      ),
       [PLOT_DYN_PANEL]: [steer, gyroZ].filter((c): c is string => c !== null),
     },
     sceneBindings: {},

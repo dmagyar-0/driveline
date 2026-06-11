@@ -76,7 +76,11 @@ export function mark(name: string): void {
 // Wraps `performance.measure` so callers don't need to catch the "start mark
 // not found" `DOMException` themselves. This is a best-effort perf seam — a
 // missing start mark should never fail user code.
-export function measure(name: string, startMark: string, endMark?: string): void {
+export function measure(
+  name: string,
+  startMark: string,
+  endMark?: string,
+): void {
   bumpAndMaybeClear(measureCounts, name, (n) => performance.clearMeasures(n));
   try {
     if (endMark) performance.measure(name, startMark, endMark);
@@ -88,7 +92,10 @@ export function measure(name: string, startMark: string, endMark?: string): void
 
 // Wraps an async operation with `<prefix>:start` / `<prefix>:end` marks and a
 // `<prefix>` measure. Returns whatever the wrapped op returns.
-export async function timed<T>(prefix: string, op: () => Promise<T>): Promise<T> {
+export async function timed<T>(
+  prefix: string,
+  op: () => Promise<T>,
+): Promise<T> {
   const start = `${prefix}:start`;
   const end = `${prefix}:end`;
   mark(start);
@@ -102,14 +109,12 @@ export async function timed<T>(prefix: string, op: () => Promise<T>): Promise<T>
 
 // Snapshot-style getter used by the Playwright dev hook.
 export function snapshot(): PerfSnapshot {
-  const entries = performance
-    .getEntries()
-    .map((e) => ({
-      name: e.name,
-      startTime: e.startTime,
-      duration: e.duration,
-      entryType: e.entryType,
-    }));
+  const entries = performance.getEntries().map((e) => ({
+    name: e.name,
+    startTime: e.startTime,
+    duration: e.duration,
+    entryType: e.entryType,
+  }));
   const mem = (performance as PerformanceWithMemory).memory;
   return {
     entries,

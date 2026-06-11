@@ -75,7 +75,8 @@ export function TopBar({ ready }: TopBarProps) {
 
   // Distinct source kinds, first-seen order, for the chip row.
   const kinds: SourceKind[] = [];
-  for (const src of sources) if (!kinds.includes(src.kind)) kinds.push(src.kind);
+  for (const src of sources)
+    if (!kinds.includes(src.kind)) kinds.push(src.kind);
 
   return (
     <header className={styles.bar}>
@@ -136,7 +137,9 @@ export function TopBar({ ready }: TopBarProps) {
         data-copied={copied ? "true" : "false"}
       >
         <LinkIcon />
-        <span className={styles.shareLabel}>{copied ? "Copied!" : "Copy link"}</span>
+        <span className={styles.shareLabel}>
+          {copied ? "Copied!" : "Copy link"}
+        </span>
       </button>
 
       <button

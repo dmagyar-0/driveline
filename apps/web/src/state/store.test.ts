@@ -288,9 +288,7 @@ function makeFakeWorker(summaries: Summaries): FakeWorker {
       }
       if (sidecarBytes && sidecarBytes.length > 0) {
         const text = new TextDecoder().decode(sidecarBytes);
-        const lines = text
-          .split("\n")
-          .filter((l) => /^\d+\t-?\d+$/.test(l));
+        const lines = text.split("\n").filter((l) => /^\d+\t-?\d+$/.test(l));
         if (
           lines.length > 0 &&
           lines.length !== summaries.mp4.channels[0].sample_count
@@ -400,7 +398,8 @@ function minimalMp4Bytes(): Uint8Array {
 
 function file(name: string, bytes?: Uint8Array): File {
   const payload =
-    bytes ?? (name.endsWith(".mp4") ? minimalMp4Bytes() : new Uint8Array([1, 2, 3]));
+    bytes ??
+    (name.endsWith(".mp4") ? minimalMp4Bytes() : new Uint8Array([1, 2, 3]));
   return new File([payload as BlobPart], name);
 }
 
@@ -427,12 +426,14 @@ describe("session store", () => {
   it("merges the global range over multiple sources", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    const r = await useSession.getState().openFiles([
-      file("short.mcap"),
-      file("short.mf4"),
-      file("short.mp4"),
-      file("short.mp4.timestamps"),
-    ]);
+    const r = await useSession
+      .getState()
+      .openFiles([
+        file("short.mcap"),
+        file("short.mf4"),
+        file("short.mp4"),
+        file("short.mp4.timestamps"),
+      ]);
     expect(r.opened.sort()).toEqual(["short.mcap", "short.mf4", "short.mp4"]);
     expect(r.errors).toHaveLength(0);
 
@@ -474,9 +475,7 @@ describe("session store", () => {
   it("dismissOpenErrors clears the lastOpenErrors slice", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession
-      .getState()
-      .openFiles([file("notes.txt")]);
+    await useSession.getState().openFiles([file("notes.txt")]);
     expect(useSession.getState().lastOpenErrors).toHaveLength(1);
     useSession.getState().dismissOpenErrors();
     expect(useSession.getState().lastOpenErrors).toHaveLength(0);
@@ -519,10 +518,9 @@ describe("session store", () => {
   it("clear closes every wasm handle", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession.getState().openFiles([
-      file("short.mcap"),
-      file("short.mf4"),
-    ]);
+    await useSession
+      .getState()
+      .openFiles([file("short.mcap"), file("short.mf4")]);
     expect(useSession.getState().sources).toHaveLength(2);
     await useSession.getState().clear();
     expect(useSession.getState().sources).toHaveLength(0);
@@ -532,10 +530,9 @@ describe("session store", () => {
   it("removeSource closes one handle and keeps the others", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession.getState().openFiles([
-      file("short.mcap"),
-      file("short.mf4"),
-    ]);
+    await useSession
+      .getState()
+      .openFiles([file("short.mcap"), file("short.mf4")]);
     expect(useSession.getState().sources).toHaveLength(2);
 
     await useSession.getState().removeSource("short.mcap");
@@ -567,10 +564,9 @@ describe("session store", () => {
   it("removeSource prunes panel bindings that pointed at the closed source", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession.getState().openFiles([
-      file("short.mcap"),
-      file("short.mf4"),
-    ]);
+    await useSession
+      .getState()
+      .openFiles([file("short.mcap"), file("short.mf4")]);
     const st = useSession.getState();
     const mcapCh = st.channels.find((c) => c.sourceId === "short.mcap")!;
     const mf4Ch = st.channels.find((c) => c.sourceId === "short.mf4")!;
@@ -601,11 +597,13 @@ describe("session store", () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
     // mcap is [1000, 2000]; mp4 is [10_000, 20_000]; union → [1000, 20_000].
-    await useSession.getState().openFiles([
-      file("short.mcap"),
-      file("clip.mp4"),
-      file("clip.mp4.timestamps"),
-    ]);
+    await useSession
+      .getState()
+      .openFiles([
+        file("short.mcap"),
+        file("clip.mp4"),
+        file("clip.mp4.timestamps"),
+      ]);
     // Park the cursor inside the mp4 tail, which only the mp4 source covers.
     useSession.getState().setCursor(18_000n);
     expect(useSession.getState().cursorNs).toBe(18_000n);
@@ -955,11 +953,15 @@ describe("fetchChannelRange", () => {
     // `channelMap` in PlotPanel keep them apart.
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession.getState().openFiles([file("short.mf4"), file("short.mf4")]);
+    await useSession
+      .getState()
+      .openFiles([file("short.mf4"), file("short.mf4")]);
     const sources = useSession.getState().sources;
     expect(sources).toHaveLength(2);
     expect(sources[0].id).not.toBe(sources[1].id);
-    expect(sources[0].channels[0].nativeId).toBe(sources[1].channels[0].nativeId);
+    expect(sources[0].channels[0].nativeId).toBe(
+      sources[1].channels[0].nativeId,
+    );
     expect(sources[0].channels[0].id).not.toBe(sources[1].channels[0].id);
 
     // Routes still hit the right wasm handle with the correct nativeId
@@ -971,7 +973,6 @@ describe("fetchChannelRange", () => {
       `mf4FetchRange:${sources[1].handle}:0/1:500:3000:false`,
     );
   });
-
 });
 
 describe("per-source time offset (Feature 2)", () => {
@@ -991,9 +992,7 @@ describe("per-source time offset (Feature 2)", () => {
       .then(() => {
         const id = useSession.getState().sources[0].id;
         useSession.getState().setSourceOffset(id, "123456789");
-        expect(useSession.getState().sources[0].timeOffsetNs).toBe(
-          123456789n,
-        );
+        expect(useSession.getState().sources[0].timeOffsetNs).toBe(123456789n);
       });
   });
 
@@ -1051,7 +1050,9 @@ describe("per-source time offset (Feature 2)", () => {
     await useSession.getState().openFiles([file("signals.csv")]);
     const head = useSession.getState().pendingTabularImports[0];
     await useSession.getState().confirmTabularImport(head.id, head.suggested);
-    const src = useSession.getState().sources.find((s) => s.kind === "tabular")!;
+    const src = useSession
+      .getState()
+      .sources.find((s) => s.kind === "tabular")!;
     useSession.getState().setSourceOffset(src.id, "500");
     const bytes = await useSession
       .getState()
@@ -1092,7 +1093,9 @@ describe("sidecar-less mp4 timestamp binding (Feature 1)", () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
     // Drop the csv and the mp4 together: tabular import is queued first.
-    await useSession.getState().openFiles([file("signals.csv"), file("cam.mp4")]);
+    await useSession
+      .getState()
+      .openFiles([file("signals.csv"), file("cam.mp4")]);
     const head = useSession.getState().pendingTabularImports[0];
     await useSession.getState().confirmTabularImport(head.id, head.suggested);
     const tabular = useSession
@@ -1118,7 +1121,9 @@ describe("sidecar-less mp4 timestamp binding (Feature 1)", () => {
     worker.setTabularTimeColumn(
       BigInt64Array.from(Array.from({ length: 29 }, (_v, i) => BigInt(i))),
     );
-    await useSession.getState().openFiles([file("signals.csv"), file("cam.mp4")]);
+    await useSession
+      .getState()
+      .openFiles([file("signals.csv"), file("cam.mp4")]);
     const head = useSession.getState().pendingTabularImports[0];
     await useSession.getState().confirmTabularImport(head.id, head.suggested);
     const tabular = useSession
@@ -1498,9 +1503,9 @@ describe("layout + bindings (T6.2)", () => {
     // Disabling sync adopts the shared window as the panel's own (no jump)…
     store.setPlotSyncTimeAxis("plot-1", false);
     expect(useSession.getState().plotZoom["plot-1"]?.x).toEqual(shared);
-    expect(useSession.getState().plotPanelSettings["plot-1"]?.syncTimeAxis).toBe(
-      false,
-    );
+    expect(
+      useSession.getState().plotPanelSettings["plot-1"]?.syncTimeAxis,
+    ).toBe(false);
     // …and the shared window itself is left alone (other plots may use it).
     expect(useSession.getState().sharedPlotZoomX).toEqual(shared);
 
@@ -1509,7 +1514,8 @@ describe("layout + bindings (T6.2)", () => {
     store.setPlotSyncTimeAxis("plot-1", true);
     expect(useSession.getState().plotZoom["plot-1"]?.x ?? null).toBeNull();
     expect(
-      "syncTimeAxis" in (useSession.getState().plotPanelSettings["plot-1"] ?? {}),
+      "syncTimeAxis" in
+        (useSession.getState().plotPanelSettings["plot-1"] ?? {}),
     ).toBe(false);
 
     // No-op when the flag is unchanged (identity preserved).
@@ -1555,13 +1561,11 @@ describe("layout + bindings (T6.2)", () => {
   });
 
   it("setPlotChannelTransform stores and clears per-channel (P7)", () => {
-    useSession
-      .getState()
-      .setPlotChannelTransform("plot-1", "/speed", {
-        kind: "scale",
-        mul: 3.6,
-        add: 0,
-      });
+    useSession.getState().setPlotChannelTransform("plot-1", "/speed", {
+      kind: "scale",
+      mul: 3.6,
+      add: 0,
+    });
     expect(
       useSession.getState().plotPanelSettings["plot-1"].transforms,
     ).toEqual({ "/speed": { kind: "scale", mul: 3.6, add: 0 } });
@@ -1657,9 +1661,7 @@ describe("named layouts (Phase 4)", () => {
     useSession.getState().setVideoBinding("video-1", "/changed");
     useSession.getState().addPlotChannel("plot-1", "/b");
 
-    const entry = useSession
-      .getState()
-      .namedLayouts.find((l) => l.id === id)!;
+    const entry = useSession.getState().namedLayouts.find((l) => l.id === id)!;
     expect(entry.videoBindings).toEqual({ "video-1": "/cam" });
     expect(entry.plotBindings).toEqual({ "plot-1": ["/a"] });
   });
@@ -1773,9 +1775,7 @@ describe("named layouts (Phase 4)", () => {
     useSession.getState().setPlotGapThreshold("plot-1", 9);
     useSession.getState().setPlotGapThreshold("plot-2", 0.5);
 
-    const entry = useSession
-      .getState()
-      .namedLayouts.find((l) => l.id === id)!;
+    const entry = useSession.getState().namedLayouts.find((l) => l.id === id)!;
     expect(entry.plotPanelSettings).toEqual({
       "plot-1": { gapThresholdSec: 1.5 },
     });
@@ -1816,9 +1816,7 @@ describe("named layouts (Phase 4)", () => {
     });
     useSession.getState().addTableChannel("table-1", "/b");
 
-    const entry = useSession
-      .getState()
-      .namedLayouts.find((l) => l.id === id)!;
+    const entry = useSession.getState().namedLayouts.find((l) => l.id === id)!;
     expect(entry.mapBindings).toEqual({
       "map-1": { latChannelId: "/lat", lonChannelId: "/lon" },
     });
@@ -1869,10 +1867,7 @@ describe("Phase 6 panel bindings", () => {
   });
 
   it("addTableChannel dedupes and caps at MAX_PLOT_SERIES", () => {
-    const ids = Array.from(
-      { length: MAX_PLOT_SERIES + 2 },
-      (_, i) => `/c${i}`,
-    );
+    const ids = Array.from({ length: MAX_PLOT_SERIES + 2 }, (_, i) => `/c${i}`);
     for (const id of ids) useSession.getState().addTableChannel("table-1", id);
     expect(useSession.getState().tableBindings["table-1"]).toEqual(
       ids.slice(0, MAX_PLOT_SERIES),
@@ -1895,9 +1890,7 @@ describe("Phase 6 panel bindings", () => {
   });
 
   it("setTableBinding dedupes and caps wholesale replace", () => {
-    useSession
-      .getState()
-      .setTableBinding("table-1", ["/a", "/a", "/b", "/c"]);
+    useSession.getState().setTableBinding("table-1", ["/a", "/a", "/b", "/c"]);
     expect(useSession.getState().tableBindings["table-1"]).toEqual([
       "/a",
       "/b",
@@ -1906,9 +1899,7 @@ describe("Phase 6 panel bindings", () => {
   });
 
   it("setEnumBinding dedupes and caps wholesale replace", () => {
-    useSession
-      .getState()
-      .setEnumBinding("enum-1", ["/a", "/a", "/b", "/c"]);
+    useSession.getState().setEnumBinding("enum-1", ["/a", "/a", "/b", "/c"]);
     expect(useSession.getState().enumBindings["enum-1"]).toEqual([
       "/a",
       "/b",
@@ -2039,9 +2030,7 @@ describe("bookmarks (Phase 8)", () => {
     const after = useSession.getState().bookmarks;
     expect(after).not.toBe(before);
     // Untouched entry is the same object reference.
-    expect(after.find((x) => x.id === b)).toBe(
-      before.find((x) => x.id === b),
-    );
+    expect(after.find((x) => x.id === b)).toBe(before.find((x) => x.id === b));
   });
 });
 
@@ -2075,7 +2064,9 @@ describe("event tagging (Phase 8)", () => {
   it("setBookmarkTag sets a value, then clears it with an empty string", () => {
     const id = useSession.getState().addBookmark(1_000n, "x");
     useSession.getState().setBookmarkTag(id, "weather", "Rain");
-    expect(useSession.getState().bookmarks[0].tags).toEqual({ weather: "Rain" });
+    expect(useSession.getState().bookmarks[0].tags).toEqual({
+      weather: "Rain",
+    });
     useSession.getState().setBookmarkTag(id, "weather", "   ");
     expect(useSession.getState().bookmarks[0].tags).toEqual({});
   });
@@ -2121,7 +2112,9 @@ describe("event tagging (Phase 8)", () => {
     useSession.getState().setBookmarkTag(id, "road_type", "Highway");
     useSession.getState().removeTagAttribute("weather");
     expect(
-      useSession.getState().eventTagConfig.attributes.some((a) => a.id === "weather"),
+      useSession
+        .getState()
+        .eventTagConfig.attributes.some((a) => a.id === "weather"),
     ).toBe(false);
     // The orphaned tag value is pruned; the still-valid one remains.
     expect(useSession.getState().bookmarks[0].tags).toEqual({
@@ -2134,7 +2127,9 @@ describe("event tagging (Phase 8)", () => {
     const id = useSession.getState().addBookmark(1_000n, "x");
     useSession.getState().setBookmarkTag(id, "weather", "Rain");
     useSession.getState().setEventTagConfig({
-      attributes: [{ id: "lighting", name: "Lighting", type: "text", options: [] }],
+      attributes: [
+        { id: "lighting", name: "Lighting", type: "text", options: [] },
+      ],
     });
     expect(useSession.getState().bookmarks[0].tags).toEqual({});
     resetConfig();

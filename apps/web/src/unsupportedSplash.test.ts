@@ -41,9 +41,7 @@ describe("unsupportedSplashHtml", () => {
   it("names Safari as the unsupported browser (by design)", () => {
     expect(unsupportedSplashHtml).toContain("Safari");
     // Firefox must not be described as unsupported any more.
-    expect(unsupportedSplashHtml).not.toMatch(
-      /Firefox and Safari do not/,
-    );
+    expect(unsupportedSplashHtml).not.toMatch(/Firefox and Safari do not/);
   });
 
   it("includes an alert role for assistive tech", () => {

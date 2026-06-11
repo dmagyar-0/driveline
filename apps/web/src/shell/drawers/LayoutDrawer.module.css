@@ -77,7 +77,9 @@
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--radius-3);
   opacity: 0;
-  transition: opacity var(--motion-base), background var(--motion-base);
+  transition:
+    opacity var(--motion-base),
+    background var(--motion-base);
 }
 
 .rowItem:hover .removeBtn,
@@ -109,7 +111,9 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--fs-13);
-  transition: border-color var(--motion-base), color var(--motion-base);
+  transition:
+    border-color var(--motion-base),
+    color var(--motion-base);
 }
 
 /* Kind glyph inside an add-panel row. Slightly muted so the label

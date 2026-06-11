@@ -92,9 +92,11 @@ export interface PlotSyncSnapshot {
   // One entry per bound channel, in binding order. `null` when no sample
   // in that channel has `ts <= cursorNs` yet — callers must treat this
   // as "not yet resolvable", not as a valid value.
-  sampleAtCursor: Array<
-    { channelId: string; tsNs: bigint; value: number } | null
-  >;
+  sampleAtCursor: Array<{
+    channelId: string;
+    tsNs: bigint;
+    value: number;
+  } | null>;
   // T6.3 — per-series min/max over the most recent fetched range. Used
   // by `signalAlignment.spec.ts` to assert two sources agree on the same
   // underlying signal within one sample. Empty when no render has
@@ -124,10 +126,7 @@ declare global {
 }
 
 // Largest index `i` with `tsNs[i] <= cursorNs`, or -1 if none.
-function lastIndexAtOrBefore(
-  tsNs: BigInt64Array,
-  cursorNs: bigint,
-): number {
+function lastIndexAtOrBefore(tsNs: BigInt64Array, cursorNs: bigint): number {
   let lo = 0;
   let hi = tsNs.length - 1;
   let ans = -1;
@@ -244,7 +243,13 @@ function buildZoomGeometry(
     if (ax.side === 0) {
       axes.push({ target: { kind: "x" }, x0: left, x1: right, y0: 0, y1: top });
     } else {
-      axes.push({ target: { kind: "x" }, x0: left, x1: right, y0: bottom, y1: OUT });
+      axes.push({
+        target: { kind: "x" },
+        x0: left,
+        x1: right,
+        y0: bottom,
+        y1: OUT,
+      });
     }
   }
 
@@ -263,7 +268,13 @@ function buildZoomGeometry(
       axes.push({ target: { kind: "y", axisIdx }, x0: 0, x1: left, y0, y1 });
       axes.push({ target: { kind: "y", axisIdx }, x0: right, x1: OUT, y0, y1 });
       // Drawing-area slice: x + this band's y.
-      axes.push({ target: { kind: "both", axisIdx }, x0: left, x1: right, y0, y1 });
+      axes.push({
+        target: { kind: "both", axisIdx },
+        x0: left,
+        x1: right,
+        y0,
+        y1,
+      });
     }
     return { plot: { left, top, width, height }, axes };
   }
@@ -611,10 +622,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // so a synced panel tracks `sharedPlotZoomX` and an unsynced one its own.
   const effectiveZoomX = useSession((s) => effectivePlotZoomX(s, panelId));
 
-  const boundChannelIds = useMemo(
-    () => storedBindings ?? [],
-    [storedBindings],
-  );
+  const boundChannelIds = useMemo(() => storedBindings ?? [], [storedBindings]);
 
   const [pickerOpen, setPickerOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState<DOMRect | null>(null);
@@ -632,7 +640,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
   const channels = useMemo(() => channelMap(sources), [sources]);
   const boundChannels = useMemo(
-    () => boundChannelIds.map((id) => channels.get(id)).filter((c): c is Channel => !!c),
+    () =>
+      boundChannelIds
+        .map((id) => channels.get(id))
+        .filter((c): c is Channel => !!c),
     [boundChannelIds, channels],
   );
 
@@ -640,8 +651,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // pass-through). A small helper so the fetch effect, seriesKey, and the
   // tooltip all agree on the same transform per series.
   const transformFor = useCallback(
-    (channelId: string): Transform =>
-      transforms?.[channelId] ?? NONE_TRANSFORM,
+    (channelId: string): Transform => transforms?.[channelId] ?? NONE_TRANSFORM,
     [transforms],
   );
 
@@ -709,10 +719,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   const globalRangeSec = useMemo<[number, number] | null>(
     () =>
       globalRange
-        ? [
-            Number(globalRange.startNs) / 1e9,
-            Number(globalRange.endNs) / 1e9,
-          ]
+        ? [Number(globalRange.startNs) / 1e9, Number(globalRange.endNs) / 1e9]
         : null,
     [globalRange],
   );
@@ -754,9 +761,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   // binary-search raw ns timestamps. Parallel to `lastRangeRef`: both
   // are updated in lockstep after a successful fetch and cleared when
   // the binding set changes.
-  const decodedRef = useRef<
-    { channelId: string; series: PlotSeries }[]
-  >([]);
+  const decodedRef = useRef<{ channelId: string; series: PlotSeries }[]>([]);
   // Per-axis auto-ranged DATA extent recorded by each banded scale's `range`
   // callback (keyed by 0-based axis index). The wheel handler needs this as
   // the base for the first per-band zoom notch: while stacked, the resolved
@@ -801,8 +806,7 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
   );
 
   const publishSync = useCallback(() => {
-    const store =
-      (window.__drivelinePlotPanels ??= {});
+    const store = (window.__drivelinePlotPanels ??= {});
     const decoded = decodedRef.current;
     // Read current cursorNs directly from the store so this callback does
     // not need cursorNs in its dep list — keeping it stable across cursor
@@ -1012,7 +1016,10 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
           if (isBandedAxis) {
             const dataLo = Number.isFinite(dMin) ? dMin : 0;
             const dataHi = Number.isFinite(dMax) ? dMax : 1;
-            bandDataExtentRef.current.set(axisIdx, { min: dataLo, max: dataHi });
+            bandDataExtentRef.current.set(axisIdx, {
+              min: dataLo,
+              max: dataHi,
+            });
             const lo = z && z.max > z.min ? z.min : dataLo;
             const hi = z && z.max > z.min ? z.max : dataHi;
             bandExtent.set(key, hi > lo ? [lo, hi] : null);
@@ -1508,7 +1515,8 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       // Map over the VISIBLE window so a drag-scrub while zoomed lands on
       // the instant under the pointer (not on the full fetched range). Uses
       // the effective window (shared when synced, else this panel's own).
-      const range = effectiveZoomXRef.current ?? lastRangeRef.current ?? globalRange;
+      const range =
+        effectiveZoomXRef.current ?? lastRangeRef.current ?? globalRange;
       if (!plot || !container || !range) return null;
       const rect = container.getBoundingClientRect();
       const dpr = window.devicePixelRatio || 1;
@@ -1733,13 +1741,19 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
       <div className={styles.controls}>
         <div className={styles.chips} data-testid="plot-chips">
           {boundChannels.map((c) => (
-            <span key={c.id} className={styles.chip} data-testid={`chip-${c.id}`}>
+            <span
+              key={c.id}
+              className={styles.chip}
+              data-testid={`chip-${c.id}`}
+            >
               <span
                 className={styles.chipSwatch}
                 style={{ background: colorFor(c.id) }}
                 aria-hidden
               />
-              <span className={styles.chipLabel}>{channelLabel(c, unitOverrides)}</span>
+              <span className={styles.chipLabel}>
+                {channelLabel(c, unitOverrides)}
+              </span>
               <span
                 className={styles.chipValue}
                 data-testid={`chip-value-${c.id}`}
@@ -1874,7 +1888,9 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
                   style={{ background: colorFor(c.id) }}
                   aria-hidden
                 />
-                <span className={styles.tooltipLabel}>{channelLabel(c, unitOverrides)}</span>
+                <span className={styles.tooltipLabel}>
+                  {channelLabel(c, unitOverrides)}
+                </span>
                 <span className={styles.tooltipValue}>
                   {valueAtHover.has(c.id)
                     ? formatValue(valueAtHover.get(c.id)!)

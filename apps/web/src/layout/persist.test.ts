@@ -78,10 +78,7 @@ describe("layout persist", () => {
 
   it("returns null when version mismatches", () => {
     const s = makeStorage();
-    s.setItem(
-      LAYOUT_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 4 }),
-    );
+    s.setItem(LAYOUT_STORAGE_KEY, JSON.stringify({ ...SAMPLE, version: 4 }));
     expect(loadLayoutFromStorage(s)).toBeNull();
   });
 

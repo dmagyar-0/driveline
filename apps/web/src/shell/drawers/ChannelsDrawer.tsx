@@ -179,7 +179,11 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
       offsets.push(top);
     };
 
-    const walk = (sourceId: string, nodes: ChannelTreeNode[], depth: number) => {
+    const walk = (
+      sourceId: string,
+      nodes: ChannelTreeNode[],
+      depth: number,
+    ) => {
       for (const node of nodes) {
         if (node.children.length === 0 && node.channel !== null) {
           push(

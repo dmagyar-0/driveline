@@ -39,7 +39,9 @@ function resolveBinding(
   return null;
 }
 
-function videoChannels(sources: SourceMeta[]): { source: SourceMeta; channel: Channel }[] {
+function videoChannels(
+  sources: SourceMeta[],
+): { source: SourceMeta; channel: Channel }[] {
   const out: { source: SourceMeta; channel: Channel }[] = [];
   for (const source of sources) {
     if (source.kind !== "mcap" && source.kind !== "mp4+sidecar") continue;
@@ -92,8 +94,8 @@ export function VideoPanelContainer({ panelId }: VideoPanelContainerProps) {
     <div className={styles.empty} data-testid={`video-panel-${panelId}-empty`}>
       {candidates.length === 0 ? (
         <p className={styles.hint}>
-          Drop an MCAP file or mp4 + sidecar with a video channel to bind
-          this panel.
+          Drop an MCAP file or mp4 + sidecar with a video channel to bind this
+          panel.
         </p>
       ) : (
         <>

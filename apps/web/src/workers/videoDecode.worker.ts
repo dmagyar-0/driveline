@@ -145,7 +145,10 @@ let decodeError: Error | null = null;
 // is the same `MessagePort` the worker already uses to hand `VideoFrame`s
 // to the panel; the panel's `onmessage` discriminates frame vs control
 // payloads. No-op when no sink is connected yet.
-function postSinkControl(message: { type: "decode-error"; reason: string }): void {
+function postSinkControl(message: {
+  type: "decode-error";
+  reason: string;
+}): void {
   const sink = session?.sink ?? pendingSink;
   if (sink) sink.postMessage(message);
 }
@@ -287,7 +290,10 @@ async function configureFromFirstKeyframe(
     optimizeForLatency: false,
     ...(framing === "avcc" && description ? { description } : {}),
   };
-  const cacheKey = configCacheKey(codec, baseConfig.description as Uint8Array | null | undefined);
+  const cacheKey = configCacheKey(
+    codec,
+    baseConfig.description as Uint8Array | null | undefined,
+  );
   let supported = configSupportedCache.get(cacheKey);
   if (supported === undefined) {
     // First time we've seen this config: ask the browser and cache the answer.

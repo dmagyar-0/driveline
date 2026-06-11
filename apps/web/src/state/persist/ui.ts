@@ -27,12 +27,7 @@ export function clampDrawerWidth(px: number): number {
   return Math.round(Math.min(DRAWER_WIDTH_MAX, Math.max(DRAWER_WIDTH_MIN, px)));
 }
 
-export type RailTab =
-  | "sources"
-  | "channels"
-  | "layout"
-  | "panel"
-  | "events";
+export type RailTab = "sources" | "channels" | "layout" | "panel" | "events";
 
 const RAIL_TABS: readonly RailTab[] = [
   "sources",
@@ -72,7 +67,9 @@ function validate(raw: unknown): PersistedUi | null {
   // than rejecting the whole blob — that would needlessly drop the user's
   // rail tab + collapse state. Anything present is clamped into range.
   const drawerWidth = clampDrawerWidth(
-    typeof raw.drawerWidth === "number" ? raw.drawerWidth : DRAWER_WIDTH_DEFAULT,
+    typeof raw.drawerWidth === "number"
+      ? raw.drawerWidth
+      : DRAWER_WIDTH_DEFAULT,
   );
   return {
     version: UI_SCHEMA_VERSION,

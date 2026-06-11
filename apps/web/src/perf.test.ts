@@ -145,9 +145,13 @@ describe("installPerfHooks", () => {
       // `clear` must remove existing marks/measures so Playwright can
       // reset between scenarios.
       mark("install-clear-test");
-      expect(performance.getEntriesByName("install-clear-test")).toHaveLength(1);
+      expect(performance.getEntriesByName("install-clear-test")).toHaveLength(
+        1,
+      );
       hook!.clear();
-      expect(performance.getEntriesByName("install-clear-test")).toHaveLength(0);
+      expect(performance.getEntriesByName("install-clear-test")).toHaveLength(
+        0,
+      );
     } finally {
       delete (globalThis as unknown as { window?: unknown }).window;
     }

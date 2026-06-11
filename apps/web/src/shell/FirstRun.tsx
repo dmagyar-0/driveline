@@ -186,8 +186,8 @@ export function FirstRun() {
       <UrlLoad variant="firstrun" />
 
       <p className={styles.kbd}>
-        <kbd>Space</kbd> play · <kbd>←</kbd> <kbd>→</kbd> step ·{" "}
-        <kbd>Home</kbd> / <kbd>End</kbd> jump
+        <kbd>Space</kbd> play · <kbd>←</kbd> <kbd>→</kbd> step · <kbd>Home</kbd>{" "}
+        / <kbd>End</kbd> jump
       </p>
 
       <input

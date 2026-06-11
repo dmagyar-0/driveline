@@ -386,7 +386,13 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    const buf = mcap_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = mcap_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
     // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
     return Comlink.transfer(buf, [buf.buffer]);
   },
@@ -416,7 +422,13 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    const buf = ros1_bag_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = ros1_bag_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
     // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
     return Comlink.transfer(buf, [buf.buffer]);
   },
@@ -450,7 +462,13 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    const buf = ros2_db3_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = ros2_db3_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
     // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
     return Comlink.transfer(buf, [buf.buffer]);
   },
@@ -496,7 +514,9 @@ export const dataCoreApi = {
    */
   async mp4SidecarIndex(handle: number): Promise<Mp4SidecarIndex> {
     await ready;
-    const idx = normaliseMp4Index(mp4_sidecar_index(handle) as RawMp4SidecarIndex);
+    const idx = normaliseMp4Index(
+      mp4_sidecar_index(handle) as RawMp4SidecarIndex,
+    );
     return Comlink.transfer(idx, [
       idx.ptsNs.buffer,
       idx.offsets.buffer,
@@ -513,10 +533,7 @@ export const dataCoreApi = {
    * `"parquet"`. Accepting a `File` keeps the bytes on the worker side —
    * no structured-clone copy. The file is re-read by `openTabular` on confirm.
    */
-  async tabularInspect(
-    file: File,
-    format: string,
-  ): Promise<RawTabularSchema> {
+  async tabularInspect(file: File, format: string): Promise<RawTabularSchema> {
     await ready;
     return tabular_inspect(
       new Uint8Array(await file.arrayBuffer()),
@@ -561,7 +578,13 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    const buf = tabular_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = tabular_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
     // Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
     return Comlink.transfer(buf, [buf.buffer]);
   },
@@ -627,7 +650,13 @@ export const dataCoreApi = {
     includePrev: boolean,
   ): Promise<Uint8Array> {
     await ready;
-    const buf = lidar_fetch_range(handle, channelId, startNs, endNs, includePrev);
+    const buf = lidar_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
     return Comlink.transfer(buf, [buf.buffer]);
   },
   /**
@@ -703,7 +732,10 @@ export const dataCoreApi = {
           mcap_video_open(h, c, p),
         mcapVideoNextBatch: async (streamId: number, maxN: number) => {
           await ready;
-          const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
+          const raw = mcap_video_next_batch(
+            streamId,
+            maxN,
+          ) as RawEncodedChunk[];
           const chunks = raw.map(normaliseEncodedChunk);
           // Cast to ArrayBuffer: wasm buffers are never SharedArrayBuffers.
           const buffers = new Set<ArrayBuffer>(

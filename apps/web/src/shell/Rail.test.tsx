@@ -10,7 +10,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { Rail } from "./Rail";
 import { DRAWER_REGION_ID } from "./Drawer";
@@ -34,15 +36,15 @@ describe("Rail", () => {
   it("flips aria-expanded + aria-pressed on the active tab only", () => {
     render(<Rail />);
     fireEvent.click(screen.getByTestId("rail-channels"));
-    expect(screen.getByTestId("rail-channels").getAttribute("aria-expanded")).toBe(
-      "true",
-    );
-    expect(screen.getByTestId("rail-channels").getAttribute("aria-pressed")).toBe(
-      "true",
-    );
-    expect(screen.getByTestId("rail-sources").getAttribute("aria-expanded")).toBe(
-      "false",
-    );
+    expect(
+      screen.getByTestId("rail-channels").getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("rail-channels").getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(
+      screen.getByTestId("rail-sources").getAttribute("aria-expanded"),
+    ).toBe("false");
   });
 
   it("collapses to null render when railCollapsed is set", () => {

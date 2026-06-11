@@ -170,10 +170,7 @@ describe("videoReadiness registry", () => {
     setPanelReadiness("p1", snap("waiting"));
     expect(bad).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "videoReadiness: subscriber threw",
-      err,
-    );
+    expect(warn).toHaveBeenCalledWith("videoReadiness: subscriber threw", err);
     warn.mockRestore();
   });
 });

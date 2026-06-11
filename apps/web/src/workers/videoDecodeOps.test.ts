@@ -216,9 +216,7 @@ describe("videoStreamOps", () => {
       mp4SetActive: vi.fn(async () => undefined),
       mp4MarkPending: vi.fn(async () => undefined),
       mp4ClearPending: vi.fn(async () => undefined),
-    } as unknown as Comlink.Remote<
-      import("./videoDecodeOps").Mp4LazyPortApi
-    >;
+    } as unknown as Comlink.Remote<import("./videoDecodeOps").Mp4LazyPortApi>;
     const ops = videoStreamOps(dc, "mp4", mp4Port);
     const result = await ops.open(2, "1/video", 33_000_000n);
     expect(result.streamId).toBeGreaterThan(0);
@@ -231,8 +229,7 @@ describe("videoStreamOps", () => {
       new Uint8Array([0x01, 0x42, 0x00, 0x1e]),
     );
     expect(
-      (mp4Port as unknown as Record<string, ReturnType<typeof vi.fn>>)
-        .mp4Index,
+      (mp4Port as unknown as Record<string, ReturnType<typeof vi.fn>>).mp4Index,
     ).toHaveBeenCalledWith(2);
     const batch = await ops.next(result.streamId, 2);
     expect(batch.length).toBe(2);
@@ -274,9 +271,7 @@ describe("videoStreamOps", () => {
       mp4SetActive: vi.fn(async () => undefined),
       mp4MarkPending: vi.fn(async () => undefined),
       mp4ClearPending: vi.fn(async () => undefined),
-    } as unknown as Comlink.Remote<
-      import("./videoDecodeOps").Mp4LazyPortApi
-    >;
+    } as unknown as Comlink.Remote<import("./videoDecodeOps").Mp4LazyPortApi>;
     const ops = videoStreamOps(dc, "mp4", mp4Port);
     const result = await ops.open(7, "1/video", 0n);
     // Annex-B mode: no avcC description, framing surfaced as `"annexb"`.
@@ -316,9 +311,7 @@ describe("detectMp4Framing", () => {
   it("returns `avcc` for length-prefixed samples (typical x264 mp4)", () => {
     // 4-byte BE length = 0x12 (18 bytes), then SPS NAL header byte.
     expect(
-      detectMp4Framing(
-        new Uint8Array([0, 0, 0, 0x12, 0x67, 0x42, 0x00, 0x1e]),
-      ),
+      detectMp4Framing(new Uint8Array([0, 0, 0, 0x12, 0x67, 0x42, 0x00, 0x1e])),
     ).toBe("avcc");
     // A larger length still well below the 16M boundary.
     expect(
@@ -331,9 +324,7 @@ describe("detectMp4Framing", () => {
   it("returns `annexb` for samples that begin with `00 00 00 01` plus a valid NAL header", () => {
     // SPS (type 7) — the synthesized Annex-B fixture's first NAL.
     expect(
-      detectMp4Framing(
-        new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e]),
-      ),
+      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e])),
     ).toBe("annexb");
     // IDR slice (type 5) — also a valid first-NAL kind in the wild.
     expect(
@@ -368,9 +359,9 @@ describe("detectMp4Framing", () => {
       detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x18, 0x55, 0x66])),
     ).toBe("avcc");
     // nal_unit_type = 31 (max 5-bit value).
-    expect(
-      detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x1f, 0x55])),
-    ).toBe("avcc");
+    expect(detectMp4Framing(new Uint8Array([0, 0, 0, 1, 0x1f, 0x55]))).toBe(
+      "avcc",
+    );
   });
 
   it("returns `annexb` at the inclusive nal_type == 1 lower boundary (non-IDR slice)", () => {
@@ -476,10 +467,7 @@ describe("pickStartCursor", () => {
   // long string of corrupt frames until the next keyframe. Both surface
   // only via end-to-end video playback, so pin the dispatch points here.
 
-  function index(
-    pts: number[],
-    sync: number[],
-  ): Mp4LazyIndex {
+  function index(pts: number[], sync: number[]): Mp4LazyIndex {
     return {
       channelId: "1/video",
       ptsNs: BigInt64Array.from(pts.map((p) => BigInt(p))),
@@ -521,10 +509,7 @@ describe("pickStartCursor", () => {
   it("snaps to the largest sync sample <= target across multiple GOPs", () => {
     // Two GOPs: [0..2] starting at sync index 0, [3..5] starting at sync
     // index 3. Target inside the second GOP must rewind to its keyframe.
-    const idx = index(
-      [0, 100, 200, 300, 400, 500],
-      [1, 0, 0, 1, 0, 0],
-    );
+    const idx = index([0, 100, 200, 300, 400, 500], [1, 0, 0, 1, 0, 0]);
     expect(pickStartCursor(idx, 450n)).toBe(3);
     expect(pickStartCursor(idx, 500n)).toBe(3);
   });

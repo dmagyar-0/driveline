@@ -174,7 +174,8 @@ export class Mp4SampleCache {
    * mid-fetch updates are no-ops.
    */
   markPendingFetch(targetNs: bigint): void {
-    if (this.currentPending && this.currentPending.targetNs === targetNs) return;
+    if (this.currentPending && this.currentPending.targetNs === targetNs)
+      return;
     this.currentPending = { targetNs };
     for (const cb of this.pendingListeners) cb(this.currentPending);
   }
@@ -287,7 +288,8 @@ export class Mp4SampleCache {
 
     // Pass 1: evict non-active samples (LRU first) — the common case,
     // which preferentially retains the active set.
-    const evictable: Array<{ idx: number; lastUsed: number; size: number }> = [];
+    const evictable: Array<{ idx: number; lastUsed: number; size: number }> =
+      [];
     for (const [idx, entry] of this.cached) {
       if (this.active.has(idx)) continue;
       evictable.push({ idx, lastUsed: entry.lastUsed, size: entry.size });
