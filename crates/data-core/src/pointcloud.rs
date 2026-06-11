@@ -32,6 +32,15 @@
 //! time** (it binary-searches `spin_times()` locally and only refetches when
 //! the active spin changes), so a frame's worth of points crosses the boundary
 //! at most once per spin, not once per cursor tick.
+//!
+//! ## Memory at open
+//!
+//! Decoded spins stay resident for the reader's lifetime (that's the design —
+//! scrubbing needs random access to any spin), but `open` itself **streams**:
+//! batches of [`OPEN_BATCH_ROWS`] rows are decoded and converted to spins one
+//! at a time, so peak memory is `file bytes + spins + one small batch`. A
+//! full-density Alpamayo clip (~52M points) opens in ~1.1 GB of wasm heap,
+//! where decoding everything before extraction used to need ~2× that and trap.
 
 use std::sync::Arc;
 
@@ -49,6 +58,13 @@ use crate::types::{Channel, ChannelId, ChannelKind, FetchOpts, SourceKind, Sourc
 /// Default per-spin display duration (ns) when a source has a single spin (or
 /// we otherwise can't infer the cadence). 100 ms ≈ the 10 Hz Alpamayo cadence.
 const DEFAULT_SPIN_PERIOD_NS: i64 = 100_000_000;
+
+/// Rows per decoded Arrow batch while opening. At native Alpamayo density a
+/// spin row decodes to ~3.4 MB (260k points × 13 bytes), so 8 rows caps the
+/// transient decode buffer at ~27 MB. The parquet default (1024 rows) would
+/// decode a whole ~200-spin file into one batch, holding every point twice
+/// (batch + extracted spins) and trapping the wasm heap above ~48M points.
+const OPEN_BATCH_ROWS: usize = 8;
 
 /// Metadata key naming the point-cloud channel; matches the converter.
 const NAME_META_KEY: &str = "driveline.pointcloud.name";
@@ -155,20 +171,112 @@ impl PointCloudReader {
         }
     }
 
-    /// Read every row group into a single set of record batches.
-    fn read_batches(bytes: &[u8]) -> crate::Result<(Arc<Schema>, Vec<RecordBatch>)> {
-        let builder =
-            ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::copy_from_slice(bytes))
-                .map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
+    /// Open from an owned buffer. Preferred at the wasm boundary: the incoming
+    /// `Vec<u8>` is wrapped in `Bytes` without copying (the `parquet` crate's
+    /// `ChunkReader: 'static` bound is why a borrowed `&[u8]` must be copied),
+    /// so a multi-hundred-MB file exists in the heap once, not twice.
+    pub fn open_owned(bytes: Vec<u8>) -> crate::Result<Self> {
+        Self::open_bytes(bytes::Bytes::from(bytes))
+    }
+
+    /// Streaming open: decode [`OPEN_BATCH_ROWS`]-row batches one at a time,
+    /// extracting each batch's spins before the next is read, so peak memory
+    /// is the file bytes + accumulated spins + one small batch — never the
+    /// whole file decoded at once.
+    fn open_bytes(data: bytes::Bytes) -> crate::Result<Self> {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data)
+            .map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
         let schema = builder.schema().clone();
+
+        let t_idx = schema
+            .index_of("t_ns")
+            .map_err(|_| crate::Error::PointCloudSchema("missing `t_ns` column".into()))?;
+        let pos_idx = schema
+            .index_of("positions")
+            .map_err(|_| crate::Error::PointCloudSchema("missing `positions` column".into()))?;
+        let int_idx = schema
+            .index_of("intensities")
+            .map_err(|_| crate::Error::PointCloudSchema("missing `intensities` column".into()))?;
+
+        let name = schema
+            .metadata()
+            .get(NAME_META_KEY)
+            .cloned()
+            .unwrap_or_else(|| "points".to_string());
+
+        // Row count from the footer, capped so a corrupt header can't trigger
+        // a giant up-front allocation (the Vec still grows past this fine).
+        let total_rows = usize::try_from(builder.metadata().file_metadata().num_rows())
+            .unwrap_or(0)
+            .min(65_536);
+
         let reader = builder
+            .with_batch_size(OPEN_BATCH_ROWS)
             .build()
             .map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
-        let mut batches = Vec::new();
+
+        let mut spins: Vec<Spin> = Vec::with_capacity(total_rows);
         for batch in reader {
-            batches.push(batch.map_err(|e| crate::Error::PointCloudParse(e.to_string()))?);
+            let batch = batch.map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
+            Self::extract_spins(&batch, t_idx, pos_idx, int_idx, &mut spins)?;
+            // `batch` drops here, before the next one is decoded.
         }
-        Ok((schema, batches))
+
+        Ok(Self::from_spins(spins, name))
+    }
+
+    /// Append one decoded batch's rows to `spins` as owned [`Spin`]s.
+    fn extract_spins(
+        batch: &RecordBatch,
+        t_idx: usize,
+        pos_idx: usize,
+        int_idx: usize,
+        spins: &mut Vec<Spin>,
+    ) -> crate::Result<()> {
+        // Accept either a plain Int64 or an Int64-backed Timestamp(ns)
+        // column for `t_ns` — both decode to the same i64 ns values.
+        let ts_col = batch.column(t_idx);
+        let ts_vals: Vec<i64> = match ts_col.data_type() {
+            DataType::Int64 => ts_col.as_primitive::<Int64Type>().values().to_vec(),
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => ts_col
+                .as_any()
+                .downcast_ref::<TimestampNanosecondArray>()
+                .ok_or_else(|| {
+                    crate::Error::PointCloudSchema("malformed `t_ns` timestamp column".into())
+                })?
+                .values()
+                .to_vec(),
+            other => {
+                return Err(crate::Error::PointCloudSchema(format!(
+                    "`t_ns` must be Int64 or Timestamp(ns), got {other:?}"
+                )))
+            }
+        };
+
+        let pos_col = batch.column(pos_idx);
+        let int_col = batch.column(int_idx);
+        for (row, &ts_ns) in ts_vals.iter().enumerate() {
+            let positions = Self::list_f32_row(pos_col.as_ref(), row)?;
+            let intensities = Self::list_u8_row(int_col.as_ref(), row)?;
+            // Each point needs 3 position floats; a mismatch means a
+            // malformed file — surface it rather than render garbage.
+            if positions.len() != intensities.len() * 3 {
+                // `spins.len()` = rows already extracted = this row's
+                // file-absolute index (one spin is pushed per row).
+                return Err(crate::Error::PointCloudSchema(format!(
+                    "spin row {}: positions ({}) != 3 * intensities ({})",
+                    spins.len(),
+                    positions.len(),
+                    intensities.len()
+                )));
+            }
+            spins.push(Spin {
+                ts_ns,
+                positions,
+                intensities,
+            });
+        }
+        Ok(())
     }
 
     /// Pull one row's `Float32` list value out of a `List<Float32>` /
@@ -232,69 +340,9 @@ impl PointCloudReader {
 
 impl Reader for PointCloudReader {
     fn open(bytes: &[u8]) -> crate::Result<Self> {
-        let (schema, batches) = Self::read_batches(bytes)?;
-
-        let t_idx = schema
-            .index_of("t_ns")
-            .map_err(|_| crate::Error::PointCloudSchema("missing `t_ns` column".into()))?;
-        let pos_idx = schema
-            .index_of("positions")
-            .map_err(|_| crate::Error::PointCloudSchema("missing `positions` column".into()))?;
-        let int_idx = schema
-            .index_of("intensities")
-            .map_err(|_| crate::Error::PointCloudSchema("missing `intensities` column".into()))?;
-
-        let name = schema
-            .metadata()
-            .get(NAME_META_KEY)
-            .cloned()
-            .unwrap_or_else(|| "points".to_string());
-
-        let mut spins: Vec<Spin> = Vec::new();
-        for batch in &batches {
-            // Accept either a plain Int64 or an Int64-backed Timestamp(ns)
-            // column for `t_ns` — both decode to the same i64 ns values.
-            let ts_col = batch.column(t_idx);
-            let ts_vals: Vec<i64> = match ts_col.data_type() {
-                DataType::Int64 => ts_col.as_primitive::<Int64Type>().values().to_vec(),
-                DataType::Timestamp(TimeUnit::Nanosecond, _) => ts_col
-                    .as_any()
-                    .downcast_ref::<TimestampNanosecondArray>()
-                    .ok_or_else(|| {
-                        crate::Error::PointCloudSchema("malformed `t_ns` timestamp column".into())
-                    })?
-                    .values()
-                    .to_vec(),
-                other => {
-                    return Err(crate::Error::PointCloudSchema(format!(
-                        "`t_ns` must be Int64 or Timestamp(ns), got {other:?}"
-                    )))
-                }
-            };
-
-            let pos_col = batch.column(pos_idx);
-            let int_col = batch.column(int_idx);
-            for (row, &ts_ns) in ts_vals.iter().enumerate() {
-                let positions = Self::list_f32_row(pos_col.as_ref(), row)?;
-                let intensities = Self::list_u8_row(int_col.as_ref(), row)?;
-                // Each point needs 3 position floats; a mismatch means a
-                // malformed file — surface it rather than render garbage.
-                if positions.len() != intensities.len() * 3 {
-                    return Err(crate::Error::PointCloudSchema(format!(
-                        "spin row {row}: positions ({}) != 3 * intensities ({})",
-                        positions.len(),
-                        intensities.len()
-                    )));
-                }
-                spins.push(Spin {
-                    ts_ns,
-                    positions,
-                    intensities,
-                });
-            }
-        }
-
-        Ok(Self::from_spins(spins, name))
+        // The copy is forced by the `ChunkReader: 'static` bound; callers that
+        // own their buffer should use `open_owned` and skip it.
+        Self::open_bytes(bytes::Bytes::copy_from_slice(bytes))
     }
 
     fn meta(&self) -> &SourceMeta {
@@ -419,7 +467,14 @@ mod tests {
 
     /// Build a Driveline point-cloud Parquet in memory from `spins`.
     fn write_pointcloud_parquet(spins: &[TestSpin]) -> Vec<u8> {
+        write_pointcloud_parquet_rg(spins, None)
+    }
+
+    /// Like [`write_pointcloud_parquet`] but with an explicit max row-group
+    /// size, so tests can force multi-row-group files.
+    fn write_pointcloud_parquet_rg(spins: &[TestSpin], max_row_group: Option<usize>) -> Vec<u8> {
         use parquet::arrow::ArrowWriter;
+        use parquet::file::properties::WriterProperties;
 
         let ts = Int64Array::from(spins.iter().map(|(t, _)| *t).collect::<Vec<_>>());
 
@@ -462,9 +517,14 @@ mod tests {
         )
         .unwrap();
 
+        let props = max_row_group.map(|n| {
+            WriterProperties::builder()
+                .set_max_row_group_size(n)
+                .build()
+        });
         let mut buf = Vec::new();
         {
-            let mut w = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+            let mut w = ArrowWriter::try_new(&mut buf, schema, props).unwrap();
             w.write(&batch).unwrap();
             w.close().unwrap();
         }
@@ -614,5 +674,70 @@ mod tests {
             PointCloudReader::open(&buf),
             Err(crate::Error::PointCloudSchema(_))
         ));
+    }
+
+    /// `open` must produce identical spins whether the file arrives in one
+    /// decode batch or is streamed across many batches and row groups. 20
+    /// spins with 3-row row groups forces 7 row groups and (with
+    /// `OPEN_BATCH_ROWS` = 8) at least 3 decode batches.
+    #[test]
+    fn open_streams_across_row_groups_and_batches() {
+        // Compile-time guard: the fixture must span multiple decode batches.
+        const _: () = assert!(20 > OPEN_BATCH_ROWS);
+        let spins: Vec<TestSpin> = (0..20i64)
+            .map(|i| {
+                let v = i as f32;
+                (
+                    1_000_000_000 + i * 100_000_000,
+                    vec![(v, v + 0.5, -v, (i * 12) as u8), (10.0 + v, 0.0, 1.0, 7)],
+                )
+            })
+            .collect();
+        let bytes = write_pointcloud_parquet_rg(&spins, Some(3));
+        let r = PointCloudReader::open(&bytes).unwrap();
+
+        // Every spin survived, in order, none duplicated across batch seams.
+        let want_ts: Vec<i64> = (0..20i64)
+            .map(|i| 1_000_000_000 + i * 100_000_000)
+            .collect();
+        assert_eq!(r.spin_times(), &want_ts[..]);
+        assert_eq!(r.meta().channels[0].sample_count, 2);
+
+        // Spot-check a spin that sits mid-file (row 9: second decode batch,
+        // fourth row group) — values must not be smeared by neighbours.
+        let ipc = r
+            .fetch_range(
+                &"lidar_top_360fov".to_string(),
+                TimeRange {
+                    start_ns: 1_900_000_000,
+                    end_ns: 1_900_000_001,
+                },
+                FetchOpts::default(),
+            )
+            .unwrap();
+        let batch = parse_ipc(&ipc);
+        assert_eq!(batch.num_rows(), 1);
+        let pos = batch.column(1).as_list::<i32>().value(0);
+        let f = pos
+            .as_any()
+            .downcast_ref::<arrow_array::Float32Array>()
+            .unwrap();
+        assert_eq!(f.values(), &[9.0, 9.5, -9.0, 19.0, 0.0, 1.0]);
+    }
+
+    /// The zero-copy owned-buffer path must behave exactly like the slice path.
+    #[test]
+    fn open_owned_matches_open() {
+        let bytes = sample();
+        let a = PointCloudReader::open(&bytes).unwrap();
+        let b = PointCloudReader::open_owned(bytes).unwrap();
+        assert_eq!(a.spin_times(), b.spin_times());
+        assert_eq!(a.meta().time_range.start_ns, b.meta().time_range.start_ns);
+        assert_eq!(a.meta().time_range.end_ns, b.meta().time_range.end_ns);
+        assert_eq!(
+            a.meta().channels[0].sample_count,
+            b.meta().channels[0].sample_count
+        );
+        assert_eq!(a.meta().channels[0].name, b.meta().channels[0].name);
     }
 }
