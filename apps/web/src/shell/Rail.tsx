@@ -89,11 +89,7 @@ export function Rail() {
   if (railCollapsed) return null;
 
   return (
-    <nav
-      className={styles.rail}
-      aria-label="Sections"
-      data-testid="rail"
-    >
+    <nav className={styles.rail} aria-label="Sections" data-testid="rail">
       {RAIL_ITEMS.map((item) => {
         const isActive = activeRailTab === item.id;
         return (

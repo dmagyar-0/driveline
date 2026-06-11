@@ -81,11 +81,10 @@ export function decodeViewState(str: string): ViewState | null {
     if (!isObject(raw)) return null;
 
     const b = isObject(raw.bindings) ? raw.bindings : {};
-    const asRecord = <T,>(v: unknown): Record<string, T> =>
+    const asRecord = <T>(v: unknown): Record<string, T> =>
       isObject(v) ? (v as Record<string, T>) : {};
 
-    const cursorNs =
-      typeof raw.cursorNs === "string" ? raw.cursorNs : "0";
+    const cursorNs = typeof raw.cursorNs === "string" ? raw.cursorNs : "0";
     // Validate the cursor really is a decimal bigint; bail to "0" otherwise
     // so a later `BigInt(cursorNs)` can't throw on apply.
     let normalisedCursor = "0";

@@ -308,8 +308,8 @@ describe("mergeSeries · gap-threshold mode (Phase 8)", () => {
     // emit each gap's (held-end, gap-start) pair in correct global order,
     // even when one series' gap markers fall between another series'
     // real samples. Output xs must be strictly ascending.
-    const a = mk([0, 100], [10, 20]);   // gap: held-end 1, gap-start 1+ε
-    const b = mk([2, 50], [200, 250]);  // gap: held-end 3, gap-start 3+ε
+    const a = mk([0, 100], [10, 20]); // gap: held-end 1, gap-start 1+ε
+    const b = mk([2, 50], [200, 250]); // gap: held-end 3, gap-start 3+ε
     const out = mergeSeries([a, b], 1);
     const xs = Array.from(out.xs);
     for (let i = 1; i < xs.length; i++) {

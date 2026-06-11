@@ -85,9 +85,7 @@ function isStringArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
-function isNullableStringMap(
-  v: unknown,
-): v is Record<string, string | null> {
+function isNullableStringMap(v: unknown): v is Record<string, string | null> {
   if (!isPlainObject(v)) return false;
   for (const k of Object.keys(v)) {
     const x = v[k];
@@ -126,9 +124,7 @@ export function coerceEnumBindings(
   return out;
 }
 
-function isMapBindingMap(
-  v: unknown,
-): v is Record<string, MapBinding | null> {
+function isMapBindingMap(v: unknown): v is Record<string, MapBinding | null> {
   if (!isPlainObject(v)) return false;
   for (const k of Object.keys(v)) {
     const x = v[k];
@@ -172,7 +168,10 @@ function isPlotPanelSettingsMap(
       return false;
     }
     // Optional, additive field — only validate when present.
-    if (x.axisAssignments !== undefined && !isAxisAssignmentMap(x.axisAssignments)) {
+    if (
+      x.axisAssignments !== undefined &&
+      !isAxisAssignmentMap(x.axisAssignments)
+    ) {
       return false;
     }
     if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {

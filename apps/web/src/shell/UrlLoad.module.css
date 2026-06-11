@@ -59,7 +59,9 @@
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-3);
   cursor: pointer;
-  transition: border-color var(--motion-base), color var(--motion-base);
+  transition:
+    border-color var(--motion-base),
+    color var(--motion-base);
 }
 
 .button:hover:not(:disabled) {

@@ -25,7 +25,9 @@ import { useSession } from "../state/store";
 
 // React 19 RTL requires this flag so `act(...)` wrappers don't log
 // "environment not configured" noise.
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 function seedSession(): void {
   // Seed a 10 s session so Home/End land on distinct values and the

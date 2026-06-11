@@ -30,7 +30,11 @@ export interface DrawerResizerProps {
   onCommit: (px: number) => void;
 }
 
-export function DrawerResizer({ width, onPreview, onCommit }: DrawerResizerProps) {
+export function DrawerResizer({
+  width,
+  onPreview,
+  onCommit,
+}: DrawerResizerProps) {
   // Drag origin + the most recent previewed width. Refs (not state) so the
   // pointermove handler reads fresh values without re-binding listeners.
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);

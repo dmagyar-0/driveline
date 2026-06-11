@@ -18,9 +18,7 @@ describe("synthesizeSidecarText", () => {
     const big = 1_700_000_000_123_456_789n;
     const ts = new BigInt64Array([big, big + 1n]);
     const text = synthesizeSidecarText(ts);
-    expect(text).toBe(
-      "0\t1700000000123456789\n1\t1700000000123456790\n",
-    );
+    expect(text).toBe("0\t1700000000123456789\n1\t1700000000123456790\n");
     // The exact final digits survive — proof no lossy conversion happened.
     expect(text.includes("123456789")).toBe(true);
     expect(text.includes("123456790")).toBe(true);

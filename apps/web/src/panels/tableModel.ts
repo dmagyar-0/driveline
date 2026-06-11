@@ -99,10 +99,7 @@ export function buildTableModel(inputs: TableColumnInput[]): TableModel {
 
 // Index of the last row at-or-before `cursorNs`, or -1 when the cursor
 // precedes every row. Binary search over the ascending `rowTsNs`.
-export function lastRowAtOrBefore(
-  rowTsNs: bigint[],
-  cursorNs: bigint,
-): number {
+export function lastRowAtOrBefore(rowTsNs: bigint[], cursorNs: bigint): number {
   let lo = 0;
   let hi = rowTsNs.length - 1;
   let ans = -1;

@@ -33,7 +33,12 @@ function multiply(a: Mat4, b: Mat4): Mat4 {
   return out;
 }
 
-function perspective(fovyRad: number, aspect: number, near: number, far: number): Mat4 {
+function perspective(
+  fovyRad: number,
+  aspect: number,
+  near: number,
+  far: number,
+): Mat4 {
   const f = 1 / Math.tan(fovyRad / 2);
   const nf = 1 / (near - far);
   const out = new Float32Array(16);
@@ -92,14 +97,26 @@ function turboLut(): Uint8Array {
     const t4 = t3 * t;
     const t5 = t4 * t;
     const r =
-      0.13572138 + 4.6153926 * t - 42.66032258 * t2 + 132.13108234 * t3 -
-      152.94239396 * t4 + 59.28637943 * t5;
+      0.13572138 +
+      4.6153926 * t -
+      42.66032258 * t2 +
+      132.13108234 * t3 -
+      152.94239396 * t4 +
+      59.28637943 * t5;
     const g =
-      0.09140261 + 2.19418839 * t + 4.84296658 * t2 - 14.18503333 * t3 +
-      4.27729857 * t4 + 2.82956604 * t5;
+      0.09140261 +
+      2.19418839 * t +
+      4.84296658 * t2 -
+      14.18503333 * t3 +
+      4.27729857 * t4 +
+      2.82956604 * t5;
     const b =
-      0.1066733 + 12.64194608 * t - 60.58204836 * t2 + 110.36276771 * t3 -
-      89.90310912 * t4 + 27.34824973 * t5;
+      0.1066733 +
+      12.64194608 * t -
+      60.58204836 * t2 +
+      110.36276771 * t3 -
+      89.90310912 * t4 +
+      27.34824973 * t5;
     lut[i * 4 + 0] = Math.max(0, Math.min(255, Math.round(r * 255)));
     lut[i * 4 + 1] = Math.max(0, Math.min(255, Math.round(g * 255)));
     lut[i * 4 + 2] = Math.max(0, Math.min(255, Math.round(b * 255)));
@@ -146,7 +163,11 @@ uniform vec4 u_color;
 out vec4 fragColor;
 void main() { fragColor = u_color; }`;
 
-function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
+function compile(
+  gl: WebGL2RenderingContext,
+  type: number,
+  src: string,
+): WebGLShader {
   const sh = gl.createShader(type);
   if (!sh) throw new Error("createShader failed");
   gl.shaderSource(sh, src);
@@ -159,7 +180,11 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
   return sh;
 }
 
-function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram {
+function link(
+  gl: WebGL2RenderingContext,
+  vs: string,
+  fs: string,
+): WebGLProgram {
   const p = gl.createProgram();
   if (!p) throw new Error("createProgram failed");
   gl.attachShader(p, compile(gl, gl.VERTEX_SHADER, vs));
@@ -174,7 +199,10 @@ function link(gl: WebGL2RenderingContext, vs: string, fs: string): WebGLProgram 
 }
 
 // Build a ground grid on the z=0 plane plus stronger x (red) / y (green) axes.
-function gridLines(extent: number, step: number): { grid: Float32Array; axes: Float32Array } {
+function gridLines(
+  extent: number,
+  step: number,
+): { grid: Float32Array; axes: Float32Array } {
   const grid: number[] = [];
   for (let v = -extent; v <= extent + 1e-6; v += step) {
     // lines parallel to x
@@ -183,8 +211,18 @@ function gridLines(extent: number, step: number): { grid: Float32Array; axes: Fl
     grid.push(v, -extent, 0, v, extent, 0);
   }
   const axes = new Float32Array([
-    0, 0, 0, extent, 0, 0, // +x
-    0, 0, 0, 0, extent, 0, // +y
+    0,
+    0,
+    0,
+    extent,
+    0,
+    0, // +x
+    0,
+    0,
+    0,
+    0,
+    extent,
+    0, // +y
   ]);
   return { grid: new Float32Array(grid), axes };
 }
@@ -290,7 +328,15 @@ export class PointCloudRenderer {
     this.lut = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.lut);
     gl.texImage2D(
-      gl.TEXTURE_2D, 0, gl.RGBA, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, turboLut(),
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA,
+      256,
+      1,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      turboLut(),
     );
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -367,7 +413,11 @@ export class PointCloudRenderer {
 
   /** Upload a new spin's geometry. `positions` is flattened xyz (len 3*count),
    *  `intensities` is 0..1 (len count). */
-  setPoints(positions: Float32Array, intensities: Float32Array, count: number): void {
+  setPoints(
+    positions: Float32Array,
+    intensities: Float32Array,
+    count: number,
+  ): void {
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuf);
     gl.bufferData(gl.ARRAY_BUFFER, positions, gl.DYNAMIC_DRAW);
@@ -392,7 +442,10 @@ export class PointCloudRenderer {
     if (positions.length < 3) return;
     // Stride large clouds — framing doesn't need every one of ~250k points.
     const stride = Math.max(3, Math.floor(positions.length / (20000 * 3)) * 3);
-    let cx = 0, cy = 0, cz = 0, n = 0;
+    let cx = 0,
+      cy = 0,
+      cz = 0,
+      n = 0;
     for (let i = 0; i + 2 < positions.length; i += stride) {
       cx += positions[i];
       cy += positions[i + 1];
@@ -466,8 +519,15 @@ export class PointCloudRenderer {
     // Point cloud.
     if (this.pointCount > 0) {
       gl.useProgram(this.pointProg);
-      gl.uniformMatrix4fv(gl.getUniformLocation(this.pointProg, "u_mvp"), false, mvp);
-      gl.uniform1f(gl.getUniformLocation(this.pointProg, "u_pointScale"), this.pointScale);
+      gl.uniformMatrix4fv(
+        gl.getUniformLocation(this.pointProg, "u_mvp"),
+        false,
+        mvp,
+      );
+      gl.uniform1f(
+        gl.getUniformLocation(this.pointProg, "u_pointScale"),
+        this.pointScale,
+      );
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, this.lut);
       gl.uniform1i(gl.getUniformLocation(this.pointProg, "u_lut"), 0);

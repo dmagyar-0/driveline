@@ -54,10 +54,7 @@ describe("ui persist", () => {
 
   it("returns null when version mismatches", () => {
     const s = makeStorage();
-    s.setItem(
-      UI_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 2 }),
-    );
+    s.setItem(UI_STORAGE_KEY, JSON.stringify({ ...SAMPLE, version: 2 }));
     expect(loadUiFromStorage(s)).toBeNull();
   });
 
@@ -117,7 +114,11 @@ describe("ui persist", () => {
     // keep the rail tab / collapse state — rather than being rejected.
     s.setItem(
       UI_STORAGE_KEY,
-      JSON.stringify({ version: 1, activeRailTab: "layout", railCollapsed: true }),
+      JSON.stringify({
+        version: 1,
+        activeRailTab: "layout",
+        railCollapsed: true,
+      }),
     );
     expect(loadUiFromStorage(s)).toEqual({
       version: 1,
@@ -239,12 +240,13 @@ describe("attachUiPersistence", () => {
   it("writes when activeRailTab changes", () => {
     const s = makeStorage();
     const store = makeFakeStore(initial);
-    const stop = attachUiPersistence(
-      store as unknown as typeof useSession,
-      s,
-    );
+    const stop = attachUiPersistence(store as unknown as typeof useSession, s);
     expect(loadUiFromStorage(s)).toBeNull();
-    store.push({ activeRailTab: "channels", railCollapsed: false, drawerWidth: 220 });
+    store.push({
+      activeRailTab: "channels",
+      railCollapsed: false,
+      drawerWidth: 220,
+    });
     expect(loadUiFromStorage(s)).toEqual({
       version: 1,
       activeRailTab: "channels",
@@ -257,10 +259,7 @@ describe("attachUiPersistence", () => {
   it("writes when railCollapsed changes", () => {
     const s = makeStorage();
     const store = makeFakeStore(initial);
-    const stop = attachUiPersistence(
-      store as unknown as typeof useSession,
-      s,
-    );
+    const stop = attachUiPersistence(store as unknown as typeof useSession, s);
     store.push({ activeRailTab: null, railCollapsed: true, drawerWidth: 220 });
     expect(loadUiFromStorage(s)).toEqual({
       version: 1,
@@ -274,10 +273,7 @@ describe("attachUiPersistence", () => {
   it("writes when drawerWidth changes", () => {
     const s = makeStorage();
     const store = makeFakeStore(initial);
-    const stop = attachUiPersistence(
-      store as unknown as typeof useSession,
-      s,
-    );
+    const stop = attachUiPersistence(store as unknown as typeof useSession, s);
     store.push({ activeRailTab: null, railCollapsed: false, drawerWidth: 400 });
     expect(loadUiFromStorage(s)).toEqual({
       version: 1,
@@ -295,12 +291,13 @@ describe("attachUiPersistence", () => {
       railCollapsed: false,
       drawerWidth: 220,
     });
-    const stop = attachUiPersistence(
-      store as unknown as typeof useSession,
-      s,
-    );
+    const stop = attachUiPersistence(store as unknown as typeof useSession, s);
     // Push the same values again; persistence layer must not write.
-    store.push({ activeRailTab: "layout", railCollapsed: false, drawerWidth: 220 });
+    store.push({
+      activeRailTab: "layout",
+      railCollapsed: false,
+      drawerWidth: 220,
+    });
     expect(loadUiFromStorage(s)).toBeNull();
     stop();
   });
@@ -308,14 +305,15 @@ describe("attachUiPersistence", () => {
   it("unsubscribes on the returned dispose handle", () => {
     const s = makeStorage();
     const store = makeFakeStore(initial);
-    const stop = attachUiPersistence(
-      store as unknown as typeof useSession,
-      s,
-    );
+    const stop = attachUiPersistence(store as unknown as typeof useSession, s);
     expect(store.listenerCount()).toBe(1);
     stop();
     expect(store.listenerCount()).toBe(0);
-    store.push({ activeRailTab: "events", railCollapsed: false, drawerWidth: 220 });
+    store.push({
+      activeRailTab: "events",
+      railCollapsed: false,
+      drawerWidth: 220,
+    });
     expect(loadUiFromStorage(s)).toBeNull();
   });
 

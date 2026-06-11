@@ -39,8 +39,18 @@ describe("panelNameFor", () => {
           type: "tabset",
           weight: 50,
           children: [
-            { type: "tab", id: "video-1", name: "Front cam", component: "video" },
-            { type: "tab", id: "video-2", name: "Rear cam", component: "video" },
+            {
+              type: "tab",
+              id: "video-1",
+              name: "Front cam",
+              component: "video",
+            },
+            {
+              type: "tab",
+              id: "video-2",
+              name: "Rear cam",
+              component: "video",
+            },
           ],
         },
         {

@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  encodeViewState,
-  decodeViewState,
-  type ViewState,
-} from "./urlState";
+import { encodeViewState, decodeViewState, type ViewState } from "./urlState";
 
 function sample(): ViewState {
   return {
@@ -73,9 +69,7 @@ describe("urlState encode/decode", () => {
   });
 
   it("normalises an invalid cursorNs to '0' so apply can't throw", () => {
-    const encoded = encodeBare(
-      JSON.stringify({ cursorNs: "not-a-number" }),
-    );
+    const encoded = encodeBare(JSON.stringify({ cursorNs: "not-a-number" }));
     const decoded = decodeViewState(encoded);
     expect(decoded!.cursorNs).toBe("0");
   });

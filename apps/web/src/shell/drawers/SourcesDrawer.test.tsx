@@ -17,7 +17,9 @@ import {
   waitFor,
 } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { SourcesDrawer } from "./SourcesDrawer";
 import { useSession } from "../../state/store";
@@ -72,9 +74,7 @@ describe("SourcesDrawer", () => {
     fireEvent.click(closeBtn);
     // `removeSource` is async (serialised behind the open/close chain);
     // wait for the slice to drain before asserting the row is gone.
-    await waitFor(() =>
-      expect(useSession.getState().sources).toHaveLength(0),
-    );
+    await waitFor(() => expect(useSession.getState().sources).toHaveLength(0));
     expect(screen.queryByTestId("source-row-demo.mcap")).toBeNull();
   });
 

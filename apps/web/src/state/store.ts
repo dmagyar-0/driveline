@@ -29,10 +29,7 @@ import {
   type RawTabularSchema,
 } from "./tabularImport";
 import { MAX_PLOT_SERIES } from "../panels/palette";
-import {
-  loadLayoutFromStorage,
-  type MapBinding,
-} from "../layout/persist";
+import { loadLayoutFromStorage, type MapBinding } from "../layout/persist";
 import {
   loadUiFromStorage,
   clampDrawerWidth,
@@ -43,10 +40,7 @@ import {
   loadNamedLayoutsFromStorage,
   type NamedLayout,
 } from "./persist/namedLayouts";
-import {
-  loadBookmarksFromStorage,
-  type Bookmark,
-} from "./persist/bookmarks";
+import { loadBookmarksFromStorage, type Bookmark } from "./persist/bookmarks";
 import {
   loadEventTagConfigFromStorage,
   DEFAULT_EVENT_TAG_CONFIG,
@@ -120,10 +114,7 @@ export interface Channel {
 
 // Length-prefix encoding so distinct (sourceId, nativeId) pairs cannot
 // compose to the same string regardless of how either side embeds `|`.
-export function qualifiedChannelId(
-  sourceId: string,
-  nativeId: string,
-): string {
+export function qualifiedChannelId(sourceId: string, nativeId: string): string {
   return `${nativeId.length}|${nativeId}|${sourceId}`;
 }
 
@@ -2002,266 +1993,267 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     async openFiles(files) {
-      const run = (): Promise<OpenResult> => timed("open", async () => {
-        if (!worker) throw new Error("session store: worker not initialised");
-        const w = worker;
+      const run = (): Promise<OpenResult> =>
+        timed("open", async () => {
+          if (!worker) throw new Error("session store: worker not initialised");
+          const w = worker;
 
-        const buckets = bucketFiles(files);
-        const opened: string[] = [];
-        const errors: BucketError[] = [...buckets.errors];
-        const newSources: SourceMeta[] = [];
-        const existing = get().sources;
+          const buckets = bucketFiles(files);
+          const opened: string[] = [];
+          const errors: BucketError[] = [...buckets.errors];
+          const newSources: SourceMeta[] = [];
+          const existing = get().sources;
 
-        for (const f of buckets.mcap) {
-          try {
-            // Pass the `File` itself, not its bytes: the worker copies it into
-            // OPFS (streamed) and reads the summary + chunks lazily via a sync
-            // access handle, so a multi-gigabyte MCAP is never held in memory.
-            const handle = await w.openMcap(f);
-            const summary = await w.mcapSummary(handle);
-            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
-            const channels = mcapChannels(id, summary);
-            newSources.push({
-              id,
-              kind: "mcap",
-              name: f.name,
-              handle,
-              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
-              channels,
-              timeOffsetNs: 0n,
-            });
-            opened.push(f.name);
-          } catch (e) {
-            errors.push({ name: f.name, reason: String(e) });
+          for (const f of buckets.mcap) {
+            try {
+              // Pass the `File` itself, not its bytes: the worker copies it into
+              // OPFS (streamed) and reads the summary + chunks lazily via a sync
+              // access handle, so a multi-gigabyte MCAP is never held in memory.
+              const handle = await w.openMcap(f);
+              const summary = await w.mcapSummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = mcapChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "mcap",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
           }
-        }
 
-        for (const f of buckets.ros1) {
-          try {
-            // ROS 1 bags open whole-file in wasm memory (no OPFS/ranged path).
-            // Pass the `File` directly — the worker reads it there, so no
-            // structured-clone of the full bytes crosses the Comlink boundary.
-            const handle = await w.openRos1Bag(f);
-            const summary = await w.ros1BagSummary(handle);
-            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
-            const channels = mcapChannels(id, summary);
-            newSources.push({
-              id,
-              kind: "ros1",
-              name: f.name,
-              handle,
-              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
-              channels,
-              timeOffsetNs: 0n,
-            });
-            opened.push(f.name);
-          } catch (e) {
-            errors.push({ name: f.name, reason: String(e) });
+          for (const f of buckets.ros1) {
+            try {
+              // ROS 1 bags open whole-file in wasm memory (no OPFS/ranged path).
+              // Pass the `File` directly — the worker reads it there, so no
+              // structured-clone of the full bytes crosses the Comlink boundary.
+              const handle = await w.openRos1Bag(f);
+              const summary = await w.ros1BagSummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = mcapChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "ros1",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
           }
-        }
 
-        for (const f of buckets.ros2db3) {
-          try {
-            // ROS 2 rosbag2 `.db3` bags open whole-file in wasm memory (no
-            // OPFS/ranged path). Pass the `File` directly — the worker reads
-            // it there; no full-file clone crosses the Comlink boundary.
-            const handle = await w.openRos2Db3(f);
-            const summary = await w.ros2Db3Summary(handle);
-            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
-            const channels = mcapChannels(id, summary);
-            newSources.push({
-              id,
-              kind: "ros2db3",
-              name: f.name,
-              handle,
-              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
-              channels,
-              timeOffsetNs: 0n,
-            });
-            opened.push(f.name);
-          } catch (e) {
-            errors.push({ name: f.name, reason: String(e) });
+          for (const f of buckets.ros2db3) {
+            try {
+              // ROS 2 rosbag2 `.db3` bags open whole-file in wasm memory (no
+              // OPFS/ranged path). Pass the `File` directly — the worker reads
+              // it there; no full-file clone crosses the Comlink boundary.
+              const handle = await w.openRos2Db3(f);
+              const summary = await w.ros2Db3Summary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = mcapChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "ros2db3",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
           }
-        }
 
-        for (const f of buckets.mf4) {
-          try {
-            // Pass the `File` itself, not its bytes: the worker copies it into
-            // OPFS (streamed) and reads channels lazily via a sync access
-            // handle, so a multi-gigabyte MF4 is never held in memory. Only
-            // plotted signals are decoded and retained.
-            const handle = await w.openMf4(f);
-            const summary = await w.mf4Summary(handle);
-            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
-            const channels = mf4Channels(id, summary);
-            newSources.push({
-              id,
-              kind: "mf4",
-              name: f.name,
-              handle,
-              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
-              channels,
-              timeOffsetNs: 0n,
-            });
-            opened.push(f.name);
-          } catch (e) {
-            errors.push({ name: f.name, reason: String(e) });
+          for (const f of buckets.mf4) {
+            try {
+              // Pass the `File` itself, not its bytes: the worker copies it into
+              // OPFS (streamed) and reads channels lazily via a sync access
+              // handle, so a multi-gigabyte MF4 is never held in memory. Only
+              // plotted signals are decoded and retained.
+              const handle = await w.openMf4(f);
+              const summary = await w.mf4Summary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = mf4Channels(id, summary);
+              newSources.push({
+                id,
+                kind: "mf4",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
           }
-        }
 
-        for (const { file: f, format } of buckets.lidar) {
-          try {
-            // Point-cloud sources open eagerly: decoded into per-spin buffers
-            // in wasm. Pass the `File` directly — the worker reads it there so
-            // no full-file clone crosses the Comlink boundary. Parquet carries
-            // many spins; a `.pcd` carries a single cloud — both surface as
-            // `kind: "lidar"`.
-            const handle =
-              format === "pcd"
-                ? await w.openLidarPcd(f)
-                : await w.openLidar(f);
-            const summary = await w.lidarSummary(handle);
-            const id = uniqueSourceId(f.name, [...existing, ...newSources]);
-            const channels = lidarChannels(id, summary);
-            newSources.push({
-              id,
-              kind: "lidar",
-              name: f.name,
-              handle,
-              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
-              channels,
-              // Point clouds carry no time offset; alignment is in the spin
-              // timestamps and the fetch path passes bytes through unshifted.
-              timeOffsetNs: 0n,
-            });
-            opened.push(f.name);
-          } catch (e) {
-            errors.push({ name: f.name, reason: String(e) });
+          for (const { file: f, format } of buckets.lidar) {
+            try {
+              // Point-cloud sources open eagerly: decoded into per-spin buffers
+              // in wasm. Pass the `File` directly — the worker reads it there so
+              // no full-file clone crosses the Comlink boundary. Parquet carries
+              // many spins; a `.pcd` carries a single cloud — both surface as
+              // `kind: "lidar"`.
+              const handle =
+                format === "pcd"
+                  ? await w.openLidarPcd(f)
+                  : await w.openLidar(f);
+              const summary = await w.lidarSummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = lidarChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "lidar",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                // Point clouds carry no time offset; alignment is in the spin
+                // timestamps and the fetch path passes bytes through unshifted.
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
           }
-        }
 
-        for (const pair of buckets.mp4Pairs) {
-          try {
-            // Only the `ftyp` + `moov` boxes are needed by the WASM parser —
-            // `mdat` (the actual encoded video, often multi-GB) is never
-            // dereferenced during `open_pair`. `readMp4HeaderBytes` walks the
-            // box structure via `File.slice()` and returns just the header,
-            // typically a few MB even for 2 GB sources.
-            //
-            // The sidecar `.mp4.timestamps` is passed as a `File` so the
-            // worker reads its bytes there — no main-thread allocation.
-            let mp4HeaderBytes: Uint8Array | null = await readMp4HeaderBytes(
-              pair.mp4,
-            );
-            const handle = await w.openMp4Sidecar(mp4HeaderBytes, pair.ts);
-            // `summary` and `index` both depend only on the handle — run them
-            // in parallel (two independent worker round-trips).
-            const [summary, index] = (await Promise.all([
-              w.mp4SidecarSummary(handle),
-              w.mp4SidecarIndex(handle),
-            ])) as [Mp4SidecarSummary, Mp4SidecarIndex];
-            // Release the transient header buffer — peak memory during open
-            // drops back to steady state once WASM owns the index.
-            mp4HeaderBytes = null;
-            const id = uniqueSourceId(pair.mp4.name, [
-              ...existing,
-              ...newSources,
-            ]);
-            const channels = mp4Channels(id, summary);
-            const cache = new Mp4SampleCache(pair.mp4, index);
-            cache.onLoadedRangesChange((ranges) => {
-              const prev = get().loadedRanges;
-              set({ loadedRanges: { ...prev, [id]: ranges } });
-            });
-            cache.onPendingFetchChange((p) => {
-              const prev = get().pendingFetch;
-              set({ pendingFetch: { ...prev, [id]: p } });
-            });
-            newSources.push({
-              id,
-              kind: "mp4+sidecar",
-              name: pair.mp4.name,
-              handle,
-              timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
-              channels,
-              mp4Cache: cache,
-              // Video alignment is baked into the sidecar timestamps; the decode
-              // hot path stays offset-free, so this is always 0n.
-              timeOffsetNs: 0n,
-            });
-            opened.push(pair.mp4.name);
-          } catch (e) {
-            errors.push({ name: pair.mp4.name, reason: String(e) });
+          for (const pair of buckets.mp4Pairs) {
+            try {
+              // Only the `ftyp` + `moov` boxes are needed by the WASM parser —
+              // `mdat` (the actual encoded video, often multi-GB) is never
+              // dereferenced during `open_pair`. `readMp4HeaderBytes` walks the
+              // box structure via `File.slice()` and returns just the header,
+              // typically a few MB even for 2 GB sources.
+              //
+              // The sidecar `.mp4.timestamps` is passed as a `File` so the
+              // worker reads its bytes there — no main-thread allocation.
+              let mp4HeaderBytes: Uint8Array | null = await readMp4HeaderBytes(
+                pair.mp4,
+              );
+              const handle = await w.openMp4Sidecar(mp4HeaderBytes, pair.ts);
+              // `summary` and `index` both depend only on the handle — run them
+              // in parallel (two independent worker round-trips).
+              const [summary, index] = (await Promise.all([
+                w.mp4SidecarSummary(handle),
+                w.mp4SidecarIndex(handle),
+              ])) as [Mp4SidecarSummary, Mp4SidecarIndex];
+              // Release the transient header buffer — peak memory during open
+              // drops back to steady state once WASM owns the index.
+              mp4HeaderBytes = null;
+              const id = uniqueSourceId(pair.mp4.name, [
+                ...existing,
+                ...newSources,
+              ]);
+              const channels = mp4Channels(id, summary);
+              const cache = new Mp4SampleCache(pair.mp4, index);
+              cache.onLoadedRangesChange((ranges) => {
+                const prev = get().loadedRanges;
+                set({ loadedRanges: { ...prev, [id]: ranges } });
+              });
+              cache.onPendingFetchChange((p) => {
+                const prev = get().pendingFetch;
+                set({ pendingFetch: { ...prev, [id]: p } });
+              });
+              newSources.push({
+                id,
+                kind: "mp4+sidecar",
+                name: pair.mp4.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                mp4Cache: cache,
+                // Video alignment is baked into the sidecar timestamps; the decode
+                // hot path stays offset-free, so this is always 0n.
+                timeOffsetNs: 0n,
+              });
+              opened.push(pair.mp4.name);
+            } catch (e) {
+              errors.push({ name: pair.mp4.name, reason: String(e) });
+            }
           }
-        }
 
-        // Sidecar-less mp4s (Feature 1) can't open until the user picks a
-        // tabular source for their per-frame timestamps. Slice the header bytes
-        // now (the same cheap ftyp+moov walk the paired path uses) and queue a
-        // pending binding the `VideoTimestampDialog` resolves on confirm. We
-        // DON'T add them to `opened` — they're not loaded yet.
-        const newVideoBindings: PendingVideoBinding[] = [];
-        for (const mp4 of buckets.videoNeedsTimestamps) {
-          try {
-            const headerBytes = await readMp4HeaderBytes(mp4);
-            newVideoBindings.push({
-              id: `vts-${videoBindingSeq++}`,
-              name: mp4.name,
-              file: mp4,
-              headerBytes,
-            });
-          } catch (e) {
-            errors.push({ name: mp4.name, reason: String(e) });
+          // Sidecar-less mp4s (Feature 1) can't open until the user picks a
+          // tabular source for their per-frame timestamps. Slice the header bytes
+          // now (the same cheap ftyp+moov walk the paired path uses) and queue a
+          // pending binding the `VideoTimestampDialog` resolves on confirm. We
+          // DON'T add them to `opened` — they're not loaded yet.
+          const newVideoBindings: PendingVideoBinding[] = [];
+          for (const mp4 of buckets.videoNeedsTimestamps) {
+            try {
+              const headerBytes = await readMp4HeaderBytes(mp4);
+              newVideoBindings.push({
+                id: `vts-${videoBindingSeq++}`,
+                name: mp4.name,
+                file: mp4,
+                headerBytes,
+              });
+            } catch (e) {
+              errors.push({ name: mp4.name, reason: String(e) });
+            }
           }
-        }
 
-        // CSV / Parquet can't open until the user picks a time basis. Inspect
-        // each one (without retaining its bytes), then queue a pending import
-        // the dialog will turn into a source on confirm. The original `File`
-        // is stored in the queue (not a byte copy) so the JS heap holds no
-        // large allocation between inspect and confirm. We DON'T add them to
-        // `opened` here — they're not loaded yet.
-        const newPending: PendingTabularImport[] = [];
-        for (const t of buckets.tabular) {
-          try {
-            // Pass the `File` to the worker — bytes are read there, zero
-            // main-thread allocation for the inspect call.
-            const schema = await w.tabularInspect(t.file, t.format);
-            newPending.push({
-              id: `tab-${tabularImportSeq++}`,
-              name: t.file.name,
-              format: t.format,
-              file: t.file,
-              schema,
-              suggested: draftFromSchema(schema),
-            });
-          } catch (e) {
-            errors.push({ name: t.file.name, reason: String(e) });
+          // CSV / Parquet can't open until the user picks a time basis. Inspect
+          // each one (without retaining its bytes), then queue a pending import
+          // the dialog will turn into a source on confirm. The original `File`
+          // is stored in the queue (not a byte copy) so the JS heap holds no
+          // large allocation between inspect and confirm. We DON'T add them to
+          // `opened` here — they're not loaded yet.
+          const newPending: PendingTabularImport[] = [];
+          for (const t of buckets.tabular) {
+            try {
+              // Pass the `File` to the worker — bytes are read there, zero
+              // main-thread allocation for the inspect call.
+              const schema = await w.tabularInspect(t.file, t.format);
+              newPending.push({
+                id: `tab-${tabularImportSeq++}`,
+                name: t.file.name,
+                format: t.format,
+                file: t.file,
+                schema,
+                suggested: draftFromSchema(schema),
+              });
+            } catch (e) {
+              errors.push({ name: t.file.name, reason: String(e) });
+            }
           }
-        }
 
-        commitOpenedSources(newSources, errors);
-        if (newPending.length > 0) {
-          set({
-            pendingTabularImports: [
-              ...get().pendingTabularImports,
-              ...newPending,
-            ],
-          });
-        }
-        // Queue video bindings AFTER tabular imports so the dialog's source
-        // dropdown sees them — the tabular dialog renders first (its queue is
-        // non-empty), and the video dialog only shows once that queue drains.
-        if (newVideoBindings.length > 0) {
-          set({
-            pendingVideoBindings: [
-              ...get().pendingVideoBindings,
-              ...newVideoBindings,
-            ],
-          });
-        }
-        return { opened, errors };
-      });
+          commitOpenedSources(newSources, errors);
+          if (newPending.length > 0) {
+            set({
+              pendingTabularImports: [
+                ...get().pendingTabularImports,
+                ...newPending,
+              ],
+            });
+          }
+          // Queue video bindings AFTER tabular imports so the dialog's source
+          // dropdown sees them — the tabular dialog renders first (its queue is
+          // non-empty), and the video dialog only shows once that queue drains.
+          if (newVideoBindings.length > 0) {
+            set({
+              pendingVideoBindings: [
+                ...get().pendingVideoBindings,
+                ...newVideoBindings,
+              ],
+            });
+          }
+          return { opened, errors };
+        });
 
       const next = pending.then(run, run);
       // Keep the chain alive even if `run` throws so the next caller still
@@ -2617,9 +2609,7 @@ export const useSession = create<SessionState>((set, get) => {
         // Re-read in case `openFiles` mutated state while the close awaited.
         const cur = get();
         const goneChannelIds = new Set(
-          cur.channels
-            .filter((c) => c.sourceId === sourceId)
-            .map((c) => c.id),
+          cur.channels.filter((c) => c.sourceId === sourceId).map((c) => c.id),
         );
 
         const nextSources = cur.sources.filter((s) => s.id !== sourceId);
@@ -2647,24 +2637,12 @@ export const useSession = create<SessionState>((set, get) => {
           // Closing a source means it can no longer drive the cursor — stop
           // playback so we don't keep ticking against a moved end-of-range.
           playing: nextRange ? cur.playing : false,
-          videoBindings: pruneSingleBindings(
-            cur.videoBindings,
-            goneChannelIds,
-          ),
+          videoBindings: pruneSingleBindings(cur.videoBindings, goneChannelIds),
           plotBindings: pruneMultiBindings(cur.plotBindings, goneChannelIds),
-          sceneBindings: pruneSingleBindings(
-            cur.sceneBindings,
-            goneChannelIds,
-          ),
+          sceneBindings: pruneSingleBindings(cur.sceneBindings, goneChannelIds),
           mapBindings: pruneMapBindings(cur.mapBindings, goneChannelIds),
-          tableBindings: pruneMultiBindings(
-            cur.tableBindings,
-            goneChannelIds,
-          ),
-          valueBindings: pruneMultiBindings(
-            cur.valueBindings,
-            goneChannelIds,
-          ),
+          tableBindings: pruneMultiBindings(cur.tableBindings, goneChannelIds),
+          valueBindings: pruneMultiBindings(cur.valueBindings, goneChannelIds),
           enumBindings: pruneMultiBindings(cur.enumBindings, goneChannelIds),
           loadedRanges,
           pendingFetch,

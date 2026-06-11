@@ -11,7 +11,9 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { Drawer } from "./Drawer";
 import { useSession } from "../state/store";
@@ -67,7 +69,9 @@ describe("Drawer host", () => {
   it("ArrowRight widens the drawer and commits to the store", () => {
     useSession.getState().setActiveRailTab("sources");
     render(<Drawer {...noopProps} />);
-    fireEvent.keyDown(screen.getByTestId("drawer-resizer"), { key: "ArrowRight" });
+    fireEvent.keyDown(screen.getByTestId("drawer-resizer"), {
+      key: "ArrowRight",
+    });
     expect(useSession.getState().drawerWidth).toBe(236);
   });
 
@@ -75,7 +79,9 @@ describe("Drawer host", () => {
     useSession.getState().setActiveRailTab("sources");
     useSession.getState().setDrawerWidth(220);
     render(<Drawer {...noopProps} />);
-    fireEvent.keyDown(screen.getByTestId("drawer-resizer"), { key: "ArrowLeft" });
+    fireEvent.keyDown(screen.getByTestId("drawer-resizer"), {
+      key: "ArrowLeft",
+    });
     expect(useSession.getState().drawerWidth).toBe(220);
   });
 

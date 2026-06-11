@@ -19,7 +19,9 @@ import {
   within,
 } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { ChannelsDrawer } from "./ChannelsDrawer";
 import { CHANNEL_DND_MIME } from "../../panels/channelDrag";
@@ -220,7 +222,9 @@ describe("ChannelsDrawer windowing", () => {
     });
 
     const after = new Set(
-      screen.getAllByTestId(/^channel-row-/).map((el) => el.getAttribute("data-testid")!),
+      screen
+        .getAllByTestId(/^channel-row-/)
+        .map((el) => el.getAttribute("data-testid")!),
     );
     // The window moved: the original first row unmounted…
     expect(after.has(before[0])).toBe(false);
@@ -314,9 +318,7 @@ describe("ChannelsDrawer tree", () => {
     expect(
       screen.getByTestId("channel-row-mcap::/vehicle/gps/lat"),
     ).toBeTruthy();
-    expect(
-      screen.queryByTestId("channel-row-mcap::/vehicle/speed"),
-    ).toBeNull();
+    expect(screen.queryByTestId("channel-row-mcap::/vehicle/speed")).toBeNull();
     expect(screen.queryByTestId("channel-row-mcap::/imu/accel")).toBeNull();
   });
 
