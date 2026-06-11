@@ -927,13 +927,18 @@ pub fn tabular_time_column_ns(handle: u32) -> Result<js_sys::BigInt64Array, JsEr
 
 /// Open a Driveline point-cloud Parquet (one row per LiDAR spin) and register
 /// the resulting `PointCloudReader` in the thread-local slab. Returns the
-/// integer handle the other `lidar_*` endpoints take. The bytes are decoded
-/// eagerly into per-spin point buffers and the reader owns them for the
-/// source's lifetime (freed by `close_lidar`); the JS caller can drop its copy
-/// of `bytes` once this returns.
+/// integer handle the other `lidar_*` endpoints take. The decoded per-spin
+/// point buffers stay resident for the source's lifetime (freed by
+/// `close_lidar`); the JS caller can drop its copy of `bytes` once this
+/// returns.
+///
+/// Takes the buffer **by value**: `open_owned` wraps the wasm-side copy
+/// without duplicating it, and the decode streams small row batches — so a
+/// full-density clip (~52M points / hundreds of MB) peaks around `file +
+/// spins`, not the 2×+ that used to trap the wasm heap.
 #[wasm_bindgen]
-pub fn open_lidar(bytes: &[u8]) -> Result<u32, JsError> {
-    let reader = PointCloudReader::open(bytes)
+pub fn open_lidar(bytes: Vec<u8>) -> Result<u32, JsError> {
+    let reader = PointCloudReader::open_owned(bytes)
         .map_err(|e| JsError::new(&format!("open lidar failed: {e}")))?;
     let key = LIDAR_READERS.with(|cell| cell.borrow_mut().insert(reader));
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
