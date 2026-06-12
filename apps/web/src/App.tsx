@@ -35,6 +35,7 @@ import {
 import { attachUrlState } from "./state/urlState";
 import { installPerfHooks } from "./perf";
 import { loadDemoSession } from "./demo/demoSession";
+import { agentApiRequested, installAgentApi } from "./agent/agentApi";
 import { Shell } from "./shell/Shell";
 
 export interface OpenMf4Result {
@@ -695,6 +696,14 @@ export function App() {
       window.__drivelineSetSourceOffset = (sourceId, offsetNs) =>
         useSession.getState().setSourceOffset(sourceId, offsetNs);
     }
+    // Agent interface — unlike the dev hooks above this ships in the
+    // production bundle, but only installs when the page opts in with
+    // `?agent` (always installed in DEV so e2e and local automation get
+    // it for free). See docs/11-agent-interface.md.
+    const uninstallAgentApi =
+      import.meta.env.DEV || agentApiRequested(window.location.search)
+        ? installAgentApi()
+        : null;
     // Public deep-link: `?demo` starts the baked demo session on an empty
     // boot (the share-link view state lives in the hash, so the query is
     // ours). The loader waits for worker registration itself and no-ops if
@@ -707,6 +716,7 @@ export function App() {
     }
     setReady(true);
     return () => {
+      uninstallAgentApi?.();
       detachPersistence();
       detachUiPersistence();
       detachNamedLayoutsPersistence();

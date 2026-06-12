@@ -70,6 +70,19 @@
   color: var(--color-fg-5);
 }
 
+/* Provenance pill on agent-created events — text ("agent"), not colour
+   alone, so the signal survives palettes and colour-blindness. */
+.originBadge {
+  padding: 0 var(--sp-2);
+  background: var(--color-bg-4);
+  color: var(--color-fg-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-11);
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
 /* Small dot before the relative time when an event spans a range. */
 .rangeDot {
   width: 5px;
@@ -379,6 +392,49 @@
 .empty {
   font-size: var(--fs-12);
   color: var(--color-fg-6);
+}
+
+/* Whole-list JSON import / export — mirrors the tag-config editor's
+   action row so the two IO surfaces read as one family. */
+.ioRow {
+  display: flex;
+  gap: var(--sp-2);
+}
+
+.ioBtn {
+  background: var(--color-bg-4);
+  color: var(--color-fg-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-3);
+  padding: var(--sp-3) var(--sp-4);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--fs-12);
+}
+
+.ioBtn:hover:not(:disabled) {
+  background: var(--color-bg-6);
+  border-color: var(--color-border-hover);
+}
+
+.ioBtn:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.ioBtn:disabled {
+  cursor: not-allowed;
+  color: var(--color-fg-6);
+}
+
+.hiddenFile {
+  display: none;
+}
+
+.ioError {
+  margin: 0;
+  font-size: var(--fs-11);
+  color: var(--color-accent-red, #ef4444);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -19,6 +19,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
+import {
+  parseBookmarksImport,
+  serializeBookmarks,
+} from "../../state/persist/bookmarks";
 import { formatRelative } from "../../timeline/formatTime";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
@@ -57,6 +61,8 @@ export function EventsDrawer() {
   const [rangeDrafts, setRangeDrafts] = useState<Record<string, RangeDraft>>(
     {},
   );
+  const [importError, setImportError] = useState<string | null>(null);
+  const importFileRef = useRef<HTMLInputElement | null>(null);
 
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const addInputRef = useRef<HTMLInputElement | null>(null);
@@ -176,6 +182,43 @@ export function EventsDrawer() {
     }
   };
 
+  // Import / export of the whole event list as JSON — same download /
+  // hidden-file-input pattern as the tag-config editor below. Import
+  // merges by id (collisions update in place) so re-importing a reviewed
+  // file is idempotent rather than duplicating.
+  const onExportEvents = () => {
+    const text = serializeBookmarks(useSession.getState().bookmarks);
+    if (
+      typeof URL === "undefined" ||
+      typeof URL.createObjectURL !== "function"
+    ) {
+      return;
+    }
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "driveline-events.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const onImportEventsFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-importing the same file
+    if (!file) return;
+    const text = await file.text();
+    const parsed = parseBookmarksImport(text);
+    if (!parsed) {
+      setImportError("Could not parse that file as an event list.");
+      return;
+    }
+    setImportError(null);
+    useSession.getState().importBookmarks(parsed, "merge");
+  };
+
   const disabled = globalRange === null;
 
   return (
@@ -282,6 +325,22 @@ export function EventsDrawer() {
                         className={s.meta}
                         data-testid={`bookmark-meta-${b.id}`}
                       >
+                        {b.origin === "agent" ? (
+                          <span
+                            className={s.originBadge}
+                            title={
+                              b.confidence !== null
+                                ? `Created by an agent · confidence ${Math.round(b.confidence * 100)}%`
+                                : "Created by an agent"
+                            }
+                            data-testid={`bookmark-origin-${b.id}`}
+                          >
+                            agent
+                            {b.confidence !== null
+                              ? ` ${Math.round(b.confidence * 100)}%`
+                              : ""}
+                          </span>
+                        ) : null}
                         {ranged ? (
                           <span className={s.rangeDot} aria-hidden="true" />
                         ) : null}
@@ -502,6 +561,43 @@ export function EventsDrawer() {
             </button>
           </div>
         )}
+
+        <div className={s.ioRow}>
+          <button
+            type="button"
+            className={s.ioBtn}
+            onClick={onExportEvents}
+            disabled={bookmarks.length === 0}
+            data-testid="events-export"
+          >
+            Export
+          </button>
+          <button
+            type="button"
+            className={s.ioBtn}
+            onClick={() => importFileRef.current?.click()}
+            data-testid="events-import"
+          >
+            Import
+          </button>
+          <input
+            ref={importFileRef}
+            type="file"
+            accept="application/json,.json"
+            className={s.hiddenFile}
+            onChange={onImportEventsFile}
+            data-testid="events-import-input"
+          />
+        </div>
+        {importError ? (
+          <p
+            className={s.ioError}
+            role="alert"
+            data-testid="events-import-error"
+          >
+            {importError}
+          </p>
+        ) : null}
 
         <EventTagConfigEditor />
       </section>

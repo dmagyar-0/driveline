@@ -28,12 +28,30 @@
 // missing tags become `{}`. The old v1 key is read once and left in
 // place (harmless; allows a manual rollback). A malformed *v2* payload
 // still fails closed (returns `null`) without falling back to v1.
+//
+// ── Provenance (agent tagging) ─────────────────────────────────────
+// Events carry an `origin` ("user" | "agent") and an optional
+// `confidence` (0..1, agent-assigned) so reviewers can tell machine
+// tags from human ones. Both are **optional on disk** — absent fields
+// hydrate to the defaults (`"user"`, `null`) so every pre-existing v2
+// payload keeps loading, and older builds simply ignore the extra keys.
+//
+// ── Import / export ────────────────────────────────────────────────
+// `serializeBookmarks` / `parseBookmarksImport` mirror the event-tag
+// config's JSON import/export (`eventTagConfig.ts`): export writes the
+// exact storage shape, import is lenient (wrapper / bare `{bookmarks}` /
+// bare array; per-entry only `ns` is required) so agents can hand-write
+// event files without replicating every field.
 
 import type { useSession } from "../store";
+import { colorFor } from "../../panels/palette";
 
 export const BOOKMARKS_STORAGE_KEY = "driveline.bookmarks.v2";
 const BOOKMARKS_STORAGE_KEY_V1 = "driveline.bookmarks.v1";
 export const BOOKMARKS_SCHEMA_VERSION = 2 as const;
+
+/** Who created an event: a human in the UI or an automated agent. */
+export type BookmarkOrigin = "user" | "agent";
 
 export interface Bookmark {
   id: string;
@@ -47,6 +65,10 @@ export interface Bookmark {
   createdAt: number;
   /** Per-event attribute values, keyed by Event Tag config attribute id. */
   tags: Record<string, string>;
+  /** Provenance — `"user"` for in-app creation, `"agent"` for automation. */
+  origin: BookmarkOrigin;
+  /** Agent-assigned confidence in `[0, 1]`; `null` when not applicable. */
+  confidence: number | null;
 }
 
 export interface PersistedBookmark {
@@ -58,6 +80,10 @@ export interface PersistedBookmark {
   color: string;
   createdAt: number;
   tags: Record<string, string>;
+  /** Omitted on disk when `"user"` (the default). */
+  origin?: BookmarkOrigin;
+  /** Omitted on disk when `null`. */
+  confidence?: number;
 }
 
 export interface PersistedBookmarks {
@@ -117,6 +143,36 @@ function validateCore(raw: Record<string, unknown>): BookmarkCore | null {
   };
 }
 
+/**
+ * Provenance fields, shared by storage validation and lenient import.
+ * Absent fields fall back to the defaults; a present-but-malformed
+ * `origin` fails (storage is fail-closed), while a malformed
+ * `confidence` is rejected too — both are machine-written fields, so a
+ * bad value means a corrupt payload rather than a typo to forgive.
+ */
+function validateProvenance(
+  raw: Record<string, unknown>,
+): Pick<Bookmark, "origin" | "confidence"> | null {
+  let origin: BookmarkOrigin = "user";
+  if (raw.origin !== undefined) {
+    if (raw.origin !== "user" && raw.origin !== "agent") return null;
+    origin = raw.origin;
+  }
+  let confidence: number | null = null;
+  if (raw.confidence !== undefined && raw.confidence !== null) {
+    if (
+      typeof raw.confidence !== "number" ||
+      !Number.isFinite(raw.confidence) ||
+      raw.confidence < 0 ||
+      raw.confidence > 1
+    ) {
+      return null;
+    }
+    confidence = raw.confidence;
+  }
+  return { origin, confidence };
+}
+
 function validateBookmarkV2(raw: unknown): Bookmark | null {
   if (!isPlainObject(raw)) return null;
   const core = validateCore(raw);
@@ -130,7 +186,9 @@ function validateBookmarkV2(raw: unknown): Bookmark | null {
   if (beforeNs < 0n || afterNs < 0n) return null;
   const tags = validateTags(raw.tags);
   if (tags === null) return null;
-  return { ...core, beforeNs, afterNs, tags };
+  const provenance = validateProvenance(raw);
+  if (provenance === null) return null;
+  return { ...core, beforeNs, afterNs, tags, ...provenance };
 }
 
 /** v1 entry → v2 in-memory shape (no range, no tags). */
@@ -138,7 +196,14 @@ function migrateBookmarkV1(raw: unknown): Bookmark | null {
   if (!isPlainObject(raw)) return null;
   const core = validateCore(raw);
   if (!core) return null;
-  return { ...core, beforeNs: 0n, afterNs: 0n, tags: {} };
+  return {
+    ...core,
+    beforeNs: 0n,
+    afterNs: 0n,
+    tags: {},
+    origin: "user",
+    confidence: null,
+  };
 }
 
 function validate(raw: unknown): Bookmark[] | null {
@@ -207,6 +272,21 @@ export function loadBookmarksFromStorage(
   return readAndValidate(storage, BOOKMARKS_STORAGE_KEY_V1, migrateV1);
 }
 
+function toPersisted(b: Bookmark): PersistedBookmark {
+  return {
+    id: b.id,
+    ns: b.ns.toString(),
+    beforeNs: b.beforeNs.toString(),
+    afterNs: b.afterNs.toString(),
+    label: b.label,
+    color: b.color,
+    createdAt: b.createdAt,
+    tags: { ...b.tags },
+    ...(b.origin !== "user" ? { origin: b.origin } : {}),
+    ...(b.confidence !== null ? { confidence: b.confidence } : {}),
+  };
+}
+
 export function saveBookmarksToStorage(
   bookmarks: Bookmark[],
   storage: Storage | undefined = defaultStorage(),
@@ -214,22 +294,116 @@ export function saveBookmarksToStorage(
   if (!storage) return;
   const payload: PersistedBookmarks = {
     version: BOOKMARKS_SCHEMA_VERSION,
-    bookmarks: bookmarks.map((b) => ({
-      id: b.id,
-      ns: b.ns.toString(),
-      beforeNs: b.beforeNs.toString(),
-      afterNs: b.afterNs.toString(),
-      label: b.label,
-      color: b.color,
-      createdAt: b.createdAt,
-      tags: { ...b.tags },
-    })),
+    bookmarks: bookmarks.map(toPersisted),
   };
   try {
     storage.setItem(BOOKMARKS_STORAGE_KEY, JSON.stringify(payload));
   } catch {
     // Quota / private-mode bucket reject — best-effort only.
   }
+}
+
+/**
+ * Serialise events for file export / the agent API. Same shape as the
+ * `localStorage` payload, so an exported file imports losslessly (and a
+ * raw storage payload is itself importable).
+ */
+export function serializeBookmarks(bookmarks: Bookmark[]): string {
+  const payload: PersistedBookmarks = {
+    version: BOOKMARKS_SCHEMA_VERSION,
+    bookmarks: bookmarks.map(toPersisted),
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function mintBookmarkId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `bm-${Math.random().toString(36).slice(2)}`;
+}
+
+/** `string` or safe-integer `number` → non-negative bigint; else null. */
+function lenientNs(v: unknown): bigint | null {
+  if (typeof v === "string") return tryParseBigInt(v);
+  if (typeof v === "number" && Number.isSafeInteger(v)) return BigInt(v);
+  return null;
+}
+
+/**
+ * Lenient parse for user/agent-supplied JSON import. Accepts any of:
+ *   - the exported wrapper `{ version, bookmarks: [...] }`
+ *   - a bare `{ bookmarks: [...] }`
+ *   - a bare array of events `[...]`
+ * Per entry only `ns` (decimal string, or a safe-integer number) is
+ * required. `id` (minted), `label` (`"event"`), `beforeNs`/`afterNs`
+ * (`0`), `tags` (`{}`), `color` (palette hash of the id), `createdAt`
+ * (now), `origin` (`"user"`) and `confidence` (`null`) all default.
+ * Returns `null` if any entry is unrecoverable — a partial import would
+ * silently drop an agent's findings, so the whole file fails instead.
+ */
+export function parseBookmarksImport(text: string): Bookmark[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  let rawEntries: unknown;
+  if (Array.isArray(parsed)) {
+    rawEntries = parsed;
+  } else if (isPlainObject(parsed) && Array.isArray(parsed.bookmarks)) {
+    rawEntries = parsed.bookmarks;
+  } else {
+    return null;
+  }
+  if (!Array.isArray(rawEntries)) return null;
+  const out: Bookmark[] = [];
+  const seen = new Set<string>();
+  for (const raw of rawEntries) {
+    if (!isPlainObject(raw)) return null;
+    const ns = lenientNs(raw.ns);
+    if (ns === null) return null;
+    const beforeNs = raw.beforeNs === undefined ? 0n : lenientNs(raw.beforeNs);
+    const afterNs = raw.afterNs === undefined ? 0n : lenientNs(raw.afterNs);
+    if (beforeNs === null || afterNs === null) return null;
+    if (beforeNs < 0n || afterNs < 0n) return null;
+    const tags = raw.tags === undefined ? {} : validateTags(raw.tags);
+    if (tags === null) return null;
+    const provenance = validateProvenance(raw);
+    if (provenance === null) return null;
+    let id =
+      typeof raw.id === "string" && raw.id.length > 0
+        ? raw.id
+        : mintBookmarkId();
+    if (seen.has(id)) {
+      let n = 2;
+      while (seen.has(`${id}_${n}`)) n++;
+      id = `${id}_${n}`;
+    }
+    seen.add(id);
+    const label =
+      typeof raw.label === "string" && raw.label.trim().length > 0
+        ? raw.label.trim()
+        : "event";
+    out.push({
+      id,
+      ns,
+      beforeNs,
+      afterNs,
+      label,
+      color:
+        typeof raw.color === "string" && raw.color.length > 0
+          ? raw.color
+          : colorFor(id),
+      createdAt:
+        typeof raw.createdAt === "number" && Number.isFinite(raw.createdAt)
+          ? raw.createdAt
+          : Date.now(),
+      tags,
+      ...provenance,
+    });
+  }
+  return out;
 }
 
 export interface BookmarksSlice {

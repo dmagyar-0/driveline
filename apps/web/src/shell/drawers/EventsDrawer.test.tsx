@@ -9,7 +9,13 @@
 // `apps/e2e/tests/bookmarks.spec.ts`.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 
 (
   globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -198,5 +204,66 @@ describe("EventsDrawer", () => {
     expect(useSession.getState().eventTagConfig.attributes).toHaveLength(
       before + 1,
     );
+  });
+});
+
+describe("EventsDrawer provenance badge", () => {
+  it("shows an agent pill with confidence on agent-created events", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(1_000_000_000n, "cut-in", {
+      origin: "agent",
+      confidence: 0.82,
+    });
+    render(<EventsDrawer />);
+    const badge = screen.getByTestId(`bookmark-origin-${id}`);
+    expect(badge.textContent).toBe("agent 82%");
+  });
+
+  it("omits the pill on user-created events", () => {
+    seedRange();
+    const id = useSession.getState().addBookmark(1_000_000_000n, "manual");
+    render(<EventsDrawer />);
+    expect(screen.queryByTestId(`bookmark-origin-${id}`)).toBeNull();
+  });
+});
+
+describe("EventsDrawer import / export", () => {
+  it("disables Export when there are no events", () => {
+    seedRange();
+    render(<EventsDrawer />);
+    const btn = screen.getByTestId("events-export") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it("imports a JSON file (merge) and surfaces a parse error", async () => {
+    seedRange();
+    render(<EventsDrawer />);
+    const input = screen.getByTestId("events-import-input") as HTMLInputElement;
+
+    const good = new File(
+      [JSON.stringify([{ ns: "2000000000", label: "imported" }])],
+      "events.json",
+      { type: "application/json" },
+    );
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [good] } });
+      // file.text() resolves on a microtask; let the handler finish.
+      await Promise.resolve();
+    });
+    expect(useSession.getState().bookmarks.map((b) => b.label)).toContain(
+      "imported",
+    );
+    expect(screen.queryByTestId("events-import-error")).toBeNull();
+
+    const bad = new File(["not json {"], "bad.json", {
+      type: "application/json",
+    });
+    await act(async () => {
+      fireEvent.change(input, { target: { files: [bad] } });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("events-import-error")).toBeTruthy();
+    // The existing events survive a failed import untouched.
+    expect(useSession.getState().bookmarks).toHaveLength(1);
   });
 });

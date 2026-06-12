@@ -48,6 +48,9 @@ The MVP has shipped. This directory now holds two kinds of content:
    tests, sample corpus, perf targets.
 10. [`10-task-breakdown.md`](./10-task-breakdown.md) — deferred
     post-MVP work items.
+11. [`11-agent-interface.md`](./11-agent-interface.md) — the automation
+    surface: `window.__drivelineAgent` (`?agent` opt-in), the event
+    JSON import/export format, and the `driveline-data` CLI.
 
 ## Key decisions at a glance
 
