@@ -329,10 +329,7 @@ declare global {
     // Feature 2 — set a SIGNAL source's per-source time offset. The offset is a
     // decimal STRING so a full-precision ns value survives `page.evaluate`;
     // an unparseable string or a non-signal source id is a no-op.
-    __drivelineSetSourceOffset?: (
-      sourceId: string,
-      offsetNs: string,
-    ) => void;
+    __drivelineSetSourceOffset?: (sourceId: string, offsetNs: string) => void;
   }
 }
 

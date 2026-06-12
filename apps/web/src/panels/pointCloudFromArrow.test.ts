@@ -24,7 +24,10 @@ function listF32(rows: number[][]): Vector {
     flat.push(...rows[i]);
     offsets[i + 1] = offsets[i] + rows[i].length;
   }
-  const child = makeData({ type: new Float32(), data: Float32Array.from(flat) });
+  const child = makeData({
+    type: new Float32(),
+    data: Float32Array.from(flat),
+  });
   const data = makeData({
     type: new List(new Field("item", new Float32(), true)),
     length: rows.length,

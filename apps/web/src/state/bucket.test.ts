@@ -35,7 +35,10 @@ describe("bucketFiles", () => {
     const r = bucketFiles([f("drive.mp4.timestamps")]);
     expect(r.mp4Pairs).toHaveLength(0);
     expect(r.errors).toEqual([
-      { name: "drive.mp4.timestamps", reason: "orphan sidecar; no drive.mp4 in drop" },
+      {
+        name: "drive.mp4.timestamps",
+        reason: "orphan sidecar; no drive.mp4 in drop",
+      },
     ]);
   });
 
@@ -85,9 +88,7 @@ describe("bucketFiles", () => {
 
   it("buckets .csv into tabular as csv", () => {
     const r = bucketFiles([f("signals.csv")]);
-    expect(r.tabular).toEqual([
-      { file: expect.any(File), format: "csv" },
-    ]);
+    expect(r.tabular).toEqual([{ file: expect.any(File), format: "csv" }]);
     expect(r.tabular[0].file.name).toBe("signals.csv");
     expect(r.errors).toHaveLength(0);
   });
@@ -147,11 +148,7 @@ describe("bucketFiles", () => {
   it("pairs the matching mp4 and queues the unpaired one for binding", () => {
     // Two mp4s but only one sidecar — the paired one becomes a pair, the
     // other is queued for the video-timestamp binding flow (not an error).
-    const r = bucketFiles([
-      f("a.mp4"),
-      f("b.mp4"),
-      f("a.mp4.timestamps"),
-    ]);
+    const r = bucketFiles([f("a.mp4"), f("b.mp4"), f("a.mp4.timestamps")]);
     expect(r.mp4Pairs).toHaveLength(1);
     expect(r.mp4Pairs[0].mp4.name).toBe("a.mp4");
     expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["b.mp4"]);
@@ -223,9 +220,7 @@ describe("classifyUrl", () => {
   });
 
   it("rejects a non-http(s) scheme", () => {
-    expect(() => classifyUrl("ftp://host.example/run.mcap")).toThrow(
-      /http/i,
-    );
+    expect(() => classifyUrl("ftp://host.example/run.mcap")).toThrow(/http/i);
   });
 
   it("rejects an unsupported extension", () => {

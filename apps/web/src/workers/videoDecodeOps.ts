@@ -188,7 +188,8 @@ function setCachedMp4Index(handle: number, index: Mp4LazyIndex): void {
   if (mp4IndexCache.length >= MAX_CACHED_HANDLES) {
     let lruIdx = 0;
     for (let i = 1; i < mp4IndexCache.length; i++) {
-      if (mp4IndexCache[i].lastUsed < mp4IndexCache[lruIdx].lastUsed) lruIdx = i;
+      if (mp4IndexCache[i].lastUsed < mp4IndexCache[lruIdx].lastUsed)
+        lruIdx = i;
     }
     mp4IndexCache.splice(lruIdx, 1);
   }
@@ -287,7 +288,10 @@ export function makeMp4LazyOps(
       // about to feed to the decoder. `setActive` overwrites — caller's
       // intent is "this is the live window".
       const activeLo = state.cursor;
-      const activeHi = Math.min(total - 1, state.cursor + take + PREFETCH_AHEAD);
+      const activeHi = Math.min(
+        total - 1,
+        state.cursor + take + PREFETCH_AHEAD,
+      );
       await mp4Port.mp4SetActive(state.handle, activeLo, activeHi);
       for (let i = 0; i < take; i++) {
         const idx = state.cursor;
@@ -344,10 +348,7 @@ export function makeMp4LazyOps(
  *  back to the first sync sample if `target` predates every keyframe.
  *  Returns 0 for tracks without an explicit sync table (every sample
  *  treated as a keyframe). */
-export function pickStartCursor(
-  idx: Mp4LazyIndex,
-  target: bigint,
-): number {
+export function pickStartCursor(idx: Mp4LazyIndex, target: bigint): number {
   const n = idx.ptsNs.length;
   if (n === 0) return 0;
   // First sync index — used as fallback.
@@ -433,8 +434,7 @@ export function detectMp4Framing(firstSample: Uint8Array): Mp4Framing {
 export function findSps(annexB: Uint8Array): Uint8Array | null {
   let i = 0;
   while (i + 2 < annexB.length) {
-    const is3 =
-      annexB[i] === 0 && annexB[i + 1] === 0 && annexB[i + 2] === 1;
+    const is3 = annexB[i] === 0 && annexB[i + 1] === 0 && annexB[i + 2] === 1;
     const is4 =
       i + 3 < annexB.length &&
       annexB[i] === 0 &&

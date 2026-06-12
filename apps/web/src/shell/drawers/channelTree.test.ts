@@ -22,7 +22,8 @@ function ch(partial: Partial<Channel> & { name: string }): Channel {
   };
 }
 
-const labels = (nodes: ChannelTreeNode[]): string[] => nodes.map((n) => n.label);
+const labels = (nodes: ChannelTreeNode[]): string[] =>
+  nodes.map((n) => n.label);
 
 describe("channelPath", () => {
   it("splits MCAP topics on slash and drops the leading empty segment", () => {

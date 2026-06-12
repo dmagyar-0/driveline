@@ -1,0 +1,7 @@
+# Generated artefacts — never hand-formatted.
+# wasm-pack output (see root .gitignore; only .gitkeep is tracked).
+src/wasm
+# Vite build output.
+dist
+# Static assets served verbatim.
+public

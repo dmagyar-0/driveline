@@ -5,7 +5,11 @@ import { UrlFetchBlockedError, urlProbeSize, urlReadRange } from "./urlRange";
 // reports a CORS/network block) or complete with a status + headers + body.
 type SendBehavior =
   | { throwOnSend: true }
-  | { status: number; headers?: Record<string, string>; response?: ArrayBuffer };
+  | {
+      status: number;
+      headers?: Record<string, string>;
+      response?: ArrayBuffer;
+    };
 
 let behavior: SendBehavior;
 const sentRanges: string[] = [];
@@ -52,7 +56,10 @@ afterEach(() => {
 
 describe("urlProbeSize", () => {
   it("reads the total size out of Content-Range on a 206", () => {
-    behavior = { status: 206, headers: { "Content-Range": "bytes 0-0/123456" } };
+    behavior = {
+      status: 206,
+      headers: { "Content-Range": "bytes 0-0/123456" },
+    };
     expect(urlProbeSize("https://host/log.mf4")).toBe(123456);
     // The probe asks for a single byte.
     expect(sentRanges).toEqual(["bytes=0-0"]);

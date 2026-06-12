@@ -10,7 +10,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, fireEvent } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { PanelDrawer } from "./PanelDrawer";
 import { useSession } from "../../state/store";
@@ -96,7 +98,12 @@ function seed(): void {
             weight: 50,
             children: [
               { type: "tab", id: "plot-1", name: "Speed", component: "plot" },
-              { type: "tab", id: "video-1", name: "Front cam", component: "video" },
+              {
+                type: "tab",
+                id: "video-1",
+                name: "Front cam",
+                component: "video",
+              },
             ],
           },
         ],
@@ -216,7 +223,8 @@ describe("PanelDrawer", () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute("aria-checked")).toBe("true");
     expect(
-      "syncTimeAxis" in (useSession.getState().plotPanelSettings["plot-1"] ?? {}),
+      "syncTimeAxis" in
+        (useSession.getState().plotPanelSettings["plot-1"] ?? {}),
     ).toBe(false);
   });
 
@@ -548,9 +556,9 @@ describe("PanelDrawer", () => {
       render(<PanelDrawer />);
       const toggle = screen.getByTestId("panel-plot-stack-toggle");
       fireEvent.click(toggle);
-      expect(
-        useSession.getState().plotPanelSettings["plot-1"]?.stackAxes,
-      ).toBe(true);
+      expect(useSession.getState().plotPanelSettings["plot-1"]?.stackAxes).toBe(
+        true,
+      );
       expect(toggle.getAttribute("aria-checked")).toBe("true");
     });
 

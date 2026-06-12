@@ -148,7 +148,9 @@ function TabularImportForm({
                 <tr key={c.name}>
                   <td className={s.colName}>{c.name}</td>
                   <td className={s.colType}>{c.dtype}</td>
-                  <td className={s.colNumeric}>{c.is_numeric ? "yes" : "no"}</td>
+                  <td className={s.colNumeric}>
+                    {c.is_numeric ? "yes" : "no"}
+                  </td>
                 </tr>
               ))}
             </tbody>

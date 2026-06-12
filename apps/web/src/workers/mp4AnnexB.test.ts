@@ -7,7 +7,10 @@
 import { describe, expect, it } from "vitest";
 import { buildAvccDescription, stripInlineParameterSets } from "./mp4AnnexB";
 
-function avccNal(nalHeader: number, payload: number[] = [0xaa, 0xbb]): number[] {
+function avccNal(
+  nalHeader: number,
+  payload: number[] = [0xaa, 0xbb],
+): number[] {
   const len = 1 + payload.length;
   return [
     (len >>> 24) & 0xff,
@@ -46,7 +49,10 @@ describe("buildAvccDescription", () => {
     // profile/compat/level live at SPS[1..4]; anything shorter would silently
     // emit a config the decoder can't validate.
     expect(() =>
-      buildAvccDescription(new Uint8Array([0x67, 0x64, 0x00]), new Uint8Array([0x68])),
+      buildAvccDescription(
+        new Uint8Array([0x67, 0x64, 0x00]),
+        new Uint8Array([0x68]),
+      ),
     ).toThrow(/SPS too short/);
   });
 

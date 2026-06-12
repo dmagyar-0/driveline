@@ -27,10 +27,7 @@ interface ValuePanelProps {
 
 const EMPTY: readonly string[] = Object.freeze([]);
 
-function lastIndexAtOrBefore(
-  tsNs: BigInt64Array,
-  cursorNs: bigint,
-): number {
+function lastIndexAtOrBefore(tsNs: BigInt64Array, cursorNs: bigint): number {
   let lo = 0;
   let hi = tsNs.length - 1;
   let ans = -1;
@@ -46,10 +43,7 @@ function lastIndexAtOrBefore(
   return ans;
 }
 
-function findChannel(
-  sources: SourceMeta[],
-  channelId: string,
-): Channel | null {
+function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
   for (const s of sources) {
     const hit = s.channels.find((c) => c.id === channelId);
     if (hit) return hit;
@@ -94,9 +88,7 @@ export function ValuePanel({ panelId }: ValuePanelProps) {
 
   // Decoded series cache keyed in bound order. One fetch per bound
   // channel per `globalRange` change.
-  const decodedRef = useRef<{ channelId: string; series: PlotSeries }[]>(
-    [],
-  );
+  const decodedRef = useRef<{ channelId: string; series: PlotSeries }[]>([]);
   const [renderTick, setRenderTick] = useState(0);
 
   const fetchKey = boundIds.join("|");
@@ -159,8 +151,8 @@ export function ValuePanel({ panelId }: ValuePanelProps) {
         <div className={styles.empty} data-testid="value-empty">
           <p className={styles.emptyTitle}>Value</p>
           <p className={styles.emptyBody}>
-            Bind scalar channels from the Panel drawer (up to{" "}
-            {MAX_PLOT_SERIES}).
+            Bind scalar channels from the Panel drawer (up to {MAX_PLOT_SERIES}
+            ).
           </p>
         </div>
       ) : (

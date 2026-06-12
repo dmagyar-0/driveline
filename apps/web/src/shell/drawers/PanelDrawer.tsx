@@ -182,8 +182,8 @@ function Empty() {
   return (
     <>
       <p className={s.empty} data-testid="panel-drawer-empty">
-        Select a panel to configure it. Click any panel in the workspace or
-        use the Channels drawer.
+        Select a panel to configure it. Click any panel in the workspace or use
+        the Channels drawer.
       </p>
       {/* Kind legend: doubles as the "what do these panel types mean"
           reference while nothing is selected. */}

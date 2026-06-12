@@ -41,11 +41,7 @@ export async function readMp4HeaderBytes(file: File): Promise<Uint8Array> {
         `mp4: truncated box header at offset ${offset} (need 8 bytes, have ${probe.length})`,
       );
     }
-    const view = new DataView(
-      probe.buffer,
-      probe.byteOffset,
-      probe.byteLength,
-    );
+    const view = new DataView(probe.buffer, probe.byteOffset, probe.byteLength);
     const size32 = view.getUint32(0, false);
     const kind = String.fromCharCode(probe[4], probe[5], probe[6], probe[7]);
 

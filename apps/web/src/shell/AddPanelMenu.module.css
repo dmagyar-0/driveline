@@ -21,7 +21,9 @@
   cursor: pointer;
   font: inherit;
   font-size: var(--fs-13);
-  transition: background var(--motion-base), border-color var(--motion-base);
+  transition:
+    background var(--motion-base),
+    border-color var(--motion-base);
 }
 
 .trigger:hover {

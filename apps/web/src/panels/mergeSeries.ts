@@ -117,7 +117,10 @@ function mergeUnion(inputs: PlotSeries[]): AlignedSeries {
     }
     if (!any) break;
     for (let i = 0; i < k; i++) {
-      if (cursors[i] < inputs[i].xs.length && inputs[i].xs[cursors[i]] === minX) {
+      if (
+        cursors[i] < inputs[i].xs.length &&
+        inputs[i].xs[cursors[i]] === minX
+      ) {
         cursors[i]++;
       }
     }
@@ -163,10 +166,7 @@ function mergeUnion(inputs: PlotSeries[]): AlignedSeries {
   };
 }
 
-function mergeStepHold(
-  inputs: PlotSeries[],
-  threshold: number,
-): AlignedSeries {
+function mergeStepHold(inputs: PlotSeries[], threshold: number): AlignedSeries {
   // Sentinel offset used to place the "gap-start" marker just past the
   // held-end marker. uPlot renders consecutive x-positions in order, so
   // any strictly positive offset breaks the line; we keep it small
@@ -216,8 +216,14 @@ function mergeStepHold(
 
   const consume = (i: number): void => {
     const ph = markerPhase[i];
-    if (ph === 1) { markerPhase[i] = 2; return; }
-    if (ph === 2) { markerPhase[i] = 0; return; }
+    if (ph === 1) {
+      markerPhase[i] = 2;
+      return;
+    }
+    if (ph === 2) {
+      markerPhase[i] = 0;
+      return;
+    }
     const ixs = inputs[i].xs;
     const idx = cursorIdx[i];
     const next = idx + 1;

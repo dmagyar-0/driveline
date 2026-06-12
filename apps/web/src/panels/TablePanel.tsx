@@ -40,10 +40,7 @@ const OVERSCAN = 6; // rows rendered beyond the viewport on each edge.
 
 const EMPTY_MODEL: TableModel = { rowTsNs: [], columns: [], truncated: false };
 
-function findChannel(
-  sources: SourceMeta[],
-  channelId: string,
-): Channel | null {
+function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
   for (const s of sources) {
     const hit = s.channels.find((c) => c.id === channelId);
     if (hit) return hit;
@@ -240,8 +237,8 @@ export function TablePanel({ panelId }: TablePanelProps) {
         <div className={styles.empty} data-testid="table-empty">
           <p className={styles.emptyTitle}>Table</p>
           <p className={styles.emptyBody}>
-            Bind scalar channels from the Panel drawer (up to{" "}
-            {MAX_PLOT_SERIES}) to browse their raw values over time.
+            Bind scalar channels from the Panel drawer (up to {MAX_PLOT_SERIES})
+            to browse their raw values over time.
           </p>
         </div>
       ) : (
@@ -301,7 +298,9 @@ export function TablePanel({ panelId }: TablePanelProps) {
                   <div
                     key={i}
                     className={
-                      isActive ? `${styles.row} ${styles.activeRow}` : styles.row
+                      isActive
+                        ? `${styles.row} ${styles.activeRow}`
+                        : styles.row
                     }
                     role="row"
                     aria-rowindex={i + 1}
@@ -335,9 +334,7 @@ export function TablePanel({ panelId }: TablePanelProps) {
                             isActive ? `table-active-${ch.id}` : undefined
                           }
                         >
-                          {v === null || v === undefined
-                            ? "—"
-                            : formatValue(v)}
+                          {v === null || v === undefined ? "—" : formatValue(v)}
                         </span>
                       );
                     })}

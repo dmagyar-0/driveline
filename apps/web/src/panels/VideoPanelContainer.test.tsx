@@ -16,7 +16,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 
-(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+(
+  globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 
 const lastVideoPanelProps: { current: Record<string, unknown> | null } = {
   current: null,
@@ -43,7 +45,11 @@ vi.mock("./VideoPanelContainer.module.css", () => ({
 }));
 
 import { VideoPanelContainer } from "./VideoPanelContainer";
-import { useSession, qualifiedChannelId, type SourceMeta } from "../state/store";
+import {
+  useSession,
+  qualifiedChannelId,
+  type SourceMeta,
+} from "../state/store";
 
 const NATIVE_ID = "1/video";
 const QUALIFIED_ID = qualifiedChannelId("clip.mp4", NATIVE_ID);

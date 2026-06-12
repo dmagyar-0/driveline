@@ -72,10 +72,7 @@ function scheduleNotify(): void {
  *  rAF blit loop once per frame. The registry stores its own copy of
  *  the snapshot so callers can reuse a per-panel scratch object on
  *  the hot path without colliding with state-change detection. */
-export function setPanelReadiness(
-  panelId: string,
-  snap: PanelReadiness,
-): void {
+export function setPanelReadiness(panelId: string, snap: PanelReadiness): void {
   const prev = registry.get(panelId);
   if (prev) {
     // State transition is the only thing the Transport cares about

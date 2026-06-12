@@ -397,9 +397,7 @@ describe("serializeBookmarks / parseBookmarksImport", () => {
   });
 
   it("accepts a bare array with only ns, defaulting every other field", () => {
-    const parsed = parseBookmarksImport(
-      JSON.stringify([{ ns: "1500000000" }]),
-    );
+    const parsed = parseBookmarksImport(JSON.stringify([{ ns: "1500000000" }]));
     expect(parsed).toHaveLength(1);
     const b = parsed![0];
     expect(b.ns).toBe(1_500_000_000n);

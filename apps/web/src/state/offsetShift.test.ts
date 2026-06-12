@@ -99,10 +99,7 @@ describe("shiftRangeArrowTs", () => {
   });
 
   it("is a pass-through (same reference) for a zero offset", () => {
-    const bytes = scalarIpc(
-      new BigInt64Array([1n]),
-      new Float64Array([0]),
-    );
+    const bytes = scalarIpc(new BigInt64Array([1n]), new Float64Array([0]));
     expect(shiftRangeArrowTs(bytes, 0n)).toBe(bytes);
   });
 

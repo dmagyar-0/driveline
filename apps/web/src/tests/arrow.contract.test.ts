@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { tableFromIPC, DataType, Timestamp, TimeUnit, Float64 } from "apache-arrow";
+import {
+  tableFromIPC,
+  DataType,
+  Timestamp,
+  TimeUnit,
+  Float64,
+} from "apache-arrow";
 
-const fixturePath = resolve(__dirname, "../../../../test-fixtures/arrow_scalar.ipc");
+const fixturePath = resolve(
+  __dirname,
+  "../../../../test-fixtures/arrow_scalar.ipc",
+);
 
 describe("Arrow IPC contract fixture (Rust ↔ JS)", () => {
   const bytes = readFileSync(fixturePath);

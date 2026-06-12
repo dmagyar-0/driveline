@@ -205,9 +205,7 @@ export function EventsDrawer() {
     URL.revokeObjectURL(url);
   };
 
-  const onImportEventsFile = async (
-    e: React.ChangeEvent<HTMLInputElement>,
-  ) => {
+  const onImportEventsFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = ""; // allow re-importing the same file
     if (!file) return;
@@ -592,7 +590,11 @@ export function EventsDrawer() {
           />
         </div>
         {importError ? (
-          <p className={s.ioError} role="alert" data-testid="events-import-error">
+          <p
+            className={s.ioError}
+            role="alert"
+            data-testid="events-import-error"
+          >
             {importError}
           </p>
         ) : null}

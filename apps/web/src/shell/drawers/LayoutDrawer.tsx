@@ -107,7 +107,8 @@ export function LayoutDrawer({
     }
   };
 
-  const onRestore = (id: string) => useSession.getState().restoreNamedLayout(id);
+  const onRestore = (id: string) =>
+    useSession.getState().restoreNamedLayout(id);
   const onRemove = (id: string) => useSession.getState().removeNamedLayout(id);
 
   return (
@@ -132,7 +133,8 @@ export function LayoutDrawer({
           <ul className={s.list} data-testid="layouts-list">
             {namedLayouts.map((l) => {
               const isActive = activeId === l.id;
-              const isLive = JSON.stringify(l.layoutJson ?? null) === currentJsonStr;
+              const isLive =
+                JSON.stringify(l.layoutJson ?? null) === currentJsonStr;
               return (
                 <li key={l.id} className={s.rowItem}>
                   <button
@@ -219,12 +221,28 @@ export function LayoutDrawer({
         <ul className={s.addList} data-testid="layout-add-list">
           {(
             [
-              { kind: "video", testid: "add-video-panel", onClick: addVideoPanel },
+              {
+                kind: "video",
+                testid: "add-video-panel",
+                onClick: addVideoPanel,
+              },
               { kind: "plot", testid: "add-plot-panel", onClick: addPlotPanel },
-              { kind: "scene", testid: "add-scene-panel", onClick: addScenePanel },
+              {
+                kind: "scene",
+                testid: "add-scene-panel",
+                onClick: addScenePanel,
+              },
               { kind: "map", testid: "add-map-panel", onClick: addMapPanel },
-              { kind: "table", testid: "add-table-panel", onClick: addTablePanel },
-              { kind: "value", testid: "add-value-panel", onClick: addValuePanel },
+              {
+                kind: "table",
+                testid: "add-table-panel",
+                onClick: addTablePanel,
+              },
+              {
+                kind: "value",
+                testid: "add-value-panel",
+                onClick: addValuePanel,
+              },
               { kind: "enum", testid: "add-enum-panel", onClick: addEnumPanel },
             ] as readonly AddRow[]
           ).map((row) => (

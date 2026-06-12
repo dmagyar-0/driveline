@@ -143,7 +143,11 @@ describe("events", () => {
       JSON.stringify([{ ns: "2", label: "new", origin: "agent" }]),
     );
     expect(result).toEqual({ added: 1, updated: 0 });
-    expect(api().listEvents().map((e) => e.id)).toContain(id);
+    expect(
+      api()
+        .listEvents()
+        .map((e) => e.id),
+    ).toContain(id);
     expect(api().listEvents()).toHaveLength(2);
   });
 });

@@ -199,7 +199,8 @@ export function previewStartNs(draft: BasisDraft): bigint | null {
 export function previewStartLabel(draft: BasisDraft): string {
   const start = previewStartNs(draft);
   if (draft.mode === "Relative") {
-    if (start === null) return "Enter a valid epoch offset to preview the start time.";
+    if (start === null)
+      return "Enter a valid epoch offset to preview the start time.";
     return `${formatAbsolute(start)} UTC`;
   }
   return "Absolute — start time is read from the column on load.";

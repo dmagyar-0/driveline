@@ -129,7 +129,8 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
       const bytes = await useSession
         .getState()
         .fetchChannelRange(id, ts, ts + 1n, false);
-      if (reqId !== reqIdRef.current || rendererRef.current !== renderer) return;
+      if (reqId !== reqIdRef.current || rendererRef.current !== renderer)
+        return;
       const res = decodePointCloud(bytes);
       if (!res.ok) {
         setStatus({ kind: "error", message: res.message });
@@ -261,21 +262,39 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
   return (
     <section className={styles.panel} data-testid="scene-panel">
       <div className={styles.canvasHost} data-testid="scene-canvas-host">
-        <canvas ref={canvasRef} className={styles.canvas} data-testid="scene-canvas" />
+        <canvas
+          ref={canvasRef}
+          className={styles.canvas}
+          data-testid="scene-canvas"
+        />
 
         {status.kind === "loading" && (
-          <div className={styles.statusOverlay} data-testid="scene-loading" role="status">
+          <div
+            className={styles.statusOverlay}
+            data-testid="scene-loading"
+            role="status"
+          >
             Loading point cloud…
           </div>
         )}
         {status.kind === "error" && (
-          <div className={styles.statusOverlay} data-testid="scene-error" role="alert">
-            <span className={styles.statusIcon} aria-hidden="true">!</span>
+          <div
+            className={styles.statusOverlay}
+            data-testid="scene-error"
+            role="alert"
+          >
+            <span className={styles.statusIcon} aria-hidden="true">
+              !
+            </span>
             {status.message}
           </div>
         )}
         {status.kind === "before" && (
-          <div className={styles.statusOverlay} data-testid="scene-no-frame" role="status">
+          <div
+            className={styles.statusOverlay}
+            data-testid="scene-no-frame"
+            role="status"
+          >
             No LiDAR spin at this time.
           </div>
         )}

@@ -9,7 +9,13 @@
 // `apps/e2e/tests/bookmarks.spec.ts`.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 
 (
   globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -232,9 +238,7 @@ describe("EventsDrawer import / export", () => {
   it("imports a JSON file (merge) and surfaces a parse error", async () => {
     seedRange();
     render(<EventsDrawer />);
-    const input = screen.getByTestId(
-      "events-import-input",
-    ) as HTMLInputElement;
+    const input = screen.getByTestId("events-import-input") as HTMLInputElement;
 
     const good = new File(
       [JSON.stringify([{ ns: "2000000000", label: "imported" }])],
@@ -246,9 +250,9 @@ describe("EventsDrawer import / export", () => {
       // file.text() resolves on a microtask; let the handler finish.
       await Promise.resolve();
     });
-    expect(
-      useSession.getState().bookmarks.map((b) => b.label),
-    ).toContain("imported");
+    expect(useSession.getState().bookmarks.map((b) => b.label)).toContain(
+      "imported",
+    );
     expect(screen.queryByTestId("events-import-error")).toBeNull();
 
     const bad = new File(["not json {"], "bad.json", {

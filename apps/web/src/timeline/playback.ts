@@ -63,10 +63,7 @@ export interface PlaybackDeps {
   boundVideoPanelIds: (state: SessionState) => string[];
 }
 
-type SessionStore = Pick<
-  StoreApi<SessionState>,
-  "getState" | "subscribe"
->;
+type SessionStore = Pick<StoreApi<SessionState>, "getState" | "subscribe">;
 
 function defaultBoundVideoPanelIds(state: SessionState): string[] {
   // Walk `videoBindings` once per tick; a panel is "bound" iff its
@@ -213,10 +210,7 @@ export function startPlaybackLoop(
       capture(state);
       return;
     }
-    if (
-      state.cursorNs !== prev.cursorNs &&
-      state.cursorNs !== lastWritten
-    ) {
+    if (state.cursorNs !== prev.cursorNs && state.cursorNs !== lastWritten) {
       capture(state);
     }
   });

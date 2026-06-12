@@ -80,8 +80,10 @@ export function toBig(n: unknown): bigint {
   return typeof n === "bigint" ? n : BigInt(n as number | string);
 }
 
-interface RawMf4Channel
-  extends Omit<Mf4ChannelInfo, "start_ns" | "end_ns" | "group"> {
+interface RawMf4Channel extends Omit<
+  Mf4ChannelInfo,
+  "start_ns" | "end_ns" | "group"
+> {
   // serde_wasm_bindgen serialises `Option::None` as `undefined`, so the
   // field may be absent on the wire; `normaliseMf4` coalesces it to `null`.
   group?: string | null;
@@ -137,8 +139,10 @@ export function normaliseMcap(raw: RawMcapSummary): McapSummary {
   };
 }
 
-interface RawMp4Channel
-  extends Omit<Mp4SidecarChannelInfo, "start_ns" | "end_ns"> {
+interface RawMp4Channel extends Omit<
+  Mp4SidecarChannelInfo,
+  "start_ns" | "end_ns"
+> {
   start_ns: number | bigint;
   end_ns: number | bigint;
 }
