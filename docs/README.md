@@ -51,6 +51,11 @@ The MVP has shipped. This directory now holds two kinds of content:
 11. [`11-agent-interface.md`](./11-agent-interface.md) — the automation
     surface: `window.__drivelineAgent` (`?agent` opt-in), the event
     JSON import/export format, and the `driveline-data` CLI.
+12. [`12-format-agent.md`](./12-format-agent.md) — design for BYOK
+    ingestion of unknown data types: a Claude-driven agent derives a
+    declarative Ingest Recipe from a consented file sample, the
+    `RecipeReader` decodes the full file locally, and a layout
+    proposal bootstraps the panels.
 
 ## Key decisions at a glance
 
