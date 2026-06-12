@@ -1,0 +1,20 @@
+[package]
+name = "data-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "driveline-data: native CLI over data-core's readers for agents and scripts (channel listing, ranged fetches as CSV/JSON)."
+
+[[bin]]
+name = "driveline-data"
+path = "src/main.rs"
+
+[dependencies]
+data-core = { path = "../data-core" }
+# Same arrow major as data-core; `arrow-cast`'s display path formats any
+# column type so the CLI doesn't hand-roll per-dtype printers.
+arrow-array = "54"
+arrow-ipc = "54"
+arrow-schema = "54"
+arrow-cast = "54"
+serde_json = "1"

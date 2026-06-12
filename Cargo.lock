@@ -336,6 +336,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "data-cli"
+version = "0.1.0"
+dependencies = [
+ "arrow-array",
+ "arrow-cast",
+ "arrow-ipc",
+ "arrow-schema",
+ "data-core",
+ "serde_json",
+]
+
+[[package]]
 name = "data-core"
 version = "0.1.0"
 dependencies = [

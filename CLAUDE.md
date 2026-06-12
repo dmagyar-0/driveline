@@ -117,7 +117,10 @@ imports the bundle. `pnpm build` already does this (`pnpm wasm:build && pnpm
 - `apps/web/src/panels/` — Video, Plot, Map, Table, Enum, Scene panels.
 - `apps/web/src/workers/` — Comlink-wrapped workers (`dataCore`, `videoDecode`).
 - `apps/web/src/perf.ts` — perf mark/measure helpers and `__drivelinePerf`.
+- `apps/web/src/agent/` — `window.__drivelineAgent` automation surface
+  (`?agent` opt-in in prod; see `docs/11-agent-interface.md`).
 - `crates/data-core/src/readers/` — one module per format.
+- `crates/data-cli/` — `driveline-data` native CLI over the same readers.
 - `docs/06-ui-and-panels.md` — UI architecture, Zustand shape, FlexLayout.
 - `docs/07-build-and-tooling.md` — build graph, size budget, browser targets.
 - `docs/book/11-run-test-ship.md` — day-to-day workflow.
