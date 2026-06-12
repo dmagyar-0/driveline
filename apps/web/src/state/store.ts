@@ -46,6 +46,7 @@ import {
 import {
   loadBookmarksFromStorage,
   type Bookmark,
+  type BookmarkOrigin,
 } from "./persist/bookmarks";
 import {
   loadEventTagConfigFromStorage,
@@ -330,6 +331,16 @@ export interface PlotAxisWindow {
 export interface PlotZoom {
   x: TimeRange | null;
   y: Record<number, PlotAxisWindow>;
+}
+
+/** Optional extras for `addBookmark` — used by the agent API and import
+ *  so an event lands fully formed in one store update. */
+export interface AddBookmarkOpts {
+  beforeNs?: bigint;
+  afterNs?: bigint;
+  tags?: Record<string, string>;
+  origin?: BookmarkOrigin;
+  confidence?: number | null;
 }
 
 export interface SessionState {
@@ -748,11 +759,22 @@ export interface SessionState {
    */
   addBookmarkAtCursor(label?: string): string | null;
   /**
-   * Test seam: add a bookmark at an explicit `ns`. No clamping;
-   * caller is responsible for keeping `ns` inside `globalRange`.
-   * Returns the new id.
+   * Add a bookmark at an explicit `ns`. No clamping; caller is
+   * responsible for keeping `ns` inside `globalRange`. `opts` lets
+   * automated callers (the agent API, import) set the range, tags and
+   * provenance in the same update. Returns the new id.
    */
-  addBookmark(ns: bigint, label?: string): string;
+  addBookmark(ns: bigint, label?: string, opts?: AddBookmarkOpts): string;
+  /**
+   * Bulk-import events (from `parseBookmarksImport`). `"merge"` keeps
+   * existing events, replacing any whose id collides with an imported
+   * one and appending the rest; `"replace"` swaps the whole list.
+   * Returns how many entries were appended vs. replaced-in-place.
+   */
+  importBookmarks(
+    entries: Bookmark[],
+    mode: "merge" | "replace",
+  ): { added: number; updated: number };
   /** Remove a bookmark; no-op on unknown id. */
   removeBookmark(id: string): void;
   /**
@@ -1744,29 +1766,58 @@ export const useSession = create<SessionState>((set, get) => {
         color: colorFor(id),
         createdAt: Date.now(),
         tags: {},
+        origin: "user",
+        confidence: null,
       };
       set({ bookmarks: [...get().bookmarks, entry] });
       return id;
     },
 
-    addBookmark(ns, label) {
+    addBookmark(ns, label, opts) {
       const id = mintId("bm");
       const finalLabel =
         label !== undefined && label.trim().length > 0
           ? label.trim()
           : `bookmark @ ${formatRelative(ns, 0n)}`;
+      const beforeNs = opts?.beforeNs ?? 0n;
+      const afterNs = opts?.afterNs ?? 0n;
+      const confidence = opts?.confidence ?? null;
       const entry: Bookmark = {
         id,
         ns,
-        beforeNs: 0n,
-        afterNs: 0n,
+        beforeNs: beforeNs < 0n ? 0n : beforeNs,
+        afterNs: afterNs < 0n ? 0n : afterNs,
         label: finalLabel,
         color: colorFor(id),
         createdAt: Date.now(),
-        tags: {},
+        tags: { ...(opts?.tags ?? {}) },
+        origin: opts?.origin ?? "user",
+        confidence:
+          confidence === null
+            ? null
+            : Math.min(1, Math.max(0, confidence)),
       };
       set({ bookmarks: [...get().bookmarks, entry] });
       return id;
+    },
+
+    importBookmarks(entries, mode) {
+      if (mode === "replace") {
+        set({ bookmarks: [...entries] });
+        return { added: entries.length, updated: 0 };
+      }
+      const byId = new Map(entries.map((e) => [e.id, e]));
+      let updated = 0;
+      const merged = get().bookmarks.map((b) => {
+        const incoming = byId.get(b.id);
+        if (!incoming) return b;
+        byId.delete(b.id);
+        updated++;
+        return incoming;
+      });
+      const appended = entries.filter((e) => byId.has(e.id));
+      set({ bookmarks: [...merged, ...appended] });
+      return { added: appended.length, updated };
     },
 
     removeBookmark(id) {

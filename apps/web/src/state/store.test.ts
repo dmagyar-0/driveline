@@ -25,6 +25,7 @@ import {
 } from "./store";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { DEFAULT_EVENT_TAG_CONFIG } from "./persist/eventTagConfig";
+import type { Bookmark } from "./persist/bookmarks";
 import type {
   DataCoreApi,
   McapSummary,
@@ -2176,5 +2177,89 @@ describe("ui shell (drawer width)", () => {
     useSession.getState().setDrawerWidth(301.7);
     expect(useSession.getState().drawerWidth).toBe(302);
     useSession.getState().setDrawerWidth(220);
+  });
+});
+
+describe("event provenance + bulk import (agent interface)", () => {
+  it("addBookmark defaults to user origin with no confidence", () => {
+    useSession.getState().addBookmark(1n, "plain");
+    const b = useSession.getState().bookmarks[0];
+    expect(b.origin).toBe("user");
+    expect(b.confidence).toBeNull();
+  });
+
+  it("addBookmark opts set range, tags, origin and clamped confidence", () => {
+    const id = useSession.getState().addBookmark(100n, "cut-in", {
+      beforeNs: 2_000_000_000n,
+      afterNs: 1_000_000_000n,
+      tags: { maneuver: "Lane change" },
+      origin: "agent",
+      confidence: 1.7,
+    });
+    const b = useSession.getState().bookmarks.find((x) => x.id === id)!;
+    expect(b.beforeNs).toBe(2_000_000_000n);
+    expect(b.afterNs).toBe(1_000_000_000n);
+    expect(b.tags).toEqual({ maneuver: "Lane change" });
+    expect(b.origin).toBe("agent");
+    expect(b.confidence).toBe(1); // clamped to [0, 1]
+  });
+
+  it("importBookmarks merge updates colliding ids and appends new ones", () => {
+    const keep = useSession.getState().addBookmark(1n, "keep");
+    const collide = useSession.getState().addBookmark(2n, "old label");
+    const incoming: Bookmark[] = [
+      {
+        id: collide,
+        ns: 2n,
+        beforeNs: 0n,
+        afterNs: 0n,
+        label: "new label",
+        color: "#fff",
+        createdAt: 1,
+        tags: { weather: "Rain" },
+        origin: "agent",
+        confidence: 0.5,
+      },
+      {
+        id: "fresh",
+        ns: 3n,
+        beforeNs: 0n,
+        afterNs: 0n,
+        label: "appended",
+        color: "#000",
+        createdAt: 2,
+        tags: {},
+        origin: "agent",
+        confidence: null,
+      },
+    ];
+    const result = useSession.getState().importBookmarks(incoming, "merge");
+    expect(result).toEqual({ added: 1, updated: 1 });
+    const bms = useSession.getState().bookmarks;
+    expect(bms.map((b) => b.id)).toEqual([keep, collide, "fresh"]);
+    expect(bms[1].label).toBe("new label");
+    expect(bms[1].tags).toEqual({ weather: "Rain" });
+    expect(bms[2].label).toBe("appended");
+  });
+
+  it("importBookmarks replace swaps the whole list", () => {
+    useSession.getState().addBookmark(1n, "doomed");
+    const incoming: Bookmark[] = [
+      {
+        id: "only",
+        ns: 9n,
+        beforeNs: 0n,
+        afterNs: 0n,
+        label: "survivor",
+        color: "#fff",
+        createdAt: 1,
+        tags: {},
+        origin: "user",
+        confidence: null,
+      },
+    ];
+    const result = useSession.getState().importBookmarks(incoming, "replace");
+    expect(result).toEqual({ added: 1, updated: 0 });
+    expect(useSession.getState().bookmarks.map((b) => b.id)).toEqual(["only"]);
   });
 });

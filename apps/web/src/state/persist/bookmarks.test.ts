@@ -3,7 +3,9 @@ import {
   attachBookmarksPersistence,
   BOOKMARKS_STORAGE_KEY,
   loadBookmarksFromStorage,
+  parseBookmarksImport,
   saveBookmarksToStorage,
+  serializeBookmarks,
   type Bookmark,
   type BookmarksSlice,
 } from "./bookmarks";
@@ -39,6 +41,8 @@ const SAMPLE_BOOKMARKS: Bookmark[] = [
     color: "#f97316",
     createdAt: 1_700_000_000_000,
     tags: {},
+    origin: "user",
+    confidence: null,
   },
   {
     id: "uuid-b",
@@ -49,6 +53,8 @@ const SAMPLE_BOOKMARKS: Bookmark[] = [
     color: "#3b82f6",
     createdAt: 1_700_000_001_000,
     tags: { weather: "Rain", road_type: "Highway" },
+    origin: "agent",
+    confidence: 0.8,
   },
 ];
 
@@ -203,6 +209,8 @@ describe("bookmarks persist (v2)", () => {
       color: "#fff",
       createdAt: 0,
       tags: {},
+      origin: "user",
+      confidence: null,
     };
     const s = makeStorage();
     saveBookmarksToStorage([big], s);
@@ -233,6 +241,8 @@ describe("bookmarks v1 → v2 migration", () => {
         color: "#abc",
         createdAt: 7,
         tags: {},
+        origin: "user",
+        confidence: null,
       },
     ]);
   });
@@ -342,5 +352,107 @@ describe("attachBookmarksPersistence", () => {
     );
     expect(store.listenerCount()).toBe(0);
     expect(() => stop()).not.toThrow();
+  });
+});
+
+describe("provenance (origin / confidence)", () => {
+  it("persists agent origin + confidence and defaults absent fields", () => {
+    const s = makeStorage();
+    saveBookmarksToStorage(SAMPLE_BOOKMARKS, s);
+    const raw = JSON.parse(s.getItem(BOOKMARKS_STORAGE_KEY) ?? "null");
+    // "user"/null are the defaults — omitted on disk.
+    expect("origin" in raw.bookmarks[0]).toBe(false);
+    expect("confidence" in raw.bookmarks[0]).toBe(false);
+    expect(raw.bookmarks[1].origin).toBe("agent");
+    expect(raw.bookmarks[1].confidence).toBe(0.8);
+    expect(loadBookmarksFromStorage(s)).toEqual(SAMPLE_BOOKMARKS);
+  });
+
+  it("fails closed on an unknown origin or out-of-range confidence", () => {
+    const base = {
+      id: "x",
+      ns: "0",
+      beforeNs: "0",
+      afterNs: "0",
+      label: "x",
+      color: "#fff",
+      createdAt: 0,
+      tags: {},
+    };
+    for (const patch of [{ origin: "robot" }, { confidence: 1.5 }]) {
+      const s = makeStorage();
+      s.setItem(
+        BOOKMARKS_STORAGE_KEY,
+        JSON.stringify({ version: 2, bookmarks: [{ ...base, ...patch }] }),
+      );
+      expect(loadBookmarksFromStorage(s)).toBeNull();
+    }
+  });
+});
+
+describe("serializeBookmarks / parseBookmarksImport", () => {
+  it("round-trips export → import losslessly", () => {
+    const parsed = parseBookmarksImport(serializeBookmarks(SAMPLE_BOOKMARKS));
+    expect(parsed).toEqual(SAMPLE_BOOKMARKS);
+  });
+
+  it("accepts a bare array with only ns, defaulting every other field", () => {
+    const parsed = parseBookmarksImport(
+      JSON.stringify([{ ns: "1500000000" }]),
+    );
+    expect(parsed).toHaveLength(1);
+    const b = parsed![0];
+    expect(b.ns).toBe(1_500_000_000n);
+    expect(b.id.length).toBeGreaterThan(0);
+    expect(b.label).toBe("event");
+    expect(b.beforeNs).toBe(0n);
+    expect(b.afterNs).toBe(0n);
+    expect(b.tags).toEqual({});
+    expect(b.origin).toBe("user");
+    expect(b.confidence).toBeNull();
+    expect(b.color).toMatch(/^#/);
+  });
+
+  it("accepts safe-integer ns numbers and agent provenance", () => {
+    const parsed = parseBookmarksImport(
+      JSON.stringify({
+        bookmarks: [
+          {
+            ns: 42,
+            label: "cut-in",
+            tags: { maneuver: "Lane change" },
+            origin: "agent",
+            confidence: 0.9,
+          },
+        ],
+      }),
+    );
+    expect(parsed).toHaveLength(1);
+    expect(parsed![0].ns).toBe(42n);
+    expect(parsed![0].origin).toBe("agent");
+    expect(parsed![0].confidence).toBe(0.9);
+    expect(parsed![0].tags).toEqual({ maneuver: "Lane change" });
+  });
+
+  it("de-duplicates colliding ids with a numeric suffix", () => {
+    const parsed = parseBookmarksImport(
+      JSON.stringify([
+        { id: "e", ns: "1" },
+        { id: "e", ns: "2" },
+      ]),
+    );
+    expect(parsed!.map((b) => b.id)).toEqual(["e", "e_2"]);
+  });
+
+  it("fails the whole file on any unrecoverable entry", () => {
+    expect(parseBookmarksImport("not json {")).toBeNull();
+    expect(parseBookmarksImport(JSON.stringify({ nope: [] }))).toBeNull();
+    expect(parseBookmarksImport(JSON.stringify([{ ns: "1" }, {}]))).toBeNull();
+    expect(
+      parseBookmarksImport(JSON.stringify([{ ns: "1", beforeNs: "-5" }])),
+    ).toBeNull();
+    expect(
+      parseBookmarksImport(JSON.stringify([{ ns: "1", tags: { a: 1 } }])),
+    ).toBeNull();
   });
 });
