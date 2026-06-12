@@ -32,6 +32,7 @@ import {
   type PanelReadiness,
   type ReadyState,
 } from "./videoReadiness";
+import { setVideoCanvas, clearVideoCanvas } from "./videoCanvasRegistry";
 import styles from "./VideoPanel.module.css";
 
 // Issue #2 — readiness predicate constants. The panel reports "ready"
@@ -327,6 +328,15 @@ export function VideoPanel({
   );
   coverageStartRef.current = coverageStartNs;
   coverageEndRef.current = coverageEndNs;
+
+  // Expose the blit canvas to the agent API's `captureVideoFrame` for
+  // the lifetime of the panel (registry pattern, like sceneDevState).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    setVideoCanvas(panelId, canvas);
+    return () => clearVideoCanvas(panelId);
+  }, [panelId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
