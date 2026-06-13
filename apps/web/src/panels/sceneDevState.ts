@@ -9,6 +9,8 @@ export interface SceneFrameInfo {
   boundChannelId: string | null;
   /** Points currently uploaded to the GPU for the active spin. */
   pointCount: number;
+  /** Bounding boxes currently rendered for the active frame (OpenLABEL). */
+  boxCount: number;
   /** Timestamp (ns) of the spin shown at the cursor, as a string (bigint). */
   frameTsNs: string | null;
   /** Index of the active spin in the source's spin list (-1 if none). */

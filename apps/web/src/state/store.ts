@@ -18,6 +18,7 @@ import { create } from "zustand";
 import {
   bucketFiles,
   classifyUrl,
+  sniffOpenlabel,
   type BucketError,
   type TabularFormat,
 } from "./bucket";
@@ -82,6 +83,7 @@ export type SourceKind =
   | "tabular"
   | "recipe"
   | "lidar"
+  | "openlabel"
   | "ros1"
   | "ros2db3";
 export type ChannelKind = ChannelKindWire;
@@ -875,6 +877,14 @@ export interface SessionState {
    * changes (not once per cursor tick). Throws for non-lidar channels.
    */
   lidarSpinTimes(channelId: string): Promise<BigInt64Array>;
+  /**
+   * Ascending frame timestamps (ns) for an OpenLABEL bounding-box channel —
+   * one per labelled frame. The 3D scene panel binary-searches this locally to
+   * map the cursor to a frame index, so it only refetches box geometry when
+   * the active frame changes (not once per cursor tick). Throws for
+   * non-OpenLABEL channels.
+   */
+  boxFrameTimes(channelId: string): Promise<BigInt64Array>;
 }
 
 export const MIN_SPEED = 0.25;
@@ -1015,6 +1025,24 @@ function lidarChannels(sourceId: string, s: Mf4Summary): Channel[] {
     name: c.name,
     group: null,
     kind: "point_cloud" as const,
+    dtype: null,
+    unit: null,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
+// OpenLABEL summaries arrive in the same MF4 shape as LiDAR (a single channel,
+// `sample_count` = peak boxes/frame). Mirrors `lidarChannels` but hardcodes the
+// `bounding_box` kind so the ScenePanel/PanelDrawer route it to the 3D scene
+// pipeline as wireframe boxes rather than a plot or a point cloud.
+function openLabelChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: null,
+    kind: "bounding_box" as const,
     dtype: null,
     unit: null,
     sampleCount: c.sample_count,
@@ -2081,6 +2109,19 @@ export const useSession = create<SessionState>((set, get) => {
               includePrev,
             );
           }
+          if (source.kind === "openlabel") {
+            // Bounding-box frames carry a multi-column List<Float32>/List<Utf8>
+            // geometry schema, not the scalar `{ts,value}` shape
+            // `shiftRangeArrowTs` rewrites — and OpenLABEL sources never carry a
+            // time offset (always 0n), so pass the bytes through unmodified.
+            return worker.openlabelFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+          }
           throw new Error(`channel kind not plottable: ${source.kind}`);
         } finally {
           mark(perfEnd);
@@ -2106,6 +2147,19 @@ export const useSession = create<SessionState>((set, get) => {
       return worker.lidarSpinTimes(source.handle);
     },
 
+    async boxFrameTimes(channelId) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel) throw new Error(`unknown channel: ${channelId}`);
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      if (source.kind !== "openlabel") {
+        throw new Error(`not a bounding-box channel: ${channelId}`);
+      }
+      return worker.openlabelFrameTimes(source.handle);
+    },
+
     async openFiles(files) {
       const run = (): Promise<OpenResult> =>
         timed("open", async () => {
@@ -2113,6 +2167,25 @@ export const useSession = create<SessionState>((set, get) => {
           const w = worker;
 
           const buckets = bucketFiles(files);
+          // `.json` is ambiguous (Ingest Recipes are JSON too), so `bucketFiles`
+          // leaves the OpenLABEL bucket empty and we sniff content here: pull any
+          // `.json` whose head carries a top-level `"openlabel"` key out of the
+          // `unknown` bucket and into the 3D scene (bounding-box) pipeline. Files
+          // that don't match stay in `unknown` for the recipe/Format-Agent flow.
+          {
+            const stillUnknown: File[] = [];
+            for (const f of buckets.unknown) {
+              if (
+                f.name.toLowerCase().endsWith(".json") &&
+                (await sniffOpenlabel(f))
+              ) {
+                buckets.openlabel.push(f);
+              } else {
+                stillUnknown.push(f);
+              }
+            }
+            buckets.unknown = stillUnknown;
+          }
           const opened: string[] = [];
           const errors: BucketError[] = [...buckets.errors];
           const newSources: SourceMeta[] = [];
@@ -2237,6 +2310,34 @@ export const useSession = create<SessionState>((set, get) => {
                 timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
                 channels,
                 // Point clouds carry no time offset; alignment is in the spin
+                // timestamps and the fetch path passes bytes through unshifted.
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
+          }
+
+          for (const f of buckets.openlabel) {
+            try {
+              // OpenLABEL annotation sources open eagerly: the JSON is decoded
+              // into per-frame box buffers in wasm. Pass the `File` directly so
+              // no full-file clone crosses the Comlink boundary. Surfaces as a
+              // single `kind: "openlabel"` source with one `bounding_box`
+              // channel, routed to the 3D scene pipeline as wireframe boxes.
+              const handle = await w.openOpenlabel(f);
+              const summary = await w.openlabelSummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = openLabelChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "openlabel",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                // Annotations carry no time offset; alignment lives in the frame
                 // timestamps and the fetch path passes bytes through unshifted.
                 timeOffsetNs: 0n,
               });
@@ -2747,6 +2848,7 @@ export const useSession = create<SessionState>((set, get) => {
             else if (s.kind === "tabular") await w.closeTabular(s.handle);
             else if (s.kind === "recipe") await w.closeRecipe(s.handle);
             else if (s.kind === "lidar") await w.closeLidar(s.handle);
+            else if (s.kind === "openlabel") await w.closeOpenlabel(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
@@ -2826,6 +2928,8 @@ export const useSession = create<SessionState>((set, get) => {
             else if (src.kind === "tabular") await w.closeTabular(src.handle);
             else if (src.kind === "recipe") await w.closeRecipe(src.handle);
             else if (src.kind === "lidar") await w.closeLidar(src.handle);
+            else if (src.kind === "openlabel")
+              await w.closeOpenlabel(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source

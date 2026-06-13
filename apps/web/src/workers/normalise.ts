@@ -16,7 +16,8 @@ export type ChannelKindWire =
   | "video"
   | "enum"
   | "bytes"
-  | "point_cloud";
+  | "point_cloud"
+  | "bounding_box";
 
 export interface Mf4ChannelInfo {
   id: string;

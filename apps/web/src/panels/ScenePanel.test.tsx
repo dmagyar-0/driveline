@@ -50,6 +50,30 @@ function fakePointCloudSource(): { source: SourceMeta; channel: Channel } {
   return { source, channel };
 }
 
+function fakeBoundingBoxSource(): { source: SourceMeta; channel: Channel } {
+  const channel: Channel = {
+    id: "boxsrc/boxes",
+    nativeId: "boxes",
+    sourceId: "boxsrc",
+    name: "openlabel_boxes",
+    group: null,
+    kind: "bounding_box",
+    dtype: null,
+    unit: null,
+    sampleCount: 8,
+    timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+  };
+  const source: SourceMeta = {
+    id: "boxsrc",
+    kind: "openlabel",
+    name: "boxsrc",
+    handle: 0,
+    timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+    channels: [channel],
+  };
+  return { source, channel };
+}
+
 describe("ScenePanel", () => {
   afterEach(async () => {
     cleanup();
@@ -66,6 +90,15 @@ describe("ScenePanel", () => {
     const { source } = fakePointCloudSource();
     useSession.setState({ sources: [source], channels: source.channels });
     useSession.getState().setSceneBinding("scene-1", "src/cloud");
+    render(<ScenePanel panelId="scene-1" />);
+    expect(screen.getByTestId("scene-canvas-host")).toBeTruthy();
+    expect(screen.queryByTestId("scene-empty")).toBeNull();
+  });
+
+  it("renders the canvas host once a bounding-box channel is bound", () => {
+    const { source } = fakeBoundingBoxSource();
+    useSession.setState({ sources: [source], channels: source.channels });
+    useSession.getState().setSceneBinding("scene-1", "boxsrc/boxes");
     render(<ScenePanel panelId="scene-1" />);
     expect(screen.getByTestId("scene-canvas-host")).toBeTruthy();
     expect(screen.queryByTestId("scene-empty")).toBeNull();
