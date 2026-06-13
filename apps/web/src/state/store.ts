@@ -968,12 +968,18 @@ function pruneOrphanTags(
 }
 
 function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
-  if (sources.length === 0) return null;
-  let start = sources[0].timeRange.startNs;
-  let end = sources[0].timeRange.endNs;
-  for (let i = 1; i < sources.length; i++) {
-    start = bigMin(start, sources[i].timeRange.startNs);
-    end = bigMax(end, sources[i].timeRange.endNs);
+  // Config-only sources (e.g. a calibration `*.calib.json`) carry no
+  // meaningful time span — their reader reports an empty range. Folding that
+  // `[0, 0]` into the merge would drag `startNs` to the epoch and stretch the
+  // timeline across ~54 years. Only sources with a real span define the
+  // global range.
+  const spanned = sources.filter((s) => s.timeRange.endNs > s.timeRange.startNs);
+  if (spanned.length === 0) return null;
+  let start = spanned[0].timeRange.startNs;
+  let end = spanned[0].timeRange.endNs;
+  for (let i = 1; i < spanned.length; i++) {
+    start = bigMin(start, spanned[i].timeRange.startNs);
+    end = bigMax(end, spanned[i].timeRange.endNs);
   }
   return { startNs: start, endNs: end };
 }
