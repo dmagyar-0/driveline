@@ -283,9 +283,12 @@ function toAgentEvent(b: Bookmark): AgentEvent {
   };
 }
 
-// Capability manifest — the authoritative list `describe()` returns. The three
-// discovery methods are `mutating: false` (always on); everything else is gated
-// behind `?agent`. Keep in sync with the `AgentApi` interface.
+// Capability manifest — the authoritative list `describe()` returns. `mutating`
+// is the *semantic* flag (does the call change session state), so an agent can
+// reason about dry-run safety; it is NOT the gating signal. Gating is conveyed
+// by `agentParamRequired`: the whole non-discovery surface (reads included,
+// since they expose session data) needs `?agent`, while the three discovery
+// methods install always. Keep in sync with the `AgentApi` interface.
 const AGENT_CAPABILITIES: readonly AgentCapability[] = [
   { name: "getSkill", summary: "Full BYOA guide (Markdown).", mutating: false },
   { name: "describe", summary: "This capability manifest.", mutating: false },
@@ -297,33 +300,45 @@ const AGENT_CAPABILITIES: readonly AgentCapability[] = [
   {
     name: "getSessionSnapshot",
     summary: "Cursor / playing / speed / globalRange.",
-    mutating: true,
+    mutating: false,
   },
-  { name: "listSources", summary: "Loaded sources.", mutating: true },
-  { name: "listChannels", summary: "Loaded channels.", mutating: true },
+  { name: "listSources", summary: "Loaded sources.", mutating: false },
+  { name: "listChannels", summary: "Loaded channels.", mutating: false },
   {
     name: "fetchChannelRange",
     summary: "Ranged channel data as JSON columns.",
-    mutating: true,
+    mutating: false,
   },
   { name: "setCursor", summary: "Move the playback cursor.", mutating: true },
   { name: "play", summary: "Start playback.", mutating: true },
   { name: "pause", summary: "Stop playback.", mutating: true },
   { name: "setSpeed", summary: "Set playback speed.", mutating: true },
-  { name: "getEventTagConfig", summary: "Event tag taxonomy.", mutating: true },
-  { name: "listEvents", summary: "All events.", mutating: true },
+  {
+    name: "getEventTagConfig",
+    summary: "Event tag taxonomy.",
+    mutating: false,
+  },
+  { name: "listEvents", summary: "All events.", mutating: false },
   { name: "addEvent", summary: "Create an agent event.", mutating: true },
   { name: "setEventTag", summary: "Set an event tag value.", mutating: true },
   { name: "setEventRange", summary: "Set an event's range.", mutating: true },
   { name: "renameEvent", summary: "Rename an event.", mutating: true },
   { name: "removeEvent", summary: "Delete an event.", mutating: true },
-  { name: "exportEvents", summary: "Events as portable JSON.", mutating: true },
+  {
+    name: "exportEvents",
+    summary: "Events as portable JSON.",
+    mutating: false,
+  },
   { name: "importEvents", summary: "Bulk-import events.", mutating: true },
-  { name: "listVideoPanels", summary: "Live video panel ids.", mutating: true },
+  {
+    name: "listVideoPanels",
+    summary: "Live video panel ids.",
+    mutating: false,
+  },
   {
     name: "captureVideoFrame",
     summary: "PNG of the decoded frame.",
-    mutating: true,
+    mutating: false,
   },
   { name: "createPanel", summary: "Mint a panel of a kind.", mutating: true },
   {

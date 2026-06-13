@@ -198,7 +198,11 @@ describe("discovery (getSkill / describe)", () => {
     expect(byName.get("getSkill")?.mutating).toBe(false);
     expect(byName.get("describe")?.mutating).toBe(false);
     expect(byName.get("addDataSource")?.mutating).toBe(true);
-    expect(byName.get("fetchChannelRange")?.mutating).toBe(true);
+    // `mutating` is the semantic flag, not the gating signal: read-only ops
+    // (still `?agent`-gated) report false so an agent can reason about safety.
+    expect(byName.get("fetchChannelRange")?.mutating).toBe(false);
+    expect(byName.get("listChannels")?.mutating).toBe(false);
+    expect(byName.get("createPanel")?.mutating).toBe(true);
     // The full surface is the gated set + the discovery trio.
     expect(m.capabilities.length).toBeGreaterThan(10);
   });

@@ -91,9 +91,12 @@ const added = agent.addDataSource({
     { name: "gps/longitude", unit: "deg", timestampsNs, values: lon },
   ],
 });
-const byName = Object.fromEntries(added.channels.map((c) => [c.name, c.id]));
+// added.channels preserves the order you sent, so index by position. (The
+// returned .name is the DISPLAY name and comes back leading-slashed, e.g.
+// "/gps/latitude" — don't try to match it against the un-slashed input name.)
+const [latId, lonId] = added.channels.map((c) => c.id);
 const panelId = agent.createPanel("map");
-agent.setMapBinding(panelId, byName["/gps/latitude"], byName["/gps/longitude"]);
+agent.setMapBinding(panelId, latId, lonId);
 \`\`\`
 
 ## Lay out panels
@@ -116,8 +119,10 @@ agent.setMapBinding(panelId, byName["/gps/latitude"], byName["/gps/longitude"]);
   column arrives as decimal-string ns; \`value\` (scalar) or \`code\` (enum) as
   numbers. \`includePrev\` also returns the last sample before the window
   (step-hold). Resolves \`null\` for an unknown channel / unparseable bounds.
-- \`getSessionSnapshot()\` → \`{ cursorNs, playing, speed, globalRange }\` (ns as
-  strings; \`globalRange\` covers every loaded source, including yours).
+- \`getSessionSnapshot()\` →
+  \`{ cursorNs, playing, speed, globalRange: { startNs, endNs } | null }\` (ns as
+  strings; \`globalRange\` covers every loaded source, including yours — use
+  \`startNs\`/\`endNs\` to park the cursor or size a fetch window).
 - \`setCursor(ns)\` / \`play()\` / \`pause()\` / \`setSpeed(x)\` drive the transport.
 - Events: \`addEvent({ ns?, label?, tags?, confidence? })\`, \`listEvents()\`,
   \`exportEvents()\`, \`importEvents(json, mode?)\` record machine findings.
