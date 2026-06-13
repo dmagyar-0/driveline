@@ -180,6 +180,25 @@ uniform vec4 u_color;
 out vec4 fragColor;
 void main() { fragColor = u_color; }`;
 
+// Vertex-coloured line program for trajectories: each endpoint carries its own
+// RGBA so a path can fade along its time horizon and lower-confidence
+// candidates draw more transparent — all without extra draw calls.
+const VCLINE_VS = `#version 300 es
+layout(location=0) in vec3 a_pos;
+layout(location=1) in vec4 a_color;
+uniform mat4 u_mvp;
+out vec4 v_color;
+void main() {
+  gl_Position = u_mvp * vec4(a_pos, 1.0);
+  v_color = a_color;
+}`;
+
+const VCLINE_FS = `#version 300 es
+precision highp float;
+in vec4 v_color;
+out vec4 fragColor;
+void main() { fragColor = v_color; }`;
+
 function compile(
   gl: WebGL2RenderingContext,
   type: number,
@@ -260,6 +279,13 @@ export interface SceneBox {
   label: string;
 }
 
+/** One predicted candidate trajectory in the vehicle frame (metres, z-up): a
+ *  polyline of waypoints plus the model's confidence in `[0, 1]`. */
+export interface SceneTrajectoryPath {
+  points: [number, number, number][];
+  confidence: number;
+}
+
 /** A box-centre (or any world point) projected to CSS pixels for label
  *  placement. `visible` is false when the point is behind the camera or
  *  outside the view frustum. */
@@ -307,6 +333,15 @@ export class PointCloudRenderer {
   private boxVao: WebGLVertexArrayObject;
   private boxBuf: WebGLBuffer;
   private boxVertexCount = 0;
+
+  // Predicted-trajectory polylines (dynamic; uploaded by `setTrajectories`).
+  // Interleaved [x,y,z, r,g,b,a] per vertex so the vertex-coloured line program
+  // renders a time-horizon gradient + per-confidence alpha in one draw call.
+  private trajProg: WebGLProgram;
+  private trajVao: WebGLVertexArrayObject;
+  private trajBuf: WebGLBuffer;
+  private trajVertexCount = 0;
+  private trajPathCount = 0;
 
   private pointCount = 0;
   private gridCount: number;
@@ -357,6 +392,7 @@ export class PointCloudRenderer {
 
     this.pointProg = link(gl, POINT_VS, POINT_FS);
     this.lineProg = link(gl, LINE_VS, LINE_FS);
+    this.trajProg = link(gl, VCLINE_VS, VCLINE_FS);
 
     // Points: position (loc 0) + intensity (loc 1), separate dynamic buffers.
     this.pointVao = gl.createVertexArray()!;
@@ -399,6 +435,19 @@ export class PointCloudRenderer {
     gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    // Trajectory polylines (dynamic; uploaded by `setTrajectories`). One VBO of
+    // interleaved [pos(3) + rgba(4)] vertices, 28-byte stride, drawn with the
+    // vertex-coloured LINE program as `gl.LINES`.
+    this.trajVao = gl.createVertexArray()!;
+    this.trajBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.trajVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.trajBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 28, 12);
     gl.bindVertexArray(null);
 
     // Colormap LUT texture (256x1 RGBA8).
@@ -555,6 +604,107 @@ export class PointCloudRenderer {
 
   clearBoxes(): void {
     this.boxVertexCount = 0;
+    this.requestRender();
+  }
+
+  /** Upload a set of predicted trajectories as vertex-coloured line geometry.
+   *  Each path of `k` waypoints becomes `k-1` line segments (`2*(k-1)`
+   *  vertices); each vertex carries an RGBA colour that (a) shifts hue along the
+   *  path's time horizon — cyan at the ego/near end → green at the far,
+   *  predicted end — and (b) scales alpha + saturation with the path's
+   *  confidence, so high-confidence candidates read brighter and more opaque
+   *  than low-confidence alternates. Reads distinctly from the amber boxes.
+   *  Buffer layout is interleaved `[x,y,z, r,g,b,a]` (28-byte stride). */
+  setTrajectories(paths: readonly SceneTrajectoryPath[]): void {
+    const gl = this.gl;
+    // Count line vertices: 2 per segment, (k-1) segments per path.
+    let segVerts = 0;
+    for (const p of paths) {
+      if (p.points.length >= 2) segVerts += (p.points.length - 1) * 2;
+    }
+    const stride = 7; // floats per vertex (pos3 + rgba4)
+    const verts = new Float32Array(segVerts * stride);
+    let o = 0;
+    let pathCount = 0;
+    for (const path of paths) {
+      const pts = path.points;
+      if (pts.length < 2) continue;
+      pathCount++;
+      // Confidence in [0,1] drives alpha (floor so a faint path still shows) and
+      // a slight desaturation of the low-confidence candidates.
+      const conf = Math.max(0, Math.min(1, path.confidence));
+      const alpha = 0.35 + 0.65 * conf;
+      for (let i = 0; i < pts.length - 1; i++) {
+        // Endpoint colours by normalised position along the path (time horizon):
+        // near end cyan (0.1, 0.9, 0.95) → far end green (0.3, 1.0, 0.4).
+        const tA = i / (pts.length - 1);
+        const tB = (i + 1) / (pts.length - 1);
+        for (const [pt, t] of [
+          [pts[i], tA] as const,
+          [pts[i + 1], tB] as const,
+        ]) {
+          const r = (0.1 + 0.2 * t) * (0.5 + 0.5 * conf);
+          const g = (0.9 + 0.1 * t) * (0.6 + 0.4 * conf);
+          const b = (0.95 - 0.55 * t) * (0.6 + 0.4 * conf);
+          verts[o++] = pt[0];
+          verts[o++] = pt[1];
+          verts[o++] = pt[2];
+          verts[o++] = r;
+          verts[o++] = g;
+          verts[o++] = b;
+          verts[o++] = alpha;
+        }
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.trajBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    this.trajVertexCount = segVerts;
+    this.trajPathCount = pathCount;
+    this.requestRender();
+  }
+
+  clearTrajectories(): void {
+    this.trajVertexCount = 0;
+    this.trajPathCount = 0;
+    this.requestRender();
+  }
+
+  /** Frame the camera to a set of predicted trajectories — the trajectory
+   *  equivalent of `frameToBoxes`. A trajectory source carries no point cloud,
+   *  so the cloud auto-frame never fires and the paths would sit off-screen at
+   *  the default camera. Computes the waypoints' axis-aligned bounds and reuses
+   *  the same centroid+radius framing maths. Called once per fresh path set. */
+  frameToTrajectories(paths: readonly SceneTrajectoryPath[]): void {
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
+    let any = false;
+    for (const path of paths) {
+      for (const p of path.points) {
+        any = true;
+        minX = Math.min(minX, p[0]);
+        minY = Math.min(minY, p[1]);
+        minZ = Math.min(minZ, p[2]);
+        maxX = Math.max(maxX, p[0]);
+        maxY = Math.max(maxY, p[1]);
+        maxZ = Math.max(maxZ, p[2]);
+      }
+    }
+    if (!any) return;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    const radius = Math.max(
+      Math.hypot(maxX - cx, maxY - cy),
+      (maxZ - minZ) / 2,
+      3,
+    );
+    this.target = [cx, cy, cz];
+    this.dist = Math.max(8, (radius / Math.tan(FOV / 2)) * 1.3);
     this.requestRender();
   }
 
@@ -767,6 +917,24 @@ export class PointCloudRenderer {
       gl.bindVertexArray(this.boxVao);
       gl.drawArrays(gl.LINES, 0, this.boxVertexCount);
     }
+
+    // Predicted trajectories last, with the vertex-coloured line program (cyan→
+    // green time-horizon gradient, per-confidence alpha) so they read distinctly
+    // from the amber boxes. Alpha-blended; depth test stays on so paths occlude
+    // correctly against the cloud/grid but blend among themselves.
+    if (this.trajVertexCount > 0) {
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+      gl.useProgram(this.trajProg);
+      gl.uniformMatrix4fv(
+        gl.getUniformLocation(this.trajProg, "u_mvp"),
+        false,
+        mvp,
+      );
+      gl.bindVertexArray(this.trajVao);
+      gl.drawArrays(gl.LINES, 0, this.trajVertexCount);
+      gl.disable(gl.BLEND);
+    }
     gl.bindVertexArray(null);
 
     // Let the panel re-place its HTML label overlay against the fresh MVP.
@@ -791,6 +959,11 @@ export class PointCloudRenderer {
     return this.boxVertexCount / (BOX_EDGES.length * 2);
   }
 
+  /** Number of candidate trajectory paths currently uploaded. */
+  trajectoryPathCountValue(): number {
+    return this.trajPathCount;
+  }
+
   dispose(): void {
     this.disposed = true;
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
@@ -805,9 +978,11 @@ export class PointCloudRenderer {
     // removed from the DOM by React.
     gl.deleteProgram(this.pointProg);
     gl.deleteProgram(this.lineProg);
+    gl.deleteProgram(this.trajProg);
     gl.deleteTexture(this.lut);
     gl.deleteBuffer(this.posBuf);
     gl.deleteBuffer(this.intBuf);
     gl.deleteBuffer(this.boxBuf);
+    gl.deleteBuffer(this.trajBuf);
   }
 }

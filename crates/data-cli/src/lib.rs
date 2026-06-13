@@ -93,6 +93,7 @@ fn kind_str(kind: ChannelKind) -> &'static str {
         ChannelKind::Bytes => "bytes",
         ChannelKind::PointCloud => "pointcloud",
         ChannelKind::BoundingBox => "bounding_box",
+        ChannelKind::Trajectory => "trajectory",
     }
 }
 
@@ -107,6 +108,7 @@ fn source_kind_str(kind: SourceKind) -> &'static str {
         SourceKind::Ros1 => "ros1",
         SourceKind::Lidar => "lidar",
         SourceKind::OpenLabel => "openlabel",
+        SourceKind::Trajectory => "trajectory",
     }
 }
 

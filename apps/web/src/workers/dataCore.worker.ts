@@ -36,6 +36,11 @@ import init, {
   openlabel_summary,
   openlabel_fetch_range,
   openlabel_frame_times,
+  open_trajectory,
+  close_trajectory,
+  trajectory_summary,
+  trajectory_fetch_range,
+  trajectory_frame_times,
   open_ros1_bag,
   close_ros1_bag,
   ros1_bag_summary,
@@ -799,6 +804,68 @@ export const dataCoreApi = {
   async closeOpenlabel(handle: number): Promise<void> {
     await ready;
     close_openlabel(handle);
+  },
+  /**
+   * Open a Driveline `*.trajectory.json` (one row per frame of predicted ego
+   * future trajectories — candidate waypoint polylines). The wasm reader owns
+   * the decoded per-frame buffers for the source's lifetime, freed by
+   * `closeTrajectory`. Accepting a `File` keeps the bytes on the worker side —
+   * no structured-clone copy across Comlink.
+   */
+  async openTrajectory(file: File): Promise<number> {
+    await ready;
+    return open_trajectory(new Uint8Array(await file.arrayBuffer()));
+  },
+  /**
+   * `SourceMeta` for an open trajectory reader, in the MF4-style shape (single
+   * channel, `group` null, `sample_count` = peak paths/frame), normalised so
+   * every `*_ns` field is a `bigint`. No `kind` on the wire — the store stamps
+   * `trajectory`, exactly like lidar stamps `point_cloud`.
+   */
+  async trajectorySummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(trajectory_summary(handle) as RawMf4Summary);
+  },
+  /**
+   * Arrow IPC for the frames overlapping `[startNs, endNs)`. The scene panel
+   * passes a zero/one-width window + `includePrev` to fetch exactly the frame
+   * active at the cursor. Schema: `{ ts, points: List<f32>, path_lengths:
+   * List<i32>, confidences: List<f32> }`, one row per frame.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async trajectoryFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    const buf = trajectory_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
+    return Comlink.transfer(buf, [buf.buffer]);
+  },
+  /**
+   * Ascending frame timestamps (ns) for a trajectory source, one per frame.
+   * The scene panel binary-searches this locally so it only refetches
+   * trajectory data when the active frame changes.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async trajectoryFrameTimes(handle: number): Promise<BigInt64Array> {
+    await ready;
+    const times = trajectory_frame_times(handle);
+    return Comlink.transfer(times, [times.buffer]);
+  },
+  async closeTrajectory(handle: number): Promise<void> {
+    await ready;
+    close_trajectory(handle);
   },
   async openMcapVideoStream(
     handle: number,

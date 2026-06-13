@@ -657,6 +657,7 @@ impl McapReader {
                 | ChannelKind::Bytes
                 | ChannelKind::PointCloud
                 | ChannelKind::BoundingBox
+                | ChannelKind::Trajectory
         ) {
             return Err(crate::Error::UnsupportedKind);
         }
@@ -711,7 +712,8 @@ impl McapReader {
             ChannelKind::Video
             | ChannelKind::Bytes
             | ChannelKind::PointCloud
-            | ChannelKind::BoundingBox => {
+            | ChannelKind::BoundingBox
+            | ChannelKind::Trajectory => {
                 unreachable!("guarded above")
             }
         }

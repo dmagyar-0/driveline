@@ -175,6 +175,7 @@ declare global {
         boundChannelId: string | null;
         pointCount: number;
         boxCount: number;
+        trajectoryPathCount: number;
         frameTsNs: string | null;
         spinIndex: number;
         spinCount: number;
@@ -224,6 +225,7 @@ declare global {
           | "recipe"
           | "lidar"
           | "openlabel"
+          | "trajectory"
           | "ros1"
           | "ros2db3";
         name: string;

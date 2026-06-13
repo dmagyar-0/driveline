@@ -71,6 +71,16 @@ export interface Buckets {
    */
   openlabel: File[];
   /**
+   * Driveline `*.trajectory.json` drops (predicted ego future trajectories,
+   * one row per frame of candidate waypoint polylines), opened straight into
+   * the 3D scene pipeline. Like OpenLABEL, a `.json` extension is ambiguous, so
+   * a file only lands here once its bytes are sniffed for a top-level
+   * `"trajectory"` key — see `sniffTrajectory`. `bucketFiles` is synchronous so
+   * it leaves this empty; `openFiles` does the async sniff and re-routes
+   * qualifying `.json` files out of `unknown` into here.
+   */
+  trajectory: File[];
+  /**
    * Drops with an extension Driveline doesn't recognise. No longer a hard
    * error: each is routed to the Format Agent flow — `openFiles` first tries
    * the Format Registry for a matching Ingest Recipe (extension / magic bytes),
@@ -95,6 +105,7 @@ export function bucketFiles(files: File[]): Buckets {
   const tabular: TabularInput[] = [];
   const lidar: LidarInput[] = [];
   const openlabel: File[] = [];
+  const trajectory: File[] = [];
   const unknown: File[] = [];
   const errors: BucketError[] = [];
 
@@ -169,6 +180,7 @@ export function bucketFiles(files: File[]): Buckets {
     tabular,
     lidar,
     openlabel,
+    trajectory,
     unknown,
     errors,
   };
@@ -207,6 +219,39 @@ export function sniffOpenlabelBytes(bytes: Uint8Array): boolean {
   const head = bytes.subarray(0, OPENLABEL_SNIFF_BYTES);
   const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
   return /"openlabel"\s*:/i.test(text);
+}
+
+/** Max bytes read when sniffing a `.json` drop for the trajectory marker —
+ *  same budget and rationale as `OPENLABEL_SNIFF_BYTES`. */
+const TRAJECTORY_SNIFF_BYTES = 64 * 1024;
+
+/**
+ * True when `file`'s leading bytes contain a top-level `"trajectory"` JSON key.
+ * `.json` is ambiguous in Driveline (Ingest Recipes and OpenLABEL are JSON
+ * too), so the drop path uses this content sniff to tell a predicted-trajectory
+ * file apart before routing it to the 3D scene pipeline. Reads only the file
+ * head (`TRAJECTORY_SNIFF_BYTES`); never throws (returns `false` on any
+ * read/decode error so the caller falls back to the recipe/unknown flow).
+ */
+export async function sniffTrajectory(file: File): Promise<boolean> {
+  try {
+    const head = file.slice(0, TRAJECTORY_SNIFF_BYTES);
+    const text = await head.text();
+    return /"trajectory"\s*:/i.test(text);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Same trajectory content sniff as `sniffTrajectory`, over already-decoded
+ * bytes rather than a `File`. The dev-hook path constructs `File`s from
+ * `{ name, bytes }`, so both paths share the marker test.
+ */
+export function sniffTrajectoryBytes(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, TRAJECTORY_SNIFF_BYTES);
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
+  return /"trajectory"\s*:/i.test(text);
 }
 
 /** A URL input classified by the reader that can open it. */
