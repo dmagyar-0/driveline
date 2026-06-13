@@ -1,17 +1,122 @@
 ---
-description: ALWAYS use this skill whenever the user says "verify visually" (in any phrasing). End-to-end visual verification of Driveline's comma2k19 demo path (real-world ADAS dataset, dashcam + signals across MCAP and MF4): fetch the public sources, build the fixtures, run the Playwright specs, and surface the screenshots/recordings. Use when the user asks to "verify visually", verify the comma2k19 demo, regenerate the demo fixtures, run the `_demo-comma2k19-video.spec.ts` Playwright tests, or visualise comma2k19 dashcam + signals end-to-end. Also use when the user asks to "rebuild the fixtures", "redo the demo", or "check the dashcam + plots still render".
-allowed-tools: Bash(scripts/setup-test-env.sh*) Bash(.claude/skills/verify-visually/scripts/*) Bash(pnpm *) Bash(python3 *) Bash(ls *) Bash(cat *) Bash(ffmpeg *) Bash(ffprobe *)
+description: ALWAYS use this skill whenever the user says "verify visually" (in any phrasing). Delegates end-to-end visual verification of Driveline's comma2k19 demo path (real-world ADAS dataset, dashcam + signals across MCAP and MF4) to a verification subagent. You capture the user's *intent* — what the change was supposed to deliver visually — hand it to the subagent, and the subagent runs the pipeline (fetch sources, build fixtures, run the Playwright specs), opens the resulting screenshots/recordings, and judges whether that intent was actually delivered. Use when the user asks to "verify visually", verify the comma2k19 demo, regenerate the demo fixtures, run the `_demo-comma2k19-video.spec.ts` Playwright tests, or visualise comma2k19 dashcam + signals end-to-end. Also use when the user asks to "rebuild the fixtures", "redo the demo", or "check the dashcam + plots still render".
+allowed-tools: Agent AskUserQuestion SendUserFile Read Bash(ls *) Bash(cat *)
 ---
 
 # verify-visually
 
-End-to-end verification that the comma2k19 demo path still works: fetch
-the public sources, build every fixture, run the Playwright specs, and
-surface the screenshots. Designed to run cold (fresh container) and
-warm (skip anything already on disk). Parallelises every step that is
-independent.
+Visual verification is **delegated to a subagent**. Your job in the main
+thread is small and intent-focused:
 
-## What this verifies
+1. **Capture the user's intent** — what was this change supposed to make
+   visible/work? That intent is the success criterion.
+2. **Dispatch one verification subagent** — hand it the intent and point
+   it at the procedure below. It runs the whole pipeline, *opens the
+   screenshots/recordings*, and judges whether the intent was delivered.
+3. **Relay the verdict** — surface the artifacts the subagent returns and
+   state plainly whether the intent was delivered, citing the visual
+   evidence.
+
+Do **not** run the fetch/build/test pipeline yourself in the main thread.
+That work, and the visual judgement, belongs to the subagent. The main
+thread stays cheap so its context isn't flooded by build/test output.
+
+---
+
+## Step 1 — Capture the user's intent
+
+The intent is a concrete, checkable visual claim — the thing the
+subagent must confirm is true on screen. Derive it from the conversation:
+what did the user just build, change, or fix, and what should now be
+visible in the app?
+
+Phrase it as a verifiable statement, e.g.:
+
+- "The steering-angle trace renders and stays aligned with the video
+  cursor as it scrubs."
+- "Both dashcams in the 6-panel dashboard show the *correct* frame after
+  each jump (no frozen/stale canvas)."
+- "Adding the MF4 source draws a second line on the shared plot rather
+  than blanking the panel."
+
+If you genuinely cannot infer a specific intent from context (e.g. the
+user said only "verify visually" with nothing prior), ask **one**
+`AskUserQuestion` to pin down what the verification should confirm. If
+the user has no specific intent, fall back to this default intent and
+say you're using it:
+
+> The comma2k19 demo path renders dashcam video synchronised with the
+> signal plots across MCAP + MF4, every panel paints real content (no
+> blank/broken panels), and replay/jump latency stays within the
+> documented baselines.
+
+Keep the intent tight enough that "delivered / not delivered" is
+answerable from the screenshots and the per-jump numbers.
+
+## Step 2 — Dispatch the verification subagent
+
+Launch **one** subagent with the `Agent` tool (`subagent_type:
+general-purpose`). Give it the intent verbatim and tell it to follow the
+procedure in this file. Template:
+
+> You are verifying a Driveline change visually. **The user's intent — the
+> thing you must confirm was actually delivered — is:**
+>
+> "<INTENT, verbatim>"
+>
+> Read `.claude/skills/verify-visually/SKILL.md` and follow the
+> **"Verification procedure"** section exactly (environment → fetch →
+> build fixtures → run the screenshot specs → run the replay/perf specs).
+> Then **open every relevant screenshot and the per-jump montage with the
+> `Read` tool and look at them**, and read the per-jump stdout numbers
+> against the "Replay latency findings" baselines.
+>
+> Judge **against the intent above** — not just "did the tests pass". A
+> green test run with a blank panel, a stale frame, or a missing trace is
+> a FAIL if the intent says that content should be visible.
+>
+> Return a structured verdict:
+> - **VERDICT:** delivered / partially delivered / not delivered
+> - **Evidence:** which specific screenshots/recordings/numbers support
+>   the verdict, described in terms of what you actually saw.
+> - **Artifacts to surface:** absolute paths of the PNGs / `.webm`s /
+>   montage the main thread should send to the user.
+> - **Anything off-baseline or broken**, even if tangential to the intent.
+
+The subagent owns all the heavy tools (Bash/pnpm/python/ffmpeg, plus
+`Read` for looking at images). The main thread does not re-run any of it.
+
+Run the subagent in the foreground unless the user asked to keep working
+in parallel — you need its verdict to respond.
+
+## Step 3 — Relay the verdict and surface artifacts
+
+When the subagent returns:
+
+1. `SendUserFile` the artifact paths it listed (the screenshot PNGs, any
+   `.webm` recordings, the jump-frames montage). These are the
+   deliverable — the user needs to see them.
+2. State the verdict plainly: **was the intent delivered?** Quote the
+   intent, then give the answer and the specific visual evidence for it.
+   If it was *not* delivered, say exactly what was missing or wrong.
+3. Pass along any off-baseline latency or broken-panel notes the subagent
+   flagged, even if they're outside the stated intent.
+
+Don't paste the subagent's whole transcript — relay the conclusion and
+the evidence that backs it.
+
+---
+
+# Verification procedure
+
+> **This section is for the verification subagent.** If you are the main
+> thread, do not run it — dispatch a subagent (see Step 2). Run cold
+> (fresh container) and warm (skip anything already on disk). Parallelise
+> every step that is independent. After running, you must **open the
+> screenshots/recordings and judge them against the user's intent** (see
+> "Judge against intent" at the end).
+
+## What the demo path exercises
 
 The five tests in `apps/e2e/tests/_demo-comma2k19-video.spec.ts`:
 
@@ -48,11 +153,11 @@ stage 3):
 
 ## Stages — run in this order
 
-Each stage is idempotent. Re-run the whole skill freely.
+Each stage is idempotent. Re-run freely.
 
 ### 1. Environment (one-shot, ~2 min on cold cache)
 
-```!
+```
 scripts/setup-test-env.sh >/dev/null
 python3 -c "import pyarrow" 2>/dev/null \
   || pip3 install --break-system-packages -q 'pyarrow>=14,<20'
@@ -66,7 +171,7 @@ addition; everything else is shared with `pnpm test`.
 
 ### 2. Fetch upstream sources (parallel, ~5–15 s warm cache)
 
-```!
+```
 .claude/skills/verify-visually/scripts/fetch-sources.sh
 ```
 
@@ -80,7 +185,7 @@ when an entry exists.
 
 ### 3. Build fixtures (parallel, ~10 s warm cache)
 
-```!
+```
 .claude/skills/verify-visually/scripts/build-fixtures.sh
 ```
 
@@ -116,7 +221,7 @@ Cohorts:
 
 ### 4. Run the e2e specs (Playwright handles parallel)
 
-```!
+```
 pnpm --filter e2e exec playwright test \
   _demo-comma2k19-video.spec.ts --project=chromium --reporter=list
 ```
@@ -139,7 +244,7 @@ include these (they exercise playback, multi-video decode, jump
 latency, and frame correctness, none of which the screenshot specs
 cover):
 
-```!
+```
 pnpm --filter e2e exec playwright test \
   _demo-comma2k19-replay-record.spec.ts \
   _demo-comma2k19-dashboard-record.spec.ts \
@@ -155,15 +260,19 @@ and `_demo-comma2k19-jump-frames-record.spec.ts` log per-jump numbers
 (`JUMP→…`, `SUMMARY …`, `FRAMES_JSON=…`) to stdout — read those against
 the baselines in "Replay latency findings".
 
-### 5. Surface the screenshots + recordings
+Scope the run to the intent when it makes sense: if the intent only
+concerns, say, the MCAP+MF4 plot, you can `-g "MCAP and MF4 together"`
+to iterate fast — but a clean final verdict should still run the full
+set so a regression elsewhere doesn't hide.
+
+### 5. Collect the screenshots + recordings
 
 The screenshot specs write into `apps/e2e/tests/screenshots/`. The
 replay/perf specs write a per-test `video.webm` under
 `apps/e2e/test-results/<test-dir>/`, and the frame spec writes per-jump
-canvases to `/tmp/jumpframes/`. After the run, send the relevant PNG(s)
-and webm(s) to the user with `SendUserFile`. For the frame spec, build a
-contact sheet of the captured cams first so the "correct frame per jump"
-claim is eyeball-checkable, e.g.:
+canvases to `/tmp/jumpframes/`. For the frame spec, build a contact
+sheet of the captured cams so the "correct frame per jump" claim is
+eyeball-checkable, e.g.:
 
 ```
 ffmpeg -v error -framerate 1 -pattern_type glob \
@@ -173,6 +282,24 @@ ffmpeg -v error -framerate 1 -pattern_type glob \
 ```
 
 The five screenshot filenames are listed in the stage-4 table.
+
+## Judge against intent (the point of this run)
+
+A passing test run is **necessary but not sufficient**. Now actually
+**look**:
+
+1. `Read` each screenshot the run produced (and the jump-frames montage).
+   Describe what is actually on screen — panels painted? traces drawn?
+   video frame present and plausibly the right moment? cursor aligned?
+2. Read the per-jump stdout numbers against "Replay latency findings".
+3. Hold all of that against **the user's intent**. The intent is the bar:
+   - If the intent says a trace/panel/frame should be visible and it is →
+     evidence toward "delivered".
+   - If a spec is green but the relevant pixels are blank, stale, or
+     wrong → **not delivered**, regardless of the green check.
+4. Form the verdict (delivered / partially delivered / not delivered),
+   cite the specific screenshots/numbers, and list the absolute artifact
+   paths for the main thread to surface.
 
 ## Replay latency findings
 
@@ -242,6 +369,11 @@ Everything that can run concurrently does. Knobs:
   `window.__drivelineDevHooks.clearSession()` then
   `resetLayout()`. The spec's `beforeEach` already does this.
 
+If a stage fails outright (can't fetch, can't build, specs error before
+producing screenshots), that is itself a verdict input: report **not
+delivered — could not verify**, with the failing stage and error, rather
+than guessing.
+
 ## Where things live (when you need to edit)
 
 - `scripts/convert_comma2k19_to_mcap.py` — MCAP converter (`--only`,
@@ -270,3 +402,5 @@ Everything that can run concurrently does. Knobs:
   they're gitignored. Commit screenshots and converter changes only.
 - The mp4 + sidecar pair counts as one source in the status bar.
   When asserting `listSources().length`, factor that in.
+</content>
+</invoke>
