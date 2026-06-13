@@ -12,6 +12,7 @@
     "fmt": "prettier --write ."
   },
   "dependencies": {
+    "ajv": "^8.20.0",
     "apache-arrow": "^17.0.0",
     "comlink": "^4.4.2",
     "flexlayout-react": "^0.8.19",
