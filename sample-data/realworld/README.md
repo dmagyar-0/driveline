@@ -133,7 +133,7 @@ wires up dataset #2 (nuScenes v1.0-mini) end-to-end for the
 synthetic calibration fixture. It converts one scene's `LIDAR_TOP` +
 `CAM_FRONT` into the three Driveline formats the overlay needs:
 
-- `nuscenes_lidar.parquet` — Driveline point-cloud schema
+- `nuscenes.lidar.parquet` — Driveline point-cloud schema
   (see [`crates/data-core/src/pointcloud.rs`](../../crates/data-core/src/pointcloud.rs)):
   one row per LIDAR_TOP sample_data (keyframes **and** sweeps), points in
   the LIDAR_TOP sensor frame, `t_ns` from the nuScenes µs timestamp.
@@ -167,7 +167,7 @@ pip install 'pyarrow>=14,<20' 'numpy>=1.24,<3'
 python3 scripts/convert_nuscenes_to_driveline.py
 
 # 3. Open it in the dev server. Drop the four files
-#    (nuscenes_lidar.parquet, nuscenes_cam_front.mp4,
+#    (nuscenes.lidar.parquet, nuscenes_cam_front.mp4,
 #     nuscenes_cam_front.mp4.timestamps, nuscenes_cam_front.calib.json)
 #    onto http://localhost:5173 together. The .mp4 + .timestamps pair as one
 #    video source; bind the point-cloud overlay on the video panel to the

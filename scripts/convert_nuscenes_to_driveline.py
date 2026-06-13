@@ -11,7 +11,7 @@ point cloud on the camera image with no reader changes.
 
 Outputs (default `/tmp/datasets/nuscenes_demo/`, gitignored):
 
-  nuscenes_lidar.parquet        Driveline point-cloud schema (see
+  nuscenes.lidar.parquet        Driveline point-cloud schema (see
                                 crates/data-core/src/pointcloud.rs):
                                   t_ns        Int64           spin ts (ns)
                                   positions   List<Float32>   flat xyz (m)
@@ -519,7 +519,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # --- LiDAR Parquet ---
-    lidar_out = out_dir / "nuscenes_lidar.parquet"
+    lidar_out = out_dir / "nuscenes.lidar.parquet"
     print(f"writing {lidar_out} ...")
     n_spins = write_lidar_parquet(lidar_sds, args.dataset_dir, lidar_out)
 
