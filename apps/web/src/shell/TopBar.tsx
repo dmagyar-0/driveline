@@ -17,6 +17,7 @@ import { useSession } from "../state/store";
 import type { SourceKind } from "../state/store";
 import { getShareUrl } from "../state/urlState";
 import { ShortcutsOverlay } from "./ShortcutsOverlay";
+import { DataGuideOverlay } from "./DataGuideOverlay";
 import styles from "./TopBar.module.css";
 
 export interface TopBarProps {
@@ -43,6 +44,7 @@ export function TopBar({ ready }: TopBarProps) {
   // cursorNs, so it doesn't re-render every rAF during playback.
   const sources = useSession((s) => s.sources);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [showDataGuide, setShowDataGuide] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -145,6 +147,17 @@ export function TopBar({ ready }: TopBarProps) {
       <button
         type="button"
         className={styles.iconBtn}
+        onClick={() => setShowDataGuide(true)}
+        aria-label="What can Driveline load?"
+        title="What can Driveline load? — formats, agents & API key"
+        data-testid="topbar-data-guide"
+      >
+        <FormatsIcon />
+      </button>
+
+      <button
+        type="button"
+        className={styles.iconBtn}
         onClick={() => setShowShortcuts(true)}
         aria-label="Keyboard shortcuts"
         title="Keyboard shortcuts"
@@ -155,6 +168,9 @@ export function TopBar({ ready }: TopBarProps) {
 
       {showShortcuts && (
         <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />
+      )}
+      {showDataGuide && (
+        <DataGuideOverlay onClose={() => setShowDataGuide(false)} />
       )}
     </header>
   );
@@ -175,6 +191,27 @@ function LinkIcon() {
     >
       <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
       <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+
+function FormatsIcon() {
+  // Stacked layers — "what kinds of data can I bring in".
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3 2 8l10 5 10-5-10-5Z" />
+      <path d="m2 13 10 5 10-5" />
+      <path d="m2 18 10 5 10-5" />
     </svg>
   );
 }
