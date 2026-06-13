@@ -19,8 +19,8 @@ project-wide BigInt rule the UI follows).
 ## Why a separate surface from the dev hooks
 
 `window.__drivelineDevHooks` is the Playwright seam: ~60 store-mutating
-methods, DEV-only, tree-shaken out of production. Agents need a *small*,
-*stable*, *production-available* surface scoped to what an analysis
+methods, DEV-only, tree-shaken out of production. Agents need a _small_,
+_stable_, _production-available_ surface scoped to what an analysis
 session actually does: discover channels, pull ranges, seek, look at the
 video, and record findings as tagged events. `__drivelineAgent` is that
 surface — nothing on it can ingest files, mutate layout, or touch
@@ -33,19 +33,22 @@ It installs when:
 
 App unmount uninstalls it (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v1)
+## `window.__drivelineAgent` (v2)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. Summary:
+is the authoritative reference. The `version` field reports `2`; v2 is a
+superset of v1 (the read/transport/event/video surface is unchanged) plus
+the four layout write ops documented below. Summary:
 
-| Group | Methods |
-| --- | --- |
-| Session (read) | `getSessionSnapshot()`, `listSources()`, `listChannels()` |
-| Data (read) | `fetchChannelRange(channelId, startNs, endNs, includePrev?)` |
-| Transport | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)` |
-| Events | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
-| Events IO | `exportEvents()`, `importEvents(json, mode?)` |
-| Video | `listVideoPanels()`, `captureVideoFrame(panelId?)` |
+| Group              | Methods                                                                                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Session (read)     | `getSessionSnapshot()`, `listSources()`, `listChannels()`                                                                                                                        |
+| Data (read)        | `fetchChannelRange(channelId, startNs, endNs, includePrev?)`                                                                                                                     |
+| Transport          | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)`                                                                                                                              |
+| Events             | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
+| Events IO          | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
+| Video              | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
+| Layout (write, v2) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `closePanel(panelId)`                                                          |
 
 Behavioural notes:
 
@@ -68,6 +71,57 @@ Behavioural notes:
 - The transport methods go through the store's normal actions, so the
   cursor hot-path rules (rAF coalescing, decode-aware gating) apply
   unchanged.
+
+### v2 layout write ops
+
+v1 was analysis-and-annotation only — layout mutation lived on the
+DEV-only dev-hook surface. v2 lifts the _minimum_ layout surface the
+Format Agent's visualisation bootstrap needs (docs/12 §7: the
+`LayoutProposal` applier) onto the production agent API, so the same code
+path serves external agents and Playwright. These are thin wrappers over
+the existing FlexLayout workspace and the store's binding actions — exactly
+what the Layout drawer does when a human clicks "add a panel" and binds
+channels — not a new layout engine.
+
+The four methods reach the live FlexLayout `Model` through a module-scoped
+**workspace bridge** (`apps/web/src/layout/workspaceBridge.ts`): the
+`Workspace` component registers its panel-mint / panel-close / reset handle
+on mount and clears it on unmount, mirroring `videoCanvasRegistry.ts`. No
+React Context is involved (the project bans adding one), and the dev hooks
+mint/close panels through the same `Workspace` handle, so panel creation
+lives in one place.
+
+| Method                                 | Returns             | Semantics                                                                                                                                                                                                                         |
+| -------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createPanel(kind)`                    | `panelId` or `null` | `kind` is a `PanelKind` (`plot` / `map` / `enum` / `table` / `value` / `video` / `scene`). Mints a tab and returns its freshly-minted id. `null` when the kind is unknown/unsupported, or when the workspace has not mounted yet. |
+| `bindChannels(panelId, channelIds)`    | `boolean`           | Appends scalar channels to a `plot` / `enum` / `table` / `value` panel via the matching store action.                                                                                                                             |
+| `setMapBinding(panelId, latId, lonId)` | `boolean`           | Sets a `map` panel's lat/lon pair.                                                                                                                                                                                                |
+| `closePanel(panelId)`                  | `boolean`           | Deletes the tab via FlexLayout `Actions.deleteTab`. `true` if the tab existed, else `false`.                                                                                                                                      |
+
+Validation & caps (mechanically enforced, never trusted from the caller —
+the Format Agent's proposal is model-authored, see docs/12 §6):
+
+- **Channel existence.** Every channel id passed to `bindChannels` /
+  `setMapBinding` must name a loaded channel. If _any_ id is unknown the
+  whole call is rejected (`false`) and nothing is bound — a partial bind
+  would silently drop a proposal's intent.
+- **Panel existence + kind.** The `panelId` must name a live tab in the
+  layout and be of a kind the call supports. `bindChannels` only accepts
+  the four list-binding kinds; `map` (use `setMapBinding`) and
+  `video`/`scene` (single-channel store actions) return `false`.
+- **Per-panel cap.** `bindChannels` enforces `MAX_PLOT_SERIES` against the
+  panel's _current_ bindings: a request that would push the total over the
+  cap is rejected whole (`false`), binding nothing. Re-binding an
+  already-bound channel is a no-op and is not counted against the cap, so
+  an idempotent re-apply of the same proposal succeeds. (docs/12 §7 quotes
+  the cap as 8; the live constant in `panels/palette.ts` is the source of
+  truth — the API reads it, it doesn't hard-code a number.)
+- **Null/false-safe.** Like the rest of the surface, these never throw for
+  "not found"; an agent can probe with plain return-value checks.
+
+Because every write goes through the same store actions and FlexLayout
+model the UI uses, a panel an agent creates is indistinguishable from one a
+user dragged in — it persists, reloads, and re-binds identically.
 
 A minimal Playwright session against the deployed app:
 
@@ -151,7 +205,9 @@ of the WASM build) and adds nothing to the web bundle.
 
 `data-testid` attributes and ARIA roles/labels in the shell (scrubber,
 transport buttons, Events drawer) double as the DOM-level automation
-contract — they are what the agent API does *not* cover (file drop,
-layout). Treat renaming them as a breaking change to automation, same
-as a method change on `AgentApi`. Bump `AGENT_API_VERSION` on any
-breaking change to the `window.__drivelineAgent` surface.
+contract — they are what the agent API does _not_ cover (file drop, and
+layout operations beyond the v2 create/bind/close ops, e.g. drag-rearrange
+and saved layouts). Treat renaming them as a breaking change to automation,
+same as a method change on `AgentApi`. Bump `AGENT_API_VERSION` on any
+breaking change to the `window.__drivelineAgent` surface (it was raised to
+`2` when the layout write ops landed).
