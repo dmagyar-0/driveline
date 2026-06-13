@@ -137,6 +137,28 @@ Because every write goes through the same store actions and FlexLayout
 model the UI uses, a panel an agent creates is indistinguishable from one a
 user dragged in — it persists, reloads, and re-binds identically.
 
+**Scene geometry channels.** The `scene` panel renders four 3D geometry
+kinds — `point_cloud`, `bounding_box`, `trajectory`, and `map_geometry` (road
+networks). These bind one-at-a-time through the single-channel scene action
+(`setSceneChannelBinding` on the dev hooks, or the PanelDrawer), **not**
+`bindChannels`. Geometry sources load through the file-open path (`openFiles` /
+drag-drop), not `addDataSource`. A `map_geometry` source comes from an
+OpenDRIVE `.xodr` (routed by extension) or a simple `drivelineMap` JSON
+(content-sniffed for a top-level `"drivelineMap"` key, like OpenLABEL and
+trajectory). Map geometry is **static** — a single frame at ts=0 — so it
+renders on bind without scrubbing the cursor. The `drivelineMap` shape:
+
+```json
+{ "drivelineMap": { "version": 1, "name": "intersection", "features": [
+  { "type": "lane_boundary", "polyline": [[0,0,0],[10,0,0]] },
+  { "type": "road_edge", "polyline": [[0,-2],[10,-2]] }
+] } }
+```
+
+Feature `type` is one of `lane_boundary` / `road_edge` / `centerline` /
+`crosswalk` / `stop_line` / `driving` / `other` (optional/unknown → `other`),
+each rendered in a distinct colour.
+
 A minimal Playwright session against the deployed app:
 
 ```ts

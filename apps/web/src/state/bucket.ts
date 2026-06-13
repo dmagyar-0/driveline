@@ -91,6 +91,18 @@ export interface Buckets {
    */
   trajectory: File[];
   /**
+   * Road-network map-geometry drops, opened straight into the 3D scene
+   * pipeline as polylines (lane boundaries, road edges, centerlines, …). Two
+   * input shapes: OpenDRIVE `.xodr` (routed by extension in `bucketFiles`) and
+   * the simple `drivelineMap` JSON. A `.json` extension is ambiguous (Ingest
+   * Recipes, OpenLABEL, and trajectories are JSON too), so a `.json` only lands
+   * here once its bytes are sniffed for a top-level `"drivelineMap"` key — see
+   * `sniffDrivelineMap`. `bucketFiles` routes `.xodr` directly but leaves the
+   * JSON case to `openFiles`, which does the async sniff and re-routes
+   * qualifying `.json` files out of `unknown` into here.
+   */
+  mapGeometry: File[];
+  /**
    * Drops with an extension Driveline doesn't recognise. No longer a hard
    * error: each is routed to the Format Agent flow — `openFiles` first tries
    * the Format Registry for a matching Ingest Recipe (extension / magic bytes),
@@ -117,6 +129,7 @@ export function bucketFiles(files: File[]): Buckets {
   const openlabel: File[] = [];
   const calibration: File[] = [];
   const trajectory: File[] = [];
+  const mapGeometry: File[] = [];
   const unknown: File[] = [];
   const errors: BucketError[] = [];
 
@@ -145,6 +158,10 @@ export function bucketFiles(files: File[]): Buckets {
     } else if (lower.endsWith(".pcd")) {
       // PCL/ROS Point Cloud Data — a single LiDAR cloud per file.
       lidar.push({ file: f, format: "pcd" });
+    } else if (lower.endsWith(".xodr")) {
+      // OpenDRIVE road network — route straight into the 3D scene pipeline as
+      // map geometry. (The `drivelineMap` JSON shape is sniffed in `openFiles`.)
+      mapGeometry.push(f);
     } else if (lower.endsWith(".csv")) {
       tabular.push({ file: f, format: "csv" });
     } else if (lower.endsWith(".parquet") || lower.endsWith(".pq")) {
@@ -193,6 +210,7 @@ export function bucketFiles(files: File[]): Buckets {
     openlabel,
     calibration,
     trajectory,
+    mapGeometry,
     unknown,
     errors,
   };
@@ -288,6 +306,41 @@ export function sniffTrajectoryBytes(bytes: Uint8Array): boolean {
   const head = bytes.subarray(0, TRAJECTORY_SNIFF_BYTES);
   const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
   return /"trajectory"\s*:/i.test(text);
+}
+
+/** Max bytes read when sniffing a `.json` drop for the `drivelineMap` marker —
+ *  same budget and rationale as `OPENLABEL_SNIFF_BYTES`. */
+const MAP_GEOMETRY_SNIFF_BYTES = 64 * 1024;
+
+/**
+ * True when `file`'s leading bytes contain a top-level `"drivelineMap"` JSON
+ * key. `.json` is ambiguous in Driveline (Ingest Recipes, OpenLABEL, and
+ * trajectories are JSON too), so the drop path uses this content sniff to tell
+ * a simple road-network map file apart before routing it to the 3D scene
+ * pipeline. Reads only the file head (`MAP_GEOMETRY_SNIFF_BYTES`); never throws
+ * (returns `false` on any read/decode error so the caller falls back to the
+ * recipe/unknown flow). OpenDRIVE `.xodr` is routed by extension in
+ * `bucketFiles` and never reaches this sniff.
+ */
+export async function sniffDrivelineMap(file: File): Promise<boolean> {
+  try {
+    const head = file.slice(0, MAP_GEOMETRY_SNIFF_BYTES);
+    const text = await head.text();
+    return /"drivelineMap"\s*:/i.test(text);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Same `drivelineMap` content sniff as `sniffDrivelineMap`, over already-decoded
+ * bytes rather than a `File`. The dev-hook path constructs `File`s from
+ * `{ name, bytes }`, so both paths share the marker test.
+ */
+export function sniffDrivelineMapBytes(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, MAP_GEOMETRY_SNIFF_BYTES);
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
+  return /"drivelineMap"\s*:/i.test(text);
 }
 
 /** A URL input classified by the reader that can open it. */

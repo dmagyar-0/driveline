@@ -99,6 +99,36 @@ The skill also documents the map case (`createPanel("map")` +
 `setMapBinding`), reading data back (`listChannels` / `fetchChannelRange`), and
 driving the transport (`setCursor` / `play` / `pause`).
 
+### 3D scene geometry, including road maps
+
+The `scene` panel renders 3D geometry channels — `point_cloud` (LiDAR),
+`bounding_box` (OpenLABEL boxes), `trajectory` (predicted ego paths), and
+`map_geometry` (road networks). These bind one-at-a-time through the scene
+binding hook (`setSceneChannelBinding` on the dev hooks, or the PanelDrawer in
+the UI), **not** `bindChannels` (which targets the plot/enum/table/value list
+kinds). A shell-only agent loads geometry through the normal file-open path
+(`openFiles` / drag-drop) rather than `addDataSource`, which is scalar/enum
+only.
+
+**Road maps (`map_geometry`).** Two input shapes load straight into a scene
+panel: an OpenDRIVE `.xodr` (routed by extension) and a simple `drivelineMap`
+JSON, content-sniffed for a top-level `"drivelineMap"` key:
+
+```json
+{ "drivelineMap": { "version": 1, "name": "intersection", "features": [
+  { "id": "b0", "type": "lane_boundary", "polyline": [[0,0,0],[10,0,0]] },
+  { "type": "road_edge", "polyline": [[0,-2],[10,-2]] }
+] } }
+```
+
+`polyline` is an array of `[x,y]` or `[x,y,z]` (z optional → 0; ≥2 points or
+the feature is skipped). `type` is one of `lane_boundary`, `road_edge`,
+`centerline`, `crosswalk`, `stop_line`, `driving`, `other` (optional/unknown →
+`other`); each maps to a distinct vertex colour. Map geometry is **static** (a
+single frame at ts=0), so binding it to a scene panel renders the network
+immediately — no cursor scrubbing. The native `driveline-data` CLI opens the
+same `.xodr`/`drivelineMap` inputs over the shared reader for shell-only flows.
+
 ## Always-on discovery vs. gated mutation
 
 The discovery trio — `version`, `getSkill()`, `describe()` — installs on

@@ -286,6 +286,36 @@ export interface SceneTrajectoryPath {
   confidence: number;
 }
 
+/** One road-network polyline in the world/vehicle frame (metres, z-up): a
+ *  sequence of vertices plus its feature type. The renderer colours each
+ *  vertex by `type` via `ROAD_TYPE_LUT`. */
+export interface SceneRoadFeature {
+  points: [number, number, number][];
+  type: string;
+}
+
+// Per-feature-type RGB colour LUT for road geometry. Picked so the feature
+// classes read distinctly against the dark scene background and the grey grid:
+//   lane_boundary → white   road_edge → yellow   centerline → cyan
+//   crosswalk     → magenta stop_line → red      driving   → grey
+//   other (and any unknown string) → grey
+// Alpha is applied uniformly at upload (`ROAD_ALPHA`).
+const ROAD_TYPE_LUT: Record<string, [number, number, number]> = {
+  lane_boundary: [0.92, 0.92, 0.95],
+  road_edge: [0.96, 0.86, 0.18],
+  centerline: [0.18, 0.82, 0.92],
+  crosswalk: [0.92, 0.26, 0.86],
+  stop_line: [0.95, 0.22, 0.22],
+  driving: [0.55, 0.58, 0.62],
+  other: [0.55, 0.58, 0.62],
+};
+const ROAD_OTHER: [number, number, number] = ROAD_TYPE_LUT.other;
+const ROAD_ALPHA = 0.9;
+
+function roadColor(type: string): [number, number, number] {
+  return ROAD_TYPE_LUT[type] ?? ROAD_OTHER;
+}
+
 /** A box-centre (or any world point) projected to CSS pixels for label
  *  placement. `visible` is false when the point is behind the camera or
  *  outside the view frustum. */
@@ -342,6 +372,15 @@ export class PointCloudRenderer {
   private trajBuf: WebGLBuffer;
   private trajVertexCount = 0;
   private trajPathCount = 0;
+
+  // Road-network polylines (static; uploaded once by `setRoads`). Same
+  // interleaved [x,y,z, r,g,b,a] layout as trajectories, drawn with the same
+  // vertex-coloured line program — each vertex coloured by its feature type via
+  // `ROAD_TYPE_LUT`. A dedicated VBO so roads and trajectories can coexist.
+  private roadVao: WebGLVertexArrayObject;
+  private roadBuf: WebGLBuffer;
+  private roadVertexCount = 0;
+  private roadFeatureCount = 0;
 
   private pointCount = 0;
   private gridCount: number;
@@ -444,6 +483,19 @@ export class PointCloudRenderer {
     this.trajBuf = gl.createBuffer()!;
     gl.bindVertexArray(this.trajVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.trajBuf);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 4, gl.FLOAT, false, 28, 12);
+    gl.bindVertexArray(null);
+
+    // Road-network polylines (static; uploaded by `setRoads`). Same interleaved
+    // [pos(3) + rgba(4)] vertex layout as trajectories (28-byte stride), drawn
+    // with the vertex-coloured LINE program as `gl.LINES`.
+    this.roadVao = gl.createVertexArray()!;
+    this.roadBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.roadVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.roadBuf);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 28, 0);
     gl.enableVertexAttribArray(1);
@@ -667,6 +719,93 @@ export class PointCloudRenderer {
   clearTrajectories(): void {
     this.trajVertexCount = 0;
     this.trajPathCount = 0;
+    this.requestRender();
+  }
+
+  /** Upload a road network as vertex-coloured line geometry. Each feature of
+   *  `k` vertices becomes `k-1` line segments (`2*(k-1)` vertices); every vertex
+   *  is coloured by the feature's type via `ROAD_TYPE_LUT` (lane boundaries
+   *  white, road edges yellow, centerlines cyan, crosswalks magenta, stop lines
+   *  red, driving/other grey) at a uniform alpha so the classes read distinctly.
+   *  A road source is STATIC, so this is called once per fresh binding rather
+   *  than per cursor tick. Buffer layout is interleaved `[x,y,z, r,g,b,a]`
+   *  (28-byte stride), shared with the trajectory program. */
+  setRoads(features: readonly SceneRoadFeature[]): void {
+    const gl = this.gl;
+    let segVerts = 0;
+    for (const f of features) {
+      if (f.points.length >= 2) segVerts += (f.points.length - 1) * 2;
+    }
+    const stride = 7; // floats per vertex (pos3 + rgba4)
+    const verts = new Float32Array(segVerts * stride);
+    let o = 0;
+    let featureCount = 0;
+    for (const feature of features) {
+      const pts = feature.points;
+      if (pts.length < 2) continue;
+      featureCount++;
+      const [r, g, b] = roadColor(feature.type);
+      for (let i = 0; i < pts.length - 1; i++) {
+        for (const pt of [pts[i], pts[i + 1]]) {
+          verts[o++] = pt[0];
+          verts[o++] = pt[1];
+          verts[o++] = pt[2];
+          verts[o++] = r;
+          verts[o++] = g;
+          verts[o++] = b;
+          verts[o++] = ROAD_ALPHA;
+        }
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.roadBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    this.roadVertexCount = segVerts;
+    this.roadFeatureCount = featureCount;
+    this.requestRender();
+  }
+
+  clearRoads(): void {
+    this.roadVertexCount = 0;
+    this.roadFeatureCount = 0;
+    this.requestRender();
+  }
+
+  /** Frame the camera to a road network — the road equivalent of
+   *  `frameToTrajectories`. A map_geometry source carries no point cloud, so
+   *  the cloud auto-frame never fires and the roads would sit off-screen at the
+   *  default camera. Computes the vertices' axis-aligned bounds and reuses the
+   *  same centroid+radius framing maths. Called once per fresh feature set. */
+  frameToRoads(features: readonly SceneRoadFeature[]): void {
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
+    let any = false;
+    for (const feature of features) {
+      for (const p of feature.points) {
+        any = true;
+        minX = Math.min(minX, p[0]);
+        minY = Math.min(minY, p[1]);
+        minZ = Math.min(minZ, p[2]);
+        maxX = Math.max(maxX, p[0]);
+        maxY = Math.max(maxY, p[1]);
+        maxZ = Math.max(maxZ, p[2]);
+      }
+    }
+    if (!any) return;
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    const radius = Math.max(
+      Math.hypot(maxX - cx, maxY - cy),
+      (maxZ - minZ) / 2,
+      3,
+    );
+    this.target = [cx, cy, cz];
+    this.dist = Math.max(8, (radius / Math.tan(FOV / 2)) * 1.3);
     this.requestRender();
   }
 
@@ -922,7 +1061,7 @@ export class PointCloudRenderer {
     // green time-horizon gradient, per-confidence alpha) so they read distinctly
     // from the amber boxes. Alpha-blended; depth test stays on so paths occlude
     // correctly against the cloud/grid but blend among themselves.
-    if (this.trajVertexCount > 0) {
+    if (this.trajVertexCount > 0 || this.roadVertexCount > 0) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.useProgram(this.trajProg);
@@ -931,8 +1070,17 @@ export class PointCloudRenderer {
         false,
         mvp,
       );
-      gl.bindVertexArray(this.trajVao);
-      gl.drawArrays(gl.LINES, 0, this.trajVertexCount);
+      // Road network (static): per-feature-type coloured polylines. Shares the
+      // vertex-coloured line program with trajectories; the colour lives in the
+      // per-vertex RGBA so no extra uniform/draw call is needed.
+      if (this.roadVertexCount > 0) {
+        gl.bindVertexArray(this.roadVao);
+        gl.drawArrays(gl.LINES, 0, this.roadVertexCount);
+      }
+      if (this.trajVertexCount > 0) {
+        gl.bindVertexArray(this.trajVao);
+        gl.drawArrays(gl.LINES, 0, this.trajVertexCount);
+      }
       gl.disable(gl.BLEND);
     }
     gl.bindVertexArray(null);
@@ -964,6 +1112,11 @@ export class PointCloudRenderer {
     return this.trajPathCount;
   }
 
+  /** Number of road-network features currently uploaded. */
+  roadFeatureCountValue(): number {
+    return this.roadFeatureCount;
+  }
+
   dispose(): void {
     this.disposed = true;
     if (this.rafId !== null) cancelAnimationFrame(this.rafId);
@@ -984,5 +1137,6 @@ export class PointCloudRenderer {
     gl.deleteBuffer(this.intBuf);
     gl.deleteBuffer(this.boxBuf);
     gl.deleteBuffer(this.trajBuf);
+    gl.deleteBuffer(this.roadBuf);
   }
 }

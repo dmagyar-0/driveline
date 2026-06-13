@@ -19,6 +19,7 @@ import {
   bucketFiles,
   classifyUrl,
   sniffCalibration,
+  sniffDrivelineMap,
   sniffOpenlabel,
   sniffTrajectory,
   type BucketError,
@@ -103,6 +104,7 @@ export type SourceKind =
   | "openlabel"
   | "calibration"
   | "trajectory"
+  | "map_geometry"
   | "ros1"
   | "ros2db3"
   // JS-only: agent-pushed columnar data held on the main thread (no Rust
@@ -1052,6 +1054,13 @@ export interface SessionState {
    * tick). Throws for non-trajectory channels.
    */
   trajectoryFrameTimes(channelId: string): Promise<BigInt64Array>;
+  /**
+   * Frame timestamps (ns) for a map-geometry channel. Map geometry is STATIC,
+   * so this always resolves `[0]`; the 3D scene panel reads frame[0] and
+   * fetches the single frame once per binding rather than refetching on every
+   * cursor tick. Throws for non-map-geometry channels.
+   */
+  mapGeometryFrameTimes(channelId: string): Promise<BigInt64Array>;
 }
 
 export const MIN_SPEED = 0.25;
@@ -1237,6 +1246,24 @@ function trajectoryChannels(sourceId: string, s: Mf4Summary): Channel[] {
     name: c.name,
     group: null,
     kind: "trajectory" as const,
+    dtype: null,
+    unit: null,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
+// Map-geometry summaries arrive in the same MF4 shape as LiDAR/OpenLABEL/
+// trajectory (a single channel, `sample_count` = polyline count). Mirrors
+// `trajectoryChannels` but hardcodes the `map_geometry` kind so the
+// ScenePanel/PanelDrawer route it to the 3D scene pipeline as road polylines.
+function mapGeometryChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: null,
+    kind: "map_geometry" as const,
     dtype: null,
     unit: null,
     sampleCount: c.sample_count,
@@ -2588,6 +2615,19 @@ export const useSession = create<SessionState>((set, get) => {
               includePrev,
             );
           }
+          if (source.kind === "map_geometry") {
+            // Road-network frames carry a multi-column List<Float32>/List<Int32>
+            // /List<Utf8> geometry schema, not the scalar `{ts,value}` shape
+            // `shiftRangeArrowTs` rewrites — and map-geometry sources never carry
+            // a time offset (always 0n), so pass the bytes through unmodified.
+            return worker.mapGeometryFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+          }
           throw new Error(`channel kind not plottable: ${source.kind}`);
         } finally {
           mark(perfEnd);
@@ -2652,6 +2692,19 @@ export const useSession = create<SessionState>((set, get) => {
       return worker.trajectoryFrameTimes(source.handle);
     },
 
+    async mapGeometryFrameTimes(channelId) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel) throw new Error(`unknown channel: ${channelId}`);
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      if (source.kind !== "map_geometry") {
+        throw new Error(`not a map-geometry channel: ${channelId}`);
+      }
+      return worker.mapGeometryFrameTimes(source.handle);
+    },
+
     async openFiles(files) {
       const run = (): Promise<OpenResult> =>
         timed("open", async () => {
@@ -2679,6 +2732,11 @@ export const useSession = create<SessionState>((set, get) => {
                 // Predicted ego trajectory `.json` (top-level `"trajectory"`
                 // key) — route into the 3D scene pipeline as polylines.
                 buckets.trajectory.push(f);
+              } else if (isJson && (await sniffDrivelineMap(f))) {
+                // Simple road-network `.json` (top-level `"drivelineMap"` key) —
+                // route into the 3D scene pipeline as map-geometry polylines.
+                // (OpenDRIVE `.xodr` is routed by extension in `bucketFiles`.)
+                buckets.mapGeometry.push(f);
               } else {
                 stillUnknown.push(f);
               }
@@ -2895,6 +2953,36 @@ export const useSession = create<SessionState>((set, get) => {
                 // Predicted trajectories carry no time offset; alignment lives
                 // in the frame timestamps and the fetch path passes bytes
                 // through unshifted.
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
+          }
+
+          for (const f of buckets.mapGeometry) {
+            try {
+              // Map-geometry sources open eagerly: the reader auto-detects
+              // OpenDRIVE (`.xodr`) vs the simple `drivelineMap` JSON and decodes
+              // every polyline into a single static frame in wasm. Pass the
+              // `File` directly so no full-file clone crosses the Comlink
+              // boundary. Surfaces as a single `kind: "map_geometry"` source with
+              // one `map_geometry` channel, routed to the 3D scene pipeline as
+              // road polylines coloured by feature type.
+              const handle = await w.openMapGeometry(f);
+              const summary = await w.mapGeometrySummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = mapGeometryChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "map_geometry",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                // Map geometry is static (a single frame at ts=0); no time
+                // offset, and the fetch path passes bytes through unshifted.
                 timeOffsetNs: 0n,
               });
               opened.push(f.name);
@@ -3512,6 +3600,8 @@ export const useSession = create<SessionState>((set, get) => {
             else if (s.kind === "lidar") await w.closeLidar(s.handle);
             else if (s.kind === "openlabel") await w.closeOpenlabel(s.handle);
             else if (s.kind === "trajectory") await w.closeTrajectory(s.handle);
+            else if (s.kind === "map_geometry")
+              await w.closeMapGeometry(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
@@ -3601,6 +3691,8 @@ export const useSession = create<SessionState>((set, get) => {
               await w.closeOpenlabel(src.handle);
             else if (src.kind === "trajectory")
               await w.closeTrajectory(src.handle);
+            else if (src.kind === "map_geometry")
+              await w.closeMapGeometry(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source

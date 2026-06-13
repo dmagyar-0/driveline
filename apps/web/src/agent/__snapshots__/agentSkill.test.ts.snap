@@ -109,6 +109,28 @@ agent.setMapBinding(panelId, latId, lonId);
 - \`setMapBinding(panelId, latId, lonId)\` → \`boolean\` for a \`map\` panel.
 - \`closePanel(panelId)\` → \`boolean\`.
 
+### 3D scene geometry — point clouds, boxes, trajectories, road maps
+
+The \`scene\` panel renders 3D geometry channels. A channel's \`kind\` (from
+\`listChannels()\`) selects what it shows: \`point_cloud\` (LiDAR), \`bounding_box\`
+(labelled 3D boxes), \`trajectory\` (predicted ego paths), and \`map_geometry\`
+(a road network — lane boundaries, road edges, centerlines, crosswalks, stop
+lines — coloured by feature type). Scene channels bind one-at-a-time via the
+scene binding hook, not \`bindChannels\` (which targets plot/enum/table/value).
+
+Road maps load through the normal file-open path (no inline form yet): drop an
+OpenDRIVE \`.xodr\`, or a simple \`drivelineMap\` JSON:
+
+\`\`\`json
+{ "drivelineMap": { "version": 1, "name": "intersection", "features": [
+  { "type": "lane_boundary", "polyline": [[0,0,0],[10,0,0]] },
+  { "type": "road_edge",     "polyline": [[0,-2],[10,-2]] }
+] } }
+\`\`\`
+
+Map geometry is STATIC (one frame at ts=0): bind it to a scene panel once and
+it renders without scrubbing the cursor.
+
 ## Read data back & drive transport
 
 - \`listSources()\` / \`listChannels()\` — enumerate what is loaded (channel

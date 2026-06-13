@@ -277,9 +277,34 @@ required; `intensity` colours the cloud when present, otherwise points are
 coloured by range from the sensor. `.pcd` drops are routed by `bucketFiles`
 (`format: "pcd"`) to the wasm `open_lidar_pcd` entry point.
 
+The same panel also renders three other geometry kinds, each routed to the
+3D scene pipeline by its `ChannelKind`: **`bounding_box`** (ASAM OpenLABEL 3D
+boxes, amber wireframes + HTML labels), **`trajectory`** (predicted ego future
+polylines, cyan→green per-confidence), and **`map_geometry`** (road networks —
+see below). All four kinds share the WebGL2 renderer and the waste-free
+frame-times binary search.
+
+**Map geometry (road networks).** `MapGeometryReader`
+(`SourceKind::MapGeometry`, `ChannelKind::MapGeometry`) reads two input
+shapes: **OpenDRIVE** `.xodr` (sampled reference lines + best-effort lane
+borders) and a simple **`drivelineMap`** JSON (`{ "drivelineMap": { features:
+[{ type, polyline }] } }`). It produces one static channel (a single frame at
+ts=0); `fetch_range` emits `{ ts, points: List<Float32>, path_lengths:
+List<Int32>, types: List<Utf8> }` — all polylines concatenated, split by
+`path_lengths`, one feature type per path. `mapGeometryFromArrow.ts` decodes
+it and `pointCloudRenderer.setRoads` uploads vertex-coloured lines via a
+per-type LUT (lane_boundary white, road_edge yellow, centerline cyan,
+crosswalk magenta, stop_line red, driving/other grey). Because the source is
+static, the panel fetches the single frame **once per binding**
+(`mapGeometryFrameTimes` returns `[0]`) and never refetches on a cursor tick.
+`.xodr` drops route by extension in `bucketFiles`; a `drivelineMap` `.json` is
+content-sniffed in `openFiles` (top-level `"drivelineMap"` key), like
+OpenLABEL/trajectory.
+
 The PanelDrawer body auto-detects bindable channels by kind:
-`SCENE_CHANNEL_KINDS` (`["point_cloud", "vector"]`) filters the
-`ChannelPicker`, and `+ bind channel…` disables when none is loaded.
+`SCENE_CHANNEL_KINDS` (`["point_cloud", "bounding_box", "trajectory",
+"map_geometry", "vector"]`) filters the `ChannelPicker`, and `+ bind channel…`
+disables when none is loaded.
 
 ### MapPanel
 
