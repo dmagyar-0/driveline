@@ -9,6 +9,7 @@ pub mod mcap;
 pub mod mf4;
 pub mod mp4_sidecar;
 pub mod noop;
+pub mod openlabel;
 pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
@@ -28,6 +29,7 @@ pub use mf4::{BoxedRangeReader, Mf4Reader};
 pub use mf4_rs::error::MdfError;
 pub use mf4_rs::index::ByteRangeReader;
 pub use mp4_sidecar::{Mp4SampleIndex, Mp4SidecarReader};
+pub use openlabel::OpenLabelReader;
 pub use pointcloud::PointCloudReader;
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
 pub use recipe::{DryRunReport, Recipe, RecipeReader};
@@ -114,6 +116,9 @@ pub enum Error {
 
     #[error("failed to parse PCD point cloud: {0}")]
     PcdParse(String),
+
+    #[error("failed to parse OpenLABEL JSON: {0}")]
+    OpenLabelParse(String),
 
     #[error("ros1 bag error: {0}")]
     Ros1Bag(String),

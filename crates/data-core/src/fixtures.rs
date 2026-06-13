@@ -5,6 +5,7 @@
 //!
 //! Using a shared generator prevents Rust ↔ JS schema drift.
 
+use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
 use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -32,6 +33,81 @@ pub fn arrow_scalar_ipc() -> crate::Result<Vec<u8>> {
     let value = Float64Array::from(vec![1.0, 2.0, 3.0]);
 
     let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts), Arc::new(value)])?;
+
+    let mut buf = Vec::new();
+    {
+        let mut w = FileWriter::try_new(&mut buf, &schema)?;
+        w.write(&batch)?;
+        w.finish()?;
+    }
+    Ok(buf)
+}
+
+/// Schema: `{ ts: Timestamp(ns, UTC), centers: List<Float32>, sizes:
+/// List<Float32>, rotations: List<Float32>, labels: List<Utf8> }` — one row
+/// (frame) with two boxes (both "car"). Mirrors `OpenLabelReader::fetch_range`.
+/// Bit-identical to `test-fixtures/arrow_bounding_box.ipc`; consumed by the
+/// Rust contract test and the JS vitest suite via `apache-arrow`.
+///
+/// The single frame holds two axis-aligned boxes (identity quaternion
+/// `(0,0,0,1)`): a car at `(12, 0, 0.75)` extent `4.5×1.8×1.5`, and a car at
+/// `(20, 3, 0.85)` extent `4.5×1.7×1.5`. Frame timestamp is `1.5 s` (ns).
+pub fn arrow_bounding_box_ipc() -> crate::Result<Vec<u8>> {
+    let centers_item = Arc::new(Field::new("item", DataType::Float32, true));
+    let sizes_item = Arc::new(Field::new("item", DataType::Float32, true));
+    let rotations_item = Arc::new(Field::new("item", DataType::Float32, true));
+    let labels_item = Arc::new(Field::new("item", DataType::Utf8, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("centers", DataType::List(centers_item), false),
+        Field::new("sizes", DataType::List(sizes_item), false),
+        Field::new("rotations", DataType::List(rotations_item), false),
+        Field::new("labels", DataType::List(labels_item), false),
+    ]));
+
+    let ts = TimestampNanosecondArray::from(vec![1_500_000_000_i64]).with_timezone("UTC");
+
+    let mut centers_b = ListBuilder::new(Float32Builder::new());
+    centers_b
+        .values()
+        .append_slice(&[12.0, 0.0, 0.75, 20.0, 3.0, 0.85]);
+    centers_b.append(true);
+    let centers = centers_b.finish();
+
+    let mut sizes_b = ListBuilder::new(Float32Builder::new());
+    sizes_b
+        .values()
+        .append_slice(&[4.5, 1.8, 1.5, 4.5, 1.7, 1.5]);
+    sizes_b.append(true);
+    let sizes = sizes_b.finish();
+
+    let mut rotations_b = ListBuilder::new(Float32Builder::new());
+    rotations_b
+        .values()
+        .append_slice(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    rotations_b.append(true);
+    let rotations = rotations_b.finish();
+
+    let mut labels_b = ListBuilder::new(StringBuilder::new());
+    labels_b.values().append_value("car");
+    labels_b.values().append_value("car");
+    labels_b.append(true);
+    let labels = labels_b.finish();
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(ts),
+            Arc::new(centers),
+            Arc::new(sizes),
+            Arc::new(rotations),
+            Arc::new(labels),
+        ],
+    )?;
 
     let mut buf = Vec::new();
     {

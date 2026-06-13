@@ -10,8 +10,8 @@ use std::cell::RefCell;
 
 use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
-    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader, RecipeReader,
-    Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
+    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, OpenLabelReader, PointCloudReader,
+    Reader, RecipeReader, Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -66,6 +66,7 @@ thread_local! {
     static VIDEO_STREAMS: RefCell<Slab<McapVideoStream>> = const { RefCell::new(Slab::new()) };
     static TABULAR_READERS: RefCell<Slab<TabularReader>> = const { RefCell::new(Slab::new()) };
     static LIDAR_READERS: RefCell<Slab<PointCloudReader>> = const { RefCell::new(Slab::new()) };
+    static OPENLABEL_READERS: RefCell<Slab<OpenLabelReader>> = const { RefCell::new(Slab::new()) };
     static ROS1_BAG_READERS: RefCell<Slab<Ros1BagReader>> = const { RefCell::new(Slab::new()) };
     static ROS2_DB3_READERS: RefCell<Slab<Ros2Db3Reader>> = const { RefCell::new(Slab::new()) };
     static RECIPE_READERS: RefCell<Slab<RecipeReader>> = const { RefCell::new(Slab::new()) };
@@ -315,6 +316,7 @@ fn channel_kind_str(k: ChannelKind) -> &'static str {
         ChannelKind::Enum => "enum",
         ChannelKind::Bytes => "bytes",
         ChannelKind::PointCloud => "point_cloud",
+        ChannelKind::BoundingBox => "bounding_box",
     }
 }
 
@@ -1048,6 +1050,121 @@ pub fn lidar_spin_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid lidar handle"))?;
         let ts = reader.spin_times();
+        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
+        arr.copy_from(ts);
+        Ok(arr)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// OpenLABEL (ASAM OpenLABEL JSON — 3D cuboid bounding boxes)
+// ---------------------------------------------------------------------------
+
+/// Open an ASAM OpenLABEL JSON file of 3D cuboid annotations and register the
+/// resulting `OpenLabelReader` in the thread-local slab. Returns the integer
+/// handle the other `openlabel_*` endpoints take. The source surfaces one
+/// `bounding_box` channel (one frame's worth of oriented boxes per sample).
+///
+/// Takes the buffer **by value**: `open_owned` parses it directly without a
+/// second copy.
+#[wasm_bindgen]
+pub fn open_openlabel(bytes: Vec<u8>) -> Result<u32, JsError> {
+    let reader = OpenLabelReader::open_owned(bytes)
+        .map_err(|e| JsError::new(&format!("open openlabel failed: {e}")))?;
+    let key = OPENLABEL_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the openlabel reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_openlabel(handle: u32) {
+    OPENLABEL_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the openlabel reader's `SourceMeta` as a plain JS object. An
+/// OpenLABEL source surfaces exactly one `bounding_box` channel; the shape
+/// reuses the MF4/lidar summary layout (`group` always null, `sample_count` =
+/// peak boxes-per-frame). 64-bit numbers serialise as `BigInt`.
+#[wasm_bindgen]
+pub fn openlabel_summary(handle: u32) -> Result<JsValue, JsError> {
+    OPENLABEL_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
+        let meta = reader.meta();
+        let summary = Mf4Summary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| ChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    unit: c.unit.clone(),
+                    group: None,
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
+/// bounding-box channel. The 3D scene panel passes a zero/one-width window plus
+/// `include_prev` to fetch exactly the frame active at the cursor. The emitted
+/// schema is `{ ts: Timestamp(ns), centers: List<Float32>, sizes:
+/// List<Float32>, rotations: List<Float32>, labels: List<Utf8> }` (one row per
+/// frame) — see `openlabel.rs`.
+#[wasm_bindgen]
+pub fn openlabel_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    OPENLABEL_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
+    })
+}
+
+/// Ascending frame timestamps (ns) of an OpenLABEL source, as a
+/// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
+/// locally to map the cursor to a frame index, so it only refetches box data
+/// when the active frame changes (not once per cursor tick).
+#[wasm_bindgen]
+pub fn openlabel_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
+    OPENLABEL_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
+        let ts = reader.frame_times();
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
         arr.copy_from(ts);
         Ok(arr)

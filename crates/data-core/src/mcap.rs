@@ -653,7 +653,10 @@ impl McapReader {
 
         if matches!(
             cm.kind,
-            ChannelKind::Video | ChannelKind::Bytes | ChannelKind::PointCloud
+            ChannelKind::Video
+                | ChannelKind::Bytes
+                | ChannelKind::PointCloud
+                | ChannelKind::BoundingBox
         ) {
             return Err(crate::Error::UnsupportedKind);
         }
@@ -705,7 +708,10 @@ impl McapReader {
                 build_vector_ipc(ts_slice, &val_refs, n)
             }
             ChannelKind::Enum => build_enum_ipc(ts_slice, &val_refs),
-            ChannelKind::Video | ChannelKind::Bytes | ChannelKind::PointCloud => {
+            ChannelKind::Video
+            | ChannelKind::Bytes
+            | ChannelKind::PointCloud
+            | ChannelKind::BoundingBox => {
                 unreachable!("guarded above")
             }
         }

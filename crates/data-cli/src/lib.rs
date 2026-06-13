@@ -92,6 +92,7 @@ fn kind_str(kind: ChannelKind) -> &'static str {
         ChannelKind::Enum => "enum",
         ChannelKind::Bytes => "bytes",
         ChannelKind::PointCloud => "pointcloud",
+        ChannelKind::BoundingBox => "bounding_box",
     }
 }
 
@@ -102,8 +103,10 @@ fn source_kind_str(kind: SourceKind) -> &'static str {
         SourceKind::Mf4 => "mf4",
         SourceKind::Mp4Sidecar => "mp4-sidecar",
         SourceKind::Tabular => "tabular",
+        SourceKind::Recipe => "recipe",
         SourceKind::Ros1 => "ros1",
         SourceKind::Lidar => "lidar",
+        SourceKind::OpenLabel => "openlabel",
     }
 }
 
