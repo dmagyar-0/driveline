@@ -195,6 +195,70 @@ pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Schema: `{ ts: Timestamp(ns, UTC), points: List<Float32>, path_lengths:
+/// List<Int32>, confidences: List<Float32> }` — one row (frame) with two
+/// candidate paths. Mirrors `TrajectoryReader::fetch_range`. Bit-identical to
+/// `test-fixtures/arrow_trajectory.ipc`; consumed by the Rust contract test and
+/// the JS vitest suite via `apache-arrow`.
+///
+/// The single frame holds a 3-point primary path (confidence `0.9`) and a
+/// 2-point alternate (confidence `0.1`); `points` is their xyz concatenated,
+/// `path_lengths` is `[3, 2]`, `confidences` is `[0.9, 0.1]`. Frame timestamp is
+/// `1.5 s` (ns).
+pub fn arrow_trajectory_ipc() -> crate::Result<Vec<u8>> {
+    let points_item = Arc::new(Field::new("item", DataType::Float32, true));
+    let lengths_item = Arc::new(Field::new("item", DataType::Int32, true));
+    let conf_item = Arc::new(Field::new("item", DataType::Float32, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            false,
+        ),
+        Field::new("points", DataType::List(points_item), false),
+        Field::new("path_lengths", DataType::List(lengths_item), false),
+        Field::new("confidences", DataType::List(conf_item), false),
+    ]));
+
+    let ts = TimestampNanosecondArray::from(vec![1_500_000_000_i64]).with_timezone("UTC");
+
+    let mut points_b = ListBuilder::new(Float32Builder::new());
+    points_b.values().append_slice(&[
+        0.0, 0.0, 0.0, 1.0, 0.0, 0.05, 2.0, 0.5, 0.1, // primary path (3 pts)
+        0.0, 0.0, 0.0, 1.5, 1.0, 0.0, // alternate path (2 pts)
+    ]);
+    points_b.append(true);
+    let points = points_b.finish();
+
+    let mut lengths_b = ListBuilder::new(Int32Builder::new());
+    lengths_b.values().append_slice(&[3, 2]);
+    lengths_b.append(true);
+    let path_lengths = lengths_b.finish();
+
+    let mut conf_b = ListBuilder::new(Float32Builder::new());
+    conf_b.values().append_slice(&[0.9, 0.1]);
+    conf_b.append(true);
+    let confidences = conf_b.finish();
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(ts),
+            Arc::new(points),
+            Arc::new(path_lengths),
+            Arc::new(confidences),
+        ],
+    )?;
+
+    let mut buf = Vec::new();
+    {
+        let mut w = FileWriter::try_new(&mut buf, &schema)?;
+        w.write(&batch)?;
+        w.finish()?;
+    }
+    Ok(buf)
+}
+
 /// Synthesises a small MF4 file in memory via `mf4-rs`'s own writer. Used
 /// by `examples/gen_mf4_fixture.rs` to produce the canonical
 /// `test-fixtures/short.mf4` and by the integration test that reads the

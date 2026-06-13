@@ -94,6 +94,7 @@ fn kind_str(kind: ChannelKind) -> &'static str {
         ChannelKind::PointCloud => "pointcloud",
         ChannelKind::BoundingBox => "bounding_box",
         ChannelKind::CameraCalibration => "camera_calibration",
+        ChannelKind::Trajectory => "trajectory",
     }
 }
 
@@ -109,6 +110,7 @@ fn source_kind_str(kind: SourceKind) -> &'static str {
         SourceKind::Lidar => "lidar",
         SourceKind::OpenLabel => "openlabel",
         SourceKind::Calibration => "calibration",
+        SourceKind::Trajectory => "trajectory",
     }
 }
 

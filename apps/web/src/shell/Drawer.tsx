@@ -13,6 +13,7 @@ import { ChannelsDrawer } from "./drawers/ChannelsDrawer";
 import { LayoutDrawer } from "./drawers/LayoutDrawer";
 import { PanelDrawer } from "./drawers/PanelDrawer";
 import { EventsDrawer } from "./drawers/EventsDrawer";
+import { FormatsDrawer } from "./drawers/FormatsDrawer";
 import { AddPanelMenu } from "./AddPanelMenu";
 import { DrawerResizer } from "./DrawerResizer";
 import styles from "./Drawer.module.css";
@@ -147,6 +148,8 @@ function DrawerBody({
       return <PanelDrawer />;
     case "events":
       return <EventsDrawer />;
+    case "formats":
+      return <FormatsDrawer />;
     default: {
       const _exhaustive: never = activeRailTab;
       void _exhaustive;

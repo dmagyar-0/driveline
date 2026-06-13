@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://driveline.dev/schemas/layoutProposal.v1.schema.json",
+  "title": "Driveline Layout Proposal (v1)",
+  "description": "A panel-placement proposal for a freshly-opened source. The Format Agent's visualisation-bootstrap call (docs/12-format-agent.md §7) is constrained to this schema; the proposal is applied through the __drivelineAgent v2 write ops (createPanel/bindChannels/setMapBinding). It is DATA, not code: it can only reference channel ids that exist (post-validated client-side) and is capped per panel. Single source of truth for the TS `LayoutProposal` interface (apps/web/src/llm/layoutProposal.types.ts).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["panels", "rationale"],
+  "properties": {
+    "panels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/panel" }
+    },
+    "rationale": {
+      "type": "string",
+      "description": "A short human-readable explanation of the proposed layout, shown to the user as plain text (untrusted model output — never rendered as HTML)."
+    }
+  },
+  "$defs": {
+    "panel": {
+      "oneOf": [
+        { "$ref": "#/$defs/plotPanel" },
+        { "$ref": "#/$defs/mapPanel" },
+        { "$ref": "#/$defs/enumPanel" },
+        { "$ref": "#/$defs/tablePanel" },
+        { "$ref": "#/$defs/valuePanel" }
+      ]
+    },
+    "plotPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A signal plot of up to MAX_PLOT_SERIES scalar channels.",
+      "required": ["kind", "title", "channelIds"],
+      "properties": {
+        "kind": { "const": "plot" },
+        "title": { "type": "string" },
+        "channelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "yAxisGroups": {
+          "type": "array",
+          "description": "Optional grouping of channelIds onto shared y-axes (channels sharing a unit / range).",
+          "items": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "mapPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A Leaflet map driven by a latitude/longitude channel pair.",
+      "required": ["kind", "latChannelId", "lonChannelId"],
+      "properties": {
+        "kind": { "const": "map" },
+        "latChannelId": { "type": "string" },
+        "lonChannelId": { "type": "string" }
+      }
+    },
+    "enumPanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "An enum lane of discrete-state channels.",
+      "required": ["kind", "channelIds"],
+      "properties": {
+        "kind": { "const": "enum" },
+        "channelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "tablePanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A tabular value readout of channels.",
+      "required": ["kind", "channelIds"],
+      "properties": {
+        "kind": { "const": "table" },
+        "channelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "valuePanel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A single-value readout of channels at the cursor.",
+      "required": ["kind", "channelIds"],
+      "properties": {
+        "kind": { "const": "value" },
+        "channelIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://driveline.dev/schemas/recipe.v1.schema.json",
+  "title": "Driveline Ingest Recipe (v1)",
+  "description": "Declarative, code-free description of how to decode an unknown binary log format. Single source of truth for the TS `Recipe` interface (apps/web/src/state/recipe.ts) and the Rust serde structs (crates/data-core/src/recipe.rs). The Format Agent's structured output is constrained to this schema. See docs/12-format-agent.md §3.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recipeVersion", "container", "time", "fields", "channels"],
+  "properties": {
+    "recipeVersion": {
+      "const": 1,
+      "description": "Recipe schema version. v1 only; unknown versions are rejected."
+    },
+    "name": { "type": "string" },
+    "description": { "type": "string" },
+    "detect": { "$ref": "#/$defs/detect" },
+    "provenance": { "$ref": "#/$defs/provenance" },
+    "container": { "$ref": "#/$defs/container" },
+    "time": { "$ref": "#/$defs/time" },
+    "fields": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/field" }
+    },
+    "channels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/channel" }
+    }
+  },
+  "$defs": {
+    "detect": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "How future drops auto-match this recipe (checked in bucket.ts before the unknown-format dialog).",
+      "properties": {
+        "extensions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "magic": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["offset", "bytesHex"],
+            "properties": {
+              "offset": { "type": "integer", "minimum": 0 },
+              "bytesHex": { "type": "string", "pattern": "^([0-9a-fA-F]{2})*$" }
+            }
+          }
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where the recipe came from. Consumed by the Format Registry, ignored by the decoder.",
+      "properties": {
+        "createdBy": { "enum": ["format-agent", "user"] },
+        "model": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "sampleSha256": { "type": "string" }
+      }
+    },
+    "container": {
+      "description": "Container framing strategy. v1 implements `fixed_record`.",
+      "oneOf": [{ "$ref": "#/$defs/fixedRecordContainer" }]
+    },
+    "fixedRecordContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "File = headerSkipBytes of preamble, then back-to-back records of recordSizeBytes each.",
+      "required": ["type", "recordSizeBytes"],
+      "properties": {
+        "type": { "const": "fixed_record" },
+        "headerSkipBytes": { "type": "integer", "minimum": 0 },
+        "recordSizeBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Time basis: ts_ns = raw * scale(unit) + epochOffsetNs.",
+      "required": ["field", "unit"],
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Name of the field (declared in `fields`) holding the timestamp."
+        },
+        "unit": { "enum": ["nanos", "micros", "millis", "seconds"] },
+        "mode": { "enum": ["absolute", "relative"] },
+        "epochOffsetNs": {
+          "type": "string",
+          "description": "Decimal string (ns can exceed 2^53); the bigint rule. Defaults to \"0\".",
+          "pattern": "^-?[0-9]+$"
+        },
+        "monotonicity": {
+          "enum": ["none", "non_decreasing", "strictly_increasing"]
+        }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One numeric field's binary layout within a record.",
+      "required": ["name", "offset", "dtype"],
+      "properties": {
+        "name": { "type": "string" },
+        "offset": { "type": "integer", "minimum": 0 },
+        "dtype": {
+          "enum": [
+            "u8",
+            "i8",
+            "u16",
+            "i16",
+            "u32",
+            "i32",
+            "u64",
+            "i64",
+            "f32",
+            "f64"
+          ]
+        },
+        "endian": { "enum": ["le", "be"] },
+        "scale": { "type": "number" },
+        "valueOffset": { "type": "number" },
+        "unit": { "type": "string" },
+        "enumDict": {
+          "type": "object",
+          "description": "Optional code→label map for enum-like fields.",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Maps field(s) to a Channel surfaced in the rail.",
+      "required": ["nativeId", "fields"],
+      "properties": {
+        "nativeId": { "type": "string" },
+        "name": { "type": "string" },
+        "kind": { "enum": ["scalar", "enum"] },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unit": { "type": "string" }
+      }
+    }
+  }
+}

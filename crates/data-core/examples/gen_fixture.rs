@@ -3,7 +3,8 @@
 //!
 //! Writes `test-fixtures/arrow_scalar.ipc`,
 //! `test-fixtures/arrow_bounding_box.ipc`, and
-//! `test-fixtures/arrow_calibration.ipc`. Pass a single path argument to
+//! `test-fixtures/arrow_calibration.ipc`, and
+//! `test-fixtures/arrow_trajectory.ipc`. Pass a single path argument to
 //! override the scalar fixture's destination (legacy behaviour).
 
 use std::io::Write;
@@ -26,4 +27,7 @@ fn main() {
 
     let calib = data_core::fixtures::arrow_calibration_ipc().expect("generate calibration");
     write_fixture(&calib, "test-fixtures/arrow_calibration.ipc");
+
+    let traj = data_core::fixtures::arrow_trajectory_ipc().expect("generate trajectory");
+    write_fixture(&traj, "test-fixtures/arrow_trajectory.ipc");
 }

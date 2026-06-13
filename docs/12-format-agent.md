@@ -510,10 +510,40 @@ closePanel(panelId: string): boolean;
 These are thin wrappers over existing store actions + FlexLayout
 `Actions.addNode` (the LayoutDrawer already does exactly this manually),
 validated against channel existence and the per-panel binding caps
-(`MAX_PLOT_SERIES = 8`). Heuristics get first crack before the API call
-even happens: lat/lon name+range detection, enum-kind channels → enum lane,
-≤ 8 scalars → one plot. The LLM call only runs when the user asks for a
-proposal, and improves grouping/naming over the heuristic floor.
+(`MAX_PLOT_SERIES`, the live constant in `panels/palette.ts` — currently
+16). Heuristics get first crack before the API call even happens: lat/lon
+name+range detection, enum-kind channels → enum lane, scalars → one or more
+capped plots. The LLM call only runs when the user asks for a proposal, and
+improves grouping/naming over the heuristic floor.
+
+**Status — implemented (Phase 3b).** Shipped:
+
+- `apps/web/src/llm/layoutHeuristics.ts` — the pure, SDK-free
+  `proposeLayoutHeuristic(channels, stats?, hint?)` floor (lat/lon → map by
+  segment-bounded name match + degree-range stats when present; enum-kind →
+  enum lane; scalars grouped by top-level name segment into plots capped at
+  `MAX_PLOT_SERIES`). Eagerly importable — no key needed.
+- `apps/web/src/llm/layoutProposal.ts` — `requestLayoutProposal(...)`: ONE
+  `claude-opus-4-8` Messages structured-output call (no agent loop) behind the
+  injected `createClient` adapter (lazy `@anthropic-ai/sdk`, base-URL guarded).
+  The returned proposal is schema-validated then `sanitizeProposal`d against the
+  real channel list + caps (unknown ids dropped, duplicates removed, plots
+  clamped, incomplete map panels dropped). `LayoutProposal` type +
+  `docs/schemas/layoutProposal.v1.schema.json` (byte-identical web copy held in
+  lock-step by a contract test, mirroring the recipe schema).
+- `apps/web/src/llm/applyLayoutProposal.ts` — the applier; places checked panels
+  through the `__drivelineAgent` v2 write ops (`createPanel` →
+  `bindChannels`/`setMapBinding`), no parallel panel-creation path.
+- `apps/web/src/shell/LayoutProposalDialog.tsx` — the Apply UI, surfaced by the
+  shell when `confirmRecipeImport` opens a source (store shard
+  `pendingLayoutProposal`). Renders the heuristic proposal immediately
+  (checkbox list + rationale as plain-text nodes), a "Refine with Claude" action
+  (uses the stored BYOK key), and `[Apply]`/`[Skip]` (Escape skips). No React
+  Context.
+- e2e: `apps/e2e/tests/layoutProposal.spec.ts` drives the heuristic path
+  (no key) and the refine path (DEV `__drivelineFormatAgent.installFakeLayoutProposal`
+  seam), asserting real panels + bindings; screenshots `layout-proposal.png` /
+  `layout-applied.png`.
 
 ## 8. Performance & size budget
 
@@ -634,9 +664,43 @@ everything above it.
   drives the full browser flow (drop → dialog → validate → open → plot, plus
   registry auto-match) and captures `recipe-dialog.png` / `recipe-plot.png`.
 
-**Not yet built:** Phases 2–4 — the live BYOK agent loop (`llm/`), the
-structured-output layout proposal, the `__drivelineAgent` v2 write ops, the
-non-`fixed_record` container strategies, the `cargo-fuzz` target, and the
-sandbox-conversion escape hatch. The v1 simplification "every recipe channel is
-a scalar f64 series" (enum/vector kinds collapse to scalar) is also a
-deliberate Phase-1 limitation noted in `recipe.rs`.
+**Phase 2 (Agent engine) is implemented.** The lazy `apps/web/src/llm/` chunk:
+`keyManager` (BYOK, in-memory by default with opt-in `localStorage` and the
+non-`api.anthropic.com` base-URL guard), `sampler` (`buildSampleBundle` —
+head/tail/stratified slices over `File.slice()` with a sha256 manifest),
+`prompts` (fixture-tested), and `ClientOrchestratedEngine` (the Messages +
+code-execution tool-use loop, the `validate_recipe`/`report_unsupported` client
+tools, structured-output recipe constrained to `RECIPE_V1_SCHEMA`, the
+iteration cap, abort, cost tally, and the client-enforced acceptance gate). The
+`UnknownFormatDialog` now drives the full key → consent (exact upload manifest +
+hex/ASCII preview) → streamed-progress → outcome flow. The recipe is described
+by a single-source JSON Schema (`docs/schemas/recipe.v1.schema.json`) validated
+in both TS (ajv) and Rust (serde `deny_unknown_fields` + version check) via
+contract tests. The agent loop is exercised against an injectable fake engine
+(`engineFactory` seam) so the e2e (`apps/e2e/tests/formatAgent.spec.ts`) is
+deterministic and key-free; `scripts/format-agent-smoke.ts` runs the real loop
+when `ANTHROPIC_API_KEY` is set. The whole SDK stays out of the first-load
+bundle (separate lazy chunk).
+
+**Phase 3 (Visualisation bootstrap) is implemented** — the `__drivelineAgent`
+v2 write ops (Phase 3a: `createPanel`/`bindChannels`/`setMapBinding`/`closePanel`
+over a shared `workspaceBridge`) plus the heuristics + structured-output
+`LayoutProposal` call + Apply UI (Phase 3b); see §7's status note.
+
+**Phase 4 (Polish) is implemented** — the Format Registry management drawer
+(list/rename/delete/export/re-derive), draft recipes (a separate
+`driveline.formats.drafts.v1` shard so the schema-locked `Recipe` is untouched
+and drafts never auto-match; opened read-only behind a "low-confidence decode"
+banner), the open-time stale-recipe gate that routes a no-longer-matching file
+to "re-derive with agent" (keeping the old recipe until replaced), per-run cost
+telemetry, and the sandbox-conversion escape hatch (`llm/convert.ts` → ingest
+the produced MCAP one-shot through the existing `McapReader`, never registered).
+The real Anthropic SDK call sites for derivation and conversion are isolated in
+single commented factories and exercised by the live smoke; all UI/ingestion
+wiring is covered by deterministic fakes (`apps/e2e/tests/formatAgentPolish.spec.ts`).
+
+**Still deferred (genuine v2+):** the non-`fixed_record` container strategies
+(`length_prefixed`/`delimited_text`/`chunked`), the `cargo-fuzz` target, and the
+Managed-Agents engine. The v1 simplification "every recipe channel is a scalar
+f64 series" (enum/vector kinds collapse to scalar) also remains a deliberate
+Phase-1 limitation noted in `recipe.rs`.

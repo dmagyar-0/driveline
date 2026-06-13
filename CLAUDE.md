@@ -57,6 +57,11 @@ imports the bundle. `pnpm build` already does this (`pnpm wasm:build && pnpm
 - **Never block the cursor/video hot path.** Cursor updates coalesce to ≤1
   per `requestAnimationFrame`; video seeks debounce 50 ms. New work on this
   path needs a `perf.ts` mark and must stay within budget.
+- **Never ship a user-facing capability that an agent can't reach.** If a
+  human can do it from the keyboard (analyse, tag, lay out, feed data), an
+  agent must be able to do the same headlessly — either through
+  `window.__drivelineAgent` or a stable `data-testid`/ARIA seam. See
+  "Agent-friendly by default" below.
 - **Never commit to `main` directly** — always branch and PR.
 - **Never bypass git hooks** (`--no-verify`, `--no-gpg-sign`, etc.). If a hook
   fails, fix the cause.
@@ -88,6 +93,44 @@ imports the bundle. `pnpm build` already does this (`pnpm wasm:build && pnpm
   ingestion, preserve that pairing.
 - WebCodecs is **required** for video (Chrome/Edge 130+, Firefox 130+).
   Safari is unsupported by design; `unsupportedSplash.ts` handles detection.
+
+## Agent-friendly by default
+
+Driveline is built to be **driven by automation, not just clicked.** Users
+bring their own agents (LLMs, scripts, CI) and either hand them the wheel or
+let them run autonomously. Treat the agent surface as a first-class consumer
+of every feature — not an afterthought bolted on at the end.
+
+- **Every new capability lands on the agent surface in the same change.** When
+  you add something a user can do (a transport action, a tag, a panel kind, a
+  way to feed data), expose it on `window.__drivelineAgent`
+  (`apps/web/src/agent/agentApi.ts`) and add it to the `describe()` capability
+  manifest in the same PR. If it genuinely can't be a method yet, give it a
+  stable `data-testid` + ARIA label and treat that as the contract. "I'll wire
+  the agent later" is how the surface rots.
+- **Headless-reachable, no human in the loop.** The flow is: an agent calls
+  `getSkill()`/`describe()` (always on, no opt-in), reloads with `?agent` to
+  unlock the mutating ops, then discovers → reads → drives → records findings.
+  A new feature isn't done until that loop works for it without a person
+  clicking anything. Shell-only agents go through the `driveline-data` CLI
+  (`crates/data-cli/`) over the same readers — keep that path in mind for
+  anything that lives in `data-core`.
+- **Honour the surface contract** (full detail in `docs/11-agent-interface.md`):
+  - **ns timestamps cross the boundary as decimal strings**, never JSON
+    numbers (same project-wide BigInt rule).
+  - **Methods never throw for "not found"/bad input** — return `null`/`false`
+    so an agent can probe without try/catch scaffolding.
+  - **Discovery (`version`/`getSkill`/`describe`) is always on**; everything
+    mutating or session-reading is gated behind `?agent`. Don't move ops
+    across that line without updating docs/11 and docs/13.
+  - **`data-testid` + ARIA in the shell are part of the automation contract.**
+    Renaming one is a breaking change, same as changing a method signature.
+- **Bump `AGENT_API_VERSION`** (`agentApi.ts`) on any breaking change to the
+  surface, and keep the BYOA guide (`getSkill()` → `agentSkill.ts`), docs/11,
+  docs/12 (Format Agent / BYOK), and docs/13 (Bring Your Own Agent) in sync.
+- **Mark machine output as machine output.** Agent-authored events stamp
+  `origin: "agent"` and an optional `confidence`; preserve that provenance so
+  reviewers can tell findings apart from human ones.
 
 ## Working style
 

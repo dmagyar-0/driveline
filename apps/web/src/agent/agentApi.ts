@@ -1,27 +1,47 @@
 // Agent interface — `window.__drivelineAgent`.
 //
 // A deliberately small, JSON-safe surface for automation (LLM agents,
-// scripts, CI) to *analyse and tag* a session: enumerate sources and
-// channels, pull ranged channel data, drive the transport, read/write
-// events (bookmarks + tags), and capture the decoded video frame at the
-// cursor. It is scoped to analysis & annotation — no file ingestion, no
-// layout mutation; those stay on the dev-hook surface.
+// scripts, CI) to *analyse, tag, lay out, and — since v3 — feed* a session:
+// enumerate sources and channels, pull ranged channel data, drive the
+// transport, read/write events (bookmarks + tags), capture the decoded video
+// frame at the cursor, mutate the panel layout (create/bind/close panels), and
+// push the agent's OWN inline data source (`addDataSource`). The v2 write ops
+// are the minimum the Format Agent's visualisation bootstrap (docs/12 §7
+// `LayoutProposal` applier) needs, shared with external agents + Playwright;
+// v3 adds the "Bring Your Own Agent" surface (docs/13).
 //
-// Unlike `__drivelineDevHooks` (DEV-only, tree-shaken from production),
-// this surface ships in the production bundle and installs when the page
-// is opened with `?agent` in the query (always in DEV). Everything it can
-// do, the user sitting at the page can already do — it only automates the
-// same-origin session — so exposing it opt-in is safe.
+// File ingestion (decoding bytes through a Rust reader) still stays on the
+// dev-hook surface — but that restriction is RELAXED for inline agent data:
+// `addDataSource` accepts the agent's own bounded, in-memory columnar dataset
+// (no file bytes, no URL), held on the main thread and ranged-fetched exactly
+// like a reader-backed source (see `state/inlineSource.ts`). It is the agent
+// feeding the page its own data, not Driveline reaching out for a file.
+//
+// Discovery is ALWAYS on: `version`, `getSkill()` and `describe()` install on
+// every load (pure documentation + a capability manifest — no mutation, no
+// session data). Every MUTATING / data-reading op (the v1/v2 surface plus
+// `addDataSource`) installs only when the page is opened with `?agent` in the
+// query (always in DEV). Everything those gated ops can do, the user at the
+// page can already do — it only automates the same-origin session — so the
+// opt-in gate is the safety boundary.
 //
 // Contract rules (see docs/11-agent-interface.md):
 //   - Every nanosecond timestamp crosses this boundary as a DECIMAL
 //     STRING (the project-wide BigInt rule); `page.evaluate` and JSON
 //     cannot carry bigints.
-//   - Methods never throw for "not found" — they return `null` so an
-//     agent can probe without try/catch scaffolding.
+//   - Methods never throw for "not found"/bad input — they return
+//     `null`/`false` so an agent can probe without try/catch scaffolding. The
+//     v2 layout write ops and v3 `addDataSource` keep that posture: unknown
+//     panel/kind/channel or an invalid spec → `null` or `false`, never an
+//     exception.
 
 import { tableFromIPC } from "apache-arrow";
-import { useSession } from "../state/store";
+import {
+  useSession,
+  type InlineSourceSpec,
+  type InlineSourceResult,
+} from "../state/store";
+import { AGENT_SKILL } from "./agentSkill";
 import {
   parseBookmarksImport,
   serializeBookmarks,
@@ -32,8 +52,33 @@ import {
   getVideoCanvas,
   listVideoCanvasPanelIds,
 } from "../panels/videoCanvasRegistry";
+import { getWorkspaceBridge } from "../layout/workspaceBridge";
+import { panelKindOf, panelNameFor, type PanelKind } from "../layout/panelId";
+import { MAX_PLOT_SERIES } from "../panels/palette";
 
-export const AGENT_API_VERSION = 1 as const;
+export const AGENT_API_VERSION = 3 as const;
+
+/**
+ * Spec for `addDataSource` — the agent's own inline (columnar) dataset.
+ * Re-exported from the store types so callers import it from one place.
+ */
+export type AgentDataSourceSpec = InlineSourceSpec;
+
+/** A single method on the agent surface, for the `describe()` manifest. */
+export interface AgentCapability {
+  name: string;
+  summary: string;
+  /** `true` if the method mutates state / reads session data (so it is gated
+   *  behind `?agent`); `false` for the always-on discovery trio. */
+  mutating: boolean;
+}
+
+export interface AgentManifest {
+  version: number;
+  capabilities: AgentCapability[];
+  /** Whether the mutating surface requires `?agent` in the URL. */
+  agentParamRequired: boolean;
+}
 
 /** One decoded Arrow column, JSON-safe (bigints → decimal strings). */
 export interface AgentColumn {
@@ -80,6 +125,30 @@ export interface AgentFrameCapture {
 
 export interface AgentApi {
   version: typeof AGENT_API_VERSION;
+
+  // ── discovery (always on — no ?agent required) ──────────────────
+  /**
+   * The full "Bring Your Own Agent" guide as Markdown: what Driveline is, the
+   * BigInt/decimal-string rule, the `AgentDataSourceSpec` shape with a
+   * copy-pasteable worked example, and how to read data back / drive the
+   * transport. Pure documentation — available WITHOUT `?agent`.
+   */
+  getSkill(): string;
+  /**
+   * Machine-readable manifest of every method (name, one-line summary, whether
+   * it mutates / is gated). Pure introspection — available WITHOUT `?agent`.
+   */
+  describe(): AgentManifest;
+
+  // ── ingestion (v3) ──────────────────────────────────────────────
+  /**
+   * Register the agent's own inline data source from columnar JSON (no file
+   * bytes, no URL). Channels appear in the Channels rail, the scrubber widens
+   * to cover them, and they are fetchable/bindable exactly like a file-backed
+   * source. Returns the new source id + channel ids, or `null` on any
+   * validation failure (never throws). Gated behind `?agent`.
+   */
+  addDataSource(spec: AgentDataSourceSpec): InlineSourceResult | null;
 
   // ── session / data (read-only) ──────────────────────────────────
   getSessionSnapshot(): {
@@ -149,6 +218,35 @@ export interface AgentApi {
    * to the first registered panel). `null` when no panel/canvas exists.
    */
   captureVideoFrame(panelId?: string): AgentFrameCapture | null;
+
+  // ── layout write ops (v2) ───────────────────────────────────────
+  // Thin wrappers over the FlexLayout workspace bridge + the store's
+  // binding actions. They are the applier surface for the Format Agent's
+  // `LayoutProposal` (docs/12 §7), shared with external agents + e2e.
+  /**
+   * Mint a panel of `kind` (one of `PanelKind`: plot/map/enum/table/value/
+   * video/scene) and return its freshly-minted panel id. `null` when the
+   * kind is unknown/unsupported or the workspace has not mounted yet.
+   */
+  createPanel(kind: PanelKind): string | null;
+  /**
+   * Bind scalar channels to a plot/enum/table/value panel via the matching
+   * store action. Validates that the panel exists, is a bindable kind, and
+   * that every channel id is known; for plot panels it also enforces the
+   * `MAX_PLOT_SERIES` cap against the panel's current bindings. Returns
+   * `false` (binding nothing) if any precondition fails.
+   */
+  bindChannels(panelId: string, channelIds: string[]): boolean;
+  /**
+   * Set a map panel's lat/lon binding. Validates that the panel is a map
+   * and that both channel ids exist. Returns `false` otherwise.
+   */
+  setMapBinding(panelId: string, latId: string, lonId: string): boolean;
+  /**
+   * Delete a panel's tab from the layout. Returns `true` if the tab existed
+   * and was removed, `false` otherwise.
+   */
+  closePanel(panelId: string): boolean;
 }
 
 declare global {
@@ -185,9 +283,99 @@ function toAgentEvent(b: Bookmark): AgentEvent {
   };
 }
 
-function makeAgentApi(): AgentApi {
+// Capability manifest — the authoritative list `describe()` returns. `mutating`
+// is the *semantic* flag (does the call change session state), so an agent can
+// reason about dry-run safety; it is NOT the gating signal. Gating is conveyed
+// by `agentParamRequired`: the whole non-discovery surface (reads included,
+// since they expose session data) needs `?agent`, while the three discovery
+// methods install always. Keep in sync with the `AgentApi` interface.
+const AGENT_CAPABILITIES: readonly AgentCapability[] = [
+  { name: "getSkill", summary: "Full BYOA guide (Markdown).", mutating: false },
+  { name: "describe", summary: "This capability manifest.", mutating: false },
+  {
+    name: "addDataSource",
+    summary: "Register an inline columnar data source.",
+    mutating: true,
+  },
+  {
+    name: "getSessionSnapshot",
+    summary: "Cursor / playing / speed / globalRange.",
+    mutating: false,
+  },
+  { name: "listSources", summary: "Loaded sources.", mutating: false },
+  { name: "listChannels", summary: "Loaded channels.", mutating: false },
+  {
+    name: "fetchChannelRange",
+    summary: "Ranged channel data as JSON columns.",
+    mutating: false,
+  },
+  { name: "setCursor", summary: "Move the playback cursor.", mutating: true },
+  { name: "play", summary: "Start playback.", mutating: true },
+  { name: "pause", summary: "Stop playback.", mutating: true },
+  { name: "setSpeed", summary: "Set playback speed.", mutating: true },
+  {
+    name: "getEventTagConfig",
+    summary: "Event tag taxonomy.",
+    mutating: false,
+  },
+  { name: "listEvents", summary: "All events.", mutating: false },
+  { name: "addEvent", summary: "Create an agent event.", mutating: true },
+  { name: "setEventTag", summary: "Set an event tag value.", mutating: true },
+  { name: "setEventRange", summary: "Set an event's range.", mutating: true },
+  { name: "renameEvent", summary: "Rename an event.", mutating: true },
+  { name: "removeEvent", summary: "Delete an event.", mutating: true },
+  {
+    name: "exportEvents",
+    summary: "Events as portable JSON.",
+    mutating: false,
+  },
+  { name: "importEvents", summary: "Bulk-import events.", mutating: true },
+  {
+    name: "listVideoPanels",
+    summary: "Live video panel ids.",
+    mutating: false,
+  },
+  {
+    name: "captureVideoFrame",
+    summary: "PNG of the decoded frame.",
+    mutating: false,
+  },
+  { name: "createPanel", summary: "Mint a panel of a kind.", mutating: true },
+  {
+    name: "bindChannels",
+    summary: "Bind channels to a panel.",
+    mutating: true,
+  },
+  { name: "setMapBinding", summary: "Bind a map's lat/lon.", mutating: true },
+  { name: "closePanel", summary: "Delete a panel.", mutating: true },
+];
+
+/** The always-on discovery trio (`version`/`getSkill`/`describe`) — installed
+ *  on every load, even without `?agent`. Pure documentation + introspection,
+ *  no mutation and no session-data read. */
+function makeDiscoverySurface(agentParamRequired: boolean): {
+  version: typeof AGENT_API_VERSION;
+  getSkill(): string;
+  describe(): AgentManifest;
+} {
   return {
     version: AGENT_API_VERSION,
+    getSkill: () => AGENT_SKILL,
+    describe: () => ({
+      version: AGENT_API_VERSION,
+      capabilities: AGENT_CAPABILITIES.map((c) => ({ ...c })),
+      agentParamRequired,
+    }),
+  };
+}
+
+function makeAgentApi(): AgentApi {
+  return {
+    ...makeDiscoverySurface(true),
+
+    addDataSource(spec) {
+      return useSession.getState().addInlineSource(spec);
+    },
 
     getSessionSnapshot() {
       const s = useSession.getState();
@@ -356,15 +544,156 @@ function makeAgentApi(): AgentApi {
         height: canvas.height,
       };
     },
+
+    createPanel(kind) {
+      // Reject anything that isn't a real PanelKind before touching the
+      // bridge — `kindLabel`/the factory only know the seven kinds, and an
+      // unknown string would otherwise mint an "Unknown panel type" tab.
+      if (!KNOWN_PANEL_KINDS.has(kind)) return null;
+      const bridge = getWorkspaceBridge();
+      if (bridge === null) return null;
+      return bridge.createPanel(kind) ?? null;
+    },
+
+    bindChannels(panelId, channelIds) {
+      const kind = panelKindOf(panelId);
+      if (kind === null) return false;
+      const st = useSession.getState();
+      // Confirm the panel actually exists in the layout (a well-formed id
+      // for a panel that was never created, or was already closed, must not
+      // silently create a binding for a ghost panel).
+      if (!panelExists(st.layoutJson, panelId)) return false;
+      // Every channel must exist; a partial bind would drop findings.
+      const known = new Set(st.channels.map((c) => c.id));
+      if (channelIds.some((id) => !known.has(id))) return false;
+      // Dedupe the request itself so the cap check matches what the store
+      // would actually store.
+      const requested = [...new Set(channelIds)];
+      switch (kind) {
+        case "plot":
+        case "enum":
+        case "table":
+        case "value": {
+          const existing = bindingsFor(st, kind, panelId);
+          // Only count genuinely new ids against the cap (re-binding an
+          // already-bound channel is a no-op in the store).
+          const added = requested.filter((id) => !existing.includes(id));
+          if (existing.length + added.length > MAX_PLOT_SERIES) return false;
+          const add = bindActionFor(st, kind);
+          for (const id of requested) add(panelId, id);
+          return true;
+        }
+        // map needs a lat/lon pair (use setMapBinding); video/scene bind
+        // through their own single-channel store actions, not this list API.
+        default:
+          return false;
+      }
+    },
+
+    setMapBinding(panelId, latId, lonId) {
+      if (panelKindOf(panelId) !== "map") return false;
+      const st = useSession.getState();
+      if (!panelExists(st.layoutJson, panelId)) return false;
+      const known = new Set(st.channels.map((c) => c.id));
+      if (!known.has(latId) || !known.has(lonId)) return false;
+      st.setMapBinding(panelId, { latChannelId: latId, lonChannelId: lonId });
+      return true;
+    },
+
+    closePanel(panelId) {
+      const bridge = getWorkspaceBridge();
+      if (bridge === null) return false;
+      return bridge.closePanel(panelId);
+    },
   };
 }
 
+const KNOWN_PANEL_KINDS: ReadonlySet<PanelKind> = new Set<PanelKind>([
+  "plot",
+  "video",
+  "scene",
+  "map",
+  "table",
+  "value",
+  "enum",
+]);
+
+type ListBindingKind = "plot" | "enum" | "table" | "value";
+
+type SessionState = ReturnType<typeof useSession.getState>;
+
+/** The current bound-channel list for a list-binding panel kind. */
+function bindingsFor(
+  st: SessionState,
+  kind: ListBindingKind,
+  panelId: string,
+): string[] {
+  switch (kind) {
+    case "plot":
+      return st.plotBindings[panelId] ?? [];
+    case "enum":
+      return st.enumBindings[panelId] ?? [];
+    case "table":
+      return st.tableBindings[panelId] ?? [];
+    case "value":
+      return st.valueBindings[panelId] ?? [];
+  }
+}
+
+/** The single-channel append action for a list-binding panel kind. */
+function bindActionFor(
+  st: SessionState,
+  kind: ListBindingKind,
+): (panelId: string, channelId: string) => void {
+  switch (kind) {
+    case "plot":
+      return st.addPlotChannel;
+    case "enum":
+      return st.addEnumChannel;
+    case "table":
+      return st.addTableChannel;
+    case "value":
+      return st.addValueChannel;
+  }
+}
+
+/** Whether the FlexLayout JSON snapshot contains a tab with `panelId`. The
+ *  store keeps only the JSON snapshot in sync; the live Model is reached via
+ *  the workspace bridge, but tab existence is cheap to read off the JSON.
+ *  `createPanel`/`closePanel` push `model.toJson()` into the store before
+ *  returning, so the snapshot is current by the time a binding call runs. */
+function panelExists(layoutJson: unknown, panelId: string): boolean {
+  return panelNameFor(layoutJson, panelId) !== null;
+}
+
 /**
- * Install `window.__drivelineAgent`. Idempotent per install; returns the
- * uninstaller (App calls it on unmount, mirroring the dev hooks).
+ * Install `window.__drivelineAgent`.
+ *
+ * `full` selects which surface installs:
+ *   - `false` (no `?agent`, not DEV): only the always-on discovery trio
+ *     (`version`/`getSkill`/`describe`) — pure documentation + a capability
+ *     manifest, no mutation and no session-data read. `describe()` reports
+ *     `agentParamRequired: true` so the agent knows to reload with `?agent`.
+ *   - `true` (`?agent` present, or DEV): the full surface (discovery +
+ *     `addDataSource` + the v1/v2 read/transport/event/video/layout ops).
+ *
+ * Always prints a one-line console banner pointing agents at `getSkill()`.
+ * Idempotent per install; returns the uninstaller (App calls it on unmount,
+ * mirroring the dev hooks).
  */
-export function installAgentApi(): () => void {
-  window.__drivelineAgent = makeAgentApi();
+export function installAgentApi(full: boolean): () => void {
+  window.__drivelineAgent = full
+    ? makeAgentApi()
+    : (makeDiscoverySurface(true) as AgentApi);
+
+  // One-line breadcrumb so an agent driving the live page (or a human in the
+  // console) finds the surface without reading the source.
+  console.info(
+    full
+      ? "[driveline] Agent surface ready — window.__drivelineAgent.getSkill() for the guide; full ops unlocked (?agent / DEV)."
+      : "[driveline] window.__drivelineAgent.getSkill() / describe() available — append ?agent to the URL to unlock the full automation surface.",
+  );
+
   return () => {
     delete window.__drivelineAgent;
   };

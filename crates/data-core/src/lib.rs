@@ -20,6 +20,7 @@ pub mod ros1_bag;
 pub mod ros2_db3;
 pub mod sqlite;
 pub mod tabular;
+pub mod trajectory;
 pub mod types;
 
 pub use calibration::CalibrationReader;
@@ -40,6 +41,7 @@ pub use ros2_db3::Ros2Db3Reader;
 pub use tabular::{
     TabularColumn, TabularFormat, TabularReader, TabularSchema, TimeBasis, TimeMode, TimeUnitScale,
 };
+pub use trajectory::TrajectoryReader;
 pub use types::{
     Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceId, SourceKind,
     SourceMeta, TimeRange,
@@ -124,6 +126,9 @@ pub enum Error {
 
     #[error("failed to parse calibration JSON: {0}")]
     CalibrationParse(String),
+
+    #[error("failed to parse trajectory JSON: {0}")]
+    TrajectoryParse(String),
 
     #[error("ros1 bag error: {0}")]
     Ros1Bag(String),

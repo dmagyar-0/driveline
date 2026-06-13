@@ -56,7 +56,9 @@ import {
   VIDEO_PREFIX,
   kindLabel,
   panelKindOf,
+  type PanelKind,
 } from "./panelId";
+import { setWorkspaceBridge } from "./workspaceBridge";
 import styles from "./Workspace.module.css";
 
 export interface WorkspaceHandle {
@@ -259,6 +261,64 @@ export const Workspace = forwardRef<WorkspaceHandle>(
     const resetLayout = useCallback(() => {
       setLayoutJson(null);
     }, [setLayoutJson]);
+
+    // Phase 3a (Format Agent) · single kind-dispatched panel mint, shared by
+    // the workspace bridge so the agent API and dev hooks reach FlexLayout
+    // through one place. Mirrors the per-kind `add*Panel` methods above.
+    const createPanel = useCallback(
+      (kind: PanelKind, channelId?: string): string | undefined => {
+        switch (kind) {
+          case "video":
+            return addVideoPanel(channelId);
+          case "plot":
+            return addPlotPanel();
+          case "scene":
+            return addScenePanel();
+          case "map":
+            return addMapPanel();
+          case "table":
+            return addTablePanel();
+          case "value":
+            return addValuePanel();
+          case "enum":
+            return addEnumPanel();
+        }
+      },
+      [
+        addVideoPanel,
+        addPlotPanel,
+        addScenePanel,
+        addMapPanel,
+        addTablePanel,
+        addValuePanel,
+        addEnumPanel,
+      ],
+    );
+
+    // Delete a tab by id, reporting whether it existed (the per-tab close
+    // button in `onRenderTab` fires the same action but ignores the result).
+    const closePanel = useCallback(
+      (panelId: string): boolean => {
+        if (model.getNodeById(panelId) === undefined) return false;
+        model.doAction(Actions.deleteTab(panelId));
+        setLayoutJson(model.toJson());
+        return true;
+      },
+      [model, setLayoutJson],
+    );
+
+    // Register the workspace bridge for non-React callers (agent API write
+    // ops, dev hooks). Mirrors `videoCanvasRegistry`'s mount/unmount lifecycle
+    // — no React Context (CLAUDE.md forbids one).
+    useEffect(
+      () =>
+        setWorkspaceBridge({
+          createPanel,
+          closePanel,
+          resetLayout,
+        }),
+      [createPanel, closePanel, resetLayout],
+    );
 
     // Phase 7 · Custom tab chrome. Replace FlexLayout's stock tab content
     // with grip + name + kind badge + a three-icon cluster (settings,

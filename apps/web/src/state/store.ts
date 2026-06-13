@@ -20,6 +20,7 @@ import {
   classifyUrl,
   sniffCalibration,
   sniffOpenlabel,
+  sniffTrajectory,
   type BucketError,
   type TabularFormat,
 } from "./bucket";
@@ -31,7 +32,7 @@ import {
   type RawTabularSchema,
 } from "./tabularImport";
 import type { RawRecipeDryRunReport, Recipe } from "./recipe";
-import { matchRecipe, saveRecipe } from "./formatRegistry";
+import { matchRecipe, saveRecipe, removeRecipe } from "./formatRegistry";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import {
   loadLayoutFromStorage,
@@ -84,6 +85,13 @@ import { readMp4HeaderBytes } from "./mp4HeaderSlice";
 import { synthesizeSidecarBytes } from "./videoTimestampBinding";
 import { shiftFetchWindow, shiftRangeArrowTs } from "./offsetShift";
 import { parseEpochOffsetNs } from "./tabularImport";
+import {
+  setInlineSource,
+  dropInlineSource,
+  resetInlineSources,
+  fetchRange as inlineFetchRange,
+  type InlineChannelData,
+} from "./inlineSource";
 
 export type SourceKind =
   | "mcap"
@@ -94,8 +102,12 @@ export type SourceKind =
   | "lidar"
   | "openlabel"
   | "calibration"
+  | "trajectory"
   | "ros1"
-  | "ros2db3";
+  | "ros2db3"
+  // JS-only: agent-pushed columnar data held on the main thread (no Rust
+  // reader, no wasm handle). See `state/inlineSource.ts` + docs/13.
+  | "inline";
 export type ChannelKind = ChannelKindWire;
 
 export interface TimeRange {
@@ -165,11 +177,51 @@ export interface SourceMeta {
    * source literals that predate the field still type-check.
    */
   timeOffsetNs?: bigint;
+  /**
+   * Phase 4 (docs/12 §9) — opened from a *draft* recipe (a non-converged /
+   * gate-failing best attempt). Surfaced as a "low-confidence decode" banner on
+   * the source so the user knows the decode is unverified. Absent on every
+   * normal source.
+   */
+  lowConfidence?: boolean;
+  /**
+   * Phase 4 (docs/12 §10) — opened from the sandbox-conversion escape hatch: a
+   * one-shot converted copy (e.g. the sample/file converted to MCAP inside the
+   * code-execution sandbox). No reusable recipe exists and it is never
+   * registered, so the UI labels it "converted copy — recipe not available".
+   */
+  oneShot?: boolean;
 }
 
 export interface OpenResult {
   opened: string[];
   errors: BucketError[];
+}
+
+/** One channel of an inline (agent-pushed) data source. Timestamps cross the
+ *  API as DECIMAL STRINGS (the project-wide BigInt rule); they are parsed to
+ *  `bigint` at the `addInlineSource` boundary. */
+export interface InlineChannelSpec {
+  name: string;
+  unit?: string;
+  kind?: "scalar" | "enum";
+  /** Decimal-string ns, non-decreasing, length N. */
+  timestampsNs: string[];
+  /** Length N; enum channels carry integer codes. */
+  values: number[];
+}
+
+/** Spec for `addInlineSource` — the agent-pushed columnar dataset. */
+export interface InlineSourceSpec {
+  name: string;
+  channels: InlineChannelSpec[];
+}
+
+/** What `addInlineSource` returns on success: the new source id and the
+ *  qualified id + display name of every channel it registered. */
+export interface InlineSourceResult {
+  sourceId: string;
+  channels: Array<{ id: string; name: string }>;
 }
 
 /** Lifecycle of the baked-in "Try the demo" load (see `demo/demoSession.ts`).
@@ -242,6 +294,20 @@ export interface PendingUnknownImport {
   size: number;
   /** The dropped `File` — re-read by the worker on confirm. */
   file: File;
+  /**
+   * Phase 4 (docs/12 §9) — a registry recipe matched this drop but the
+   * open-time dry-run gate FAILED (coverage too low / framing errors), so the
+   * file is queued with the stale recipe attached instead of opening garbage.
+   * The dialog surfaces a "re-derive with agent" prompt; the old recipe is kept
+   * until replaced. `null`/absent for an ordinary unknown drop.
+   */
+  staleRecipe?: { name: string; coverage: number } | null;
+  /**
+   * Phase 4 (docs/12 §3.4) — this entry was queued by a "Re-derive with agent"
+   * action in the Formats drawer rather than a drop. Carries the name of the
+   * registry recipe being re-derived; on success the new recipe replaces it.
+   */
+  reDeriveName?: string | null;
 }
 
 /**
@@ -581,9 +647,57 @@ export interface SessionState {
    * Format Registry (so future drops of this format match offline), and dequeue.
    * No-op on an unknown id. Failures surface via `lastOpenErrors`.
    */
-  confirmRecipeImport(id: string, recipeJson: string): Promise<void>;
+  confirmRecipeImport(
+    id: string,
+    recipeJson: string,
+    opts?: {
+      /**
+       * Phase 4 — opened from a draft recipe: tag the source `lowConfidence`
+       * (the "low-confidence decode" banner) and do NOT save the recipe to the
+       * real registry (drafts live in the parallel drafts shard).
+       */
+      lowConfidence?: boolean;
+      /**
+       * Phase 4 re-derive: the name of the registry recipe this run replaces.
+       * On success the old recipe is overwritten with the freshly-derived one
+       * (kept until replaced, docs/12 §9). When set the recipe IS saved.
+       */
+      replaceRecipeName?: string;
+    },
+  ): Promise<void>;
   /** Cancel (drop) a queued unknown import by id. No-op on an unknown id. */
   cancelUnknownImport(id: string): void;
+  /**
+   * Phase 4 (docs/12 §3.4) — queue a "Re-derive with agent" run for an existing
+   * registry recipe, pointed at a representative file the user picks. Opens the
+   * Format Agent dialog in re-derive mode; on success the new recipe replaces
+   * the named one. No-op if the file is empty.
+   */
+  reDeriveRecipe(name: string, file: File): void;
+  /**
+   * Phase 4 (docs/12 §10) — ingest a sandbox-converted MCAP copy of an unknown
+   * file. Opens the bytes through the EXISTING MCAP path (`openFiles`), tags the
+   * resulting source `oneShot` ("converted copy — recipe not available"), and
+   * dequeues the originating unknown import. Never registers a recipe.
+   */
+  ingestConvertedMcap(
+    id: string,
+    name: string,
+    bytes: Uint8Array,
+  ): Promise<void>;
+  /**
+   * A freshly-opened source whose channels have not yet been placed on panels,
+   * awaiting the visualisation-bootstrap "Layout proposal" affordance
+   * (docs/12-format-agent.md §7). `confirmRecipeImport` sets this after a recipe
+   * source opens; the `LayoutProposalDialog` renders the heuristic proposal +
+   * the "Refine with Claude" / Apply / Skip controls. `null` when there is
+   * nothing to propose. Reset by `clear()`.
+   */
+  pendingLayoutProposal: { sourceId: string } | null;
+  /** Queue a layout proposal for a just-opened source (no-op on unknown id). */
+  proposeLayoutFor(sourceId: string): void;
+  /** Dismiss the pending layout proposal (Apply / Skip / Escape). */
+  dismissLayoutProposal(): void;
   /**
    * Confirm a queued sidecar-less mp4 binding (Feature 1): fetch the chosen
    * tabular source's converted ns time column, synthesize a `.mp4.timestamps`
@@ -914,6 +1028,15 @@ export interface SessionState {
    */
   lidarSpinTimes(channelId: string): Promise<BigInt64Array>;
   /**
+   * Register an inline (agent-pushed) data source: validate `spec`, build its
+   * `Channel[]`, store its columnar data on the main thread (no worker), and
+   * widen `globalRange` / reseat the cursor exactly like a file open so it
+   * appears in the Channels rail and the scrubber covers it. Returns the new
+   * source id + channel ids, or `null` on ANY validation failure (never
+   * throws). See `state/inlineSource.ts` + docs/13.
+   */
+  addInlineSource(spec: InlineSourceSpec): InlineSourceResult | null;
+  /**
    * Ascending frame timestamps (ns) for an OpenLABEL bounding-box channel —
    * one per labelled frame. The 3D scene panel binary-searches this locally to
    * map the cursor to a frame index, so it only refetches box geometry when
@@ -921,6 +1044,14 @@ export interface SessionState {
    * non-OpenLABEL channels.
    */
   boxFrameTimes(channelId: string): Promise<BigInt64Array>;
+  /**
+   * Ascending frame timestamps (ns) for a trajectory channel — one per frame
+   * of predicted ego future trajectories. The 3D scene panel binary-searches
+   * this locally to map the cursor to a frame index, so it only refetches
+   * trajectory geometry when the active frame changes (not once per cursor
+   * tick). Throws for non-trajectory channels.
+   */
+  trajectoryFrameTimes(channelId: string): Promise<BigInt64Array>;
 }
 
 export const MIN_SPEED = 0.25;
@@ -973,7 +1104,9 @@ function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
   // `[0, 0]` into the merge would drag `startNs` to the epoch and stretch the
   // timeline across ~54 years. Only sources with a real span define the
   // global range.
-  const spanned = sources.filter((s) => s.timeRange.endNs > s.timeRange.startNs);
+  const spanned = sources.filter(
+    (s) => s.timeRange.endNs > s.timeRange.startNs,
+  );
   if (spanned.length === 0) return null;
   let start = spanned[0].timeRange.startNs;
   let end = spanned[0].timeRange.endNs;
@@ -1090,6 +1223,145 @@ function openLabelChannels(sourceId: string, s: Mf4Summary): Channel[] {
     sampleCount: c.sample_count,
     timeRange: { startNs: c.start_ns, endNs: c.end_ns },
   }));
+}
+// Trajectory summaries arrive in the same MF4 shape as LiDAR/OpenLABEL (a
+// single channel, `sample_count` = peak paths/frame). Mirrors
+// `openLabelChannels` but hardcodes the `trajectory` kind so the
+// ScenePanel/PanelDrawer route it to the 3D scene pipeline as predicted
+// polylines.
+function trajectoryChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: null,
+    kind: "trajectory" as const,
+    dtype: null,
+    unit: null,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
+
+// Validate + build an inline (agent-pushed) source from its spec: parse every
+// decimal-string timestamp to `bigint`, enforce equal-length non-decreasing
+// columns, and produce the `SourceMeta` (synthetic handle, `kind: "inline"`),
+// the per-channel columnar storage, and the qualified channel id/name list the
+// API returns. Returns `null` on ANY violation (never throws) so the agent
+// surface can probe without try/catch. Leading-slash the displayed channel name
+// (matching how MCAP topics surface) so the Channels tree splits on `/`.
+function buildInlineSource(
+  spec: InlineSourceSpec,
+  existing: SourceMeta[],
+): {
+  source: SourceMeta;
+  data: Map<string, InlineChannelData>;
+  channels: Array<{ id: string; name: string }>;
+} | null {
+  if (
+    spec === null ||
+    typeof spec !== "object" ||
+    typeof spec.name !== "string" ||
+    spec.name.trim().length === 0 ||
+    !Array.isArray(spec.channels) ||
+    spec.channels.length === 0
+  ) {
+    return null;
+  }
+
+  const sourceId = uniqueSourceId(spec.name.trim(), existing);
+  const data = new Map<string, InlineChannelData>();
+  const channels: Channel[] = [];
+  const channelOut: Array<{ id: string; name: string }> = [];
+  const seenNative = new Set<string>();
+
+  let srcStart: bigint | null = null;
+  let srcEnd: bigint | null = null;
+
+  for (const c of spec.channels) {
+    if (
+      c === null ||
+      typeof c !== "object" ||
+      typeof c.name !== "string" ||
+      c.name.trim().length === 0 ||
+      !Array.isArray(c.timestampsNs) ||
+      !Array.isArray(c.values) ||
+      c.timestampsNs.length === 0 ||
+      c.timestampsNs.length !== c.values.length
+    ) {
+      return null;
+    }
+    const kind = c.kind === "enum" ? "enum" : "scalar";
+    // The native id is the raw channel name; uniqueness within the source keeps
+    // `qualifiedChannelId` injective and the storage map keyed cleanly.
+    const nativeName = c.name.trim();
+    if (seenNative.has(nativeName)) return null;
+    seenNative.add(nativeName);
+
+    const n = c.timestampsNs.length;
+    const tsNs = new BigInt64Array(n);
+    let prev: bigint | null = null;
+    for (let i = 0; i < n; i++) {
+      const raw = c.timestampsNs[i];
+      if (typeof raw !== "string") return null;
+      let v: bigint;
+      try {
+        v = BigInt(raw);
+      } catch {
+        return null;
+      }
+      if (prev !== null && v < prev) return null; // must be non-decreasing
+      tsNs[i] = v;
+      prev = v;
+    }
+    for (let i = 0; i < n; i++) {
+      if (typeof c.values[i] !== "number") return null;
+    }
+    const values =
+      kind === "enum"
+        ? Int32Array.from(c.values, (x) => x | 0)
+        : Float64Array.from(c.values);
+
+    data.set(nativeName, { kind, tsNs, values });
+
+    const chStart = tsNs[0];
+    const chEnd = tsNs[n - 1];
+    srcStart = srcStart === null ? chStart : bigMin(srcStart, chStart);
+    srcEnd = srcEnd === null ? chEnd : bigMax(srcEnd, chEnd);
+
+    // Display name leading-slashed so the Channels tree splits it like a topic.
+    const displayName = nativeName.startsWith("/")
+      ? nativeName
+      : `/${nativeName}`;
+    const id = qualifiedChannelId(sourceId, nativeName);
+    channels.push({
+      id,
+      nativeId: nativeName,
+      sourceId,
+      name: displayName,
+      group: null,
+      kind,
+      dtype: kind === "enum" ? "i32" : "f64",
+      unit: typeof c.unit === "string" && c.unit.length > 0 ? c.unit : null,
+      sampleCount: n,
+      timeRange: { startNs: chStart, endNs: chEnd },
+    });
+    channelOut.push({ id, name: displayName });
+  }
+
+  if (srcStart === null || srcEnd === null) return null;
+
+  const source: SourceMeta = {
+    id: sourceId,
+    kind: "inline",
+    name: sourceId,
+    handle: -1, // synthetic: inline sources hold no wasm slab handle
+    timeRange: { startNs: srcStart, endNs: srcEnd },
+    channels,
+    timeOffsetNs: 0n,
+  };
+  return { source, data, channels: channelOut };
 }
 
 // Calibration summaries arrive in the same MF4 shape (a single channel,
@@ -1335,6 +1607,7 @@ export const useSession = create<SessionState>((set, get) => {
     pendingTabularImports: [],
     pendingUnknownImports: [],
     pendingVideoBindings: [],
+    pendingLayoutProposal: null,
     demoLoad: { phase: "idle", receivedBytes: 0, totalBytes: 0, error: null },
 
     setWorker(w) {
@@ -2162,12 +2435,33 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {
-      if (!worker) throw new Error("session store: worker not initialised");
       const { channels, sources } = get();
       const channel = channels.find((c) => c.id === channelId);
       if (!channel) throw new Error(`unknown channel: ${channelId}`);
       const source = sources.find((s) => s.id === channel.sourceId);
       if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+
+      // Inline (agent-pushed) sources are served straight from the main-thread
+      // store — no worker round-trip. They honour the same per-source offset
+      // contract (0n by default = pass-through), built into the shifted window
+      // + the returned-ts shift, exactly like the signal readers below.
+      if (source.kind === "inline") {
+        const offset = source.timeOffsetNs ?? 0n;
+        const win = shiftFetchWindow(startNs, endNs, offset);
+        const bytes = inlineFetchRange(
+          source.id,
+          channel.nativeId,
+          win.startNs,
+          win.endNs,
+          includePrev ?? false,
+        );
+        if (bytes === null) {
+          throw new Error(`unknown inline channel: ${channelId}`);
+        }
+        return shiftRangeArrowTs(bytes, offset);
+      }
+
+      if (!worker) throw new Error("session store: worker not initialised");
 
       // In-flight dedup: two panels bound to the same channel that issue
       // concurrent fetches for the same window share one worker round-trip.
@@ -2281,6 +2575,19 @@ export const useSession = create<SessionState>((set, get) => {
               includePrev,
             );
           }
+          if (source.kind === "trajectory") {
+            // Trajectory frames carry a multi-column List<Float32>/List<Int32>
+            // geometry schema, not the scalar `{ts,value}` shape
+            // `shiftRangeArrowTs` rewrites — and trajectory sources never carry
+            // a time offset (always 0n), so pass the bytes through unmodified.
+            return worker.trajectoryFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+          }
           throw new Error(`channel kind not plottable: ${source.kind}`);
         } finally {
           mark(perfEnd);
@@ -2306,6 +2613,19 @@ export const useSession = create<SessionState>((set, get) => {
       return worker.lidarSpinTimes(source.handle);
     },
 
+    addInlineSource(spec) {
+      const built = buildInlineSource(spec, get().sources);
+      if (built === null) return null;
+      const { source, data, channels } = built;
+      // Stash the columnar data on the main thread BEFORE committing the
+      // source, so the first `fetchChannelRange` after registration finds it.
+      setInlineSource(source.id, data);
+      // Widen `globalRange`, seed/reseat the cursor, and surface the source +
+      // channels — the same derived-state recompute every file open uses.
+      commitOpenedSources([source], []);
+      return { sourceId: source.id, channels };
+    },
+
     async boxFrameTimes(channelId) {
       if (!worker) throw new Error("session store: worker not initialised");
       const { channels, sources } = get();
@@ -2317,6 +2637,19 @@ export const useSession = create<SessionState>((set, get) => {
         throw new Error(`not a bounding-box channel: ${channelId}`);
       }
       return worker.openlabelFrameTimes(source.handle);
+    },
+
+    async trajectoryFrameTimes(channelId) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel) throw new Error(`unknown channel: ${channelId}`);
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      if (source.kind !== "trajectory") {
+        throw new Error(`not a trajectory channel: ${channelId}`);
+      }
+      return worker.trajectoryFrameTimes(source.handle);
     },
 
     async openFiles(files) {
@@ -2342,6 +2675,10 @@ export const useSession = create<SessionState>((set, get) => {
                 buckets.calibration.push(f);
               } else if (isJson && (await sniffOpenlabel(f))) {
                 buckets.openlabel.push(f);
+              } else if (isJson && (await sniffTrajectory(f))) {
+                // Predicted ego trajectory `.json` (top-level `"trajectory"`
+                // key) — route into the 3D scene pipeline as polylines.
+                buckets.trajectory.push(f);
               } else {
                 stillUnknown.push(f);
               }
@@ -2537,6 +2874,35 @@ export const useSession = create<SessionState>((set, get) => {
             }
           }
 
+          for (const f of buckets.trajectory) {
+            try {
+              // Trajectory sources open eagerly: the JSON is decoded into
+              // per-frame polyline buffers in wasm. Pass the `File` directly so
+              // no full-file clone crosses the Comlink boundary. Surfaces as a
+              // single `kind: "trajectory"` source with one `trajectory`
+              // channel, routed to the 3D scene pipeline as predicted polylines.
+              const handle = await w.openTrajectory(f);
+              const summary = await w.trajectorySummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = trajectoryChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "trajectory",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                // Predicted trajectories carry no time offset; alignment lives
+                // in the frame timestamps and the fetch path passes bytes
+                // through unshifted.
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
+          }
+
           for (const pair of buckets.mp4Pairs) {
             try {
               // Only the `ftyp` + `moov` boxes are needed by the WASM parser —
@@ -2646,6 +3012,32 @@ export const useSession = create<SessionState>((set, get) => {
             try {
               const recipe = await matchRecipe(f);
               if (recipe) {
+                // Stale-recipe gate (docs/12 §9): before opening, dry-run the
+                // matched recipe over the file. A vendor that bumped the format
+                // (newer rev) yields low coverage / framing errors; rather than
+                // silently open garbage, queue it with the stale recipe so the
+                // dialog can offer "re-derive with agent" (old recipe kept).
+                const probe = await w.recipeDryRun(
+                  f,
+                  JSON.stringify(recipe),
+                  50_000,
+                );
+                if (
+                  probe.coverage < 0.99 ||
+                  Number(probe.records_rejected) > 0
+                ) {
+                  newUnknownPending.push({
+                    id: `unk-${unknownImportSeq++}`,
+                    name: f.name,
+                    size: f.size,
+                    file: f,
+                    staleRecipe: {
+                      name: recipe.name ?? "(unnamed)",
+                      coverage: probe.coverage,
+                    },
+                  });
+                  continue;
+                }
                 const handle = await w.openRecipe(f, JSON.stringify(recipe));
                 const summary = await w.recipeSummary(handle);
                 const sourceId = uniqueSourceId(f.name, [
@@ -2798,7 +3190,7 @@ export const useSession = create<SessionState>((set, get) => {
       return worker.recipeDryRun(pendingImport.file, recipeJson, 200_000);
     },
 
-    async confirmRecipeImport(id, recipeJson) {
+    async confirmRecipeImport(id, recipeJson, opts) {
       const run = async () => {
         if (!worker) throw new Error("session store: worker not initialised");
         const w = worker;
@@ -2807,6 +3199,7 @@ export const useSession = create<SessionState>((set, get) => {
         );
         if (!pendingImport) return;
 
+        const lowConfidence = opts?.lowConfidence === true;
         const errors: BucketError[] = [];
         const newSources: SourceMeta[] = [];
         let savedRecipe: Recipe | null = null;
@@ -2822,25 +3215,47 @@ export const useSession = create<SessionState>((set, get) => {
             timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
             channels: tabularChannels(sourceId, summary),
             timeOffsetNs: 0n,
+            // A draft-opened source carries the low-confidence banner and is NOT
+            // registered (docs/12 §9); a normal/re-derived one is.
+            ...(lowConfidence ? { lowConfidence: true } : {}),
           });
-          // Only persist a recipe that actually opened.
-          try {
-            savedRecipe = JSON.parse(recipeJson) as Recipe;
-          } catch {
-            savedRecipe = null;
+          // Only persist a recipe that actually opened — and never for a draft
+          // (drafts stay in the parallel drafts shard, never auto-matched).
+          if (!lowConfidence) {
+            try {
+              savedRecipe = JSON.parse(recipeJson) as Recipe;
+            } catch {
+              savedRecipe = null;
+            }
           }
         } catch (e) {
           errors.push({ name: pendingImport.name, reason: String(e) });
         }
 
         commitOpenedSources(newSources, errors);
-        if (savedRecipe) saveRecipe(savedRecipe);
+        if (savedRecipe) {
+          // Re-derive replacement (docs/12 §9): if the new recipe was named
+          // differently from the one it replaces, drop the stale entry so the
+          // registry doesn't keep both. `saveRecipe` itself overwrites a
+          // same-named entry.
+          if (
+            opts?.replaceRecipeName &&
+            opts.replaceRecipeName !== (savedRecipe.name ?? "")
+          ) {
+            removeRecipe(opts.replaceRecipeName);
+          }
+          saveRecipe(savedRecipe);
+        }
         // Dequeue only on success; a failed open leaves it queued for a retry.
         if (newSources.length > 0) {
           set({
             pendingUnknownImports: get().pendingUnknownImports.filter(
               (p) => p.id !== id,
             ),
+            // Offer the visualisation-bootstrap layout proposal for the source
+            // we just opened (docs/12 §7). The dialog renders the heuristic
+            // floor immediately; "Refine with Claude" upgrades it.
+            pendingLayoutProposal: { sourceId: newSources[0].id },
           });
         }
       };
@@ -2853,6 +3268,59 @@ export const useSession = create<SessionState>((set, get) => {
       const cur = get().pendingUnknownImports;
       const next = cur.filter((p) => p.id !== id);
       if (next.length !== cur.length) set({ pendingUnknownImports: next });
+    },
+
+    reDeriveRecipe(name, file) {
+      if (file.size === 0) return;
+      set({
+        pendingUnknownImports: [
+          ...get().pendingUnknownImports,
+          {
+            id: `unk-${unknownImportSeq++}`,
+            name: file.name,
+            size: file.size,
+            file,
+            reDeriveName: name,
+          },
+        ],
+      });
+    },
+
+    async ingestConvertedMcap(id, name, bytes) {
+      // Open the sandbox-produced MCAP through the EXISTING openFiles/McapReader
+      // path (docs/12 §10) — a converted copy is a normal MCAP source. Tag the
+      // freshly-opened source `oneShot` so the UI labels it "converted copy —
+      // recipe not available". Never registers a recipe.
+      const before = new Set(get().sources.map((s) => s.id));
+      const mcapName = name.toLowerCase().endsWith(".mcap")
+        ? name
+        : `${name}.mcap`;
+      // BlobPart copy keeps the worker re-reading the bytes (mirrors the dev
+      // `openFiles` hook), so peak memory stays near the file size.
+      const file = new File([bytes as BlobPart], mcapName);
+      await get().openFiles([file]);
+      const fresh = get().sources.filter((s) => !before.has(s.id));
+      if (fresh.length > 0) {
+        set({
+          sources: get().sources.map((s) =>
+            fresh.some((f) => f.id === s.id) ? { ...s, oneShot: true } : s,
+          ),
+          // Drop the originating unknown import — its escape hatch is done.
+          pendingUnknownImports: get().pendingUnknownImports.filter(
+            (p) => p.id !== id,
+          ),
+        });
+      }
+    },
+
+    proposeLayoutFor(sourceId) {
+      if (!get().sources.some((s) => s.id === sourceId)) return;
+      set({ pendingLayoutProposal: { sourceId } });
+    },
+    dismissLayoutProposal() {
+      if (get().pendingLayoutProposal !== null) {
+        set({ pendingLayoutProposal: null });
+      }
     },
 
     async confirmVideoBinding(id, tabularSourceId) {
@@ -3027,10 +3495,14 @@ export const useSession = create<SessionState>((set, get) => {
 
     async clear() {
       const run = async () => {
+        // Inline (agent-pushed) storage lives on the main thread, not in the
+        // worker — wipe it regardless of worker presence.
+        resetInlineSources();
         if (!worker) return;
         const w = worker;
         for (const s of get().sources) {
           try {
+            if (s.kind === "inline") continue; // no wasm handle to free
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "ros1") await w.closeRos1Bag(s.handle);
             else if (s.kind === "ros2db3") await w.closeRos2Db3(s.handle);
@@ -3039,6 +3511,7 @@ export const useSession = create<SessionState>((set, get) => {
             else if (s.kind === "recipe") await w.closeRecipe(s.handle);
             else if (s.kind === "lidar") await w.closeLidar(s.handle);
             else if (s.kind === "openlabel") await w.closeOpenlabel(s.handle);
+            else if (s.kind === "trajectory") await w.closeTrajectory(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
@@ -3090,6 +3563,7 @@ export const useSession = create<SessionState>((set, get) => {
           pendingTabularImports: [],
           pendingUnknownImports: [],
           pendingVideoBindings: [],
+          pendingLayoutProposal: null,
           demoLoad: {
             phase: "idle",
             receivedBytes: 0,
@@ -3110,7 +3584,10 @@ export const useSession = create<SessionState>((set, get) => {
         // Unknown id (already removed, or a stale click): nothing to do.
         if (!src) return;
 
-        if (worker) {
+        if (src.kind === "inline") {
+          // Main-thread storage, no wasm handle — drop it directly.
+          dropInlineSource(sourceId);
+        } else if (worker) {
           const w = worker;
           try {
             if (src.kind === "mcap") await w.closeMcap(src.handle);
@@ -3122,6 +3599,8 @@ export const useSession = create<SessionState>((set, get) => {
             else if (src.kind === "lidar") await w.closeLidar(src.handle);
             else if (src.kind === "openlabel")
               await w.closeOpenlabel(src.handle);
+            else if (src.kind === "trajectory")
+              await w.closeTrajectory(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source
