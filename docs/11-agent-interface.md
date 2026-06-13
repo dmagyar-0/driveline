@@ -19,33 +19,47 @@ project-wide BigInt rule the UI follows).
 ## Why a separate surface from the dev hooks
 
 `window.__drivelineDevHooks` is the Playwright seam: ~60 store-mutating
-methods, DEV-only, tree-shaken out of production. Agents need a *small*,
-*stable*, *production-available* surface scoped to what an analysis
+methods, DEV-only, tree-shaken out of production. Agents need a _small_,
+_stable_, _production-available_ surface scoped to what an analysis
 session actually does: discover channels, pull ranges, seek, look at the
 video, and record findings as tagged events. `__drivelineAgent` is that
 surface — nothing on it can ingest files, mutate layout, or touch
 anything the user at the keyboard couldn't already do.
 
-It installs when:
+It installs in two tiers (see docs/13 for the BYOA rationale):
 
-- the page URL carries `?agent` (any value), in any build, or
-- the app runs in DEV (so e2e and local automation get it for free).
+- **Always on (any build, no opt-in):** the read-only discovery trio
+  `version`, `getSkill()`, `describe()` — pure documentation + a capability
+  manifest, no mutation and no session-data read.
+- **Gated:** the full mutating / data-reading surface (the v1/v2 ops plus
+  v3's `addDataSource`) installs only when the page URL carries `?agent`
+  (any value), or the app runs in DEV (so e2e and local automation get it
+  for free).
 
-App unmount uninstalls it (mirrors the dev hooks).
+Every load prints a one-line console banner pointing agents at `getSkill()`
+and noting that `?agent` unlocks the full surface. App unmount uninstalls the
+whole thing (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v1)
+## `window.__drivelineAgent` (v3)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. Summary:
+is the authoritative reference. The `version` field reports `3`; v3 is a
+superset of v2 (itself a superset of v1) and adds the always-on discovery
+trio (`getSkill`/`describe`) plus inline data-source ingestion
+(`addDataSource`, the "Bring Your Own Agent" surface — see
+docs/13-bring-your-own-agent.md). Summary:
 
-| Group | Methods |
-| --- | --- |
-| Session (read) | `getSessionSnapshot()`, `listSources()`, `listChannels()` |
-| Data (read) | `fetchChannelRange(channelId, startNs, endNs, includePrev?)` |
-| Transport | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)` |
-| Events | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
-| Events IO | `exportEvents()`, `importEvents(json, mode?)` |
-| Video | `listVideoPanels()`, `captureVideoFrame(panelId?)` |
+| Group              | Methods                                                                                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery (always on, v3) | `getSkill()`, `describe()`                                                                                                                                                |
+| Ingestion (v3)     | `addDataSource(spec)` — register an inline columnar source                                                                                                                       |
+| Session (read)     | `getSessionSnapshot()`, `listSources()`, `listChannels()`                                                                                                                        |
+| Data (read)        | `fetchChannelRange(channelId, startNs, endNs, includePrev?)`                                                                                                                     |
+| Transport          | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)`                                                                                                                              |
+| Events             | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
+| Events IO          | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
+| Video              | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
+| Layout (write, v2) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `closePanel(panelId)`                                                          |
 
 Behavioural notes:
 
@@ -69,6 +83,60 @@ Behavioural notes:
   cursor hot-path rules (rAF coalescing, decode-aware gating) apply
   unchanged.
 
+### v2 layout write ops
+
+v1 was analysis-and-annotation only — layout mutation lived on the
+DEV-only dev-hook surface. v2 lifts the _minimum_ layout surface the
+Format Agent's visualisation bootstrap needs (docs/12 §7: the
+`LayoutProposal` applier) onto the production agent API, so the same code
+path serves external agents and Playwright. The applier
+(`apps/web/src/llm/applyLayoutProposal.ts`) places a proposal's panels by
+calling exactly these v2 ops (`createPanel` → `bindChannels` /
+`setMapBinding`) — it has no parallel panel-creation path. These are thin wrappers over
+the existing FlexLayout workspace and the store's binding actions — exactly
+what the Layout drawer does when a human clicks "add a panel" and binds
+channels — not a new layout engine.
+
+The four methods reach the live FlexLayout `Model` through a module-scoped
+**workspace bridge** (`apps/web/src/layout/workspaceBridge.ts`): the
+`Workspace` component registers its panel-mint / panel-close / reset handle
+on mount and clears it on unmount, mirroring `videoCanvasRegistry.ts`. No
+React Context is involved (the project bans adding one), and the dev hooks
+mint/close panels through the same `Workspace` handle, so panel creation
+lives in one place.
+
+| Method                                 | Returns             | Semantics                                                                                                                                                                                                                         |
+| -------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createPanel(kind)`                    | `panelId` or `null` | `kind` is a `PanelKind` (`plot` / `map` / `enum` / `table` / `value` / `video` / `scene`). Mints a tab and returns its freshly-minted id. `null` when the kind is unknown/unsupported, or when the workspace has not mounted yet. |
+| `bindChannels(panelId, channelIds)`    | `boolean`           | Appends scalar channels to a `plot` / `enum` / `table` / `value` panel via the matching store action.                                                                                                                             |
+| `setMapBinding(panelId, latId, lonId)` | `boolean`           | Sets a `map` panel's lat/lon pair.                                                                                                                                                                                                |
+| `closePanel(panelId)`                  | `boolean`           | Deletes the tab via FlexLayout `Actions.deleteTab`. `true` if the tab existed, else `false`.                                                                                                                                      |
+
+Validation & caps (mechanically enforced, never trusted from the caller —
+the Format Agent's proposal is model-authored, see docs/12 §6):
+
+- **Channel existence.** Every channel id passed to `bindChannels` /
+  `setMapBinding` must name a loaded channel. If _any_ id is unknown the
+  whole call is rejected (`false`) and nothing is bound — a partial bind
+  would silently drop a proposal's intent.
+- **Panel existence + kind.** The `panelId` must name a live tab in the
+  layout and be of a kind the call supports. `bindChannels` only accepts
+  the four list-binding kinds; `map` (use `setMapBinding`) and
+  `video`/`scene` (single-channel store actions) return `false`.
+- **Per-panel cap.** `bindChannels` enforces `MAX_PLOT_SERIES` against the
+  panel's _current_ bindings: a request that would push the total over the
+  cap is rejected whole (`false`), binding nothing. Re-binding an
+  already-bound channel is a no-op and is not counted against the cap, so
+  an idempotent re-apply of the same proposal succeeds. (docs/12 §7 quotes
+  the cap as 8; the live constant in `panels/palette.ts` is the source of
+  truth — the API reads it, it doesn't hard-code a number.)
+- **Null/false-safe.** Like the rest of the surface, these never throw for
+  "not found"; an agent can probe with plain return-value checks.
+
+Because every write goes through the same store actions and FlexLayout
+model the UI uses, a panel an agent creates is indistinguishable from one a
+user dragged in — it persists, reloads, and re-binds identically.
+
 A minimal Playwright session against the deployed app:
 
 ```ts
@@ -89,6 +157,28 @@ await page.evaluate(async () => {
   return agent.exportEvents();
 });
 ```
+
+### v3 additions: discovery + inline ingestion
+
+v3 lifts two capabilities onto the surface for the "Bring Your Own Agent"
+flow (docs/13). The mutating split changed: the discovery trio installs on
+every load, the rest stays gated.
+
+| Method                       | Availability      | Returns                                              | Semantics                                                                                                                       |
+| ---------------------------- | ----------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `getSkill()`                 | always (no opt-in)| `string`                                            | The full BYOA guide as Markdown (what Driveline is, the timestamp rule, the `AgentDataSourceSpec` shape + worked example).      |
+| `describe()`                 | always (no opt-in)| `{ version, capabilities[], agentParamRequired }`   | Machine-readable manifest of every method (name, summary, `mutating`). `agentParamRequired: true` when the gated ops are off.  |
+| `addDataSource(spec)`        | gated (`?agent`)  | `{ sourceId, channels: [{ id, name }] } \| null`    | Register the agent's own inline columnar data source (no file bytes, no URL). `null` on any validation failure; never throws.   |
+
+`addDataSource` takes an `AgentDataSourceSpec`: a source `name` plus
+`channels[]`, each with a `name` (slashes build the Channels tree), optional
+`unit`, optional `kind` (`"scalar"` default / `"enum"`), a `timestampsNs`
+decimal-string array (non-decreasing, length N), and a `values` number array
+(length N; enum → integer codes). The data is held on the main thread and
+ranged-fetched as Arrow IPC matching the exact scalar/enum schema
+`seriesFromArrow.ts` expects, so an inline source is indistinguishable to the
+panels from a reader-backed one. See docs/13 for the inline-source model and
+how BYOA differs from the BYOK Format Agent (docs/12).
 
 ## Event JSON format
 
@@ -151,7 +241,10 @@ of the WASM build) and adds nothing to the web bundle.
 
 `data-testid` attributes and ARIA roles/labels in the shell (scrubber,
 transport buttons, Events drawer) double as the DOM-level automation
-contract — they are what the agent API does *not* cover (file drop,
-layout). Treat renaming them as a breaking change to automation, same
-as a method change on `AgentApi`. Bump `AGENT_API_VERSION` on any
-breaking change to the `window.__drivelineAgent` surface.
+contract — they are what the agent API does _not_ cover (file drop, and
+layout operations beyond the v2 create/bind/close ops, e.g. drag-rearrange
+and saved layouts). Treat renaming them as a breaking change to automation,
+same as a method change on `AgentApi`. Bump `AGENT_API_VERSION` on any
+breaking change to the `window.__drivelineAgent` surface (it was raised to
+`2` when the layout write ops landed, and to `3` for the always-on
+discovery trio + inline `addDataSource` ingestion — see docs/13).

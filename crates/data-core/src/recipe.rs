@@ -140,6 +140,13 @@ pub enum Endian {
 pub enum Container {
     /// File = `header_skip_bytes` of preamble, then back-to-back records of
     /// `record_size_bytes` each. A trailing partial record is ignored.
+    //
+    // NOTE: serde does not support `deny_unknown_fields` on a variant of an
+    // internally-tagged enum (the tag field is consumed by the enum, leaving
+    // the variant unable to reason about unknown keys). Unknown keys inside the
+    // container are therefore rejected at the JSON-Schema layer
+    // (`additionalProperties:false` in `docs/schemas/recipe.v1.schema.json`,
+    // enforced by ajv before the recipe ever reaches Rust), not here.
     #[serde(rename_all = "camelCase")]
     FixedRecord {
         #[serde(default)]
@@ -149,7 +156,7 @@ pub enum Container {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TimeSpec {
     /// Name of the field (declared in `fields`) holding the timestamp.
     pub field: String,
@@ -165,7 +172,7 @@ pub struct TimeSpec {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FieldSpec {
     pub name: String,
     pub offset: u64,
@@ -202,7 +209,7 @@ pub enum RecipeChannelKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChannelSpec {
     /// Stable id, unique within the source. Used as the channel id + name when
     /// `name` is absent.
@@ -221,7 +228,7 @@ pub struct ChannelSpec {
 /// JS-side Format Registry, not the decoder — they are accepted and ignored
 /// here so a registry round-trip never strips them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Recipe {
     pub recipe_version: u32,
     #[serde(default)]

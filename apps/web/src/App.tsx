@@ -225,7 +225,8 @@ declare global {
           | "lidar"
           | "openlabel"
           | "ros1"
-          | "ros2db3";
+          | "ros2db3"
+          | "inline";
         name: string;
         timeRange: { startNs: string; endNs: string };
         channelIds: string[];
@@ -333,6 +334,45 @@ declare global {
     // decimal STRING so a full-precision ns value survives `page.evaluate`;
     // an unparseable string or a non-signal source id is a no-op.
     __drivelineSetSourceOffset?: (sourceId: string, offsetNs: string) => void;
+    // Format Agent (docs/12 Phase 2) — engine-injection seam for the
+    // deterministic e2e. `installFakeEngine(progress, recipeJson)` lazy-imports
+    // the `llm/` chunk and replaces the engine factory with one that emits the
+    // supplied progress events then returns the supplied recipe — no network,
+    // no key. `resetEngine()` restores the real `ClientOrchestratedEngine`.
+    // The seam lives INSIDE the lazy chunk (engineFactory.ts), so installing it
+    // pulls the chunk but never the Anthropic SDK (the SDK is a nested dynamic
+    // import behind a real run only) — the first-load budget is untouched.
+    __drivelineFormatAgent?: {
+      installFakeEngine: (
+        progress: unknown[],
+        recipeJson: string,
+      ) => Promise<void>;
+      // Install a fake that emits one event then hangs until aborted — for
+      // exercising the Abort button + failure surface deterministically.
+      installHangingEngine: () => Promise<void>;
+      // Install a fake that fails with a typed AgentError after optionally
+      // validating a best-attempt recipe (so the draft + convert failure
+      // affordances render deterministically). `kind` is the AgentError kind
+      // ("iteration-cap" | "acceptance-gate" | "unsupported"). When
+      // `bestRecipeJson` is provided it is dry-run first so the failure carries
+      // a real best-attempt report.
+      installFailingEngine: (
+        kind: string,
+        bestRecipeJson?: string,
+      ) => Promise<void>;
+      resetEngine: () => Promise<void>;
+      // Visualisation bootstrap (docs/12 §7) — swap the layout-proposal LLM
+      // call's client factory for one that returns a canned proposal, so the
+      // "Refine with Claude" path runs deterministically with no network/key.
+      installFakeLayoutProposal: (proposal: unknown) => Promise<void>;
+      resetLayoutProposal: () => Promise<void>;
+      // Sandbox-conversion escape hatch (docs/12 §10) — swap the converter
+      // factory for one that returns the supplied canned MCAP bytes, so the
+      // "Convert this file to MCAP" path ingests deterministically with no
+      // network/key.
+      installFakeConverter: (mcapBytes: Uint8Array) => Promise<void>;
+      resetConverter: () => Promise<void>;
+    };
   }
 }
 
@@ -698,15 +738,138 @@ export function App() {
       };
       window.__drivelineSetSourceOffset = (sourceId, offsetNs) =>
         useSession.getState().setSourceOffset(sourceId, offsetNs);
+      window.__drivelineFormatAgent = {
+        installFakeEngine: async (progress, recipeJson) => {
+          // Lazy-import the engine barrel (same chunk the dialog imports) and
+          // swap its factory. The fake never touches the network or the SDK.
+          const llm = await import("./llm");
+          llm.setFormatAgentEngineFactory(() => ({
+            async run({ validateLocally, onProgress, signal }) {
+              for (const msg of progress) {
+                if (signal.aborted) {
+                  throw new llm.AgentError("aborted", "cancelled");
+                }
+                onProgress(msg as never);
+              }
+              // Run the real local dry-run so the verdict + outcome report
+              // reflect the actual decode of the dropped file.
+              const report = await validateLocally(recipeJson);
+              onProgress({ type: "validation-verdict", attempt: 1, report });
+              const recipe = JSON.parse(recipeJson);
+              onProgress({ type: "done", recipe });
+              return { recipe, transcriptSummary: "fake engine" };
+            },
+          }));
+        },
+        installHangingEngine: async () => {
+          const llm = await import("./llm");
+          llm.setFormatAgentEngineFactory(() => ({
+            run({ onProgress, signal }) {
+              onProgress({ type: "thinking", text: "Working…" });
+              return new Promise((_resolve, reject) => {
+                signal.addEventListener("abort", () => {
+                  reject(new llm.AgentError("aborted", "cancelled"));
+                });
+              });
+            },
+          }));
+        },
+        installFailingEngine: async (kind, bestRecipeJson) => {
+          const llm = await import("./llm");
+          llm.setFormatAgentEngineFactory(() => ({
+            async run({ validateLocally, onProgress, signal }) {
+              if (signal.aborted) {
+                throw new llm.AgentError("aborted", "cancelled");
+              }
+              onProgress({
+                type: "thinking",
+                text: "Probing framing on the head slice.",
+              });
+              // For draft paths, run the real local dry-run on the best attempt
+              // so the failure carries a genuine report (coverage etc.).
+              if (bestRecipeJson) {
+                const report = await validateLocally(bestRecipeJson);
+                onProgress({ type: "validation-verdict", attempt: 1, report });
+              }
+              if (kind === "unsupported") {
+                onProgress({
+                  type: "unsupported",
+                  reason: "zstd-compressed chunks",
+                  findings: "Payload is zstd-compressed; out of recipe DSL.",
+                  suggestedExport: "Export to MCAP from your vendor tool.",
+                });
+                throw new llm.AgentError(
+                  "unsupported",
+                  "Format reported as out of recipe scope",
+                  {
+                    unsupported: {
+                      reason: "zstd-compressed chunks",
+                      findings:
+                        "Payload is zstd-compressed; out of recipe DSL.",
+                      suggestedExport: "Export to MCAP from your vendor tool.",
+                    },
+                  },
+                );
+              }
+              // iteration-cap / acceptance-gate — surface a typed failure.
+              const k =
+                kind === "acceptance-gate"
+                  ? "acceptance-gate"
+                  : "iteration-cap";
+              throw new llm.AgentError(k as never, `Did not converge (${k}).`);
+            },
+          }));
+        },
+        resetEngine: async () => {
+          const llm = await import("./llm");
+          llm.resetFormatAgentEngineFactory();
+        },
+        installFakeLayoutProposal: async (proposal) => {
+          // Swap the layout-proposal client factory for one whose single
+          // `createMessage` returns the canned proposal as structured-output
+          // text. The real `requestLayoutProposal` then schema-validates and
+          // sanitizes it against the live channels — exercising the whole path
+          // with no network or key.
+          const llm = await import("./llm");
+          llm.setLayoutProposalClientFactory(() => ({
+            async createMessage() {
+              return {
+                role: "assistant" as const,
+                content: [{ type: "text", text: JSON.stringify(proposal) }],
+                stop_reason: "end_turn" as const,
+              };
+            },
+          }));
+        },
+        resetLayoutProposal: async () => {
+          const llm = await import("./llm");
+          llm.resetLayoutProposalClientFactory();
+        },
+        installFakeConverter: async (mcapBytes) => {
+          // Swap the sandbox converter for one that returns canned MCAP bytes
+          // (e.g. a committed `.mcap` fixture). The dialog then ingests them
+          // through the real `openFiles`/McapReader path — no network or key.
+          const llm = await import("./llm");
+          llm.setSampleConverterFactory(() => ({
+            async convertToMcap() {
+              return { mcapBytes };
+            },
+          }));
+        },
+        resetConverter: async () => {
+          const llm = await import("./llm");
+          llm.resetSampleConverterFactory();
+        },
+      };
     }
     // Agent interface — unlike the dev hooks above this ships in the
-    // production bundle, but only installs when the page opts in with
-    // `?agent` (always installed in DEV so e2e and local automation get
-    // it for free). See docs/11-agent-interface.md.
-    const uninstallAgentApi =
-      import.meta.env.DEV || agentApiRequested(window.location.search)
-        ? installAgentApi()
-        : null;
+    // production bundle. The discovery trio (version/getSkill/describe) is
+    // ALWAYS installed; the full mutating surface unlocks only with `?agent`
+    // (or in DEV, so e2e and local automation get it for free). See
+    // docs/11-agent-interface.md + docs/13-bring-your-own-agent.md.
+    const uninstallAgentApi = installAgentApi(
+      import.meta.env.DEV || agentApiRequested(window.location.search),
+    );
     // Public deep-link: `?demo` starts the baked demo session on an empty
     // boot (the share-link view state lives in the hash, so the query is
     // ours). The loader waits for worker registration itself and no-ops if
@@ -731,6 +894,7 @@ export function App() {
         delete window.__drivelineTabular;
         delete window.__drivelineVideoTs;
         delete window.__drivelineSetSourceOffset;
+        delete window.__drivelineFormatAgent;
       }
       useSession.getState().setWorker(null);
       dataCore.current = null;

@@ -82,6 +82,11 @@ test("unknown format: recipe validates and the decoded signals plot", async ({
   await page.getByTestId("unknown-format-open").click();
   await expect(page.getByTestId("unknown-format-dialog")).toHaveCount(0);
 
+  // Opening a recipe source surfaces the visualisation-bootstrap layout
+  // proposal (docs/12 §7). This test exercises manual binding, so Skip it.
+  await page.getByTestId("layout-proposal-skip").click();
+  await expect(page.getByTestId("layout-proposal-dialog")).toHaveCount(0);
+
   const channels = await page.evaluate(() => {
     const h = window.__drivelineDevHooks as unknown as Hooks;
     return (h.listChannels() as { name: string; kind: string; id: string }[])

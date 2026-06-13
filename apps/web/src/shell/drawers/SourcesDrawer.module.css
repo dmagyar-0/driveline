@@ -145,6 +145,25 @@
   border-radius: var(--radius-3);
 }
 
+/* Phase 4 provenance banners (low-confidence draft / one-shot converted copy).
+ * Drop onto their own line below the row via `flex-basis: 100%`. */
+.banner {
+  flex-basis: 100%;
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  border-radius: var(--radius-3);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-bg-5);
+  color: var(--color-fg-4);
+}
+
+.banner[data-kind="low-confidence"] {
+  border-color: var(--color-fg-warning, var(--color-border-hover));
+  color: var(--color-fg-warning, var(--color-fg-3));
+}
+
 .loadRow {
   display: block;
   width: 100%;

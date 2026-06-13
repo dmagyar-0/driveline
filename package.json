@@ -13,6 +13,7 @@
     "test:rust": "cargo test --workspace",
     "size:check": "node scripts/check-bundle-size.mjs",
     "e2e": "pnpm --filter e2e test",
+    "format-agent:smoke": "node scripts/run-vite-node.mjs scripts/format-agent-smoke.ts",
     "fmt": "cargo fmt --all && pnpm --filter web fmt",
     "license:check:js": "node scripts/check-js-licenses.mjs",
     "license:check:rust": "cargo deny check licenses"
