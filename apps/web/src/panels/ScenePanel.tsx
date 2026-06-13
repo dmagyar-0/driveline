@@ -190,6 +190,15 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
           publish({ error: res.message });
           return;
         }
+        // A bounding_box source carries no point cloud, so the point-cloud
+        // auto-frame never fires. Frame the camera to the box set once per
+        // fresh binding (gated on `framedRef`, mirroring the cloud path) so the
+        // boxes are comfortably in view; manual orbiting afterwards is never
+        // overridden.
+        if (!framedRef.current && res.boxes.length > 0) {
+          renderer.frameToBoxes(res.boxes);
+          framedRef.current = true;
+        }
         renderer.setBoxes(res.boxes);
         boxesRef.current = res.boxes;
         placeLabels();

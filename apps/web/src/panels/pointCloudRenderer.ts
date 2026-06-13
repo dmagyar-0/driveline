@@ -631,6 +631,53 @@ export class PointCloudRenderer {
     this.requestRender();
   }
 
+  /** Fit the camera to a set of bounding boxes — the box equivalent of
+   *  `frameToBounds`. A `bounding_box` source carries no point cloud, so the
+   *  point-cloud auto-frame never fires and the boxes would sit off-screen at
+   *  the default camera. Computes the boxes' axis-aligned bounds (using each
+   *  box centre ± half its full extent, ignoring orientation — a small
+   *  over-estimate that only adds harmless headroom) and reuses the same
+   *  centroid+radius framing maths as `frameToBounds`. Called once per fresh
+   *  box set (the panel gates on `!hasFramed`) so manual orbiting afterwards is
+   *  never overridden. */
+  frameToBoxes(boxes: readonly SceneBox[]): void {
+    if (boxes.length === 0) return;
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
+    for (const b of boxes) {
+      const hx = Math.abs(b.size[0]) / 2;
+      const hy = Math.abs(b.size[1]) / 2;
+      const hz = Math.abs(b.size[2]) / 2;
+      // Conservative AABB: the box may be rotated, so pad by the largest
+      // half-extent on every axis. Cheap and only ever frames a touch wider.
+      const pad = Math.max(hx, hy, hz);
+      minX = Math.min(minX, b.center[0] - pad);
+      minY = Math.min(minY, b.center[1] - pad);
+      minZ = Math.min(minZ, b.center[2] - pad);
+      maxX = Math.max(maxX, b.center[0] + pad);
+      maxY = Math.max(maxY, b.center[1] + pad);
+      maxZ = Math.max(maxZ, b.center[2] + pad);
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    // Horizontal radius drives the framing (same as the cloud path, which fits
+    // the vertical FOV to the in-plane spread); include z so tall trucks/poles
+    // still fit. Floor keeps a single small box from zooming uncomfortably close.
+    const radius = Math.max(
+      Math.hypot(maxX - cx, maxY - cy),
+      (maxZ - minZ) / 2,
+      3,
+    );
+    this.target = [cx, cy, cz];
+    this.dist = Math.max(8, (radius / Math.tan(FOV / 2)) * 1.3);
+    this.requestRender();
+  }
+
   resize(cssW: number, cssH: number): void {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = Math.max(1, Math.round(cssW * dpr));
