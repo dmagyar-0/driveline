@@ -13,6 +13,8 @@ export interface SceneFrameInfo {
   boxCount: number;
   /** Predicted trajectory paths currently rendered for the active frame. */
   trajectoryPathCount: number;
+  /** Road-network features currently rendered (map_geometry, static). */
+  roadFeatureCount: number;
   /** Timestamp (ns) of the spin shown at the cursor, as a string (bigint). */
   frameTsNs: string | null;
   /** Index of the active spin in the source's spin list (-1 if none). */

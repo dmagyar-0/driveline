@@ -24,6 +24,7 @@ import { mark, measure } from "../perf";
 import { decodePointCloud } from "./pointCloudFromArrow";
 import { decodeBoxes, type BoundingBox } from "./boxesFromArrow";
 import { decodeTrajectories } from "./trajectoriesFromArrow";
+import { decodeMapGeometry } from "./mapGeometryFromArrow";
 import { PointCloudRenderer } from "./pointCloudRenderer";
 import { clearSceneFrameInfo, setSceneFrameInfo } from "./sceneDevState";
 import styles from "./ScenePanel.module.css";
@@ -66,7 +67,13 @@ type Status =
   | { kind: "loading" }
   | { kind: "error"; message: string }
   | { kind: "before" } // cursor before the first frame
-  | { kind: "ready"; points: number; boxes: number; paths: number };
+  | {
+      kind: "ready";
+      points: number;
+      boxes: number;
+      paths: number;
+      roads: number;
+    };
 
 export function ScenePanel({ panelId }: ScenePanelProps) {
   const sources = useSession((s) => s.sources);
@@ -83,6 +90,7 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
   const channelKind: ChannelKind | null = channel?.kind ?? null;
   const isBoxes = channelKind === "bounding_box";
   const isTraj = channelKind === "trajectory";
+  const isRoad = channelKind === "map_geometry";
   const isEmpty = channelId === null;
 
   // Drop a stale persisted binding once sources exist but the channel is gone.
@@ -110,6 +118,8 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
   isBoxesRef.current = isBoxes;
   const isTrajRef = useRef<boolean>(isTraj);
   isTrajRef.current = isTraj;
+  const isRoadRef = useRef<boolean>(isRoad);
+  isRoadRef.current = isRoad;
   // The boxes shown for the active frame, kept so the onRender hook can
   // reproject their centres without re-decoding.
   const boxesRef = useRef<BoundingBox[]>([]);
@@ -146,6 +156,7 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
         boxCount: rendererRef.current?.boxCountValue() ?? 0,
         trajectoryPathCount:
           rendererRef.current?.trajectoryPathCountValue() ?? 0,
+        roadFeatureCount: rendererRef.current?.roadFeatureCountValue() ?? 0,
         frameTsNs: null,
         spinIndex: lastFrameRef.current,
         spinCount: frameTimesRef.current?.length ?? 0,
@@ -175,6 +186,7 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
       renderer.clearPoints();
       renderer.clearBoxes();
       renderer.clearTrajectories();
+      renderer.clearRoads();
       boxesRef.current = [];
       placeLabels();
       setStatus({ kind: "before" });
@@ -182,6 +194,7 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
         pointCount: 0,
         boxCount: 0,
         trajectoryPathCount: 0,
+        roadFeatureCount: 0,
         frameTsNs: null,
         spinIndex: -1,
       });
@@ -198,6 +211,45 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
         .fetchChannelRange(id, ts, ts + 1n, false);
       if (reqId !== reqIdRef.current || rendererRef.current !== renderer)
         return;
+
+      if (isRoadRef.current) {
+        const res = decodeMapGeometry(bytes);
+        if (!res.ok) {
+          setStatus({ kind: "error", message: res.message });
+          publish({ error: res.message });
+          return;
+        }
+        // A map_geometry source carries no point cloud, so the point-cloud
+        // auto-frame never fires. Frame the camera to the road network once per
+        // fresh binding (gated on `framedRef`). Map geometry is STATIC, so this
+        // whole branch runs once per binding — there is a single frame at ts=0,
+        // so the cursor never crosses into a new frame and never refetches.
+        if (!framedRef.current && res.features.length > 0) {
+          renderer.frameToRoads(res.features);
+          framedRef.current = true;
+        }
+        renderer.setRoads(res.features);
+        // Roads carry no HTML labels; clear any stale box labels.
+        boxesRef.current = [];
+        placeLabels();
+        setStatus({
+          kind: "ready",
+          points: 0,
+          boxes: 0,
+          paths: 0,
+          roads: res.features.length,
+        });
+        publish({
+          roadFeatureCount: res.features.length,
+          trajectoryPathCount: 0,
+          boxCount: 0,
+          pointCount: 0,
+          frameTsNs: (res.tsNs ?? ts).toString(),
+          spinIndex: idx,
+          error: null,
+        });
+        return;
+      }
 
       if (isTrajRef.current) {
         const res = decodeTrajectories(bytes);
@@ -222,9 +274,11 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
           points: 0,
           boxes: 0,
           paths: res.paths.length,
+          roads: 0,
         });
         publish({
           trajectoryPathCount: res.paths.length,
+          roadFeatureCount: 0,
           boxCount: 0,
           pointCount: 0,
           frameTsNs: (res.tsNs ?? ts).toString(),
@@ -258,11 +312,13 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
           points: 0,
           boxes: res.boxes.length,
           paths: 0,
+          roads: 0,
         });
         publish({
           boxCount: res.boxes.length,
           pointCount: 0,
           trajectoryPathCount: 0,
+          roadFeatureCount: 0,
           frameTsNs: (res.tsNs ?? ts).toString(),
           spinIndex: idx,
           error: null,
@@ -287,10 +343,17 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
         framedRef.current = true;
       }
       renderer.setPoints(res.positions, res.intensities, res.count);
-      setStatus({ kind: "ready", points: res.count, boxes: 0, paths: 0 });
+      setStatus({
+        kind: "ready",
+        points: res.count,
+        boxes: 0,
+        paths: 0,
+        roads: 0,
+      });
       publish({
         pointCount: res.count,
         trajectoryPathCount: 0,
+        roadFeatureCount: 0,
         frameTsNs: (res.tsNs ?? ts).toString(),
         spinIndex: idx,
         error: null,
@@ -363,6 +426,7 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
       pointCount: 0,
       boxCount: 0,
       trajectoryPathCount: 0,
+      roadFeatureCount: 0,
       frameTsNs: null,
       spinIndex: -1,
       error: null,
@@ -371,11 +435,17 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
     void (async () => {
       try {
         const st = useSession.getState();
-        const times = isTrajRef.current
-          ? await st.trajectoryFrameTimes(channelId)
-          : isBoxesRef.current
-            ? await st.boxFrameTimes(channelId)
-            : await st.lidarSpinTimes(channelId);
+        // Map geometry is static: `mapGeometryFrameTimes` resolves `[0]`, so the
+        // panel fetches the single frame once and never refetches on a cursor
+        // tick. Boxes/trajectories pull their per-frame timeline; clouds pull
+        // their spin timeline.
+        const times = isRoadRef.current
+          ? await st.mapGeometryFrameTimes(channelId)
+          : isTrajRef.current
+            ? await st.trajectoryFrameTimes(channelId)
+            : isBoxesRef.current
+              ? await st.boxFrameTimes(channelId)
+              : await st.lidarSpinTimes(channelId);
         if (aborted || channelIdRef.current !== channelId) return;
         frameTimesRef.current = times;
         await updateFrameRef.current();
@@ -409,10 +479,11 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
         <div className={styles.empty} data-testid="scene-empty">
           <p className={styles.title}>3D scene</p>
           <p className={styles.body}>
-            Bind a point-cloud, bounding-box, or trajectory channel from the
-            Panel drawer to render it here — a LiDAR cloud coloured by
-            intensity, labelled 3D boxes, or predicted ego trajectories —
-            stepping with the cursor.
+            Bind a point-cloud, bounding-box, trajectory, or map-geometry
+            channel from the Panel drawer to render it here — a LiDAR cloud
+            coloured by intensity, labelled 3D boxes, predicted ego
+            trajectories, or a road network coloured by feature type — stepping
+            with the cursor.
           </p>
         </div>
       </section>
@@ -454,11 +525,13 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
             data-testid="scene-loading"
             role="status"
           >
-            {isTraj
-              ? "Loading trajectories…"
-              : isBoxes
-                ? "Loading boxes…"
-                : "Loading point cloud…"}
+            {isRoad
+              ? "Loading map geometry…"
+              : isTraj
+                ? "Loading trajectories…"
+                : isBoxes
+                  ? "Loading boxes…"
+                  : "Loading point cloud…"}
           </div>
         )}
         {status.kind === "error" && (
@@ -479,11 +552,13 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
             data-testid="scene-no-frame"
             role="status"
           >
-            {isTraj
-              ? "No predicted trajectory at this time."
-              : isBoxes
-                ? "No labelled frame at this time."
-                : "No LiDAR spin at this time."}
+            {isRoad
+              ? "No map geometry to show."
+              : isTraj
+                ? "No predicted trajectory at this time."
+                : isBoxes
+                  ? "No labelled frame at this time."
+                  : "No LiDAR spin at this time."}
           </div>
         )}
 
@@ -500,7 +575,12 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
             {status.boxes.toLocaleString()} boxes
           </span>
         )}
-        {status.kind === "ready" && !isBoxes && !isTraj && (
+        {status.kind === "ready" && isRoad && (
+          <span className={styles.pointsPill} data-testid="scene-road-count">
+            {status.roads.toLocaleString()} features
+          </span>
+        )}
+        {status.kind === "ready" && !isBoxes && !isTraj && !isRoad && (
           <span className={styles.pointsPill} data-testid="scene-points-count">
             {status.points.toLocaleString()} pts
           </span>

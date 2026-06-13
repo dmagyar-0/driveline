@@ -45,6 +45,11 @@ import init, {
   trajectory_summary,
   trajectory_fetch_range,
   trajectory_frame_times,
+  open_map_geometry,
+  close_map_geometry,
+  map_geometry_summary,
+  map_geometry_fetch_range,
+  map_geometry_frame_times,
   open_ros1_bag,
   close_ros1_bag,
   ros1_bag_summary,
@@ -910,6 +915,69 @@ export const dataCoreApi = {
   async closeTrajectory(handle: number): Promise<void> {
     await ready;
     close_trajectory(handle);
+  },
+  /**
+   * Open a road-network map-geometry file — OpenDRIVE (`.xodr`) or the simple
+   * `drivelineMap` JSON. The reader auto-detects the format and decodes every
+   * polyline (lane boundaries, road edges, centerlines, …) into a single static
+   * frame. The wasm reader owns the decoded geometry for the source's lifetime,
+   * freed by `closeMapGeometry`. Accepting a `File` keeps the bytes on the
+   * worker side — no structured-clone copy across Comlink.
+   */
+  async openMapGeometry(file: File): Promise<number> {
+    await ready;
+    return open_map_geometry(new Uint8Array(await file.arrayBuffer()));
+  },
+  /**
+   * `SourceMeta` for an open map-geometry reader, in the MF4-style shape (single
+   * channel, `group` null, `sample_count` = polyline count), normalised so every
+   * `*_ns` field is a `bigint`. No `kind` on the wire — the store stamps
+   * `map_geometry`, exactly like lidar stamps `point_cloud`.
+   */
+  async mapGeometrySummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(map_geometry_summary(handle) as RawMf4Summary);
+  },
+  /**
+   * Arrow IPC for the road network. Map geometry is STATIC (one frame at ts=0),
+   * so the scene panel passes the single-frame window + `includePrev` to fetch
+   * it. Schema: `{ ts, points: List<f32>, path_lengths: List<i32>, types:
+   * List<Utf8> }`, one row.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async mapGeometryFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    const buf = map_geometry_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
+    return Comlink.transfer(buf, [buf.buffer]);
+  },
+  /**
+   * Frame timestamps (ns) for a map-geometry source. Map geometry is static, so
+   * this always returns `[0]`; the scene panel reads frame[0] and fetches the
+   * single frame once per binding (no per-cursor refetch).
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async mapGeometryFrameTimes(handle: number): Promise<BigInt64Array> {
+    await ready;
+    const times = map_geometry_frame_times(handle);
+    return Comlink.transfer(times, [times.buffer]);
+  },
+  async closeMapGeometry(handle: number): Promise<void> {
+    await ready;
+    close_map_geometry(handle);
   },
   async openMcapVideoStream(
     handle: number,

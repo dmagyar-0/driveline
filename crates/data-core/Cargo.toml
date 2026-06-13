@@ -16,6 +16,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 mp4 = "0.14"
+# OpenDRIVE (`.xodr`) XML parsing for the map-geometry reader. Pure Rust,
+# wasm-safe, no C deps; default features are fine.
+roxmltree = "0.20"
 # CSV ingestion for the tabular reader. Small, pure-Rust, default features ok.
 csv = "1"
 # Parquet ingestion for the tabular reader. `default-features = false` keeps

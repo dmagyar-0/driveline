@@ -17,7 +17,7 @@ use arrow_ipc::reader::FileReader;
 use arrow_schema::DataType;
 use data_core::reader::{ArrowIpc, Reader};
 use data_core::types::{ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange};
-use data_core::{McapReader, Mf4Reader, Ros1BagReader, Ros2Db3Reader};
+use data_core::{MapGeometryReader, McapReader, Mf4Reader, Ros1BagReader, Ros2Db3Reader};
 use serde_json::{json, Value};
 
 /// Enum dispatcher over the format readers. `McapReader`/`Mf4Reader`
@@ -28,6 +28,7 @@ pub enum LogReader {
     Mf4(Mf4Reader),
     Ros1(Ros1BagReader),
     Ros2(Ros2Db3Reader),
+    MapGeometry(MapGeometryReader),
 }
 
 impl LogReader {
@@ -37,6 +38,7 @@ impl LogReader {
             LogReader::Mf4(r) => r.meta(),
             LogReader::Ros1(r) => r.meta(),
             LogReader::Ros2(r) => r.meta(),
+            LogReader::MapGeometry(r) => r.meta(),
         }
     }
 
@@ -52,12 +54,14 @@ impl LogReader {
             LogReader::Mf4(r) => r.fetch_range(&id, range, opts),
             LogReader::Ros1(r) => r.fetch_range(&id, range, opts),
             LogReader::Ros2(r) => r.fetch_range(&id, range, opts),
+            LogReader::MapGeometry(r) => r.fetch_range(&id, range, opts),
         }
     }
 }
 
 /// Open `path` with the reader matching its extension.
-/// Supported: `.mcap`, `.mf4`, `.bag` (ROS1), `.db3` (ROS2).
+/// Supported: `.mcap`, `.mf4`, `.bag` (ROS1), `.db3` (ROS2), `.xodr` (OpenDRIVE
+/// map geometry).
 pub fn open_reader(path: &Path) -> Result<LogReader, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let ext = path
@@ -78,8 +82,11 @@ pub fn open_reader(path: &Path) -> Result<LogReader, String> {
         "db3" => Ok(LogReader::Ros2(
             Ros2Db3Reader::open(&bytes).map_err(|e| e.to_string())?,
         )),
+        "xodr" => Ok(LogReader::MapGeometry(
+            MapGeometryReader::open(&bytes).map_err(|e| e.to_string())?,
+        )),
         other => Err(format!(
-            "unsupported extension {other:?} (expected .mcap, .mf4, .bag or .db3)"
+            "unsupported extension {other:?} (expected .mcap, .mf4, .bag, .db3 or .xodr)"
         )),
     }
 }
@@ -95,6 +102,7 @@ fn kind_str(kind: ChannelKind) -> &'static str {
         ChannelKind::BoundingBox => "bounding_box",
         ChannelKind::CameraCalibration => "camera_calibration",
         ChannelKind::Trajectory => "trajectory",
+        ChannelKind::MapGeometry => "map_geometry",
     }
 }
 
@@ -111,6 +119,7 @@ fn source_kind_str(kind: SourceKind) -> &'static str {
         SourceKind::OpenLabel => "openlabel",
         SourceKind::Calibration => "calibration",
         SourceKind::Trajectory => "trajectory",
+        SourceKind::MapGeometry => "map_geometry",
     }
 }
 
@@ -394,6 +403,40 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.contains("unsupported extension"));
+        // The message now lists the .xodr map-geometry extension too.
+        assert!(err.contains(".xodr"), "message: {err}");
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn opens_opendrive_map_geometry() {
+        let xml = br#"<OpenDRIVE>
+          <header name="cli_map"/>
+          <road id="1" length="10"><planView>
+            <geometry s="0" x="0" y="0" hdg="0" length="10"><line/></geometry>
+          </planView>
+          <lanes><laneSection s="0">
+            <right><lane id="-1" type="driving"><width sOffset="0" a="3.5"/></lane></right>
+          </laneSection></lanes>
+          </road>
+        </OpenDRIVE>"#;
+        let path = temp_file("map.xodr", xml);
+        let reader = open_reader(&path).unwrap();
+        let info = source_info_json(&reader);
+        assert_eq!(info["kind"], "map_geometry");
+        let channels = info["channels"].as_array().unwrap();
+        assert_eq!(channels.len(), 1);
+        assert_eq!(channels[0]["kind"], "map_geometry");
+
+        // Fetch the single static frame and confirm it carries polyline rows.
+        let id = channels[0]["id"].as_str().unwrap();
+        let range = channel_range(&reader, id).unwrap();
+        let csv = fetch_csv(&reader, id, range, false).unwrap();
+        let header = csv.lines().next().unwrap();
+        assert!(header.contains("points"), "header: {header}");
+        assert!(header.contains("path_lengths"), "header: {header}");
+        assert!(header.contains("types"), "header: {header}");
+        assert!(csv.lines().count() > 1, "expected a data row");
         std::fs::remove_file(path).ok();
     }
 }

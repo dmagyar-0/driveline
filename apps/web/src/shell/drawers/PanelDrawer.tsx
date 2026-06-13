@@ -976,6 +976,7 @@ const SCENE_CHANNEL_KINDS: readonly ChannelKind[] = [
   "point_cloud",
   "bounding_box",
   "trajectory",
+  "map_geometry",
   "vector",
 ];
 

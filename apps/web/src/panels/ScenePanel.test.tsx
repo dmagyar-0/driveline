@@ -98,6 +98,30 @@ function fakeTrajectorySource(): { source: SourceMeta; channel: Channel } {
   return { source, channel };
 }
 
+function fakeMapGeometrySource(): { source: SourceMeta; channel: Channel } {
+  const channel: Channel = {
+    id: "mapsrc/road",
+    nativeId: "road",
+    sourceId: "mapsrc",
+    name: "road_network",
+    group: null,
+    kind: "map_geometry",
+    dtype: null,
+    unit: null,
+    sampleCount: 12,
+    timeRange: { startNs: 0n, endNs: 0n },
+  };
+  const source: SourceMeta = {
+    id: "mapsrc",
+    kind: "map_geometry",
+    name: "mapsrc",
+    handle: 0,
+    timeRange: { startNs: 0n, endNs: 0n },
+    channels: [channel],
+  };
+  return { source, channel };
+}
+
 describe("ScenePanel", () => {
   afterEach(async () => {
     cleanup();
@@ -132,6 +156,15 @@ describe("ScenePanel", () => {
     const { source } = fakeTrajectorySource();
     useSession.setState({ sources: [source], channels: source.channels });
     useSession.getState().setSceneBinding("scene-1", "trajsrc/ego");
+    render(<ScenePanel panelId="scene-1" />);
+    expect(screen.getByTestId("scene-canvas-host")).toBeTruthy();
+    expect(screen.queryByTestId("scene-empty")).toBeNull();
+  });
+
+  it("renders the canvas host once a map-geometry channel is bound", () => {
+    const { source } = fakeMapGeometrySource();
+    useSession.setState({ sources: [source], channels: source.channels });
+    useSession.getState().setSceneBinding("scene-1", "mapsrc/road");
     render(<ScenePanel panelId="scene-1" />);
     expect(screen.getByTestId("scene-canvas-host")).toBeTruthy();
     expect(screen.queryByTestId("scene-empty")).toBeNull();

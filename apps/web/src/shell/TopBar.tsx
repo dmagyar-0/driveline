@@ -34,6 +34,8 @@ function kindLabel(k: SourceKind): string {
       return "TABLE";
     case "lidar":
       return "LIDAR";
+    case "map_geometry":
+      return "MAP";
     default:
       return "MP4+TS";
   }

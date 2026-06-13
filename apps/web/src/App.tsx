@@ -177,6 +177,7 @@ declare global {
         pointCount: number;
         boxCount: number;
         trajectoryPathCount: number;
+        roadFeatureCount: number;
         frameTsNs: string | null;
         spinIndex: number;
         spinCount: number;
@@ -249,6 +250,7 @@ declare global {
           | "openlabel"
           | "calibration"
           | "trajectory"
+          | "map_geometry"
           | "ros1"
           | "ros2db3"
           | "inline";

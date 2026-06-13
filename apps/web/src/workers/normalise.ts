@@ -19,7 +19,8 @@ export type ChannelKindWire =
   | "point_cloud"
   | "bounding_box"
   | "camera_calibration"
-  | "trajectory";
+  | "trajectory"
+  | "map_geometry";
 
 export interface Mf4ChannelInfo {
   id: string;

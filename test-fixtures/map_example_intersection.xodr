@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OpenDRIVE>
+  <header revMajor="1" revMinor="6" name="example_intersection" version="1.00"/>
+
+  <!-- West approach: straight road heading east into the junction. -->
+  <road name="west_approach" length="40.0" id="1" junction="-1">
+    <planView>
+      <geometry s="0.0" x="-60.0" y="0.0" hdg="0.0" length="40.0">
+        <line/>
+      </geometry>
+    </planView>
+    <elevationProfile>
+      <elevation s="0.0" a="0.0" b="0.0" c="0.0" d="0.0"/>
+    </elevationProfile>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </left>
+        <center><lane id="0" type="none"/></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+          <lane id="-2" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+
+  <!-- East exit: straight road heading east away from the junction. -->
+  <road name="east_exit" length="40.0" id="2" junction="-1">
+    <planView>
+      <geometry s="0.0" x="20.0" y="0.0" hdg="0.0" length="40.0">
+        <line/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </left>
+        <center><lane id="0" type="none"/></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+
+  <!-- North arm: straight road heading north out of the junction. -->
+  <road name="north_arm" length="40.0" id="3" junction="-1">
+    <planView>
+      <geometry s="0.0" x="0.0" y="20.0" hdg="1.5707963" length="40.0">
+        <line/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </left>
+        <center><lane id="0" type="none"/></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+
+  <!-- Sweeping right-turn connector: spiral into an arc into a spiral. -->
+  <road name="turn_connector" length="34.0" id="4" junction="100">
+    <planView>
+      <geometry s="0.0" x="-20.0" y="0.0" hdg="0.0" length="8.0">
+        <spiral curvStart="0.0" curvEnd="0.08"/>
+      </geometry>
+      <geometry s="8.0" x="-12.3" y="0.6" hdg="0.32" length="18.0">
+        <arc curvature="0.08"/>
+      </geometry>
+      <geometry s="26.0" x="-1.0" y="14.0" hdg="1.25" length="8.0">
+        <spiral curvStart="0.08" curvEnd="0.0"/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <center><lane id="0" type="none"/></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+
+  <!-- Curved S-bend modelled with a parametric cubic, just to exercise it. -->
+  <road name="curved_sbend" length="30.0" id="5" junction="-1">
+    <planView>
+      <geometry s="0.0" x="20.0" y="-30.0" hdg="0.0" length="30.0">
+        <paramPoly3 aU="0.0" bU="30.0" cU="0.0" dU="0.0"
+                    aV="0.0" bV="0.0" cV="0.12" dV="-0.008" pRange="normalized"/>
+      </geometry>
+    </planView>
+    <lanes>
+      <laneSection s="0.0">
+        <left>
+          <lane id="1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </left>
+        <center><lane id="0" type="none"/></center>
+        <right>
+          <lane id="-1" type="driving"><width sOffset="0.0" a="3.5"/></lane>
+        </right>
+      </laneSection>
+    </lanes>
+  </road>
+</OpenDRIVE>

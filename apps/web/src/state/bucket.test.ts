@@ -3,6 +3,7 @@ import {
   bucketFiles,
   classifyUrl,
   sniffCalibrationBytes,
+  sniffDrivelineMapBytes,
   urlBasename,
 } from "./bucket";
 
@@ -38,6 +39,21 @@ describe("bucketFiles", () => {
     expect(r.mp4Pairs).toHaveLength(0);
     expect(r.videoNeedsTimestamps.map((x) => x.name)).toEqual(["drive.mp4"]);
     expect(r.errors).toHaveLength(0);
+  });
+
+  it("routes an OpenDRIVE .xodr into the mapGeometry bucket", () => {
+    const r = bucketFiles([f("intersection.xodr")]);
+    expect(r.mapGeometry.map((x) => x.name)).toEqual(["intersection.xodr"]);
+    expect(r.unknown).toHaveLength(0);
+    expect(r.errors).toHaveLength(0);
+  });
+
+  it("leaves a drivelineMap .json in unknown for the openFiles sniff", () => {
+    // `bucketFiles` is synchronous and can't read bytes, so the `.json`
+    // case is resolved later in `openFiles` via `sniffDrivelineMap`.
+    const r = bucketFiles([f("map.json")]);
+    expect(r.mapGeometry).toHaveLength(0);
+    expect(r.unknown.map((x) => x.name)).toEqual(["map.json"]);
   });
 
   it("reports an orphan sidecar as an error", () => {
@@ -193,6 +209,25 @@ describe("sniffCalibrationBytes", () => {
   });
   it("rejects an unrelated JSON", () => {
     expect(sniffCalibrationBytes(bytes('{ "foo": 1 }'))).toBe(false);
+  });
+});
+
+describe("sniffDrivelineMapBytes", () => {
+  it("matches a top-level drivelineMap key", () => {
+    expect(
+      sniffDrivelineMapBytes(
+        bytes('{ "drivelineMap": { "version": 1, "features": [] } }'),
+      ),
+    ).toBe(true);
+  });
+  it("rejects an OpenLABEL JSON", () => {
+    expect(sniffDrivelineMapBytes(bytes('{ "openlabel": { } }'))).toBe(false);
+  });
+  it("rejects a trajectory JSON", () => {
+    expect(sniffDrivelineMapBytes(bytes('{ "trajectory": { } }'))).toBe(false);
+  });
+  it("rejects an unrelated JSON", () => {
+    expect(sniffDrivelineMapBytes(bytes('{ "foo": 1 }'))).toBe(false);
   });
 });
 

@@ -51,6 +51,12 @@ pub enum ChannelKind {
     /// confidence per path), fetched one frame at a time by the 3D scene panel.
     /// See `trajectory.rs` for the Arrow schema.
     Trajectory,
+    /// A road-network "map": a single static frame of typed polylines (lane
+    /// boundaries, road edges, centerlines, crosswalks, stop lines), sourced
+    /// from an OpenDRIVE `.xodr` file or the simple `drivelineMap` JSON format.
+    /// Rendered as lines in the 3D scene panel. See `map_geometry.rs` for the
+    /// Arrow schema.
+    MapGeometry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +125,10 @@ pub enum SourceKind {
     /// A Driveline `*.trajectory.json` file of per-frame predicted ego future
     /// trajectories (candidate waypoint polylines). See `TrajectoryReader`.
     Trajectory,
+    /// A road-network map (OpenDRIVE `.xodr` or the simple `drivelineMap` JSON
+    /// format) surfaced as a single static frame of typed polylines. See
+    /// `MapGeometryReader`.
+    MapGeometry,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
