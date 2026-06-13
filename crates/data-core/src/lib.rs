@@ -4,6 +4,7 @@
 //! on top of `mf4-rs`, `McapReader` on top of the `mcap` crate, and
 //! `Mp4SidecarReader` for mp4 + `.mp4.timestamps` sidecar pairs.
 
+pub mod calibration;
 pub mod fixtures;
 pub mod mcap;
 pub mod mf4;
@@ -21,6 +22,7 @@ pub mod sqlite;
 pub mod tabular;
 pub mod types;
 
+pub use calibration::CalibrationReader;
 pub use mcap::{McapReader, McapVideoCursor};
 pub use mf4::{BoxedRangeReader, Mf4Reader};
 // Re-exported so out-of-crate callers (e.g. `wasm-bindings`) can implement a
@@ -119,6 +121,9 @@ pub enum Error {
 
     #[error("failed to parse OpenLABEL JSON: {0}")]
     OpenLabelParse(String),
+
+    #[error("failed to parse calibration JSON: {0}")]
+    CalibrationParse(String),
 
     #[error("ros1 bag error: {0}")]
     Ros1Bag(String),

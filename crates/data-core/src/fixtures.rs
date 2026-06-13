@@ -5,7 +5,7 @@
 //!
 //! Using a shared generator prevents Rust ↔ JS schema drift.
 
-use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
+use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -106,6 +106,83 @@ pub fn arrow_bounding_box_ipc() -> crate::Result<Vec<u8>> {
             Arc::new(sizes),
             Arc::new(rotations),
             Arc::new(labels),
+        ],
+    )?;
+
+    let mut buf = Vec::new();
+    {
+        let mut w = FileWriter::try_new(&mut buf, &schema)?;
+        w.write(&batch)?;
+        w.finish()?;
+    }
+    Ok(buf)
+}
+
+/// Schema: `{ name: Utf8, intrinsics: List<Float32>, resolution: List<Int32>,
+/// distortion: List<Float32>, translation: List<Float32>, quaternion:
+/// List<Float32> }` — one row (camera). Mirrors `CalibrationReader::fetch_range`.
+/// Bit-identical to `test-fixtures/arrow_calibration.ipc`; consumed by the Rust
+/// contract test and the JS vitest suite via `apache-arrow`.
+///
+/// The single camera is the `CAM_FRONT` example from
+/// `docs/13-camera-lidar-calibration.md`: nuScenes-style intrinsics
+/// `[1266.4, 1266.4, 816.3, 491.5]`, resolution `[1600, 900]`, zero distortion
+/// `[0,0,0,0,0]`, zero translation, and the scalar-last extrinsic quaternion
+/// `[-0.5, 0.5, -0.5, 0.5]`.
+pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
+    let f32_item = || Arc::new(Field::new("item", DataType::Float32, true));
+    let i32_item = Arc::new(Field::new("item", DataType::Int32, true));
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("name", DataType::Utf8, false),
+        Field::new("intrinsics", DataType::List(f32_item()), false),
+        Field::new("resolution", DataType::List(i32_item), false),
+        Field::new("distortion", DataType::List(f32_item()), false),
+        Field::new("translation", DataType::List(f32_item()), false),
+        Field::new("quaternion", DataType::List(f32_item()), false),
+    ]));
+
+    let mut name_b = StringBuilder::new();
+    name_b.append_value("CAM_FRONT");
+    let name = name_b.finish();
+
+    let mut intrinsics_b = ListBuilder::new(Float32Builder::new());
+    intrinsics_b
+        .values()
+        .append_slice(&[1266.4, 1266.4, 816.3, 491.5]);
+    intrinsics_b.append(true);
+    let intrinsics = intrinsics_b.finish();
+
+    let mut resolution_b = ListBuilder::new(Int32Builder::new());
+    resolution_b.values().append_slice(&[1600, 900]);
+    resolution_b.append(true);
+    let resolution = resolution_b.finish();
+
+    let mut distortion_b = ListBuilder::new(Float32Builder::new());
+    distortion_b
+        .values()
+        .append_slice(&[0.0, 0.0, 0.0, 0.0, 0.0]);
+    distortion_b.append(true);
+    let distortion = distortion_b.finish();
+
+    let mut translation_b = ListBuilder::new(Float32Builder::new());
+    translation_b.values().append_slice(&[0.0, 0.0, 0.0]);
+    translation_b.append(true);
+    let translation = translation_b.finish();
+
+    let mut quaternion_b = ListBuilder::new(Float32Builder::new());
+    quaternion_b.values().append_slice(&[-0.5, 0.5, -0.5, 0.5]);
+    quaternion_b.append(true);
+    let quaternion = quaternion_b.finish();
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(name),
+            Arc::new(intrinsics),
+            Arc::new(resolution),
+            Arc::new(distortion),
+            Arc::new(translation),
+            Arc::new(quaternion),
         ],
     )?;
 
