@@ -74,6 +74,30 @@ function fakeBoundingBoxSource(): { source: SourceMeta; channel: Channel } {
   return { source, channel };
 }
 
+function fakeTrajectorySource(): { source: SourceMeta; channel: Channel } {
+  const channel: Channel = {
+    id: "trajsrc/ego",
+    nativeId: "ego",
+    sourceId: "trajsrc",
+    name: "ego_trajectory",
+    group: null,
+    kind: "trajectory",
+    dtype: null,
+    unit: null,
+    sampleCount: 3,
+    timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+  };
+  const source: SourceMeta = {
+    id: "trajsrc",
+    kind: "trajectory",
+    name: "trajsrc",
+    handle: 0,
+    timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+    channels: [channel],
+  };
+  return { source, channel };
+}
+
 describe("ScenePanel", () => {
   afterEach(async () => {
     cleanup();
@@ -99,6 +123,15 @@ describe("ScenePanel", () => {
     const { source } = fakeBoundingBoxSource();
     useSession.setState({ sources: [source], channels: source.channels });
     useSession.getState().setSceneBinding("scene-1", "boxsrc/boxes");
+    render(<ScenePanel panelId="scene-1" />);
+    expect(screen.getByTestId("scene-canvas-host")).toBeTruthy();
+    expect(screen.queryByTestId("scene-empty")).toBeNull();
+  });
+
+  it("renders the canvas host once a trajectory channel is bound", () => {
+    const { source } = fakeTrajectorySource();
+    useSession.setState({ sources: [source], channels: source.channels });
+    useSession.getState().setSceneBinding("scene-1", "trajsrc/ego");
     render(<ScenePanel panelId="scene-1" />);
     expect(screen.getByTestId("scene-canvas-host")).toBeTruthy();
     expect(screen.queryByTestId("scene-empty")).toBeNull();

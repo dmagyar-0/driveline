@@ -12,6 +12,7 @@ use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
     McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, OpenLabelReader, PointCloudReader,
     Reader, RecipeReader, Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
+    TrajectoryReader,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -67,6 +68,7 @@ thread_local! {
     static TABULAR_READERS: RefCell<Slab<TabularReader>> = const { RefCell::new(Slab::new()) };
     static LIDAR_READERS: RefCell<Slab<PointCloudReader>> = const { RefCell::new(Slab::new()) };
     static OPENLABEL_READERS: RefCell<Slab<OpenLabelReader>> = const { RefCell::new(Slab::new()) };
+    static TRAJECTORY_READERS: RefCell<Slab<TrajectoryReader>> = const { RefCell::new(Slab::new()) };
     static ROS1_BAG_READERS: RefCell<Slab<Ros1BagReader>> = const { RefCell::new(Slab::new()) };
     static ROS2_DB3_READERS: RefCell<Slab<Ros2Db3Reader>> = const { RefCell::new(Slab::new()) };
     static RECIPE_READERS: RefCell<Slab<RecipeReader>> = const { RefCell::new(Slab::new()) };
@@ -317,6 +319,7 @@ fn channel_kind_str(k: ChannelKind) -> &'static str {
         ChannelKind::Bytes => "bytes",
         ChannelKind::PointCloud => "point_cloud",
         ChannelKind::BoundingBox => "bounding_box",
+        ChannelKind::Trajectory => "trajectory",
     }
 }
 
@@ -1164,6 +1167,122 @@ pub fn openlabel_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsErr
         let reader = slab
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
+        let ts = reader.frame_times();
+        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
+        arr.copy_from(ts);
+        Ok(arr)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Trajectory (predicted ego future trajectories — Alpamayo-style polylines)
+// ---------------------------------------------------------------------------
+
+/// Open a Driveline `*.trajectory.json` file of per-frame predicted ego future
+/// trajectories and register the resulting `TrajectoryReader` in the
+/// thread-local slab. Returns the integer handle the other `trajectory_*`
+/// endpoints take. The source surfaces one `trajectory` channel (one frame's
+/// worth of candidate waypoint polylines per sample).
+///
+/// Takes the buffer **by value**: `open_owned` parses it directly without a
+/// second copy.
+#[wasm_bindgen]
+pub fn open_trajectory(bytes: Vec<u8>) -> Result<u32, JsError> {
+    let reader = TrajectoryReader::open_owned(bytes)
+        .map_err(|e| JsError::new(&format!("open trajectory failed: {e}")))?;
+    let key = TRAJECTORY_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the trajectory reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_trajectory(handle: u32) {
+    TRAJECTORY_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the trajectory reader's `SourceMeta` as a plain JS object. A
+/// trajectory source surfaces exactly one `trajectory` channel; the shape
+/// reuses the MF4/lidar summary layout (`group` always null, `sample_count` =
+/// peak paths-per-frame). 64-bit numbers serialise as `BigInt`.
+#[wasm_bindgen]
+pub fn trajectory_summary(handle: u32) -> Result<JsValue, JsError> {
+    TRAJECTORY_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
+        let meta = reader.meta();
+        let summary = Mf4Summary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| ChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    unit: c.unit.clone(),
+                    group: None,
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
+/// trajectory channel. The 3D scene panel passes a zero/one-width window plus
+/// `include_prev` to fetch exactly the frame active at the cursor. The emitted
+/// schema is `{ ts: Timestamp(ns), points: List<Float32>, path_lengths:
+/// List<Int32>, confidences: List<Float32> }` (one row per frame) — see
+/// `trajectory.rs`.
+#[wasm_bindgen]
+pub fn trajectory_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    TRAJECTORY_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
+    })
+}
+
+/// Ascending frame timestamps (ns) of a trajectory source, as a
+/// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
+/// locally to map the cursor to a frame index, so it only refetches trajectory
+/// data when the active frame changes (not once per cursor tick).
+#[wasm_bindgen]
+pub fn trajectory_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
+    TRAJECTORY_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
         let ts = reader.frame_times();
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
         arr.copy_from(ts);

@@ -19,6 +19,7 @@ import {
   bucketFiles,
   classifyUrl,
   sniffOpenlabel,
+  sniffTrajectory,
   type BucketError,
   type TabularFormat,
 } from "./bucket";
@@ -91,6 +92,7 @@ export type SourceKind =
   | "recipe"
   | "lidar"
   | "openlabel"
+  | "trajectory"
   | "ros1"
   | "ros2db3"
   // JS-only: agent-pushed columnar data held on the main thread (no Rust
@@ -1006,6 +1008,14 @@ export interface SessionState {
    * non-OpenLABEL channels.
    */
   boxFrameTimes(channelId: string): Promise<BigInt64Array>;
+  /**
+   * Ascending frame timestamps (ns) for a trajectory channel — one per frame
+   * of predicted ego future trajectories. The 3D scene panel binary-searches
+   * this locally to map the cursor to a frame index, so it only refetches
+   * trajectory geometry when the active frame changes (not once per cursor
+   * tick). Throws for non-trajectory channels.
+   */
+  trajectoryFrameTimes(channelId: string): Promise<BigInt64Array>;
 }
 
 export const MIN_SPEED = 0.25;
@@ -1164,6 +1174,25 @@ function openLabelChannels(sourceId: string, s: Mf4Summary): Channel[] {
     name: c.name,
     group: null,
     kind: "bounding_box" as const,
+    dtype: null,
+    unit: null,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
+// Trajectory summaries arrive in the same MF4 shape as LiDAR/OpenLABEL (a
+// single channel, `sample_count` = peak paths/frame). Mirrors
+// `openLabelChannels` but hardcodes the `trajectory` kind so the
+// ScenePanel/PanelDrawer route it to the 3D scene pipeline as predicted
+// polylines.
+function trajectoryChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: null,
+    kind: "trajectory" as const,
     dtype: null,
     unit: null,
     sampleCount: c.sample_count,
@@ -2385,6 +2414,19 @@ export const useSession = create<SessionState>((set, get) => {
               includePrev,
             );
           }
+          if (source.kind === "trajectory") {
+            // Trajectory frames carry a multi-column List<Float32>/List<Int32>
+            // geometry schema, not the scalar `{ts,value}` shape
+            // `shiftRangeArrowTs` rewrites — and trajectory sources never carry
+            // a time offset (always 0n), so pass the bytes through unmodified.
+            return worker.trajectoryFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+          }
           throw new Error(`channel kind not plottable: ${source.kind}`);
         } finally {
           mark(perfEnd);
@@ -2436,6 +2478,19 @@ export const useSession = create<SessionState>((set, get) => {
       return worker.openlabelFrameTimes(source.handle);
     },
 
+    async trajectoryFrameTimes(channelId) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === channelId);
+      if (!channel) throw new Error(`unknown channel: ${channelId}`);
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      if (source.kind !== "trajectory") {
+        throw new Error(`not a trajectory channel: ${channelId}`);
+      }
+      return worker.trajectoryFrameTimes(source.handle);
+    },
+
     async openFiles(files) {
       const run = (): Promise<OpenResult> =>
         timed("open", async () => {
@@ -2451,11 +2506,13 @@ export const useSession = create<SessionState>((set, get) => {
           {
             const stillUnknown: File[] = [];
             for (const f of buckets.unknown) {
-              if (
-                f.name.toLowerCase().endsWith(".json") &&
-                (await sniffOpenlabel(f))
-              ) {
+              const isJson = f.name.toLowerCase().endsWith(".json");
+              if (isJson && (await sniffOpenlabel(f))) {
                 buckets.openlabel.push(f);
+              } else if (isJson && (await sniffTrajectory(f))) {
+                // Predicted ego trajectory `.json` (top-level `"trajectory"`
+                // key) — route into the 3D scene pipeline as polylines.
+                buckets.trajectory.push(f);
               } else {
                 stillUnknown.push(f);
               }
@@ -2615,6 +2672,35 @@ export const useSession = create<SessionState>((set, get) => {
                 channels,
                 // Annotations carry no time offset; alignment lives in the frame
                 // timestamps and the fetch path passes bytes through unshifted.
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
+          }
+
+          for (const f of buckets.trajectory) {
+            try {
+              // Trajectory sources open eagerly: the JSON is decoded into
+              // per-frame polyline buffers in wasm. Pass the `File` directly so
+              // no full-file clone crosses the Comlink boundary. Surfaces as a
+              // single `kind: "trajectory"` source with one `trajectory`
+              // channel, routed to the 3D scene pipeline as predicted polylines.
+              const handle = await w.openTrajectory(f);
+              const summary = await w.trajectorySummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = trajectoryChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "trajectory",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                // Predicted trajectories carry no time offset; alignment lives
+                // in the frame timestamps and the fetch path passes bytes
+                // through unshifted.
                 timeOffsetNs: 0n,
               });
               opened.push(f.name);
@@ -3231,6 +3317,7 @@ export const useSession = create<SessionState>((set, get) => {
             else if (s.kind === "recipe") await w.closeRecipe(s.handle);
             else if (s.kind === "lidar") await w.closeLidar(s.handle);
             else if (s.kind === "openlabel") await w.closeOpenlabel(s.handle);
+            else if (s.kind === "trajectory") await w.closeTrajectory(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
@@ -3316,6 +3403,8 @@ export const useSession = create<SessionState>((set, get) => {
             else if (src.kind === "lidar") await w.closeLidar(src.handle);
             else if (src.kind === "openlabel")
               await w.closeOpenlabel(src.handle);
+            else if (src.kind === "trajectory")
+              await w.closeTrajectory(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source

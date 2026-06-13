@@ -38,6 +38,12 @@ pub enum ChannelKind {
     /// (centers/sizes/rotations/labels), fetched one frame at a time by the 3D
     /// scene panel. See `openlabel.rs` for the Arrow schema.
     BoundingBox,
+    /// A per-frame predicted ego future trajectory (Alpamayo-style), sourced
+    /// from a Driveline `*.trajectory.json` file. Each "sample" is a whole
+    /// frame's worth of one-or-more candidate waypoint polylines (with a
+    /// confidence per path), fetched one frame at a time by the 3D scene panel.
+    /// See `trajectory.rs` for the Arrow schema.
+    Trajectory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +105,9 @@ pub enum SourceKind {
     /// An ASAM OpenLABEL JSON file of 3D cuboid annotations. See
     /// `OpenLabelReader`.
     OpenLabel,
+    /// A Driveline `*.trajectory.json` file of per-frame predicted ego future
+    /// trajectories (candidate waypoint polylines). See `TrajectoryReader`.
+    Trajectory,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

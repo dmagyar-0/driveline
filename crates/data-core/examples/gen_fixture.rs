@@ -1,8 +1,9 @@
 //! One-shot generator for the committed Arrow IPC contract fixtures.
 //! Run with: `cargo run -p data-core --example gen_fixture`
 //!
-//! Writes `test-fixtures/arrow_scalar.ipc` and
-//! `test-fixtures/arrow_bounding_box.ipc`. Pass a single path argument to
+//! Writes `test-fixtures/arrow_scalar.ipc`,
+//! `test-fixtures/arrow_bounding_box.ipc`, and
+//! `test-fixtures/arrow_trajectory.ipc`. Pass a single path argument to
 //! override the scalar fixture's destination (legacy behaviour).
 
 use std::io::Write;
@@ -22,4 +23,7 @@ fn main() {
 
     let bbox = data_core::fixtures::arrow_bounding_box_ipc().expect("generate bounding_box");
     write_fixture(&bbox, "test-fixtures/arrow_bounding_box.ipc");
+
+    let traj = data_core::fixtures::arrow_trajectory_ipc().expect("generate trajectory");
+    write_fixture(&traj, "test-fixtures/arrow_trajectory.ipc");
 }
