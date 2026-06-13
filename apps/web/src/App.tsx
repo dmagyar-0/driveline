@@ -19,6 +19,7 @@ import type { VideoHudSnapshot } from "./panels/VideoPanel";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { getReadinessSnapshot } from "./panels/videoReadiness";
 import { getSceneFrameInfo } from "./panels/sceneDevState";
+import { getVideoOverlayInfo } from "./panels/videoOverlayDevState";
 import { hasChannelDrag } from "./panels/channelDrag";
 import { isCursorGated, startPlaybackLoop } from "./timeline/playback";
 import { Transport } from "./timeline/Transport";
@@ -182,6 +183,27 @@ declare global {
         glOk: boolean;
         error: string | null;
       } | null;
+      // Point-cloud-on-video overlay (docs/13) — read what the overlay is
+      // projecting onto a video panel (enabled bit, bound camera, spin ts,
+      // point + projected-visible counts) so specs can assert the dots land
+      // without scraping the canvas. `spinTsNs` is a decimal STRING.
+      getVideoOverlaySync: (panelId: string) => {
+        enabled: boolean;
+        cameraName: string | null;
+        spinTsNs: string | null;
+        pointCount: number;
+        projectedVisibleCount: number;
+      };
+      // Set/clear a video panel's overlay binding from e2e (mirrors
+      // `setVideoChannelBinding`). `null` clears.
+      setVideoOverlayBinding: (
+        panelId: string,
+        binding: {
+          calibrationChannelId: string;
+          cameraName: string;
+          pointcloudChannelId: string;
+        } | null,
+      ) => void;
       // T6.3 — per-series min/max stats over the most recent render for
       // `signalAlignment.spec.ts`.
       getPlotPanelSeriesStats: (panelId: string) => Array<{
@@ -225,6 +247,7 @@ declare global {
           | "recipe"
           | "lidar"
           | "openlabel"
+          | "calibration"
           | "trajectory"
           | "ros1"
           | "ros2db3"
@@ -604,6 +627,9 @@ export function App() {
           }));
         },
         getScenePanelSync: (panelId) => getSceneFrameInfo(panelId),
+        getVideoOverlaySync: (panelId) => getVideoOverlayInfo(panelId),
+        setVideoOverlayBinding: (panelId, binding) =>
+          useSession.getState().setPointCloudOverlay(panelId, binding),
         listChannels: () =>
           useSession.getState().channels.map((c) => ({
             id: c.id,

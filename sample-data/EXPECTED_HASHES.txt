@@ -8,3 +8,16 @@
 # upstream resharding cannot silently invalidate the e2e expectations
 # in apps/e2e/tests/realworld-comma2k19.spec.ts.
 5f40cd21c6376543365514ef1e36d44cb1198444e597d481bef6aa0916a0957e  comma2k19_demo.parquet
+
+# calib fixture (sample-data/generate_calib_scene.py)
+200147e6814810872f3d7da9f93324cf741b365117f3a38c09f4ecc43c675c37  calib/scene.lidar.parquet
+5079eb0f796167c4b221af7cf26802e8f3cfe8925d2e8d5bd6eab1f757a99493  calib/scene_cam_front.mp4
+d69f8b4d8fe56d99ce1978cec7f8253c68c9495c38bb166187a8d5c161988cfd  calib/scene_cam_front.mp4.timestamps
+6938d4e692e202626a767a81c3f89e05cc9932e66b87410c00367d6d48ca8d92  calib/scene.calib.json
+
+# SHA256 of https://www.nuscenes.org/data/v1.0-mini.tgz (4 167 696 325 bytes).
+# nuScenes v1.0-mini (Motional, CC BY-NC-SA 4.0 — non-commercial).
+# scripts/convert_nuscenes_to_driveline.py verifies this hash on read so an
+# upstream re-publish cannot silently change the LIDAR_TOP -> CAM_FRONT
+# calibration the point-cloud-on-camera demo is built against.
+943037abbb3b26b3070dc76504a43eb440503b00baf9ac2f1538d9c03fc9298f  v1.0-mini.tgz

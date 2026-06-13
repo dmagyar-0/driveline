@@ -36,6 +36,10 @@ import init, {
   openlabel_summary,
   openlabel_fetch_range,
   openlabel_frame_times,
+  open_calibration,
+  close_calibration,
+  calibration_summary,
+  calibration_fetch_range,
   open_trajectory,
   close_trajectory,
   trajectory_summary,
@@ -804,6 +808,46 @@ export const dataCoreApi = {
   async closeOpenlabel(handle: number): Promise<void> {
     await ready;
     close_openlabel(handle);
+  },
+  /**
+   * Open a `driveline.calibration/v1` JSON (camera ↔ LiDAR calibration). The
+   * wasm reader validates the schema marker and owns the decoded cameras for
+   * the source's lifetime, freed by `closeCalibration`. Accepting a `File`
+   * keeps the bytes on the worker side — no structured-clone copy across
+   * Comlink.
+   */
+  async openCalibration(file: File): Promise<number> {
+    await ready;
+    return open_calibration(new Uint8Array(await file.arrayBuffer()));
+  },
+  /**
+   * `SourceMeta` for an open calibration reader, in the MF4-style shape (single
+   * `camera_calibration` channel, `group` null, `sample_count` = camera count),
+   * normalised so every `*_ns` field is a `bigint`.
+   */
+  async calibrationSummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(calibration_summary(handle) as RawMf4Summary);
+  },
+  /**
+   * Arrow IPC for the calibration channel. Calibration is config, not a time
+   * series: there is no range — every camera is returned, one row each. Schema:
+   * `{ name: Utf8, intrinsics: List<f32>, resolution: List<i32>, distortion:
+   * List<f32>, translation: List<f32>, quaternion: List<f32> }`.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async calibrationFetch(
+    handle: number,
+    channelId: string,
+  ): Promise<Uint8Array> {
+    await ready;
+    const buf = calibration_fetch_range(handle, channelId);
+    return Comlink.transfer(buf, [buf.buffer]);
+  },
+  async closeCalibration(handle: number): Promise<void> {
+    await ready;
+    close_calibration(handle);
   },
   /**
    * Open a Driveline `*.trajectory.json` (one row per frame of predicted ego

@@ -38,6 +38,13 @@ pub enum ChannelKind {
     /// (centers/sizes/rotations/labels), fetched one frame at a time by the 3D
     /// scene panel. See `openlabel.rs` for the Arrow schema.
     BoundingBox,
+    /// Camera calibration tying a 2D camera (a `Video` channel) to the 3D
+    /// scene/LiDAR frame: a pinhole intrinsic plus a translation+quaternion
+    /// extrinsic. This is **config, not a time series** — one fetch returns all
+    /// cameras (one row per camera), and the range is ignored. Sourced from a
+    /// `driveline.calibration/v1` JSON file. See `calibration.rs` for the Arrow
+    /// schema and `docs/13-camera-lidar-calibration.md` for the contract.
+    CameraCalibration,
     /// A per-frame predicted ego future trajectory (Alpamayo-style), sourced
     /// from a Driveline `*.trajectory.json` file. Each "sample" is a whole
     /// frame's worth of one-or-more candidate waypoint polylines (with a
@@ -105,6 +112,10 @@ pub enum SourceKind {
     /// An ASAM OpenLABEL JSON file of 3D cuboid annotations. See
     /// `OpenLabelReader`.
     OpenLabel,
+    /// A `driveline.calibration/v1` JSON file describing one or more camera
+    /// calibrations (intrinsic + scene/LiDAR→camera extrinsic). See
+    /// `CalibrationReader`.
+    Calibration,
     /// A Driveline `*.trajectory.json` file of per-frame predicted ego future
     /// trajectories (candidate waypoint polylines). See `TrajectoryReader`.
     Trajectory,

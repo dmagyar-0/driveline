@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { bucketFiles, classifyUrl, urlBasename } from "./bucket";
+import {
+  bucketFiles,
+  classifyUrl,
+  sniffCalibrationBytes,
+  urlBasename,
+} from "./bucket";
+
+function bytes(s: string): Uint8Array {
+  return new TextEncoder().encode(s);
+}
 
 function f(name: string): File {
   return new File([new Uint8Array(0)], name);
@@ -168,6 +177,22 @@ describe("bucketFiles", () => {
 
   it("always returns a videoNeedsTimestamps array even when none are dropped", () => {
     expect(bucketFiles([f("a.mcap")]).videoNeedsTimestamps).toEqual([]);
+  });
+});
+
+describe("sniffCalibrationBytes", () => {
+  it("matches the driveline.calibration/v1 schema marker", () => {
+    expect(
+      sniffCalibrationBytes(
+        bytes('{ "schema": "driveline.calibration/v1", "cameras": [] }'),
+      ),
+    ).toBe(true);
+  });
+  it("rejects an OpenLABEL JSON", () => {
+    expect(sniffCalibrationBytes(bytes('{ "openlabel": { } }'))).toBe(false);
+  });
+  it("rejects an unrelated JSON", () => {
+    expect(sniffCalibrationBytes(bytes('{ "foo": 1 }'))).toBe(false);
   });
 });
 

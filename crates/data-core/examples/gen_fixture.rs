@@ -3,6 +3,7 @@
 //!
 //! Writes `test-fixtures/arrow_scalar.ipc`,
 //! `test-fixtures/arrow_bounding_box.ipc`, and
+//! `test-fixtures/arrow_calibration.ipc`, and
 //! `test-fixtures/arrow_trajectory.ipc`. Pass a single path argument to
 //! override the scalar fixture's destination (legacy behaviour).
 
@@ -23,6 +24,9 @@ fn main() {
 
     let bbox = data_core::fixtures::arrow_bounding_box_ipc().expect("generate bounding_box");
     write_fixture(&bbox, "test-fixtures/arrow_bounding_box.ipc");
+
+    let calib = data_core::fixtures::arrow_calibration_ipc().expect("generate calibration");
+    write_fixture(&calib, "test-fixtures/arrow_calibration.ipc");
 
     let traj = data_core::fixtures::arrow_trajectory_ipc().expect("generate trajectory");
     write_fixture(&traj, "test-fixtures/arrow_trajectory.ipc");

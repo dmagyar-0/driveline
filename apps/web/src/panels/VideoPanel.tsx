@@ -19,11 +19,27 @@ import type { VideoDecodeApi } from "../workerClient";
 import {
   mark,
   measure,
+  OVERLAY_DRAW,
+  OVERLAY_DRAW_END,
+  OVERLAY_DRAW_START,
   VIDEO_FIRST_FRAME,
   VIDEO_SEEK_END,
   VIDEO_SEEK_START,
   VIDEO_SEEK_TO_BLIT,
 } from "../perf";
+import { decodePointCloud } from "./pointCloudFromArrow";
+import {
+  makeProjectionBuffers,
+  projectPointsInto,
+  type ProjectionBuffers,
+} from "./cameraProjection";
+import { contentRect, depthColor, imagePixelToContent } from "./videoOverlay";
+import {
+  clearVideoOverlayInfo,
+  setVideoOverlayInfo,
+} from "./videoOverlayDevState";
+import type { CameraCalibration } from "./calibrationFromArrow";
+import type { PointCloudOverlayBinding } from "../layout/persist";
 import {
   clearPanelReadiness,
   getReadinessSnapshot,
@@ -126,6 +142,29 @@ export function VideoPanel({
   panelId,
 }: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Point-cloud overlay (docs/13). A second canvas sized to the letterboxed
+  // content rect; the rAF tick projects the bound LiDAR spin onto it after the
+  // video blit. All overlay hot-path inputs are mirrored into refs so the tick
+  // never reads a reactive selector.
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayBindingRef = useRef<PointCloudOverlayBinding | null>(null);
+  const overlayCalibRef = useRef<CameraCalibration | null>(null);
+  // Spin start timestamps for the bound point-cloud channel.
+  const overlaySpinTimesRef = useRef<BigInt64Array | null>(null);
+  // The spin index currently projected + its cached projection, so we only
+  // recompute when the active spin index OR the calibration changes.
+  const overlaySpinIdxRef = useRef<number>(-1);
+  const overlayProjRef = useRef<ProjectionBuffers | null>(null);
+  const overlayProjCountRef = useRef<number>(0);
+  const overlayDepthsRef = useRef<{ near: number; far: number }>({
+    near: 1,
+    far: 60,
+  });
+  // True while an async spin fetch+project is inflight, so the tick coalesces
+  // to ≤1 outstanding overlay refresh (never stacks fetches per rAF).
+  const overlayBusyRef = useRef<boolean>(false);
+  // Monotonic token so a late spin fetch result for a stale binding is dropped.
+  const overlayReqRef = useRef<number>(0);
   const queueRef = useRef<QueueEntry[]>([]);
   const cursorRef = useRef<bigint>(0n);
   const rafRef = useRef<number | null>(null);
@@ -191,6 +230,14 @@ export function VideoPanel({
     canvas.style.transform = `translate(${zoomTxRef.current}px, ${zoomTyRef.current}px) scale(${s})`;
     canvas.style.cursor =
       s > 1 ? (panActiveRef.current ? "grabbing" : "grab") : "";
+    // Keep the overlay canvas locked to the same zoom/pan as the video so
+    // projected dots track the frame under magnification. Same transform-origin
+    // (panel centre) so 1× sits exactly where object-fit: contain placed both.
+    const overlay = overlayCanvasRef.current;
+    if (overlay) {
+      overlay.style.transformOrigin = "center";
+      overlay.style.transform = `translate(${zoomTxRef.current}px, ${zoomTyRef.current}px) scale(${s})`;
+    }
     window.__drivelineVideoZoom = s;
   }, []);
 
@@ -305,6 +352,32 @@ export function VideoPanel({
   // playing state are read non-reactively below via `useSession.subscribe`
   // so a 60 Hz cursor tick during playback doesn't churn the React tree.
   const globalRange = useSession((s) => s.globalRange);
+
+  // Point-cloud overlay binding for this panel (docs/13). Reactive — changing
+  // it re-runs the binding effect that loads spin times + calibration, and the
+  // tick reads the mirrored refs. `overlayBinding` is the persisted binding;
+  // `sources` drives the picker dropdowns (calibration channels, point-cloud
+  // channels, camera names).
+  const overlayBinding = useSession(
+    (s) => s.pointCloudOverlays[panelId] ?? null,
+  );
+  const sources = useSession((s) => s.sources);
+  const calibrationCache = useSession((s) => s.calibrationCache);
+  const [overlayMenuOpen, setOverlayMenuOpen] = useState<boolean>(false);
+
+  // Candidate channels for the pickers.
+  const calibrationChannels = sources.flatMap((s) =>
+    s.channels.filter((c) => c.kind === "camera_calibration"),
+  );
+  const pointCloudChannels = sources.flatMap((s) =>
+    s.channels.filter((c) => c.kind === "point_cloud"),
+  );
+  // Cameras available in the bound (or first) calibration channel.
+  const activeCalibChannelId =
+    overlayBinding?.calibrationChannelId ?? calibrationChannels[0]?.id ?? null;
+  const camerasForActiveCalib: CameraCalibration[] = activeCalibChannelId
+    ? (calibrationCache[activeCalibChannelId] ?? [])
+    : [];
 
   // T7 — this source's own time coverage. The cursor roams the whole
   // session timeline, but a source only has frames inside [startNs, endNs]
@@ -507,6 +580,132 @@ export function VideoPanel({
       }
     })();
 
+    // Largest spin index with `times[i] <= ptsNs`, or -1 if before the first
+    // spin. `times` is ascending. Same binary search the ScenePanel uses.
+    const activeSpinIndex = (times: BigInt64Array, ptsNs: bigint): number => {
+      if (times.length === 0 || ptsNs < times[0]) return -1;
+      let lo = 0;
+      let hi = times.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (times[mid] <= ptsNs) lo = mid;
+        else hi = mid - 1;
+      }
+      return lo;
+    };
+
+    // Fetch + decode + project the spin at `idx` into the cached projection
+    // buffers. Coalesced: at most one outstanding refresh; a stale binding's
+    // late result is dropped via the request token. Off the synchronous tick.
+    const refreshOverlaySpin = (idx: number) => {
+      const binding = overlayBindingRef.current;
+      const calib = overlayCalibRef.current;
+      const times = overlaySpinTimesRef.current;
+      if (!binding || !calib || !times || idx < 0 || idx >= times.length) {
+        return;
+      }
+      if (overlayBusyRef.current) return;
+      overlayBusyRef.current = true;
+      const token = ++overlayReqRef.current;
+      const ts = times[idx];
+      void (async () => {
+        try {
+          const bytes = await useSession
+            .getState()
+            .fetchChannelRange(binding.pointcloudChannelId, ts, ts + 1n, false);
+          if (token !== overlayReqRef.current) return;
+          const res = decodePointCloud(bytes);
+          if (!res.ok || res.count === 0) {
+            overlayProjCountRef.current = 0;
+            overlaySpinIdxRef.current = idx;
+            return;
+          }
+          // Grow the reusable projection buffers when the spin gets denser.
+          let buf = overlayProjRef.current;
+          if (!buf || buf.us.length < res.count) {
+            buf = makeProjectionBuffers(res.count);
+            overlayProjRef.current = buf;
+          }
+          const visible = projectPointsInto(
+            calib,
+            res.positions,
+            res.count,
+            buf,
+          );
+          overlayProjCountRef.current = res.count;
+          overlaySpinIdxRef.current = idx;
+          setVideoOverlayInfo(panelId, {
+            enabled: true,
+            cameraName: binding.cameraName,
+            spinTsNs: (res.tsNs ?? ts).toString(),
+            pointCount: res.count,
+            projectedVisibleCount: visible,
+          });
+        } catch {
+          /* advisory overlay; leave the previous projection on screen */
+        } finally {
+          if (token === overlayReqRef.current) overlayBusyRef.current = false;
+        }
+      })();
+    };
+
+    // Per-tick overlay paint. Sizes the overlay canvas to the panel, clears it,
+    // and redraws the cached projection at the letterboxed content rect. When
+    // the active spin index changed, kicks a (coalesced) async refresh first.
+    const drawOverlay = () => {
+      const overlayCanvas = overlayCanvasRef.current;
+      const overlayCtx = overlayCanvas?.getContext("2d") ?? null;
+      if (!overlayCanvas || !overlayCtx) return;
+      const binding = overlayBindingRef.current;
+      const calib = overlayCalibRef.current;
+      const times = overlaySpinTimesRef.current;
+      const blitPts = lastBlitPtsRef.current;
+      // Match the overlay canvas's pixel buffer to its CSS box (the panel) so
+      // its coordinate space is panel pixels.
+      const cw = overlayCanvas.clientWidth;
+      const ch = overlayCanvas.clientHeight;
+      if (cw > 0 && ch > 0) {
+        if (overlayCanvas.width !== cw) overlayCanvas.width = cw;
+        if (overlayCanvas.height !== ch) overlayCanvas.height = ch;
+      }
+      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      if (!binding || !calib || !times || blitPts === null) return;
+      // Refetch only when the active spin actually changes.
+      const idx = activeSpinIndex(times, blitPts);
+      if (idx !== overlaySpinIdxRef.current && idx >= 0) {
+        refreshOverlaySpin(idx);
+      }
+      const buf = overlayProjRef.current;
+      const count = overlayProjCountRef.current;
+      if (!buf || count === 0) return;
+
+      mark(OVERLAY_DRAW_START);
+      const rect = contentRect(
+        calib.intrinsics.width,
+        calib.intrinsics.height,
+        overlayCanvas.width,
+        overlayCanvas.height,
+      );
+      const { near, far } = overlayDepthsRef.current;
+      const radius = Math.max(1.2, rect.width / 640);
+      for (let i = 0; i < count; i++) {
+        if (buf.visible[i] === 0) continue;
+        const [cx, cy] = imagePixelToContent(
+          buf.us[i],
+          buf.vs[i],
+          calib.intrinsics.width,
+          calib.intrinsics.height,
+          rect,
+        );
+        overlayCtx.fillStyle = depthColor(buf.depths[i], near, far);
+        overlayCtx.beginPath();
+        overlayCtx.arc(rect.left + cx, rect.top + cy, radius, 0, Math.PI * 2);
+        overlayCtx.fill();
+      }
+      mark(OVERLAY_DRAW_END);
+      measure(OVERLAY_DRAW, OVERLAY_DRAW_START, OVERLAY_DRAW_END);
+    };
+
     const tick = () => {
       const q = queueRef.current;
       const cursor = cursorRef.current;
@@ -566,6 +765,15 @@ export function VideoPanel({
           q.shift();
         }
       }
+
+      // Point-cloud overlay (docs/13). After the video blit, project the LiDAR
+      // spin nearest the on-screen frame PTS onto the overlay canvas. The heavy
+      // fetch+decode+project is coalesced to ≤1 outstanding refresh and only
+      // re-run when the active spin index (or the calibration) changes — so the
+      // per-tick cost is just a clear+redraw of the cached projection, which we
+      // bracket with a perf measure to keep it inside the hot-path budget.
+      drawOverlay();
+
       // Publish a HUD snapshot every tick. Cheap (plain object) and the
       // dev hook needs it available whether or not the HUD is visible.
       const snapshot: VideoHudSnapshot = {
@@ -781,6 +989,67 @@ export function VideoPanel({
     return () => unsub();
   }, [panelId]);
 
+  // Overlay binding effect. When the binding (or its calibration camera /
+  // point-cloud channel) changes, resolve the camera calibration and load the
+  // point-cloud spin timestamps, then mirror everything the rAF tick needs into
+  // refs. Reset the cached projection so the next tick recomputes. None of this
+  // is on the cursor hot path — it runs once per binding change.
+  useEffect(() => {
+    overlayBindingRef.current = overlayBinding;
+    overlayCalibRef.current = null;
+    overlaySpinTimesRef.current = null;
+    overlaySpinIdxRef.current = -1;
+    overlayProjCountRef.current = 0;
+    // Clear stale dots immediately when the binding goes away / changes.
+    const oc = overlayCanvasRef.current;
+    if (oc) {
+      const octx = oc.getContext("2d");
+      if (octx) octx.clearRect(0, 0, oc.width, oc.height);
+    }
+    if (!overlayBinding) {
+      setVideoOverlayInfo(panelId, {
+        enabled: false,
+        cameraName: null,
+        spinTsNs: null,
+        pointCount: 0,
+        projectedVisibleCount: 0,
+      });
+      return;
+    }
+    let aborted = false;
+    void (async () => {
+      const st = useSession.getState();
+      const cams = await st.loadCalibration(
+        overlayBinding.calibrationChannelId,
+      );
+      if (aborted || overlayBindingRef.current !== overlayBinding) return;
+      const cam =
+        cams.find((c) => c.name === overlayBinding.cameraName) ?? null;
+      overlayCalibRef.current = cam;
+      try {
+        const times = await st.lidarSpinTimes(
+          overlayBinding.pointcloudChannelId,
+        );
+        if (aborted || overlayBindingRef.current !== overlayBinding) return;
+        overlaySpinTimesRef.current = times;
+      } catch {
+        overlaySpinTimesRef.current = null;
+      }
+      setVideoOverlayInfo(panelId, {
+        enabled: true,
+        cameraName: overlayBinding.cameraName,
+        spinTsNs: null,
+        pointCount: 0,
+        projectedVisibleCount: 0,
+      });
+    })();
+    return () => {
+      aborted = true;
+    };
+  }, [overlayBinding, panelId]);
+
+  useEffect(() => () => clearVideoOverlayInfo(panelId), [panelId]);
+
   // Wheel-to-zoom. Registered as a native, non-passive listener because
   // React's synthetic onWheel is passive — `preventDefault` there is a
   // no-op and the page/panel would scroll instead of zooming. The anchor
@@ -966,6 +1235,75 @@ export function VideoPanel({
     toggleHud();
   };
 
+  // Overlay control handlers. The binding only becomes active once all three
+  // parts are chosen; the pickers patch the current (or a freshly-defaulted)
+  // binding and commit via `setPointCloudOverlay`. Picking "— none —" anywhere
+  // clears the overlay for this panel.
+  const setOverlay = useSession((s) => s.setPointCloudOverlay);
+  const commitOverlay = useCallback(
+    (patch: Partial<PointCloudOverlayBinding>) => {
+      const cur = useSession.getState().pointCloudOverlays[panelId] ?? null;
+      const next: Partial<PointCloudOverlayBinding> = {
+        calibrationChannelId:
+          cur?.calibrationChannelId ?? activeCalibChannelId ?? undefined,
+        cameraName: cur?.cameraName,
+        pointcloudChannelId:
+          cur?.pointcloudChannelId ?? pointCloudChannels[0]?.id,
+        ...patch,
+      };
+      if (
+        next.calibrationChannelId &&
+        next.cameraName &&
+        next.pointcloudChannelId
+      ) {
+        setOverlay(panelId, {
+          calibrationChannelId: next.calibrationChannelId,
+          cameraName: next.cameraName,
+          pointcloudChannelId: next.pointcloudChannelId,
+        });
+      } else {
+        setOverlay(panelId, null);
+      }
+    },
+    [panelId, activeCalibChannelId, pointCloudChannels, setOverlay],
+  );
+  const onToggleOverlay = () => {
+    if (overlayBinding !== null) {
+      setOverlay(panelId, null);
+      setOverlayMenuOpen(false);
+      return;
+    }
+    setOverlayMenuOpen((v) => !v);
+    // Best-effort: auto-commit when there's an obvious single choice so the
+    // toggle "just works" with one calibration camera + one point cloud.
+    const cam = camerasForActiveCalib[0]?.name;
+    const pc = pointCloudChannels[0]?.id;
+    if (activeCalibChannelId && cam && pc) {
+      setOverlay(panelId, {
+        calibrationChannelId: activeCalibChannelId,
+        cameraName: cam,
+        pointcloudChannelId: pc,
+      });
+    } else if (activeCalibChannelId) {
+      // Ensure the cameras get decoded so the camera picker populates.
+      void useSession.getState().loadCalibration(activeCalibChannelId);
+    }
+  };
+  const onPickCalibration = (id: string) => {
+    if (!id) {
+      setOverlay(panelId, null);
+      return;
+    }
+    void useSession.getState().loadCalibration(id);
+    commitOverlay({ calibrationChannelId: id, cameraName: undefined });
+  };
+  const onPickCamera = (name: string) => {
+    commitOverlay({ cameraName: name || undefined });
+  };
+  const onPickPointCloud = (id: string) => {
+    commitOverlay({ pointcloudChannelId: id || undefined });
+  };
+
   return (
     <div className={styles.panel} tabIndex={0} onKeyDown={onKeyDown}>
       <canvas
@@ -977,6 +1315,93 @@ export function VideoPanel({
         onPointerUp={onCanvasPointerUp}
         onPointerCancel={onCanvasPointerUp}
       />
+      {/* Point-cloud overlay canvas (docs/13) — always mounted (empty when no
+       *  binding) so the rAF tick can size + draw into it without remounting.
+       *  pointer-events:none lets the pan/zoom gestures fall through to the
+       *  video canvas underneath. */}
+      <canvas
+        ref={overlayCanvasRef}
+        data-testid="video-overlay-canvas"
+        className={styles.overlayCanvas}
+        aria-hidden="true"
+      />
+      {/* Overlay control cluster — toggle + camera / point-cloud pickers. */}
+      <div className={styles.overlayControls}>
+        <button
+          type="button"
+          data-testid="video-overlay-toggle"
+          className={styles.overlayToggle}
+          aria-pressed={overlayBinding !== null}
+          aria-expanded={overlayMenuOpen}
+          onClick={onToggleOverlay}
+          disabled={
+            calibrationChannels.length === 0 || pointCloudChannels.length === 0
+          }
+          title={
+            calibrationChannels.length === 0 || pointCloudChannels.length === 0
+              ? "Load a calibration (.calib.json) and a LiDAR point-cloud source first"
+              : "Toggle the LiDAR point-cloud overlay"
+          }
+        >
+          LiDAR overlay
+        </button>
+        {overlayMenuOpen && (
+          <div
+            className={styles.overlayPickers}
+            data-testid="video-overlay-pickers"
+          >
+            <label className={styles.overlaySelectLabel}>
+              Calibration
+              <select
+                className={styles.overlaySelect}
+                data-testid="video-overlay-calib-select"
+                value={overlayBinding?.calibrationChannelId ?? ""}
+                onChange={(e) => onPickCalibration(e.target.value)}
+              >
+                <option value="">— none —</option>
+                {calibrationChannels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.overlaySelectLabel}>
+              Camera
+              <select
+                className={styles.overlaySelect}
+                data-testid="video-overlay-camera-select"
+                value={overlayBinding?.cameraName ?? ""}
+                onChange={(e) => onPickCamera(e.target.value)}
+                disabled={camerasForActiveCalib.length === 0}
+              >
+                <option value="">— none —</option>
+                {camerasForActiveCalib.map((cam) => (
+                  <option key={cam.name} value={cam.name}>
+                    {cam.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className={styles.overlaySelectLabel}>
+              Point cloud
+              <select
+                className={styles.overlaySelect}
+                data-testid="video-overlay-pointcloud-select"
+                value={overlayBinding?.pointcloudChannelId ?? ""}
+                onChange={(e) => onPickPointCloud(e.target.value)}
+              >
+                <option value="">— none —</option>
+                {pointCloudChannels.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+      </div>
       {/* Reset-zoom affordance — only mounted while magnified, so it stays
        *  out of the way during normal playback. Top-left to clear the HUD
        *  toggle (top-right) and the stats strip (bottom-right). */}

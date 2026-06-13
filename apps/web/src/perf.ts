@@ -21,6 +21,15 @@ export const VIDEO_SEEK_START = "video:seek:start";
 export const VIDEO_SEEK_END = "video:seek:end";
 export const VIDEO_SEEK_TO_BLIT = "video:seek-to-blit";
 
+// Point-cloud-on-video overlay (docs/13). `OVERLAY_DRAW` brackets the per-frame
+// project + draw of the bound LiDAR spin onto the video frame. The work is
+// gated to ≤1 per rAF and reuses a cached/projected spin, so this measure
+// should stay small; it lets perfBudgets / e2e assert the overlay never blows
+// the cursor/video hot-path budget.
+export const OVERLAY_DRAW_START = "video:overlay:start";
+export const OVERLAY_DRAW_END = "video:overlay:end";
+export const OVERLAY_DRAW = "video:overlay-draw";
+
 export interface PerfSnapshot {
   readonly entries: ReadonlyArray<{
     name: string;

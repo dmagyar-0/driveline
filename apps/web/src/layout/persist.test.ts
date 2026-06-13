@@ -55,6 +55,14 @@ const SAMPLE: PersistedLayout = {
     },
     "plot-2": { gapThresholdSec: null },
   },
+  pointCloudOverlays: {
+    "video-1": {
+      calibrationChannelId: "/calib",
+      cameraName: "CAM_FRONT",
+      pointcloudChannelId: "/cloud/front",
+    },
+    "video-2": null,
+  },
   unitOverrides: { "/vehicle/speed": "km/h", "/vehicle/rpm": "" },
 };
 
@@ -198,6 +206,7 @@ describe("layout persist", () => {
       valueBindings: {},
       enumBindings: {},
       plotPanelSettings: {},
+      pointCloudOverlays: {},
       unitOverrides: {},
     };
     saveLayoutToStorage(payload, s);
@@ -344,6 +353,7 @@ const EMPTY_SLICE: LayoutSlice = {
   valueBindings: {},
   enumBindings: {},
   plotPanelSettings: {},
+  pointCloudOverlays: {},
   unitOverrides: {},
 };
 

@@ -71,6 +71,16 @@ export interface Buckets {
    */
   openlabel: File[];
   /**
+   * Camera-calibration JSON drops (`driveline.calibration/v1`), opened straight
+   * into the point-cloud-on-video overlay. Like OpenLABEL, a `.json` extension
+   * is ambiguous, so a file only lands here once its bytes are sniffed for the
+   * `driveline.calibration/v1` schema marker (see `sniffCalibration`).
+   * `bucketFiles` is synchronous so it leaves this empty; `openFiles` does the
+   * async sniff and re-routes qualifying `.json`/`.calib.json` files out of
+   * `unknown` into here.
+   */
+  calibration: File[];
+  /**
    * Driveline `*.trajectory.json` drops (predicted ego future trajectories,
    * one row per frame of candidate waypoint polylines), opened straight into
    * the 3D scene pipeline. Like OpenLABEL, a `.json` extension is ambiguous, so
@@ -105,6 +115,7 @@ export function bucketFiles(files: File[]): Buckets {
   const tabular: TabularInput[] = [];
   const lidar: LidarInput[] = [];
   const openlabel: File[] = [];
+  const calibration: File[] = [];
   const trajectory: File[] = [];
   const unknown: File[] = [];
   const errors: BucketError[] = [];
@@ -180,6 +191,7 @@ export function bucketFiles(files: File[]): Buckets {
     tabular,
     lidar,
     openlabel,
+    calibration,
     trajectory,
     unknown,
     errors,
@@ -219,6 +231,30 @@ export function sniffOpenlabelBytes(bytes: Uint8Array): boolean {
   const head = bytes.subarray(0, OPENLABEL_SNIFF_BYTES);
   const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
   return /"openlabel"\s*:/i.test(text);
+}
+
+/**
+ * True when `file`'s leading bytes contain the `driveline.calibration/v1`
+ * schema marker. `.json`/`.calib.json` is ambiguous (recipes and OpenLABEL are
+ * JSON too), so the drop path uses this content sniff to route a calibration
+ * file to the point-cloud-on-video overlay. Reads only the file head; never
+ * throws (returns `false` on any read/decode error so the caller falls back).
+ */
+export async function sniffCalibration(file: File): Promise<boolean> {
+  try {
+    const head = file.slice(0, OPENLABEL_SNIFF_BYTES);
+    const text = await head.text();
+    return /driveline\.calibration\/v1/.test(text);
+  } catch {
+    return false;
+  }
+}
+
+/** Same calibration content sniff as `sniffCalibration`, over decoded bytes. */
+export function sniffCalibrationBytes(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, OPENLABEL_SNIFF_BYTES);
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
+  return /driveline\.calibration\/v1/.test(text);
 }
 
 /** Max bytes read when sniffing a `.json` drop for the trajectory marker —

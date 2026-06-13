@@ -6,14 +6,19 @@ Driveline ingests **MCAP** (Foxglove-style schemas: H.264
 expressed in those shapes will load with no reader changes.
 
 This file lists seven public datasets that fit the tool, with links,
-licences, and conversion notes. One of them (comma2k19) is wired up
-end-to-end — see [`scripts/convert_comma2k19_to_mcap.py`](../../scripts/convert_comma2k19_to_mcap.py)
-and the e2e proof in [`apps/e2e/tests/realworld-comma2k19.spec.ts`](../../apps/e2e/tests/realworld-comma2k19.spec.ts).
+licences, and conversion notes. Two of them are wired up end-to-end:
+**comma2k19** (CAN/IMU/GNSS + dashcam → MCAP/MF4 + mp4) — see
+[`scripts/convert_comma2k19_to_mcap.py`](../../scripts/convert_comma2k19_to_mcap.py)
+and the e2e proof in [`apps/e2e/tests/realworld-comma2k19.spec.ts`](../../apps/e2e/tests/realworld-comma2k19.spec.ts) —
+and **nuScenes** (LiDAR + camera + calibration for the point-cloud-on-camera
+overlay) via
+[`scripts/convert_nuscenes_to_driveline.py`](../../scripts/convert_nuscenes_to_driveline.py)
+(see the [nuScenes section](#nuscenes-point-cloud-on-camera-lidar--camera--calibration) below).
 
 | # | Dataset | Domain | Format on disk | Conversion path | Licence |
 |---|---------|--------|----------------|-----------------|---------|
 | 1 | [comma2k19](https://github.com/commaai/comma2k19) (also [HF mirror](https://huggingface.co/datasets/commaai/comma2k19)) | ADAS, 33 h CA-280 highway, CAN + GNSS + IMU + dashcam | rlog (capnp) + HEVC / parquet on HF | `scripts/convert_comma2k19_to_mcap.py` (HF parquet → MCAP) | MIT |
-| 2 | [nuScenes](https://www.nuscenes.org/nuscenes) (Motional) | ADAS, 1 000 urban scenes, 6 cams + 5 radars + LiDAR | custom JSON + JPG + LiDAR `.pcd.bin` | [`foxglove/nuscenes2mcap`](https://github.com/foxglove/nuscenes2mcap) (Docker, registration) | CC BY-NC-SA 4.0 |
+| 2 | [nuScenes](https://www.nuscenes.org/nuscenes) (Motional) | ADAS, 1 000 urban scenes, 6 cams + 5 radars + LiDAR | custom JSON + JPG + LiDAR `.pcd.bin` | `scripts/convert_nuscenes_to_driveline.py` (v1.0-mini → point-cloud Parquet + mp4/sidecar + calibration; see below) | CC BY-NC-SA 4.0 |
 | 3 | [Waymo Open Dataset](https://waymo.com/open/) | ADAS, perception + motion | TFRecord (protobuf) | [`waymo_open_dataset` → MCAP](https://foxglove.dev/blog/converting-the-waymo-open-dataset-to-mcap) | Waymo Dataset Licence |
 | 4 | [Argoverse 2](https://www.argoverse.org/av2.html) (Argo AI) | ADAS, motion forecasting + sensor + LiDAR | feather + JPG + LiDAR `.feather` | [`av2 → MCAP`](https://foxglove.dev/blog/converting-the-argoverse-2-dataset-to-mcap) | CC BY-NC-SA 4.0 |
 | 5 | [KITTI raw](https://www.cvlibs.net/datasets/kitti/raw_data.php) | ADAS, Karlsruhe drive sequences, OXTS GPS/IMU + grayscale + colour stereo + Velodyne | per-folder text/PNG/bin | [`kitti2bag`](https://github.com/tomas789/kitti2bag) → `mcap convert` | CC BY-NC-SA 3.0 |
@@ -119,6 +124,74 @@ pnpm --filter e2e exec playwright test _demo-comma2k19-video.spec.ts
 
 The `_demo-*` prefix keeps the spec out of the default CI run — it
 needs the three large fixtures above, which aren't checked in.
+
+## nuScenes: point cloud on camera (lidar + camera + calibration)
+
+[`scripts/convert_nuscenes_to_driveline.py`](../../scripts/convert_nuscenes_to_driveline.py)
+wires up dataset #2 (nuScenes v1.0-mini) end-to-end for the
+**point-cloud-on-camera overlay** — the real-world companion to the
+synthetic calibration fixture. It converts one scene's `LIDAR_TOP` +
+`CAM_FRONT` into the three Driveline formats the overlay needs:
+
+- `nuscenes.lidar.parquet` — Driveline point-cloud schema
+  (see [`crates/data-core/src/pointcloud.rs`](../../crates/data-core/src/pointcloud.rs)):
+  one row per LIDAR_TOP sample_data (keyframes **and** sweeps), points in
+  the LIDAR_TOP sensor frame, `t_ns` from the nuScenes µs timestamp.
+- `nuscenes_cam_front.mp4` + `.mp4.timestamps` — the CAM_FRONT JPGs encoded
+  to H.264 (avc1, what WebCodecs needs) with one real per-frame ns timestamp
+  in the sidecar (see [`crates/data-core/src/mp4_sidecar.rs`](../../crates/data-core/src/mp4_sidecar.rs)).
+- `nuscenes_cam_front.calib.json` — `driveline.calibration/v1`
+  (see [`docs/13-camera-lidar-calibration.md`](../../docs/13-camera-lidar-calibration.md)):
+  CAM_FRONT pinhole intrinsics from `camera_intrinsic`, distortion `[]`
+  (nuScenes images are pre-undistorted), and the **LIDAR_TOP → CAM_FRONT**
+  optical extrinsic (translation + scalar-last quaternion).
+
+> nuScenes is **CC BY-NC-SA 4.0 (non-commercial)**. The 4.16 GB archive is
+> downloaded to `/tmp`, the converted output lands in
+> `/tmp/datasets/nuscenes_demo/`, and **none of those bytes are committed** —
+> the script + this doc + the pinned `v1.0-mini.tgz` SHA256 in
+> [`sample-data/EXPECTED_HASHES.txt`](../EXPECTED_HASHES.txt) are the only
+> tracked artefacts.
+
+```sh
+# 1. Tooling: ffmpeg (avc1 encode) + the same pyarrow/numpy the converter uses.
+#    The converter parses the nuScenes JSON tables directly — no devkit needed.
+sudo apt-get install -y ffmpeg          # or your platform's package manager
+pip install 'pyarrow>=14,<20' 'numpy>=1.24,<3'
+
+# 2. Convert. The script downloads v1.0-mini.tgz to /tmp (resumable curl -C -),
+#    verifies its size + SHA256 against EXPECTED_HASHES.txt, extracts it, picks
+#    scene index 0 (scene-0061), and emits the four files into
+#    /tmp/datasets/nuscenes_demo/. Re-runs are idempotent: an already-extracted
+#    tree is reused. Use --skip-download if you extracted it yourself.
+python3 scripts/convert_nuscenes_to_driveline.py
+
+# 3. Open it in the dev server. Drop the four files
+#    (nuscenes.lidar.parquet, nuscenes_cam_front.mp4,
+#     nuscenes_cam_front.mp4.timestamps, nuscenes_cam_front.calib.json)
+#    onto http://localhost:5173 together. The .mp4 + .timestamps pair as one
+#    video source; bind the point-cloud overlay on the video panel to the
+#    LIDAR_TOP channel via the CAM_FRONT calibration.
+pnpm wasm:build && pnpm dev
+```
+
+The converter ends with a self-check it prints: the Parquet schema + row
+count + a sample point, the mp4 frame count vs sidecar line count (must
+match exactly or `Mp4SidecarReader` rejects the pair), finite intrinsics +
+extrinsic, and a **reprojection sanity check** — it transforms one keyframe's
+LIDAR_TOP spin by the extrinsic + intrinsics and reports the fraction of
+points that land in front of the camera (`Z>0`) and inside the 1600×900
+image. For scene-0061 that's ~34 % in front (a 360° LiDAR vs a forward
+camera) and ~8 % inside the frame, with a point 10 m straight ahead landing
+within a pixel of the principal point — the overlay is geometrically aligned.
+
+Representative scene-0061 calibration (what the converter prints):
+
+```text
+intrinsics: fx=1266.417 fy=1266.417 cx=816.267 cy=491.507  1600x900
+extrinsic translation: [0.0119, -0.3250, -0.7590]
+extrinsic quaternion (xyzw): [0.70050, 0.00364, 0.00113, 0.71364]
+```
 
 ### Splitting signals across MCAP and MF4
 

@@ -63,6 +63,14 @@ Channel {
 - `Video` — encoded frames (H.264 access units today).
 - `Enum` — integer-coded state (gear, mode).
 - `Bytes` — opaque payload (raw protobuf/CDR; MVP does not decode).
+- `PointCloud` — a whole LiDAR spin (array of 3D points) per sample, fetched a
+  frame at a time by the 3D scene panel (`pointcloud.rs`).
+- `BoundingBox` — a whole frame's worth of 3D oriented cuboids per sample,
+  sourced from ASAM OpenLABEL JSON (`openlabel.rs`).
+- `CameraCalibration` — camera ↔ LiDAR calibration (config, not a time series):
+  a pinhole intrinsic plus a scene/LiDAR→camera extrinsic, one row per camera.
+  Sourced from a `driveline.calibration/v1` JSON (`calibration.rs`). See
+  `docs/13-camera-lidar-calibration.md`.
 
 ### `Message`
 
@@ -115,6 +123,24 @@ Schema per channel kind:
 - **Bytes**
   - `ts`      : `Timestamp(ns, UTC)`
   - `payload` : `Binary`
+- **PointCloud** (one row per spin) — see `pointcloud.rs`
+  - `ts`          : `Timestamp(ns, UTC)`
+  - `positions`   : `List<Float32>` (flattened xyz, length `3*N`)
+  - `intensities` : `List<Float32>` (length `N`, normalised 0..1)
+- **BoundingBox** (one row per frame) — see `openlabel.rs`
+  - `ts`        : `Timestamp(ns, UTC)`
+  - `centers`   : `List<Float32>` (flattened xyz, length `3*N`)
+  - `sizes`     : `List<Float32>` (flattened full extents, length `3*N`)
+  - `rotations` : `List<Float32>` (flattened quaternion, length `4*N`)
+  - `labels`    : `List<Utf8>` (class strings, length `N`)
+- **CameraCalibration** (one row per camera; config, range ignored) — see
+  `calibration.rs` and `docs/13-camera-lidar-calibration.md`
+  - `name`        : `Utf8` (camera name, e.g. `CAM_FRONT`)
+  - `intrinsics`  : `List<Float32>` (length 4 = `[fx, fy, cx, cy]`, px)
+  - `resolution`  : `List<Int32>` (length 2 = `[width, height]`, px)
+  - `distortion`  : `List<Float32>` (length 0 or 5 = `[k1,k2,p1,p2,k3]`)
+  - `translation` : `List<Float32>` (length 3 = `[tx, ty, tz]`, m)
+  - `quaternion`  : `List<Float32>` (length 4 = `[qx, qy, qz, qw]`, scalar-last)
 
 Why Arrow:
 

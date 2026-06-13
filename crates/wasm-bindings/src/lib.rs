@@ -9,10 +9,10 @@
 use std::cell::RefCell;
 
 use data_core::{
-    BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
-    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, OpenLabelReader, PointCloudReader,
-    Reader, RecipeReader, Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
-    TrajectoryReader,
+    BoxedRangeReader, ByteRangeReader, CalibrationReader, ChannelKind, DType, EncodedChunk,
+    FetchOpts, McapReader, McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, OpenLabelReader,
+    PointCloudReader, Reader, RecipeReader, Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis,
+    TimeRange, TrajectoryReader,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -68,6 +68,7 @@ thread_local! {
     static TABULAR_READERS: RefCell<Slab<TabularReader>> = const { RefCell::new(Slab::new()) };
     static LIDAR_READERS: RefCell<Slab<PointCloudReader>> = const { RefCell::new(Slab::new()) };
     static OPENLABEL_READERS: RefCell<Slab<OpenLabelReader>> = const { RefCell::new(Slab::new()) };
+    static CALIBRATION_READERS: RefCell<Slab<CalibrationReader>> = const { RefCell::new(Slab::new()) };
     static TRAJECTORY_READERS: RefCell<Slab<TrajectoryReader>> = const { RefCell::new(Slab::new()) };
     static ROS1_BAG_READERS: RefCell<Slab<Ros1BagReader>> = const { RefCell::new(Slab::new()) };
     static ROS2_DB3_READERS: RefCell<Slab<Ros2Db3Reader>> = const { RefCell::new(Slab::new()) };
@@ -319,6 +320,7 @@ fn channel_kind_str(k: ChannelKind) -> &'static str {
         ChannelKind::Bytes => "bytes",
         ChannelKind::PointCloud => "point_cloud",
         ChannelKind::BoundingBox => "bounding_box",
+        ChannelKind::CameraCalibration => "camera_calibration",
         ChannelKind::Trajectory => "trajectory",
     }
 }
@@ -1171,6 +1173,99 @@ pub fn openlabel_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsErr
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
         arr.copy_from(ts);
         Ok(arr)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Calibration (driveline.calibration/v1 — camera ↔ LiDAR calibration)
+// ---------------------------------------------------------------------------
+
+/// Open a `driveline.calibration/v1` JSON file (camera calibrations) and
+/// register the resulting `CalibrationReader` in the thread-local slab. Returns
+/// the integer handle the other `calibration_*` endpoints take. The source
+/// surfaces one `camera_calibration` channel carrying every camera (one row per
+/// camera on fetch).
+///
+/// `open_owned` validates the `"schema": "driveline.calibration/v1"` marker, so
+/// a non-calibration `.json` is rejected here rather than mis-decoded. Takes the
+/// buffer **by value** to parse it without a second copy.
+#[wasm_bindgen]
+pub fn open_calibration(bytes: Vec<u8>) -> Result<u32, JsError> {
+    let reader = CalibrationReader::open_owned(bytes)
+        .map_err(|e| JsError::new(&format!("open calibration failed: {e}")))?;
+    let key = CALIBRATION_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the calibration reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_calibration(handle: u32) {
+    CALIBRATION_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the calibration reader's `SourceMeta` as a plain JS object. A
+/// calibration source surfaces exactly one `camera_calibration` channel; the
+/// shape reuses the MF4/lidar summary layout (`group` always null,
+/// `sample_count` = camera count). 64-bit numbers serialise as `BigInt`.
+#[wasm_bindgen]
+pub fn calibration_summary(handle: u32) -> Result<JsValue, JsError> {
+    CALIBRATION_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid calibration handle"))?;
+        let meta = reader.meta();
+        let summary = Mf4Summary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| ChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    unit: c.unit.clone(),
+                    group: None,
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for the calibration channel. Calibration is **config, not a
+/// time series**: there is no range — every camera is always returned, one row
+/// each. The emitted schema is `{ name: Utf8, intrinsics: List<Float32>,
+/// resolution: List<Int32>, distortion: List<Float32>, translation:
+/// List<Float32>, quaternion: List<Float32> }` (one row per camera) — see
+/// `calibration.rs` and `docs/13-camera-lidar-calibration.md`.
+#[wasm_bindgen]
+pub fn calibration_fetch_range(handle: u32, channel_id: &str) -> Result<Uint8Array, JsError> {
+    CALIBRATION_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid calibration handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange::empty(),
+                FetchOpts::default(),
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
     })
 }
 
