@@ -1,0 +1,48 @@
+{
+  "drivelineMap": {
+    "version": 1,
+    "name": "demo_intersection",
+    "features": [
+      {
+        "id": "center_ns",
+        "type": "centerline",
+        "polyline": [[-30, 0, 0], [-10, 0, 0], [0, 0, 0], [10, 0, 0], [30, 0, 0]]
+      },
+      {
+        "id": "center_ew",
+        "type": "centerline",
+        "polyline": [[0, -30, 0], [0, -10, 0], [0, 0, 0], [0, 10, 0], [0, 30, 0]]
+      },
+      {
+        "id": "edge_north",
+        "type": "road_edge",
+        "polyline": [[-30, 5], [-6, 5], [-6, 30]]
+      },
+      {
+        "id": "edge_south",
+        "type": "road_edge",
+        "polyline": [[-30, -5], [-6, -5], [-6, -30]]
+      },
+      {
+        "id": "lane_div_ns",
+        "type": "lane_boundary",
+        "polyline": [[-30, 1.75], [-8, 1.75]]
+      },
+      {
+        "id": "lane_div_ns2",
+        "type": "lane_boundary",
+        "polyline": [[-30, -1.75], [-8, -1.75]]
+      },
+      {
+        "id": "xwalk_west",
+        "type": "crosswalk",
+        "polyline": [[-8, -5], [-8, 5], [-6, 5], [-6, -5], [-8, -5]]
+      },
+      {
+        "id": "stop_west",
+        "type": "stop_line",
+        "polyline": [[-8, -5], [-8, 0]]
+      }
+    ]
+  }
+}

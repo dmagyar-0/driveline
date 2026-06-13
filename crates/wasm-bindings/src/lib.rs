@@ -10,9 +10,9 @@ use std::cell::RefCell;
 
 use data_core::{
     BoxedRangeReader, ByteRangeReader, CalibrationReader, ChannelKind, DType, EncodedChunk,
-    FetchOpts, McapReader, McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, OpenLabelReader,
-    PointCloudReader, Reader, RecipeReader, Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis,
-    TimeRange, TrajectoryReader,
+    FetchOpts, MapGeometryReader, McapReader, McapVideoCursor, MdfError, Mf4Reader,
+    Mp4SidecarReader, OpenLabelReader, PointCloudReader, Reader, RecipeReader, Ros1BagReader,
+    Ros2Db3Reader, TabularReader, TimeBasis, TimeRange, TrajectoryReader,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -70,6 +70,7 @@ thread_local! {
     static OPENLABEL_READERS: RefCell<Slab<OpenLabelReader>> = const { RefCell::new(Slab::new()) };
     static CALIBRATION_READERS: RefCell<Slab<CalibrationReader>> = const { RefCell::new(Slab::new()) };
     static TRAJECTORY_READERS: RefCell<Slab<TrajectoryReader>> = const { RefCell::new(Slab::new()) };
+    static MAP_GEOMETRY_READERS: RefCell<Slab<MapGeometryReader>> = const { RefCell::new(Slab::new()) };
     static ROS1_BAG_READERS: RefCell<Slab<Ros1BagReader>> = const { RefCell::new(Slab::new()) };
     static ROS2_DB3_READERS: RefCell<Slab<Ros2Db3Reader>> = const { RefCell::new(Slab::new()) };
     static RECIPE_READERS: RefCell<Slab<RecipeReader>> = const { RefCell::new(Slab::new()) };
@@ -322,6 +323,7 @@ fn channel_kind_str(k: ChannelKind) -> &'static str {
         ChannelKind::BoundingBox => "bounding_box",
         ChannelKind::CameraCalibration => "camera_calibration",
         ChannelKind::Trajectory => "trajectory",
+        ChannelKind::MapGeometry => "map_geometry",
     }
 }
 
@@ -1378,6 +1380,125 @@ pub fn trajectory_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsEr
         let reader = slab
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
+        let ts = reader.frame_times();
+        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
+        arr.copy_from(ts);
+        Ok(arr)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Map geometry (road network — OpenDRIVE .xodr or simple `drivelineMap` JSON)
+// ---------------------------------------------------------------------------
+
+/// Open a road-network "map" (OpenDRIVE `.xodr` XML or the simple `drivelineMap`
+/// JSON format — auto-detected by the first non-whitespace byte) and register
+/// the resulting `MapGeometryReader` in the thread-local slab. Returns the
+/// integer handle the other `map_geometry_*` endpoints take. The source surfaces
+/// one `map_geometry` channel: a single static frame of typed polylines.
+///
+/// Takes the buffer **by value**: `open_owned` parses it directly without a
+/// second copy.
+#[wasm_bindgen]
+pub fn open_map_geometry(bytes: Vec<u8>) -> Result<u32, JsError> {
+    let reader = MapGeometryReader::open_owned(bytes)
+        .map_err(|e| JsError::new(&format!("open map geometry failed: {e}")))?;
+    let key = MAP_GEOMETRY_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the map-geometry reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_map_geometry(handle: u32) {
+    MAP_GEOMETRY_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the map-geometry reader's `SourceMeta` as a plain JS object. A map
+/// source surfaces exactly one `map_geometry` channel; the shape reuses the
+/// MF4/lidar summary layout (`group` always null, `sample_count` = polyline
+/// count). Channels carry an explicit `kind` (`"map_geometry"`) so the JS
+/// normaliser routes them to the scene panel. 64-bit numbers serialise as
+/// `BigInt`.
+#[wasm_bindgen]
+pub fn map_geometry_summary(handle: u32) -> Result<JsValue, JsError> {
+    MAP_GEOMETRY_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid map geometry handle"))?;
+        let meta = reader.meta();
+        let summary = McapSummary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| McapChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    kind: channel_kind_str(c.kind),
+                    dtype: c.dtype.map(dtype_str),
+                    unit: c.unit.clone(),
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
+/// map-geometry channel. A map is a single static frame at `t = 0`; the scene
+/// panel passes a zero/one-width window plus `include_prev` to fetch it. The
+/// emitted schema is `{ ts: Timestamp(ns), points: List<Float32>, path_lengths:
+/// List<Int32>, types: List<Utf8> }` (one row per frame) — see
+/// `map_geometry.rs`.
+#[wasm_bindgen]
+pub fn map_geometry_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    MAP_GEOMETRY_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid map geometry handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
+    })
+}
+
+/// Ascending frame timestamps (ns) of a map-geometry source, as a
+/// `BigInt64Array` — always a single entry `[0]` (a map is static). The scene
+/// panel reads frame 0 to fetch the road network once. Mirrors
+/// `openlabel_frame_times`.
+#[wasm_bindgen]
+pub fn map_geometry_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
+    MAP_GEOMETRY_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid map geometry handle"))?;
         let ts = reader.frame_times();
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
         arr.copy_from(ts);
