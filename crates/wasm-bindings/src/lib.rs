@@ -10,7 +10,7 @@ use std::cell::RefCell;
 
 use data_core::{
     BoxedRangeReader, ByteRangeReader, ChannelKind, DType, EncodedChunk, FetchOpts, McapReader,
-    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader,
+    McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader, PointCloudReader, Reader, RecipeReader,
     Ros1BagReader, Ros2Db3Reader, TabularReader, TimeBasis, TimeRange,
 };
 use js_sys::{Array, Uint8Array};
@@ -68,6 +68,7 @@ thread_local! {
     static LIDAR_READERS: RefCell<Slab<PointCloudReader>> = const { RefCell::new(Slab::new()) };
     static ROS1_BAG_READERS: RefCell<Slab<Ros1BagReader>> = const { RefCell::new(Slab::new()) };
     static ROS2_DB3_READERS: RefCell<Slab<Ros2Db3Reader>> = const { RefCell::new(Slab::new()) };
+    static RECIPE_READERS: RefCell<Slab<RecipeReader>> = const { RefCell::new(Slab::new()) };
 }
 
 /// A live MCAP video stream: a lazy cursor plus the handle of the `McapReader`
@@ -1050,5 +1051,110 @@ pub fn lidar_spin_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
         let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
         arr.copy_from(ts);
         Ok(arr)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Recipe (Format Agent — declarative decode of an unknown format)
+// ---------------------------------------------------------------------------
+
+/// Dry-run a candidate recipe against (a bounded prefix of) `bytes` and return a
+/// `DryRunReport` JSON object without retaining the source. This is the Format
+/// Agent's `validate_recipe` feedback signal (`docs/12-format-agent.md` §4.4):
+/// it decodes at most `budget` records, never panics, and never allocates past
+/// the budget. `budget` of 0 is treated as "no records".
+#[wasm_bindgen]
+pub fn recipe_dry_run(bytes: &[u8], recipe_json: &str, budget: u32) -> Result<JsValue, JsError> {
+    let report = RecipeReader::dry_run(bytes, recipe_json, budget)
+        .map_err(|e| JsError::new(&format!("recipe dry run failed: {e}")))?;
+    report
+        .serialize(&bigint_serializer())
+        .map_err(|e| JsError::new(&format!("serialise dry-run report: {e}")))
+}
+
+/// Open `bytes` with the given Ingest Recipe (JSON) and register the resulting
+/// `RecipeReader` in the thread-local slab. Returns the integer handle the other
+/// `recipe_*` endpoints take. Every channel surfaces as a `Scalar` / `Float64`
+/// series, so the JS store treats a recipe source exactly like a tabular one.
+#[wasm_bindgen]
+pub fn open_recipe(bytes: &[u8], recipe_json: &str) -> Result<u32, JsError> {
+    let reader = RecipeReader::open(bytes, recipe_json)
+        .map_err(|e| JsError::new(&format!("open recipe failed: {e}")))?;
+    let key = RECIPE_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
+/// Drop the recipe reader at `handle`. No-op if the handle is stale.
+#[wasm_bindgen]
+pub fn close_recipe(handle: u32) {
+    RECIPE_READERS.with(|cell| {
+        let mut slab = cell.borrow_mut();
+        if slab.contains(handle as usize) {
+            slab.remove(handle as usize);
+        }
+    });
+}
+
+/// Return the recipe reader's `SourceMeta` as a plain JS object — the same shape
+/// `tabular_summary` emits (`{ start_ns, end_ns, channels: [{ id, name, unit,
+/// group, sample_count, start_ns, end_ns }] }`), since every recipe channel is a
+/// scalar f64 signal.
+#[wasm_bindgen]
+pub fn recipe_summary(handle: u32) -> Result<JsValue, JsError> {
+    RECIPE_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid recipe handle"))?;
+        let meta = reader.meta();
+        let summary = Mf4Summary {
+            start_ns: meta.time_range.start_ns,
+            end_ns: meta.time_range.end_ns,
+            channels: meta
+                .channels
+                .iter()
+                .map(|c| ChannelInfo {
+                    id: c.id.clone(),
+                    name: c.name.clone(),
+                    unit: c.unit.clone(),
+                    group: None,
+                    sample_count: c.sample_count,
+                    start_ns: c.time_range.start_ns,
+                    end_ns: c.time_range.end_ns,
+                })
+                .collect(),
+        };
+        summary
+            .serialize(&bigint_serializer())
+            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    })
+}
+
+/// Arrow IPC bytes for `[start_ns, end_ns)` of the given recipe channel id.
+/// `include_prev` controls the step-hold leading-sample option documented in
+/// `docs/03-data-model.md` FetchOpts.
+#[wasm_bindgen]
+pub fn recipe_fetch_range(
+    handle: u32,
+    channel_id: &str,
+    start_ns: i64,
+    end_ns: i64,
+    include_prev: bool,
+) -> Result<Uint8Array, JsError> {
+    RECIPE_READERS.with(|cell| {
+        let slab = cell.borrow();
+        let reader = slab
+            .get(handle as usize)
+            .ok_or_else(|| JsError::new("invalid recipe handle"))?;
+        let bytes = reader
+            .fetch_range(
+                &channel_id.to_string(),
+                TimeRange { start_ns, end_ns },
+                FetchOpts { include_prev },
+            )
+            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+        let out = Uint8Array::new_with_length(bytes.len() as u32);
+        out.copy_from(&bytes);
+        Ok(out)
     })
 }

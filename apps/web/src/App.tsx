@@ -220,6 +220,7 @@ declare global {
           | "mf4"
           | "mp4+sidecar"
           | "tabular"
+          | "recipe"
           | "lidar"
           | "ros1"
           | "ros2db3";

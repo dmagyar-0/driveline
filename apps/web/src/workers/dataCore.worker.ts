@@ -39,6 +39,11 @@ import init, {
   close_ros2_db3,
   ros2_db3_summary,
   ros2_db3_fetch_range,
+  recipe_dry_run,
+  open_recipe,
+  recipe_summary,
+  recipe_fetch_range,
+  close_recipe,
 } from "../wasm/wasm_bindings.js";
 import {
   normaliseEncodedChunk,
@@ -55,6 +60,7 @@ import {
   type RawMp4Summary,
 } from "./normalise";
 import type { RawTabularSchema } from "../state/tabularImport";
+import type { RawRecipeDryRunReport } from "../state/recipe";
 import { UrlFetchBlockedError, urlProbeSize, urlReadRange } from "./urlRange";
 
 /**
@@ -603,6 +609,59 @@ export const dataCoreApi = {
   async closeTabular(handle: number): Promise<void> {
     await ready;
     close_tabular(handle);
+  },
+  /**
+   * Dry-run a candidate Ingest Recipe against (a bounded prefix of) a file and
+   * return a `DryRunReport` — the Format Agent's `validate_recipe` feedback
+   * signal (see `docs/12-format-agent.md`). Decodes at most `budget` records;
+   * never retains the source. Accepting a `File` keeps the bytes worker-side.
+   */
+  async recipeDryRun(
+    file: File,
+    recipeJson: string,
+    budget: number,
+  ): Promise<RawRecipeDryRunReport> {
+    await ready;
+    return recipe_dry_run(
+      new Uint8Array(await file.arrayBuffer()),
+      recipeJson,
+      budget,
+    ) as RawRecipeDryRunReport;
+  },
+  /**
+   * Open a file with an Ingest Recipe (JSON) and register the resulting reader
+   * in the wasm slab. Returns the integer handle the other `recipe*` methods
+   * take. Every channel is a scalar f64 signal, so the summary/fetch shape is
+   * identical to the tabular path.
+   */
+  async openRecipe(file: File, recipeJson: string): Promise<number> {
+    await ready;
+    return open_recipe(new Uint8Array(await file.arrayBuffer()), recipeJson);
+  },
+  async recipeSummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(recipe_summary(handle) as RawMf4Summary);
+  },
+  async recipeFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    const buf = recipe_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
+    return Comlink.transfer(buf, [buf.buffer]);
+  },
+  async closeRecipe(handle: number): Promise<void> {
+    await ready;
+    close_recipe(handle);
   },
   /**
    * Open a Driveline point-cloud Parquet (one row per LiDAR spin). The wasm

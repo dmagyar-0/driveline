@@ -83,6 +83,9 @@ pub enum SourceKind {
     Mf4,
     Mp4Sidecar,
     Tabular,
+    /// A source decoded from an unknown format via a declarative Ingest Recipe
+    /// (the Format Agent path). See `RecipeReader` and `docs/12-format-agent.md`.
+    Recipe,
     /// A ROS1 `.bag` (rosbag v2.0). See `Ros1BagReader`.
     Ros1,
     /// A Driveline point-cloud Parquet (one row per LiDAR spin). See

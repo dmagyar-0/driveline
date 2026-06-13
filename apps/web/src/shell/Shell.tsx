@@ -16,6 +16,7 @@ import { Drawer } from "./Drawer";
 import { FirstRun } from "./FirstRun";
 import { OpenErrorToast } from "./OpenErrorToast";
 import { TabularImportDialog } from "./TabularImportDialog";
+import { UnknownFormatDialog } from "./UnknownFormatDialog";
 import { VideoTimestampDialog } from "./VideoTimestampDialog";
 import styles from "./Shell.module.css";
 
@@ -97,6 +98,7 @@ export function Shell({
       {transport}
       <OpenErrorToast />
       <TabularImportDialog />
+      <UnknownFormatDialog />
       <VideoTimestampDialog />
       {dragActive && (
         <div className={styles.dragOverlay}>
