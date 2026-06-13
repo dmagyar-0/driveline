@@ -18,6 +18,7 @@ import { create } from "zustand";
 import {
   bucketFiles,
   classifyUrl,
+  sniffCalibration,
   sniffOpenlabel,
   type BucketError,
   type TabularFormat,
@@ -32,7 +33,15 @@ import {
 import type { RawRecipeDryRunReport, Recipe } from "./recipe";
 import { matchRecipe, saveRecipe } from "./formatRegistry";
 import { MAX_PLOT_SERIES } from "../panels/palette";
-import { loadLayoutFromStorage, type MapBinding } from "../layout/persist";
+import {
+  loadLayoutFromStorage,
+  type MapBinding,
+  type PointCloudOverlayBinding,
+} from "../layout/persist";
+import {
+  decodeCalibration,
+  type CameraCalibration,
+} from "../panels/calibrationFromArrow";
 import {
   loadUiFromStorage,
   clampDrawerWidth,
@@ -84,6 +93,7 @@ export type SourceKind =
   | "recipe"
   | "lidar"
   | "openlabel"
+  | "calibration"
   | "ros1"
   | "ros2db3";
 export type ChannelKind = ChannelKindWire;
@@ -441,6 +451,16 @@ export interface SessionState {
   // stacks one state strip ("lane") per bound channel rather than filling
   // itself with a single signal. Capped at `MAX_PLOT_SERIES`.
   enumBindings: Record<string, string[]>;
+  // Per-video-panel point-cloud overlay bindings (docs/13). Keyed by the
+  // FlexLayout video-panel id; `null`/absent ⇒ no overlay. Round-trips
+  // through the layout shard like `mapBindings`.
+  pointCloudOverlays: Record<string, PointCloudOverlayBinding | null>;
+  // Decoded calibration cache, keyed by calibration channel id. Populated by
+  // `loadCalibration` (open → fetch → decode) so the overlay binding picker
+  // and the VideoPanel draw loop can resolve a `cameraName` to a
+  // `CameraCalibration` without re-fetching. Ephemeral: not persisted (the
+  // binding is; the decoded cameras are re-fetched from the open source).
+  calibrationCache: Record<string, CameraCalibration[]>;
   // UI shell slice (Phase 1). `activeRailTab` and `railCollapsed` persist
   // to `driveline.ui.v1`; `selectedPanelId` is per-session and is wired by
   // panel-chrome work in Phase 7.
@@ -746,6 +766,22 @@ export interface SessionState {
   setSceneBinding(panelId: string, channelId: string | null): void;
   /** Bind a map panel to lat/lon channels; pass `null` to clear. */
   setMapBinding(panelId: string, binding: MapBinding | null): void;
+  /**
+   * Set (or clear with `null`) a video panel's point-cloud overlay binding
+   * (docs/13). When a non-null binding names a not-yet-cached calibration
+   * channel, also kicks off `loadCalibration` so the decoded cameras are ready
+   * for the draw loop.
+   */
+  setPointCloudOverlay(
+    panelId: string,
+    binding: PointCloudOverlayBinding | null,
+  ): void;
+  /**
+   * Fetch + decode the cameras for a calibration channel into
+   * `calibrationCache` (keyed by channel id). Idempotent: a cached entry
+   * short-circuits. Resolves to the decoded cameras (empty array on failure).
+   */
+  loadCalibration(calibrationChannelId: string): Promise<CameraCalibration[]>;
   /** Replace a table panel's bound channels wholesale (capped, deduped). */
   setTableBinding(panelId: string, ids: string[]): void;
   /** Append one channel to a table panel (no-op if present or at cap). */
@@ -1050,6 +1086,67 @@ function openLabelChannels(sourceId: string, s: Mf4Summary): Channel[] {
   }));
 }
 
+// Calibration summaries arrive in the same MF4 shape (a single channel,
+// `sample_count` = camera count). Mirrors `lidarChannels`/`openLabelChannels`
+// but hardcodes the `camera_calibration` kind so the PanelDrawer/overlay picker
+// route it to the point-cloud-on-video overlay rather than a plot. Calibration
+// is config, not a time series — `timeRange` mirrors the summary's bounds (the
+// reader emits a degenerate range) and is never used for fetching.
+function calibrationChannels(sourceId: string, s: Mf4Summary): Channel[] {
+  return s.channels.map((c) => ({
+    id: qualifiedChannelId(sourceId, c.id),
+    nativeId: c.id,
+    sourceId,
+    name: c.name,
+    group: null,
+    kind: "camera_calibration" as const,
+    dtype: null,
+    unit: null,
+    sampleCount: c.sample_count,
+    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
+  }));
+}
+
+// Prune helper for the object-valued point-cloud overlay map: a binding dies
+// when *either* its calibration channel or its point-cloud channel is gone.
+function prunePointCloudOverlays(
+  m: Record<string, PointCloudOverlayBinding | null>,
+  gone: Set<string>,
+): Record<string, PointCloudOverlayBinding | null> {
+  let changed = false;
+  const out: Record<string, PointCloudOverlayBinding | null> = {};
+  for (const [panelId, binding] of Object.entries(m)) {
+    if (
+      binding !== null &&
+      (gone.has(binding.calibrationChannelId) ||
+        gone.has(binding.pointcloudChannelId))
+    ) {
+      out[panelId] = null;
+      changed = true;
+    } else {
+      out[panelId] = binding;
+    }
+  }
+  return changed ? out : m;
+}
+
+// Drop decoded-calibration cache entries whose calibration channel is gone.
+function pruneCalibrationCache(
+  m: Record<string, CameraCalibration[]>,
+  gone: Set<string>,
+): Record<string, CameraCalibration[]> {
+  let changed = false;
+  const out: Record<string, CameraCalibration[]> = {};
+  for (const [channelId, cams] of Object.entries(m)) {
+    if (gone.has(channelId)) {
+      changed = true;
+      continue;
+    }
+    out[channelId] = cams;
+  }
+  return changed ? out : m;
+}
+
 // Binding-pruning helpers used by `removeSource`. Each returns the *same*
 // reference when nothing changed so Zustand selectors subscribed to an
 // untouched binding map don't see a spurious update.
@@ -1216,6 +1313,8 @@ export const useSession = create<SessionState>((set, get) => {
     tableBindings: hydrated?.tableBindings ?? {},
     valueBindings: hydrated?.valueBindings ?? {},
     enumBindings: hydrated?.enumBindings ?? {},
+    pointCloudOverlays: hydrated?.pointCloudOverlays ?? {},
+    calibrationCache: {},
     activeRailTab: hydratedUi?.activeRailTab ?? null,
     railCollapsed: hydratedUi?.railCollapsed ?? false,
     drawerWidth: hydratedUi?.drawerWidth ?? DRAWER_WIDTH_DEFAULT,
@@ -1605,6 +1704,60 @@ export const useSession = create<SessionState>((set, get) => {
         return;
       }
       set({ mapBindings: { ...prev, [panelId]: binding } });
+    },
+
+    setPointCloudOverlay(panelId, binding) {
+      const prev = get().pointCloudOverlays;
+      const cur = prev[panelId] ?? null;
+      // Deep-equal short-circuit so re-binding the same overlay is a no-op
+      // (avoids spurious persistence writes), mirroring `setMapBinding`.
+      if (
+        cur === binding ||
+        (cur !== null &&
+          binding !== null &&
+          cur.calibrationChannelId === binding.calibrationChannelId &&
+          cur.cameraName === binding.cameraName &&
+          cur.pointcloudChannelId === binding.pointcloudChannelId)
+      ) {
+        return;
+      }
+      set({ pointCloudOverlays: { ...prev, [panelId]: binding } });
+      // Warm the decoded-calibration cache so the draw loop has cameras ready.
+      if (
+        binding !== null &&
+        !get().calibrationCache[binding.calibrationChannelId]
+      ) {
+        void get().loadCalibration(binding.calibrationChannelId);
+      }
+    },
+
+    async loadCalibration(calibrationChannelId) {
+      const cached = get().calibrationCache[calibrationChannelId];
+      if (cached) return cached;
+      if (!worker) throw new Error("session store: worker not initialised");
+      const { channels, sources } = get();
+      const channel = channels.find((c) => c.id === calibrationChannelId);
+      if (!channel) return [];
+      const source = sources.find((s) => s.id === channel.sourceId);
+      if (!source || source.kind !== "calibration") return [];
+      let cameras: CameraCalibration[] = [];
+      try {
+        const bytes = await worker.calibrationFetch(
+          source.handle,
+          channel.nativeId,
+        );
+        const res = decodeCalibration(bytes);
+        if (res.ok) cameras = res.cameras;
+      } catch {
+        cameras = [];
+      }
+      set({
+        calibrationCache: {
+          ...get().calibrationCache,
+          [calibrationChannelId]: cameras,
+        },
+      });
+      return cameras;
     },
 
     setTableBinding(panelId, ids) {
@@ -2175,10 +2328,13 @@ export const useSession = create<SessionState>((set, get) => {
           {
             const stillUnknown: File[] = [];
             for (const f of buckets.unknown) {
-              if (
-                f.name.toLowerCase().endsWith(".json") &&
-                (await sniffOpenlabel(f))
-              ) {
+              const isJson = f.name.toLowerCase().endsWith(".json");
+              // Sniff calibration before OpenLABEL: a `.calib.json` is the
+              // narrower marker. Files that match neither stay in `unknown`
+              // for the recipe/Format-Agent flow.
+              if (isJson && (await sniffCalibration(f))) {
+                buckets.calibration.push(f);
+              } else if (isJson && (await sniffOpenlabel(f))) {
                 buckets.openlabel.push(f);
               } else {
                 stillUnknown.push(f);
@@ -2339,6 +2495,34 @@ export const useSession = create<SessionState>((set, get) => {
                 channels,
                 // Annotations carry no time offset; alignment lives in the frame
                 // timestamps and the fetch path passes bytes through unshifted.
+                timeOffsetNs: 0n,
+              });
+              opened.push(f.name);
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
+          }
+
+          for (const f of buckets.calibration) {
+            try {
+              // Camera-calibration sources open eagerly: the wasm reader
+              // validates the `driveline.calibration/v1` marker and owns the
+              // decoded cameras for the source's lifetime. Surfaces as a single
+              // `kind: "calibration"` source with one `camera_calibration`
+              // channel carrying every camera (one row each on fetch), routed
+              // to the point-cloud-on-video overlay rather than a plot.
+              const handle = await w.openCalibration(f);
+              const summary = await w.calibrationSummary(handle);
+              const id = uniqueSourceId(f.name, [...existing, ...newSources]);
+              const channels = calibrationChannels(id, summary);
+              newSources.push({
+                id,
+                kind: "calibration",
+                name: f.name,
+                handle,
+                timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+                channels,
+                // Calibration is config, not a time series — no offset.
                 timeOffsetNs: 0n,
               });
               opened.push(f.name);
@@ -2892,6 +3076,8 @@ export const useSession = create<SessionState>((set, get) => {
           tableBindings: {},
           valueBindings: {},
           enumBindings: {},
+          pointCloudOverlays: {},
+          calibrationCache: {},
           lastOpenErrors: [],
           loadedRanges: {},
           pendingFetch: {},
@@ -2982,6 +3168,14 @@ export const useSession = create<SessionState>((set, get) => {
           tableBindings: pruneMultiBindings(cur.tableBindings, goneChannelIds),
           valueBindings: pruneMultiBindings(cur.valueBindings, goneChannelIds),
           enumBindings: pruneMultiBindings(cur.enumBindings, goneChannelIds),
+          pointCloudOverlays: prunePointCloudOverlays(
+            cur.pointCloudOverlays,
+            goneChannelIds,
+          ),
+          calibrationCache: pruneCalibrationCache(
+            cur.calibrationCache,
+            goneChannelIds,
+          ),
           loadedRanges,
           pendingFetch,
         });

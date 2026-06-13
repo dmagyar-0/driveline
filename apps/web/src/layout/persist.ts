@@ -46,6 +46,17 @@ export interface MapBinding {
   lonChannelId: string;
 }
 
+// Per-video-panel point-cloud overlay binding (docs/13). Ties a video panel to
+// (a) a loaded calibration channel, (b) a named camera within that calibration,
+// and (c) the LiDAR point-cloud channel whose spins are projected onto the
+// frame. Persisted in the layout shard like `MapBinding` — an object-valued,
+// per-panel binding.
+export interface PointCloudOverlayBinding {
+  calibrationChannelId: string;
+  cameraName: string;
+  pointcloudChannelId: string;
+}
+
 export interface PlotPanelSettingsLite {
   gapThresholdSec: number | null;
   // Per-channel-id → 0-based y-axis index. Optional (additive field).
@@ -69,6 +80,9 @@ export interface PersistedLayout {
   valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
+  // Per-video-panel point-cloud overlay bindings (docs/13). Optional/additive
+  // like `valueBindings`: payloads written before this existed default to `{}`.
+  pointCloudOverlays: Record<string, PointCloudOverlayBinding | null>;
   // Global per-channel unit overrides, keyed by channel id.
   unitOverrides: Record<string, string>;
 }
@@ -132,6 +146,21 @@ function isMapBindingMap(v: unknown): v is Record<string, MapBinding | null> {
     if (!isPlainObject(x)) return false;
     if (typeof x.latChannelId !== "string") return false;
     if (typeof x.lonChannelId !== "string") return false;
+  }
+  return true;
+}
+
+function isPointCloudOverlayMap(
+  v: unknown,
+): v is Record<string, PointCloudOverlayBinding | null> {
+  if (!isPlainObject(v)) return false;
+  for (const k of Object.keys(v)) {
+    const x = v[k];
+    if (x === null) continue;
+    if (!isPlainObject(x)) return false;
+    if (typeof x.calibrationChannelId !== "string") return false;
+    if (typeof x.cameraName !== "string") return false;
+    if (typeof x.pointcloudChannelId !== "string") return false;
   }
   return true;
 }
@@ -205,6 +234,8 @@ function validate(raw: unknown): PersistedLayout | null {
   if (!isPlotPanelSettingsMap(settings)) return null;
   const valueBindings = raw.valueBindings ?? {};
   if (!isStringArrayMap(valueBindings)) return null;
+  const pointCloudOverlays = raw.pointCloudOverlays ?? {};
+  if (!isPointCloudOverlayMap(pointCloudOverlays)) return null;
   const unitOverrides = raw.unitOverrides ?? {};
   if (!isStringMap(unitOverrides)) return null;
   return {
@@ -219,6 +250,7 @@ function validate(raw: unknown): PersistedLayout | null {
     valueBindings,
     enumBindings,
     plotPanelSettings: settings,
+    pointCloudOverlays,
     unitOverrides,
   };
 }
@@ -269,6 +301,7 @@ export interface LayoutSlice {
   valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
+  pointCloudOverlays: Record<string, PointCloudOverlayBinding | null>;
   unitOverrides: Record<string, string>;
 }
 
@@ -285,6 +318,7 @@ function snapshot(s: LayoutSlice): PersistedLayout {
     valueBindings: s.valueBindings,
     enumBindings: s.enumBindings,
     plotPanelSettings: s.plotPanelSettings,
+    pointCloudOverlays: s.pointCloudOverlays,
     unitOverrides: s.unitOverrides,
   };
 }
@@ -311,6 +345,7 @@ export function attachLayoutPersistence(
       s.valueBindings === last.valueBindings &&
       s.enumBindings === last.enumBindings &&
       s.plotPanelSettings === last.plotPanelSettings &&
+      s.pointCloudOverlays === last.pointCloudOverlays &&
       s.unitOverrides === last.unitOverrides
     ) {
       return;

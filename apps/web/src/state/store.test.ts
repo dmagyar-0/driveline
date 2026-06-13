@@ -2261,3 +2261,37 @@ describe("event provenance + bulk import (agent interface)", () => {
     expect(useSession.getState().bookmarks.map((b) => b.id)).toEqual(["only"]);
   });
 });
+
+describe("setPointCloudOverlay (point-cloud-on-video overlay binding)", () => {
+  it("sets, short-circuits, and clears a per-panel overlay binding", () => {
+    const binding = {
+      calibrationChannelId: "/calib",
+      cameraName: "CAM_FRONT",
+      pointcloudChannelId: "/cloud/front",
+    };
+    useSession.getState().setPointCloudOverlay("video-1", binding);
+    expect(useSession.getState().pointCloudOverlays["video-1"]).toEqual(
+      binding,
+    );
+
+    // Deep-equal re-set is a no-op (same object identity preserved).
+    const before = useSession.getState().pointCloudOverlays;
+    useSession.getState().setPointCloudOverlay("video-1", { ...binding });
+    expect(useSession.getState().pointCloudOverlays).toBe(before);
+
+    // Clearing sets null.
+    useSession.getState().setPointCloudOverlay("video-1", null);
+    expect(useSession.getState().pointCloudOverlays["video-1"]).toBeNull();
+  });
+
+  it("clear() drops all overlay bindings and the calibration cache", async () => {
+    useSession.getState().setPointCloudOverlay("video-1", {
+      calibrationChannelId: "/calib",
+      cameraName: "CAM_FRONT",
+      pointcloudChannelId: "/cloud/front",
+    });
+    await useSession.getState().clear();
+    expect(useSession.getState().pointCloudOverlays).toEqual({});
+    expect(useSession.getState().calibrationCache).toEqual({});
+  });
+});
