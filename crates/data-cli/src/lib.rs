@@ -104,6 +104,7 @@ fn source_kind_str(kind: SourceKind) -> &'static str {
         SourceKind::Tabular => "tabular",
         SourceKind::Ros1 => "ros1",
         SourceKind::Lidar => "lidar",
+        SourceKind::Recipe => "recipe",
     }
 }
 
