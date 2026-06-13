@@ -331,6 +331,24 @@ declare global {
     // decimal STRING so a full-precision ns value survives `page.evaluate`;
     // an unparseable string or a non-signal source id is a no-op.
     __drivelineSetSourceOffset?: (sourceId: string, offsetNs: string) => void;
+    // Format Agent (docs/12 Phase 2) — engine-injection seam for the
+    // deterministic e2e. `installFakeEngine(progress, recipeJson)` lazy-imports
+    // the `llm/` chunk and replaces the engine factory with one that emits the
+    // supplied progress events then returns the supplied recipe — no network,
+    // no key. `resetEngine()` restores the real `ClientOrchestratedEngine`.
+    // The seam lives INSIDE the lazy chunk (engineFactory.ts), so installing it
+    // pulls the chunk but never the Anthropic SDK (the SDK is a nested dynamic
+    // import behind a real run only) — the first-load budget is untouched.
+    __drivelineFormatAgent?: {
+      installFakeEngine: (
+        progress: unknown[],
+        recipeJson: string,
+      ) => Promise<void>;
+      // Install a fake that emits one event then hangs until aborted — for
+      // exercising the Abort button + failure surface deterministically.
+      installHangingEngine: () => Promise<void>;
+      resetEngine: () => Promise<void>;
+    };
   }
 }
 
@@ -696,6 +714,47 @@ export function App() {
       };
       window.__drivelineSetSourceOffset = (sourceId, offsetNs) =>
         useSession.getState().setSourceOffset(sourceId, offsetNs);
+      window.__drivelineFormatAgent = {
+        installFakeEngine: async (progress, recipeJson) => {
+          // Lazy-import the engine barrel (same chunk the dialog imports) and
+          // swap its factory. The fake never touches the network or the SDK.
+          const llm = await import("./llm");
+          llm.setFormatAgentEngineFactory(() => ({
+            async run({ validateLocally, onProgress, signal }) {
+              for (const msg of progress) {
+                if (signal.aborted) {
+                  throw new llm.AgentError("aborted", "cancelled");
+                }
+                onProgress(msg as never);
+              }
+              // Run the real local dry-run so the verdict + outcome report
+              // reflect the actual decode of the dropped file.
+              const report = await validateLocally(recipeJson);
+              onProgress({ type: "validation-verdict", attempt: 1, report });
+              const recipe = JSON.parse(recipeJson);
+              onProgress({ type: "done", recipe });
+              return { recipe, transcriptSummary: "fake engine" };
+            },
+          }));
+        },
+        installHangingEngine: async () => {
+          const llm = await import("./llm");
+          llm.setFormatAgentEngineFactory(() => ({
+            run({ onProgress, signal }) {
+              onProgress({ type: "thinking", text: "Working…" });
+              return new Promise((_resolve, reject) => {
+                signal.addEventListener("abort", () => {
+                  reject(new llm.AgentError("aborted", "cancelled"));
+                });
+              });
+            },
+          }));
+        },
+        resetEngine: async () => {
+          const llm = await import("./llm");
+          llm.resetFormatAgentEngineFactory();
+        },
+      };
     }
     // Agent interface — unlike the dev hooks above this ships in the
     // production bundle, but only installs when the page opts in with
@@ -729,6 +788,7 @@ export function App() {
         delete window.__drivelineTabular;
         delete window.__drivelineVideoTs;
         delete window.__drivelineSetSourceOffset;
+        delete window.__drivelineFormatAgent;
       }
       useSession.getState().setWorker(null);
       dataCore.current = null;

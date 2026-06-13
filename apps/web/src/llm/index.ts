@@ -43,3 +43,10 @@ export {
   type AnthropicLike,
   type EngineConfig,
 } from "./engine";
+
+export {
+  getFormatAgentEngineFactory,
+  resetFormatAgentEngineFactory,
+  setFormatAgentEngineFactory,
+  type FormatAgentEngineFactory,
+} from "./engineFactory";
