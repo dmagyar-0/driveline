@@ -118,25 +118,28 @@ pub fn arrow_bounding_box_ipc() -> crate::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/// Schema: `{ name: Utf8, intrinsics: List<Float32>, resolution: List<Int32>,
-/// distortion: List<Float32>, translation: List<Float32>, quaternion:
-/// List<Float32> }` — one row (camera). Mirrors `CalibrationReader::fetch_range`.
-/// Bit-identical to `test-fixtures/arrow_calibration.ipc`; consumed by the Rust
-/// contract test and the JS vitest suite via `apache-arrow`.
+/// Schema: `{ name: Utf8, model: Utf8, intrinsics: List<Float32>, resolution:
+/// List<Int32>, distortion: List<Float32>, forward_poly: List<Float32>,
+/// translation: List<Float32>, quaternion: List<Float32> }` — one row (camera).
+/// Mirrors `CalibrationReader::fetch_range`. Bit-identical to
+/// `test-fixtures/arrow_calibration.ipc`; consumed by the Rust contract test and
+/// the JS vitest suite via `apache-arrow`.
 ///
 /// The single camera is the `CAM_FRONT` example from
-/// `docs/13-camera-lidar-calibration.md`: nuScenes-style intrinsics
-/// `[1266.4, 1266.4, 816.3, 491.5]`, resolution `[1600, 900]`, zero distortion
-/// `[0,0,0,0,0]`, zero translation, and the scalar-last extrinsic quaternion
-/// `[-0.5, 0.5, -0.5, 0.5]`.
+/// `docs/13-camera-lidar-calibration.md`: `pinhole` model with nuScenes-style
+/// intrinsics `[1266.4, 1266.4, 816.3, 491.5]`, resolution `[1600, 900]`, zero
+/// distortion `[0,0,0,0,0]`, empty `forward_poly` (pinhole), zero translation,
+/// and the scalar-last extrinsic quaternion `[-0.5, 0.5, -0.5, 0.5]`.
 pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
     let f32_item = || Arc::new(Field::new("item", DataType::Float32, true));
     let i32_item = Arc::new(Field::new("item", DataType::Int32, true));
     let schema = Arc::new(Schema::new(vec![
         Field::new("name", DataType::Utf8, false),
+        Field::new("model", DataType::Utf8, false),
         Field::new("intrinsics", DataType::List(f32_item()), false),
         Field::new("resolution", DataType::List(i32_item), false),
         Field::new("distortion", DataType::List(f32_item()), false),
+        Field::new("forward_poly", DataType::List(f32_item()), false),
         Field::new("translation", DataType::List(f32_item()), false),
         Field::new("quaternion", DataType::List(f32_item()), false),
     ]));
@@ -144,6 +147,10 @@ pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
     let mut name_b = StringBuilder::new();
     name_b.append_value("CAM_FRONT");
     let name = name_b.finish();
+
+    let mut model_b = StringBuilder::new();
+    model_b.append_value("pinhole");
+    let model = model_b.finish();
 
     let mut intrinsics_b = ListBuilder::new(Float32Builder::new());
     intrinsics_b
@@ -164,6 +171,11 @@ pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
     distortion_b.append(true);
     let distortion = distortion_b.finish();
 
+    // Pinhole camera → empty forward_poly (just close the list row).
+    let mut forward_poly_b = ListBuilder::new(Float32Builder::new());
+    forward_poly_b.append(true);
+    let forward_poly = forward_poly_b.finish();
+
     let mut translation_b = ListBuilder::new(Float32Builder::new());
     translation_b.values().append_slice(&[0.0, 0.0, 0.0]);
     translation_b.append(true);
@@ -178,9 +190,11 @@ pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
         schema.clone(),
         vec![
             Arc::new(name),
+            Arc::new(model),
             Arc::new(intrinsics),
             Arc::new(resolution),
             Arc::new(distortion),
+            Arc::new(forward_poly),
             Arc::new(translation),
             Arc::new(quaternion),
         ],

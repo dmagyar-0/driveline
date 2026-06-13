@@ -3,12 +3,14 @@
 // Rust core emits one row per camera (see `crates/data-core/src/calibration.rs`
 // and `docs/13-camera-lidar-calibration.md`):
 //
-//   { name:        Utf8,
-//     intrinsics:  List<Float32>,  // length 4 = [fx, fy, cx, cy] (px)
-//     resolution:  List<Int32>,    // length 2 = [width, height] (px)
-//     distortion:  List<Float32>,  // length 0 or 5 = [k1,k2,p1,p2,k3]
-//     translation: List<Float32>,  // length 3 = [tx, ty, tz] (m)
-//     quaternion:  List<Float32> } // length 4 = [qx, qy, qz, qw] scalar-LAST
+//   { name:         Utf8,
+//     model:        Utf8,           // "pinhole" or "ftheta"
+//     intrinsics:   List<Float32>,  // length 4 = [fx, fy, cx, cy] (px)
+//     resolution:   List<Int32>,    // length 2 = [width, height] (px)
+//     distortion:   List<Float32>,  // length 0 or 5 = [k1,k2,p1,p2,k3]
+//     forward_poly: List<Float32>,  // length 0 (pinhole) or >=2 ftheta coeffs
+//     translation:  List<Float32>,  // length 3 = [tx, ty, tz] (m)
+//     quaternion:   List<Float32> } // length 4 = [qx, qy, qz, qw] scalar-LAST
 //
 // Calibration is config, not a time series: a single fetch returns *every*
 // camera, so the decoder returns one `CameraCalibration` per row (not just the
@@ -18,8 +20,15 @@
 
 import { tableFromIPC, type Table } from "apache-arrow";
 
+/** Projection model. `pinhole` uses intrinsics + Brown–Conrady distortion;
+ * `ftheta` uses the `forwardPoly` (angle→pixel-radius) fisheye polynomial. */
+export type CameraModel = "pinhole" | "ftheta";
+
 export interface CameraCalibration {
   name: string;
+  // Projection model — selects how `cameraProjection.ts` maps a camera-frame
+  // point to a pixel. `pinhole` (default) or `ftheta` (wide-FOV fisheye).
+  model: CameraModel;
   intrinsics: {
     fx: number;
     fy: number;
@@ -28,8 +37,12 @@ export interface CameraCalibration {
     width: number;
     height: number;
   };
-  // Distortion coefficients: `[]` (none) or 5 `[k1, k2, p1, p2, k3]`.
+  // Distortion coefficients: `[]` (none) or 5 `[k1, k2, p1, p2, k3]`. Unused
+  // when `model === "ftheta"`.
   distortion: number[];
+  // f-theta forward polynomial `[c0, c1, …]`: `[]` for pinhole, else >=2 coeffs
+  // mapping a ray's angle from the optical axis (radians) to a pixel radius.
+  forwardPoly: number[];
   // Translation `[tx, ty, tz]` (metres), scene/LiDAR -> camera optical.
   translation: [number, number, number];
   // Orientation quaternion, scalar-LAST `[qx, qy, qz, qw]`.
@@ -123,9 +136,16 @@ export function decodeCalibration(bytes: Uint8Array): CalibrationResult {
   const nameCol = table.getChild("name") as
     | Parameters<typeof utf8Row>[0]
     | null;
+  // `model` and `forward_poly` are additive (f-theta) columns. They are read
+  // tolerantly — a calibration source without them decodes as `pinhole` with an
+  // empty forward polynomial — so the decoder never throws on a missing column.
+  const modelCol = table.getChild("model") as
+    | Parameters<typeof utf8Row>[0]
+    | null;
   const intrinsicsCol = table.getChild("intrinsics") as ListCol | null;
   const resolutionCol = table.getChild("resolution") as ListCol | null;
   const distortionCol = table.getChild("distortion") as ListCol | null;
+  const forwardPolyCol = table.getChild("forward_poly") as ListCol | null;
   const translationCol = table.getChild("translation") as ListCol | null;
   const quaternionCol = table.getChild("quaternion") as ListCol | null;
   if (
@@ -166,21 +186,31 @@ export function decodeCalibration(bytes: Uint8Array): CalibrationResult {
         message: `row ${r}: a column was not the expected single-chunk List/Utf8 type.`,
       };
     }
+    // f-theta columns are tolerant: absent → pinhole / empty forward_poly.
+    const modelStr = modelCol ? utf8Row(modelCol, r) : null;
+    const model: CameraModel = modelStr === "ftheta" ? "ftheta" : "pinhole";
+    const forwardPoly = forwardPolyCol
+      ? listRow(forwardPolyCol, r, Float32Array)
+      : null;
     if (
       intrinsics.length !== 4 ||
       resolution.length !== 2 ||
       (distortion.length !== 0 && distortion.length !== 5) ||
+      (forwardPoly !== null &&
+        forwardPoly.length !== 0 &&
+        forwardPoly.length < 2) ||
       translation.length !== 3 ||
       quaternion.length !== 4
     ) {
       return {
         ok: false,
         reason: "dtype",
-        message: `row ${r}: column lengths disagree (intrinsics=${intrinsics.length} resolution=${resolution.length} distortion=${distortion.length} translation=${translation.length} quaternion=${quaternion.length}).`,
+        message: `row ${r}: column lengths disagree (intrinsics=${intrinsics.length} resolution=${resolution.length} distortion=${distortion.length} forward_poly=${forwardPoly?.length ?? 0} translation=${translation.length} quaternion=${quaternion.length}).`,
       };
     }
     cameras.push({
       name,
+      model,
       intrinsics: {
         fx: intrinsics[0],
         fy: intrinsics[1],
@@ -190,6 +220,7 @@ export function decodeCalibration(bytes: Uint8Array): CalibrationResult {
         height: resolution[1],
       },
       distortion: Array.from(distortion),
+      forwardPoly: forwardPoly ? Array.from(forwardPoly) : [],
       translation: [translation[0], translation[1], translation[2]],
       quaternion: [quaternion[0], quaternion[1], quaternion[2], quaternion[3]],
     });

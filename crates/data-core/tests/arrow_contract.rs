@@ -146,24 +146,27 @@ fn bounding_box_fixture_equals_generator() {
 }
 
 /// The camera-calibration Arrow IPC schema the overlay pipeline consumes: one
-/// row per camera, six non-nullable columns. The frontend
-/// (`calibrationFromArrow.ts`) is coded against these exact field names and
-/// types — see `docs/13-camera-lidar-calibration.md`.
+/// row per camera, eight non-nullable columns (incl. `model` + `forward_poly`
+/// for the f-theta fisheye model). The frontend (`calibrationFromArrow.ts`) is
+/// coded against these exact field names and types — see
+/// `docs/13-camera-lidar-calibration.md`.
 #[test]
 fn fixture_matches_calibration_contract() {
     let reader = FileReader::try_new(Cursor::new(CALIB_FIXTURE), None).expect("valid ipc");
     let schema = reader.schema();
 
-    assert_eq!(schema.fields().len(), 6);
+    assert_eq!(schema.fields().len(), 8);
     assert_eq!(schema.field(0).name(), "name");
-    assert_eq!(schema.field(1).name(), "intrinsics");
-    assert_eq!(schema.field(2).name(), "resolution");
-    assert_eq!(schema.field(3).name(), "distortion");
-    assert_eq!(schema.field(4).name(), "translation");
-    assert_eq!(schema.field(5).name(), "quaternion");
+    assert_eq!(schema.field(1).name(), "model");
+    assert_eq!(schema.field(2).name(), "intrinsics");
+    assert_eq!(schema.field(3).name(), "resolution");
+    assert_eq!(schema.field(4).name(), "distortion");
+    assert_eq!(schema.field(5).name(), "forward_poly");
+    assert_eq!(schema.field(6).name(), "translation");
+    assert_eq!(schema.field(7).name(), "quaternion");
 
-    // All six fields are non-nullable.
-    for i in 0..6 {
+    // All eight fields are non-nullable.
+    for i in 0..8 {
         assert!(!schema.field(i).is_nullable(), "field {i} must be non-null");
     }
 
@@ -177,12 +180,14 @@ fn fixture_matches_calibration_contract() {
         DataType::Int32,
         true,
     )));
-    assert_eq!(schema.field(0).data_type(), &DataType::Utf8);
-    assert_eq!(schema.field(1).data_type(), &list_f32); // intrinsics
-    assert_eq!(schema.field(2).data_type(), &list_i32); // resolution
-    assert_eq!(schema.field(3).data_type(), &list_f32); // distortion
-    assert_eq!(schema.field(4).data_type(), &list_f32); // translation
-    assert_eq!(schema.field(5).data_type(), &list_f32); // quaternion
+    assert_eq!(schema.field(0).data_type(), &DataType::Utf8); // name
+    assert_eq!(schema.field(1).data_type(), &DataType::Utf8); // model
+    assert_eq!(schema.field(2).data_type(), &list_f32); // intrinsics
+    assert_eq!(schema.field(3).data_type(), &list_i32); // resolution
+    assert_eq!(schema.field(4).data_type(), &list_f32); // distortion
+    assert_eq!(schema.field(5).data_type(), &list_f32); // forward_poly
+    assert_eq!(schema.field(6).data_type(), &list_f32); // translation
+    assert_eq!(schema.field(7).data_type(), &list_f32); // quaternion
 
     let batches: Vec<_> = reader.collect::<Result<Vec<_>, _>>().expect("read batches");
     assert_eq!(batches.len(), 1);
@@ -196,23 +201,38 @@ fn fixture_matches_calibration_contract() {
         .expect("name array");
     assert_eq!(name.value(0), "CAM_FRONT");
 
-    let intrinsics = batch.column(1).as_list::<i32>().value(0);
+    let model = batch
+        .column(1)
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .expect("model array");
+    assert_eq!(model.value(0), "pinhole");
+
+    let intrinsics = batch.column(2).as_list::<i32>().value(0);
     let intr = intrinsics.as_any().downcast_ref::<Float32Array>().unwrap();
     assert_eq!(intr.values(), &[1266.4, 1266.4, 816.3, 491.5]);
 
-    let resolution = batch.column(2).as_list::<i32>().value(0);
+    let resolution = batch.column(3).as_list::<i32>().value(0);
     let res = resolution.as_any().downcast_ref::<Int32Array>().unwrap();
     assert_eq!(res.values(), &[1600, 900]);
 
-    let distortion = batch.column(3).as_list::<i32>().value(0);
+    let distortion = batch.column(4).as_list::<i32>().value(0);
     let dist = distortion.as_any().downcast_ref::<Float32Array>().unwrap();
     assert_eq!(dist.values(), &[0.0, 0.0, 0.0, 0.0, 0.0]);
 
-    let translation = batch.column(4).as_list::<i32>().value(0);
+    // Pinhole camera → empty forward_poly.
+    let forward_poly = batch.column(5).as_list::<i32>().value(0);
+    let fwd = forward_poly
+        .as_any()
+        .downcast_ref::<Float32Array>()
+        .unwrap();
+    assert_eq!(fwd.len(), 0);
+
+    let translation = batch.column(6).as_list::<i32>().value(0);
     let trans = translation.as_any().downcast_ref::<Float32Array>().unwrap();
     assert_eq!(trans.values(), &[0.0, 0.0, 0.0]);
 
-    let quaternion = batch.column(5).as_list::<i32>().value(0);
+    let quaternion = batch.column(7).as_list::<i32>().value(0);
     let quat = quaternion.as_any().downcast_ref::<Float32Array>().unwrap();
     assert_eq!(quat.values(), &[-0.5, 0.5, -0.5, 0.5]);
 }

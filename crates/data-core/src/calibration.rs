@@ -17,6 +17,20 @@
 //! - `quaternion` is a unit quaternion, **scalar-last `[qx, qy, qz, qw]`** —
 //!   the same wire convention as OpenLABEL cuboids.
 //!
+//! ## Camera models
+//!
+//! Two projection models are supported, selected per camera by `model`:
+//!
+//! - **`pinhole`** (default): the OpenCV pinhole `intrinsics` `[fx, fy, cx, cy]`
+//!   with optional Brown–Conrady `distortion`. Used by nuScenes and the
+//!   synthetic fixture.
+//! - **`ftheta`**: NVIDIA's f-theta polynomial fisheye model (Alpamayo and most
+//!   modern AV stacks). A `forward_poly` maps the ray's angle from the optical
+//!   axis (radians) to a pixel radius from the principal point — it captures the
+//!   wide-FOV lens distortion a pinhole `fx`/`fy` cannot. `distortion` is unused
+//!   for `ftheta`; `intrinsics.fx`/`fy` carry the linear-term approximation so a
+//!   pinhole-only consumer degrades gracefully, while `cx`/`cy` stay exact.
+//!
 //! ## Source structure (what `open` expects)
 //!
 //! Root must carry `"schema": "driveline.calibration/v1"` — this marker (not
@@ -28,9 +42,11 @@
 //!   "schema": "driveline.calibration/v1",
 //!   "cameras": [{
 //!     "name": "CAM_FRONT",
+//!     "model": "pinhole",                     // optional; "pinhole" (default) or "ftheta"
 //!     "intrinsics": { "fx": 1266.4, "fy": 1266.4, "cx": 816.3, "cy": 491.5,
 //!                     "width": 1600, "height": 900 },
-//!     "distortion": [0, 0, 0, 0, 0],          // optional; omit or [] = none
+//!     "distortion": [0, 0, 0, 0, 0],          // optional; omit or [] = none (pinhole only)
+//!     "forward_poly": [0, 926.1, -3.2, -19.3, 3.7], // required for "ftheta"; angle(rad)->px radius
 //!     "extrinsic": {                          // scene/LiDAR -> camera optical
 //!       "translation": [0.0, 0.0, 0.0],
 //!       "quaternion":  [-0.5, 0.5, -0.5, 0.5] // [qx,qy,qz,qw], scalar-last
@@ -45,14 +61,16 @@
 //! One row per camera, all columns **non-nullable**, every vector field a
 //! `List<Float32>` / `List<Int32>` to match the OpenLABEL precedent:
 //!
-//! | column        | Arrow type        | meaning                                   |
-//! | ------------- | ----------------- | ----------------------------------------- |
-//! | `name`        | `Utf8`            | camera name, e.g. `CAM_FRONT`             |
-//! | `intrinsics`  | `List<Float32>`   | length 4 = `[fx, fy, cx, cy]` (px)        |
-//! | `resolution`  | `List<Int32>`     | length 2 = `[width, height]` (px)         |
-//! | `distortion`  | `List<Float32>`   | length 0 or 5 = `[k1,k2,p1,p2,k3]`        |
-//! | `translation` | `List<Float32>`   | length 3 = `[tx, ty, tz]` (m)             |
-//! | `quaternion`  | `List<Float32>`   | length 4 = `[qx, qy, qz, qw]` scalar-last |
+//! | column         | Arrow type      | meaning                                    |
+//! | -------------- | --------------- | ------------------------------------------ |
+//! | `name`         | `Utf8`          | camera name, e.g. `CAM_FRONT`              |
+//! | `model`        | `Utf8`          | `"pinhole"` or `"ftheta"`                  |
+//! | `intrinsics`   | `List<Float32>` | length 4 = `[fx, fy, cx, cy]` (px)         |
+//! | `resolution`   | `List<Int32>`   | length 2 = `[width, height]` (px)          |
+//! | `distortion`   | `List<Float32>` | length 0 or 5 = `[k1,k2,p1,p2,k3]`         |
+//! | `forward_poly` | `List<Float32>` | length 0 (pinhole) or ≥2 ftheta coeffs     |
+//! | `translation`  | `List<Float32>` | length 3 = `[tx, ty, tz]` (m)              |
+//! | `quaternion`   | `List<Float32>` | length 4 = `[qx, qy, qz, qw]` scalar-last  |
 
 use std::sync::Arc;
 
@@ -75,16 +93,44 @@ const SCHEMA_MARKER: &str = "driveline.calibration/v1";
 /// channel carrying every camera.
 const CHANNEL_NAME: &str = "calibration";
 
+/// Camera projection model. `Pinhole` uses `intrinsics` + Brown–Conrady
+/// `distortion`; `FTheta` uses the `forward_poly` (angle→pixel-radius) fisheye
+/// polynomial and ignores `distortion`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CameraModel {
+    Pinhole,
+    FTheta,
+}
+
+impl CameraModel {
+    /// Wire string emitted in the `model` Arrow column / accepted in the JSON.
+    fn as_str(self) -> &'static str {
+        match self {
+            CameraModel::Pinhole => "pinhole",
+            CameraModel::FTheta => "ftheta",
+        }
+    }
+}
+
 /// One decoded camera calibration. Vector fields are owned so `fetch_range` can
 /// append them straight into the Arrow builders.
 struct Camera {
     name: String,
-    /// `[fx, fy, cx, cy]` in pixels.
+    /// Projection model: `pinhole` (intrinsics + distortion) or `ftheta`
+    /// (forward_poly fisheye).
+    model: CameraModel,
+    /// `[fx, fy, cx, cy]` in pixels. For `ftheta`, `fx`/`fy` are the linear-term
+    /// approximation and `cx`/`cy` are exact.
     intrinsics: [f32; 4],
     /// `[width, height]` in pixels.
     resolution: [i32; 2],
-    /// `[]` (no distortion) or exactly 5 floats `[k1, k2, p1, p2, k3]`.
+    /// `[]` (no distortion) or exactly 5 floats `[k1, k2, p1, p2, k3]`. Unused
+    /// for `ftheta`.
     distortion: Vec<f32>,
+    /// f-theta forward polynomial: `[]` for pinhole, else ≥2 coefficients
+    /// `[c0, c1, …]` mapping a ray's angle from the optical axis (radians) to a
+    /// pixel radius from the principal point (`r = Σ cᵢ·θⁱ`).
+    forward_poly: Vec<f32>,
     /// `[tx, ty, tz]` metres.
     translation: [f32; 3],
     /// `[qx, qy, qz, qw]`, scalar-last, unit length.
@@ -161,16 +207,18 @@ impl CalibrationReader {
         Self::parse(&bytes)
     }
 
-    /// Arrow schema `fetch_range` emits. All six columns are non-nullable; every
-    /// vector field is a variable-length `List<Float32>` / `List<Int32>`.
+    /// Arrow schema `fetch_range` emits. All eight columns are non-nullable;
+    /// every vector field is a variable-length `List<Float32>` / `List<Int32>`.
     fn fetch_schema() -> Arc<Schema> {
         let f32_item = || Arc::new(Field::new("item", DataType::Float32, true));
         let i32_item = Arc::new(Field::new("item", DataType::Int32, true));
         Arc::new(Schema::new(vec![
             Field::new("name", DataType::Utf8, false),
+            Field::new("model", DataType::Utf8, false),
             Field::new("intrinsics", DataType::List(f32_item()), false),
             Field::new("resolution", DataType::List(i32_item), false),
             Field::new("distortion", DataType::List(f32_item()), false),
+            Field::new("forward_poly", DataType::List(f32_item()), false),
             Field::new("translation", DataType::List(f32_item()), false),
             Field::new("quaternion", DataType::List(f32_item()), false),
         ]))
@@ -202,14 +250,18 @@ impl Reader for CalibrationReader {
         let n = self.cameras.len();
 
         let mut name_b = StringBuilder::new();
+        let mut model_b = StringBuilder::new();
         let mut intrinsics_b = ListBuilder::with_capacity(Float32Builder::with_capacity(n * 4), n);
         let mut resolution_b = ListBuilder::with_capacity(Int32Builder::with_capacity(n * 2), n);
         let mut distortion_b = ListBuilder::with_capacity(Float32Builder::with_capacity(n * 5), n);
+        let mut forward_poly_b =
+            ListBuilder::with_capacity(Float32Builder::with_capacity(n * 5), n);
         let mut translation_b = ListBuilder::with_capacity(Float32Builder::with_capacity(n * 3), n);
         let mut quaternion_b = ListBuilder::with_capacity(Float32Builder::with_capacity(n * 4), n);
 
         for cam in &self.cameras {
             name_b.append_value(&cam.name);
+            model_b.append_value(cam.model.as_str());
 
             intrinsics_b.values().append_slice(&cam.intrinsics);
             intrinsics_b.append(true);
@@ -219,6 +271,9 @@ impl Reader for CalibrationReader {
 
             distortion_b.values().append_slice(&cam.distortion);
             distortion_b.append(true);
+
+            forward_poly_b.values().append_slice(&cam.forward_poly);
+            forward_poly_b.append(true);
 
             translation_b.values().append_slice(&cam.translation);
             translation_b.append(true);
@@ -231,9 +286,11 @@ impl Reader for CalibrationReader {
             schema.clone(),
             vec![
                 Arc::new(name_b.finish()),
+                Arc::new(model_b.finish()),
                 Arc::new(intrinsics_b.finish()),
                 Arc::new(resolution_b.finish()),
                 Arc::new(distortion_b.finish()),
+                Arc::new(forward_poly_b.finish()),
                 Arc::new(translation_b.finish()),
                 Arc::new(quaternion_b.finish()),
             ],
@@ -259,6 +316,17 @@ fn parse_camera(cam: &Value, index: usize) -> crate::Result<Camera> {
         .and_then(Value::as_str)
         .ok_or_else(|| err("missing `name`".into()))?
         .to_string();
+
+    // Projection model: absent or "pinhole" → Pinhole; "ftheta" → FTheta.
+    let model = match cam.get("model").and_then(Value::as_str) {
+        None | Some("pinhole") => CameraModel::Pinhole,
+        Some("ftheta") => CameraModel::FTheta,
+        Some(other) => {
+            return Err(err(format!(
+                "unknown `model` {other:?} (expected \"pinhole\" or \"ftheta\")"
+            )))
+        }
+    };
 
     let intr = cam
         .get("intrinsics")
@@ -294,6 +362,37 @@ fn parse_camera(cam: &Value, index: usize) -> crate::Result<Camera> {
         Some(_) => return Err(err("`distortion` must be an array".into())),
     };
 
+    // Forward polynomial: absent/`[]` for pinhole; ≥2 numeric coefficients for
+    // ftheta. Cross-checked against `model` so the two never disagree.
+    let forward_poly: Vec<f32> = match cam.get("forward_poly") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(arr)) => {
+            let nums: Vec<f32> = arr
+                .iter()
+                .filter_map(Value::as_f64)
+                .map(|n| n as f32)
+                .collect();
+            if nums.len() != arr.len() {
+                return Err(err("`forward_poly` contains a non-numeric entry".into()));
+            }
+            nums
+        }
+        Some(_) => return Err(err("`forward_poly` must be an array".into())),
+    };
+    match model {
+        CameraModel::FTheta if forward_poly.len() < 2 => {
+            return Err(err(
+                "`model: \"ftheta\"` requires a `forward_poly` of at least 2 coefficients".into(),
+            ))
+        }
+        CameraModel::Pinhole if !forward_poly.is_empty() => {
+            return Err(err(
+                "`forward_poly` is only valid with `model: \"ftheta\"`".into(),
+            ))
+        }
+        _ => {}
+    }
+
     let extr = cam
         .get("extrinsic")
         .ok_or_else(|| err("missing `extrinsic`".into()))?;
@@ -304,9 +403,11 @@ fn parse_camera(cam: &Value, index: usize) -> crate::Result<Camera> {
 
     Ok(Camera {
         name,
+        model,
         intrinsics: [fx, fy, cx, cy],
         resolution: [width as i32, height as i32],
         distortion,
+        forward_poly,
         translation: [translation[0], translation[1], translation[2]],
         quaternion: [quaternion[0], quaternion[1], quaternion[2], quaternion[3]],
     })
@@ -398,23 +499,35 @@ mod tests {
             .unwrap();
         assert_eq!(name.value(0), "CAM_FRONT");
 
-        let intr = batch.column(1).as_list::<i32>().value(0);
+        let model = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(model.value(0), "pinhole");
+
+        let intr = batch.column(2).as_list::<i32>().value(0);
         let intr = intr.as_any().downcast_ref::<Float32Array>().unwrap();
         assert_eq!(intr.values(), &[1266.4, 1266.4, 816.3, 491.5]);
 
-        let res = batch.column(2).as_list::<i32>().value(0);
+        let res = batch.column(3).as_list::<i32>().value(0);
         let res = res.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(res.values(), &[1600, 900]);
 
-        let dist = batch.column(3).as_list::<i32>().value(0);
+        let dist = batch.column(4).as_list::<i32>().value(0);
         let dist = dist.as_any().downcast_ref::<Float32Array>().unwrap();
         assert_eq!(dist.values(), &[0.0, 0.0, 0.0, 0.0, 0.0]);
 
-        let trans = batch.column(4).as_list::<i32>().value(0);
+        // Pinhole camera carries an empty forward_poly.
+        let fwd = batch.column(5).as_list::<i32>().value(0);
+        let fwd = fwd.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(fwd.len(), 0);
+
+        let trans = batch.column(6).as_list::<i32>().value(0);
         let trans = trans.as_any().downcast_ref::<Float32Array>().unwrap();
         assert_eq!(trans.values(), &[0.0, 0.0, 0.0]);
 
-        let quat = batch.column(5).as_list::<i32>().value(0);
+        let quat = batch.column(7).as_list::<i32>().value(0);
         let quat = quat.as_any().downcast_ref::<Float32Array>().unwrap();
         assert_eq!(quat.values(), &[-0.5, 0.5, -0.5, 0.5]);
     }
@@ -437,7 +550,7 @@ mod tests {
             )
             .unwrap();
         let batch = parse_ipc(&ipc);
-        let dist = batch.column(3).as_list::<i32>().value(0);
+        let dist = batch.column(4).as_list::<i32>().value(0);
         let dist = dist.as_any().downcast_ref::<Float32Array>().unwrap();
         assert_eq!(dist.len(), 0);
     }
@@ -473,9 +586,75 @@ mod tests {
         assert_eq!(name.value(0), "A");
         assert_eq!(name.value(1), "B");
         // Second camera carries a 5-element distortion vector.
-        let dist = batch.column(3).as_list::<i32>().value(1);
+        let dist = batch.column(4).as_list::<i32>().value(1);
         let dist = dist.as_any().downcast_ref::<Float32Array>().unwrap();
         assert_eq!(dist.values(), &[1.0, 2.0, 3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn ftheta_model_round_trips() {
+        let json = r#"
+        { "schema": "driveline.calibration/v1", "cameras": [
+          { "name": "FISHEYE", "model": "ftheta",
+            "intrinsics": { "fx": 926.1, "fy": 926.1, "cx": 960.0, "cy": 540.0,
+              "width": 1920, "height": 1080 },
+            "forward_poly": [0.0, 926.1, -3.16, -19.34, 3.72],
+            "extrinsic": { "translation": [1,2,3], "quaternion": [0,0,0,1] } }
+        ] }
+        "#;
+        let r = CalibrationReader::open(json.as_bytes()).unwrap();
+        let ipc = r
+            .fetch_range(
+                &"calibration".to_string(),
+                TimeRange::empty(),
+                FetchOpts::default(),
+            )
+            .unwrap();
+        let batch = parse_ipc(&ipc);
+        let model = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert_eq!(model.value(0), "ftheta");
+        // forward_poly (column 5) carries the 5 coefficients verbatim;
+        // distortion (column 4) stays empty.
+        let fwd = batch.column(5).as_list::<i32>().value(0);
+        let fwd = fwd.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(fwd.values(), &[0.0, 926.1, -3.16, -19.34, 3.72]);
+        let dist = batch.column(4).as_list::<i32>().value(0);
+        let dist = dist.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(dist.len(), 0);
+    }
+
+    #[test]
+    fn ftheta_without_forward_poly_rejected() {
+        let json = r#"
+        { "schema": "driveline.calibration/v1", "cameras": [
+          { "name": "FISHEYE", "model": "ftheta",
+            "intrinsics": { "fx": 1, "fy": 1, "cx": 1, "cy": 1, "width": 10, "height": 20 },
+            "extrinsic": { "translation": [0,0,0], "quaternion": [0,0,0,1] } }
+        ] }
+        "#;
+        assert!(matches!(
+            CalibrationReader::open(json.as_bytes()),
+            Err(crate::Error::CalibrationParse(_))
+        ));
+    }
+
+    #[test]
+    fn forward_poly_on_pinhole_rejected() {
+        let json = r#"
+        { "schema": "driveline.calibration/v1", "cameras": [
+          { "name": "CAM", "intrinsics": { "fx": 1, "fy": 1, "cx": 1, "cy": 1,
+            "width": 10, "height": 20 }, "forward_poly": [0, 900],
+            "extrinsic": { "translation": [0,0,0], "quaternion": [0,0,0,1] } }
+        ] }
+        "#;
+        assert!(matches!(
+            CalibrationReader::open(json.as_bytes()),
+            Err(crate::Error::CalibrationParse(_))
+        ));
     }
 
     #[test]

@@ -13,8 +13,10 @@ import type { CameraCalibration } from "./calibrationFromArrow";
 // ground-truth projections of known scene markers (computed independently).
 const ORACLE: CameraCalibration = {
   name: "CAM_FRONT",
+  model: "pinhole",
   intrinsics: { fx: 900, fy: 900, cx: 640, cy: 360, width: 1280, height: 720 },
   distortion: [],
+  forwardPoly: [],
   translation: [0, 1.5, 0],
   quaternion: [0.5, -0.5, 0.5, 0.5],
 };
@@ -112,5 +114,74 @@ describe("projectPointsInto (batch)", () => {
     expect(buf.visible[1]).toBe(0);
     expect(Number.isNaN(buf.us[1])).toBe(true);
     expect(buf.visible[2]).toBe(0);
+  });
+});
+
+// f-theta fisheye: a camera whose optical frame equals the scene frame
+// (identity extrinsic) so the maths is transparent. Forward polynomial
+// `ρ(θ) = 100·θ` (focal length 100), principal point (500,500), 1000x1000. The
+// ray angle from +Z is `θ = atan2(hypot(X,Y), Z)`; the pixel sits at radius
+// `ρ(θ)` from (cx,cy) along the (X,Y) direction.
+const FTHETA: CameraCalibration = {
+  name: "FISHEYE",
+  model: "ftheta",
+  intrinsics: { fx: 100, fy: 100, cx: 500, cy: 500, width: 1000, height: 1000 },
+  distortion: [],
+  forwardPoly: [0, 100],
+  translation: [0, 0, 0],
+  quaternion: [0, 0, 0, 1], // identity: camera optical frame == scene frame
+};
+
+describe("projectPoint (f-theta fisheye)", () => {
+  it("maps an on-axis point to the principal point", () => {
+    const p = projectPoint(FTHETA, [0, 0, 5]);
+    expect(p.visible).toBe(true);
+    expect(p.u).toBeCloseTo(500, 4);
+    expect(p.v).toBeCloseTo(500, 4);
+    expect(p.depth).toBeCloseTo(5, 4);
+  });
+
+  it("places an off-axis point at radius ρ(θ) = 100·θ", () => {
+    // (3,0,4): θ = atan2(3,4); along +X so only u shifts by ρ.
+    const theta = Math.atan2(3, 4);
+    const p = projectPoint(FTHETA, [3, 0, 4]);
+    expect(p.visible).toBe(true);
+    expect(p.u).toBeCloseTo(500 + 100 * theta, 3);
+    expect(p.v).toBeCloseTo(500, 4);
+    expect(p.depth).toBeCloseTo(4, 4);
+  });
+
+  it("bends a wide-angle ray inward vs an equivalent pinhole (ρ=fθ < f·tanθ)", () => {
+    // The whole point of f-theta: at a wide angle the fisheye radius fθ is
+    // smaller than the pinhole radius f·tanθ. (0,5,5) is at θ = 45°.
+    const p = projectPoint(FTHETA, [0, 5, 5]);
+    const theta = Math.PI / 4;
+    expect(p.v).toBeCloseTo(500 + 100 * theta, 3); // 578.54, fisheye
+    // A pinhole with the same focal length would land at 500 + 100·tan(45°)=600.
+    expect(p.v).toBeLessThan(500 + 100 * Math.tan(theta));
+  });
+
+  it("marks a behind-camera point not visible", () => {
+    const p = projectPoint(FTHETA, [0, 0, -5]);
+    expect(p.visible).toBe(false);
+    expect(p.depth).toBeLessThanOrEqual(0);
+  });
+
+  it("batch projection matches the single-point path", () => {
+    const scenes: [number, number, number][] = [
+      [0, 0, 5],
+      [3, 0, 4],
+      [0, 5, 5],
+      [-2, 1, 6],
+    ];
+    const xyz = new Float32Array(scenes.flat());
+    const buf = makeProjectionBuffers(scenes.length);
+    projectPointsInto(FTHETA, xyz, scenes.length, buf);
+    scenes.forEach((s, i) => {
+      const single = projectPoint(FTHETA, s);
+      expect(buf.us[i]).toBeCloseTo(single.u, 3);
+      expect(buf.vs[i]).toBeCloseTo(single.v, 3);
+      expect(buf.visible[i]).toBe(single.visible ? 1 : 0);
+    });
   });
 });
