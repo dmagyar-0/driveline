@@ -46,6 +46,10 @@ sample-data/*
 !sample-data/realworld/
 sample-data/realworld/*
 !sample-data/realworld/README.md
+# OpenLABEL demo fixtures are small, static, externally-authored JSON (one
+# synthetic dashcam scene + the real Vicomtech VCD cuboid example) — committed,
+# not regenerated. Track the whole directory.
+!sample-data/openlabel/
 
 # Editor / OS
 .DS_Store

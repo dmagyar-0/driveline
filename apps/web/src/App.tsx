@@ -174,6 +174,7 @@ declare global {
       getScenePanelSync: (panelId: string) => {
         boundChannelId: string | null;
         pointCount: number;
+        boxCount: number;
         frameTsNs: string | null;
         spinIndex: number;
         spinCount: number;
@@ -222,6 +223,7 @@ declare global {
           | "tabular"
           | "recipe"
           | "lidar"
+          | "openlabel"
           | "ros1"
           | "ros2db3";
         name: string;

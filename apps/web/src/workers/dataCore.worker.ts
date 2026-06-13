@@ -31,6 +31,11 @@ import init, {
   lidar_fetch_range,
   lidar_spin_times,
   close_lidar,
+  open_openlabel,
+  close_openlabel,
+  openlabel_summary,
+  openlabel_fetch_range,
+  openlabel_frame_times,
   open_ros1_bag,
   close_ros1_bag,
   ros1_bag_summary,
@@ -733,6 +738,67 @@ export const dataCoreApi = {
   async closeLidar(handle: number): Promise<void> {
     await ready;
     close_lidar(handle);
+  },
+  /**
+   * Open an ASAM OpenLABEL JSON (one row per labelled frame of 3D bounding
+   * boxes). The wasm reader owns the decoded per-frame buffers for the
+   * source's lifetime, freed by `closeOpenlabel`. Accepting a `File` keeps
+   * the bytes on the worker side — no structured-clone copy across Comlink.
+   */
+  async openOpenlabel(file: File): Promise<number> {
+    await ready;
+    return open_openlabel(new Uint8Array(await file.arrayBuffer()));
+  },
+  /**
+   * `SourceMeta` for an open OpenLABEL reader, in the MF4-style shape (single
+   * channel, `group` null, `sample_count` = peak boxes/frame), normalised so
+   * every `*_ns` field is a `bigint`. No `kind` on the wire — the store stamps
+   * `bounding_box`, exactly like lidar stamps `point_cloud`.
+   */
+  async openlabelSummary(handle: number): Promise<Mf4Summary> {
+    await ready;
+    return normaliseMf4(openlabel_summary(handle) as RawMf4Summary);
+  },
+  /**
+   * Arrow IPC for the frames overlapping `[startNs, endNs)`. The scene panel
+   * passes a zero/one-width window + `includePrev` to fetch exactly the frame
+   * active at the cursor. Schema: `{ ts, centers, sizes, rotations: List<f32>,
+   * labels: List<Utf8> }`, one row per frame.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async openlabelFetchRange(
+    handle: number,
+    channelId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ): Promise<Uint8Array> {
+    await ready;
+    const buf = openlabel_fetch_range(
+      handle,
+      channelId,
+      startNs,
+      endNs,
+      includePrev,
+    );
+    return Comlink.transfer(buf, [buf.buffer]);
+  },
+  /**
+   * Ascending frame timestamps (ns) for an OpenLABEL source, one per frame.
+   * The scene panel binary-searches this locally so it only refetches box
+   * data when the active frame changes.
+   *
+   * Fresh allocation from wasm every call — transfer to avoid structured-clone copy.
+   */
+  async openlabelFrameTimes(handle: number): Promise<BigInt64Array> {
+    await ready;
+    const times = openlabel_frame_times(handle);
+    return Comlink.transfer(times, [times.buffer]);
+  },
+  async closeOpenlabel(handle: number): Promise<void> {
+    await ready;
+    close_openlabel(handle);
   },
   async openMcapVideoStream(
     handle: number,

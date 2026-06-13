@@ -968,9 +968,15 @@ function VideoBody({ panelId }: BodyProps) {
 
 // Channel kinds a 3D scene can render. `point_cloud` is the dedicated
 // per-frame LiDAR geometry kind the data core emits (a whole spin per
-// sample); `vector` stays accepted as a fallback for 3D-vector channels.
-// Scalars / enums / video can't describe a cloud, so they're excluded.
-const SCENE_CHANNEL_KINDS: readonly ChannelKind[] = ["point_cloud", "vector"];
+// sample); `bounding_box` is the per-frame OpenLABEL 3D box kind (wireframe
+// boxes + labels); `vector` stays accepted as a fallback for 3D-vector
+// channels. Scalars / enums / video can't describe a scene, so they're
+// excluded.
+const SCENE_CHANNEL_KINDS: readonly ChannelKind[] = [
+  "point_cloud",
+  "bounding_box",
+  "vector",
+];
 
 function SceneBody({ panelId }: BodyProps) {
   const channels = useSession((st) => st.channels);
@@ -1006,9 +1012,9 @@ function SceneBody({ panelId }: BodyProps) {
       <section className={s.section}>
         <h4 className={s.sectionTitle}>Status</h4>
         <p className={s.empty} data-testid="panel-scene-status">
-          Renders a 3D point cloud — bind a point-cloud channel to orbit the
-          scene. Points are coloured by intensity and step with the cursor as
-          you scrub or play.
+          Renders a 3D scene — bind a point-cloud channel to orbit a LiDAR
+          cloud, or a bounding-box channel to see labelled 3D boxes. Geometry
+          steps with the cursor as you scrub or play.
         </p>
       </section>
       <section className={s.section}>
