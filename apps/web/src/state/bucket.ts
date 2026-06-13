@@ -61,6 +61,16 @@ export interface Buckets {
    */
   lidar: LidarInput[];
   /**
+   * ASAM OpenLABEL JSON drops (3D bounding-box annotations, one row per
+   * labelled frame), opened straight into the 3D scene pipeline. A `.json`
+   * extension is ambiguous (Ingest Recipes are also JSON), so a file only
+   * lands here once its bytes are sniffed for a top-level `"openlabel"` key —
+   * see `sniffOpenlabel`. `bucketFiles` is synchronous so it leaves this
+   * empty; `openFiles` does the async sniff and re-routes qualifying `.json`
+   * files out of `unknown` into here.
+   */
+  openlabel: File[];
+  /**
    * Drops with an extension Driveline doesn't recognise. No longer a hard
    * error: each is routed to the Format Agent flow — `openFiles` first tries
    * the Format Registry for a matching Ingest Recipe (extension / magic bytes),
@@ -84,6 +94,7 @@ export function bucketFiles(files: File[]): Buckets {
   const mp4s: File[] = [];
   const tabular: TabularInput[] = [];
   const lidar: LidarInput[] = [];
+  const openlabel: File[] = [];
   const unknown: File[] = [];
   const errors: BucketError[] = [];
 
@@ -157,9 +168,45 @@ export function bucketFiles(files: File[]): Buckets {
     videoNeedsTimestamps,
     tabular,
     lidar,
+    openlabel,
     unknown,
     errors,
   };
+}
+
+/** Max bytes read when sniffing a `.json` drop for the OpenLABEL marker. A
+ *  conformant file opens with `{ "openlabel": { ... } }`, so the key sits in
+ *  the first few hundred bytes; cap the read so a giant unrelated `.json`
+ *  isn't slurped whole just to classify it. */
+const OPENLABEL_SNIFF_BYTES = 64 * 1024;
+
+/**
+ * True when `file`'s leading bytes contain a top-level `"openlabel"` JSON key.
+ * `.json` is ambiguous in Driveline — Ingest Recipes are JSON too — so the
+ * drop path uses this content sniff to tell an ASAM OpenLABEL annotation file
+ * apart from a recipe before routing it to the 3D scene pipeline. Reads only
+ * the file head (`OPENLABEL_SNIFF_BYTES`); never throws (returns `false` on
+ * any read/decode error so the caller falls back to the recipe/unknown flow).
+ */
+export async function sniffOpenlabel(file: File): Promise<boolean> {
+  try {
+    const head = file.slice(0, OPENLABEL_SNIFF_BYTES);
+    const text = await head.text();
+    return /"openlabel"\s*:/i.test(text);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Same OpenLABEL content sniff as `sniffOpenlabel`, over already-decoded
+ * bytes rather than a `File`. The dev-hook path constructs `File`s from
+ * `{ name, bytes }`, so both paths share the marker test.
+ */
+export function sniffOpenlabelBytes(bytes: Uint8Array): boolean {
+  const head = bytes.subarray(0, OPENLABEL_SNIFF_BYTES);
+  const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
+  return /"openlabel"\s*:/i.test(text);
 }
 
 /** A URL input classified by the reader that can open it. */

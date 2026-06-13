@@ -33,6 +33,11 @@ pub enum ChannelKind {
     /// whole point cloud, fetched one frame at a time by the 3D scene panel —
     /// not a scalar time series. See `pointcloud.rs` for the Arrow schema.
     PointCloud,
+    /// A per-frame set of 3D oriented bounding boxes (cuboids), sourced from
+    /// ASAM OpenLABEL JSON. Each "sample" is a whole frame's worth of boxes
+    /// (centers/sizes/rotations/labels), fetched one frame at a time by the 3D
+    /// scene panel. See `openlabel.rs` for the Arrow schema.
+    BoundingBox,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +96,9 @@ pub enum SourceKind {
     /// A Driveline point-cloud Parquet (one row per LiDAR spin). See
     /// `PointCloudReader`.
     Lidar,
+    /// An ASAM OpenLABEL JSON file of 3D cuboid annotations. See
+    /// `OpenLabelReader`.
+    OpenLabel,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

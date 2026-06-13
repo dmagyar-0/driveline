@@ -93,6 +93,36 @@
   pointer-events: none;
 }
 
+/* Floating box-label overlay. One absolutely-positioned layer fills the host;
+ * each label is a small chip placed (via transform) at the projected screen
+ * position of its box. Non-interactive so it never steals orbit/zoom drags. */
+.labelLayer {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.boxLabel {
+  position: absolute;
+  top: 0;
+  left: 0;
+  padding: 0.1rem 0.35rem;
+  border-radius: var(--radius-4, 4px);
+  background: rgba(20, 20, 24, 0.72);
+  border: 1px solid rgba(255, 205, 25, 0.55);
+  color: #ffe08a;
+  font-size: var(--fs-11);
+  line-height: 1.3;
+  letter-spacing: var(--tracking-wide);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  /* Positioned per-label via an inline transform (projected pixel + a
+   * -50%/-120% offset to centre the chip over the box and lift it above). */
+  pointer-events: none;
+}
+
 .statusOverlay {
   position: absolute;
   top: 50%;

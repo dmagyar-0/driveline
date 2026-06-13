@@ -1,0 +1,3904 @@
+{
+  "openlabel": {
+    "metadata": {
+      "schema_version": "1.0.0",
+      "name": "comma-dashcam-scene",
+      "comment": "Synthetic dashcam-style 3D object scene (ISO-8855 z-up vehicle frame)."
+    },
+    "coordinate_systems": {
+      "vehicle-iso8855": {
+        "type": "local_cs",
+        "parent": "",
+        "children": []
+      }
+    },
+    "objects": {
+      "0": {
+        "name": "lead_car",
+        "type": "car"
+      },
+      "1": {
+        "name": "left_car",
+        "type": "car"
+      },
+      "2": {
+        "name": "right_car",
+        "type": "car"
+      },
+      "3": {
+        "name": "far_car",
+        "type": "car"
+      },
+      "4": {
+        "name": "oncoming",
+        "type": "car"
+      },
+      "5": {
+        "name": "box_truck",
+        "type": "truck"
+      },
+      "6": {
+        "name": "pedestrian",
+        "type": "pedestrian"
+      }
+    },
+    "frames": {
+      "0": {
+        "frame_properties": {
+          "timestamp": 1704067200.0
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    18.0,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    26.0,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    12.0,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    42.0,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    34.0,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    30.0,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    9.0,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "1": {
+        "frame_properties": {
+          "timestamp": 1704067200.1
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    17.82,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.9,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    11.78,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.95,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    34.3,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.88,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.96,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "2": {
+        "frame_properties": {
+          "timestamp": 1704067200.2
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    17.64,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.8,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    11.56,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.9,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    34.6,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.76,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.92,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "3": {
+        "frame_properties": {
+          "timestamp": 1704067200.3
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    17.46,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.7,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    11.34,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.85,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    34.9,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.64,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.88,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "4": {
+        "frame_properties": {
+          "timestamp": 1704067200.4
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    17.28,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.6,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    11.12,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.8,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    35.2,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.52,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.84,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "5": {
+        "frame_properties": {
+          "timestamp": 1704067200.5
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    17.1,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.5,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    10.9,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.75,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    35.5,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.4,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.8,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "6": {
+        "frame_properties": {
+          "timestamp": 1704067200.6
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    16.92,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.4,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    10.68,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.7,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    35.8,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.28,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.76,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "7": {
+        "frame_properties": {
+          "timestamp": 1704067200.7
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    16.74,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.3,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    10.46,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.65,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    36.1,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.16,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.72,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "8": {
+        "frame_properties": {
+          "timestamp": 1704067200.8
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    16.56,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.2,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    10.24,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.6,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    36.4,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    29.04,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.68,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "9": {
+        "frame_properties": {
+          "timestamp": 1704067200.9
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    16.38,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.1,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    10.02,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.55,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    36.7,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.92,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.64,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "10": {
+        "frame_properties": {
+          "timestamp": 1704067201.0
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    16.2,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    25.0,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    9.8,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.5,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    37.0,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.8,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.6,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "11": {
+        "frame_properties": {
+          "timestamp": 1704067201.1
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    16.02,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.9,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    9.58,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.45,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    37.3,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.68,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.56,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "12": {
+        "frame_properties": {
+          "timestamp": 1704067201.2
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    15.84,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.8,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    9.36,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.4,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    37.6,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.56,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.52,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "13": {
+        "frame_properties": {
+          "timestamp": 1704067201.3
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    15.66,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.7,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    9.14,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.35,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    37.9,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.44,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.48,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "14": {
+        "frame_properties": {
+          "timestamp": 1704067201.4
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    15.48,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.6,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.92,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.3,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    38.2,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.32,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.44,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "15": {
+        "frame_properties": {
+          "timestamp": 1704067201.5
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    15.3,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.5,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.7,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.25,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    38.5,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.2,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.4,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "16": {
+        "frame_properties": {
+          "timestamp": 1704067201.6
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    15.12,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.4,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.48,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.2,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    38.8,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    28.08,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.36,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "17": {
+        "frame_properties": {
+          "timestamp": 1704067201.7
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    14.94,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.3,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.26,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.15,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    39.1,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.96,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.32,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "18": {
+        "frame_properties": {
+          "timestamp": 1704067201.8
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    14.76,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.2,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.04,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.1,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    39.4,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.84,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.28,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "19": {
+        "frame_properties": {
+          "timestamp": 1704067201.9
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    14.58,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.1,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    7.82,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.05,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    39.7,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.72,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.24,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "20": {
+        "frame_properties": {
+          "timestamp": 1704067202.0
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    14.4,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    24.0,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    7.6,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.0,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.0,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.6,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.2,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "21": {
+        "frame_properties": {
+          "timestamp": 1704067202.1
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    14.22,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    23.9,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    7.38,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.95,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.3,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.48,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.16,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "22": {
+        "frame_properties": {
+          "timestamp": 1704067202.2
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    14.04,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    23.8,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    7.16,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.9,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.6,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.36,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.12,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "23": {
+        "frame_properties": {
+          "timestamp": 1704067202.3
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    13.86,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    23.7,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    6.94,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.85,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.9,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.24,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.08,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      },
+      "24": {
+        "frame_properties": {
+          "timestamp": 1704067202.4
+        },
+        "objects": {
+          "0": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    13.68,
+                    0.2,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.034907,
+                    4.6,
+                    1.85,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "1": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    23.6,
+                    4.5,
+                    0.725,
+                    0.0,
+                    0.0,
+                    -0.10472,
+                    4.4,
+                    1.8,
+                    1.45
+                  ]
+                }
+              ]
+            }
+          },
+          "2": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    6.72,
+                    -3.6,
+                    0.775,
+                    0.0,
+                    0.0,
+                    0.139626,
+                    4.7,
+                    1.82,
+                    1.55
+                  ]
+                }
+              ]
+            }
+          },
+          "3": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    40.8,
+                    -1.0,
+                    0.75,
+                    0.0,
+                    0.0,
+                    0.017453,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "4": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    41.2,
+                    6.8,
+                    0.75,
+                    0.0,
+                    0.0,
+                    3.106686,
+                    4.5,
+                    1.8,
+                    1.5
+                  ]
+                }
+              ]
+            }
+          },
+          "5": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    27.12,
+                    -6.5,
+                    1.55,
+                    0.0,
+                    0.0,
+                    -0.05236,
+                    7.6,
+                    2.5,
+                    3.1
+                  ]
+                }
+              ]
+            }
+          },
+          "6": {
+            "object_data": {
+              "cuboid": [
+                {
+                  "name": "shape",
+                  "coordinate_system": "vehicle-iso8855",
+                  "val": [
+                    8.04,
+                    3.2,
+                    0.9,
+                    0.0,
+                    0.0,
+                    1.22173,
+                    0.6,
+                    0.6,
+                    1.8
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "frame_intervals": [
+      {
+        "frame_start": 0,
+        "frame_end": 24
+      }
+    ]
+  }
+}

@@ -65,6 +65,23 @@ function normalize(a: Vec3): Vec3 {
   return [a[0] / l, a[1] / l, a[2] / l];
 }
 
+// Rotate a vector by a unit quaternion `[qx,qy,qz,qw]` (scalar-LAST, the
+// OpenLABEL/Arrow wire convention). Uses the standard `v' = v + 2*q_xyz ×
+// (q_xyz × v + q_w*v)` form so we avoid building a full rotation matrix.
+function quatRotate(q: [number, number, number, number], v: Vec3): Vec3 {
+  const [x, y, z, w] = q;
+  // t = 2 * cross(q_xyz, v)
+  const tx = 2 * (y * v[2] - z * v[1]);
+  const ty = 2 * (z * v[0] - x * v[2]);
+  const tz = 2 * (x * v[1] - y * v[0]);
+  // v' = v + w*t + cross(q_xyz, t)
+  return [
+    v[0] + w * tx + (y * tz - z * ty),
+    v[1] + w * ty + (z * tx - x * tz),
+    v[2] + w * tz + (x * ty - y * tx),
+  ];
+}
+
 function lookAt(eye: Vec3, center: Vec3, up: Vec3): Mat4 {
   const f = normalize(sub(center, eye)); // forward
   const s = normalize(cross(f, up)); // right
@@ -234,6 +251,44 @@ export interface SceneCameraInfo {
   target: Vec3;
 }
 
+/** One 3D bounding box in the vehicle frame (metres, z-up). `size` is FULL
+ *  extents; `quat` is scalar-LAST `[qx,qy,qz,qw]`. */
+export interface SceneBox {
+  center: [number, number, number];
+  size: [number, number, number];
+  quat: [number, number, number, number];
+  label: string;
+}
+
+/** A box-centre (or any world point) projected to CSS pixels for label
+ *  placement. `visible` is false when the point is behind the camera or
+ *  outside the view frustum. */
+export interface ProjectedPoint {
+  x: number;
+  y: number;
+  visible: boolean;
+}
+
+// The 12 edges of a unit box as pairs of corner indices. Corner index bit
+// layout: bit0 = +x, bit1 = +y, bit2 = +z (so corner i has sign per axis).
+const BOX_EDGES: ReadonlyArray<readonly [number, number]> = [
+  // bottom face (z-)
+  [0, 1],
+  [1, 3],
+  [3, 2],
+  [2, 0],
+  // top face (z+)
+  [4, 5],
+  [5, 7],
+  [7, 6],
+  [6, 4],
+  // vertical pillars
+  [0, 4],
+  [1, 5],
+  [2, 6],
+  [3, 7],
+];
+
 const FOV = (60 * Math.PI) / 180;
 const MIN_EL = -1.5;
 const MAX_EL = 1.5;
@@ -249,9 +304,21 @@ export class PointCloudRenderer {
   private intBuf: WebGLBuffer;
   private lut: WebGLTexture;
 
+  private boxVao: WebGLVertexArrayObject;
+  private boxBuf: WebGLBuffer;
+  private boxVertexCount = 0;
+
   private pointCount = 0;
   private gridCount: number;
   private gridExtent: number;
+
+  // Last view-projection computed in `render()`, exposed via `getMvp()` so the
+  // panel can project box centres to screen for the HTML label overlay.
+  private lastMvp: Mat4 = new Float32Array(16);
+
+  // Optional hook invoked at the END of every `render()` (after the draw),
+  // letting the panel re-glue its label divs during orbit/zoom/resize.
+  private onRender: (() => void) | null = null;
 
   // Orbit camera. Defaults to a 3/4 view looking down the +x ("forward") axis.
   private az = -2.2;
@@ -320,6 +387,16 @@ export class PointCloudRenderer {
     gl.bindVertexArray(this.axesVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, axesBuf);
     gl.bufferData(gl.ARRAY_BUFFER, axes, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+
+    // Bounding-box wireframes (dynamic; uploaded by `setBoxes`). One VBO of
+    // line-segment endpoints, drawn with the LINE program.
+    this.boxVao = gl.createVertexArray()!;
+    this.boxBuf = gl.createBuffer()!;
+    gl.bindVertexArray(this.boxVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
@@ -433,6 +510,92 @@ export class PointCloudRenderer {
     this.requestRender();
   }
 
+  /** Upload a set of 3D bounding boxes as wireframe geometry. Each box becomes
+   *  12 edges (24 line vertices): the 8 local corners at `(±sx/2,±sy/2,±sz/2)`
+   *  are rotated by the box quaternion and translated by its centre, then the
+   *  `BOX_EDGES` index pairs are expanded into `gl.LINES` endpoints. */
+  setBoxes(boxes: readonly SceneBox[]): void {
+    const gl = this.gl;
+    const verts = new Float32Array(boxes.length * BOX_EDGES.length * 2 * 3);
+    let o = 0;
+    for (const box of boxes) {
+      const hx = box.size[0] / 2;
+      const hy = box.size[1] / 2;
+      const hz = box.size[2] / 2;
+      // 8 world-space corners, indexed by (bit0=+x, bit1=+y, bit2=+z).
+      const corners: Vec3[] = [];
+      for (let i = 0; i < 8; i++) {
+        const local: Vec3 = [
+          i & 1 ? hx : -hx,
+          i & 2 ? hy : -hy,
+          i & 4 ? hz : -hz,
+        ];
+        const r = quatRotate(box.quat, local);
+        corners.push([
+          r[0] + box.center[0],
+          r[1] + box.center[1],
+          r[2] + box.center[2],
+        ]);
+      }
+      for (const [a, b] of BOX_EDGES) {
+        verts[o++] = corners[a][0];
+        verts[o++] = corners[a][1];
+        verts[o++] = corners[a][2];
+        verts[o++] = corners[b][0];
+        verts[o++] = corners[b][1];
+        verts[o++] = corners[b][2];
+      }
+    }
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.boxBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, verts, gl.DYNAMIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+    this.boxVertexCount = verts.length / 3;
+    this.requestRender();
+  }
+
+  clearBoxes(): void {
+    this.boxVertexCount = 0;
+    this.requestRender();
+  }
+
+  /** Register (or clear with `null`) a callback fired at the end of every
+   *  `render()` — used by the panel to reposition HTML box labels each frame so
+   *  they track the camera during orbit/zoom/resize. */
+  setOnRender(cb: (() => void) | null): void {
+    this.onRender = cb;
+  }
+
+  /** Current view-projection matrix (column-major) from the last `render()`. */
+  getMvp(): Float32Array {
+    return this.lastMvp;
+  }
+
+  /** Drawing-buffer size in device pixels `[w, h]`. */
+  viewportSize(): [number, number] {
+    return [this.viewW, this.viewH];
+  }
+
+  /** Project a world point to CSS pixels (origin top-left). Returns `visible:
+   *  false` when the point is behind the camera or outside the NDC cube. The
+   *  caller divides device pixels by `dpr` itself if it works in CSS units —
+   *  here we return CSS pixels directly, matching `clientX/clientY`. */
+  project(p: Vec3): ProjectedPoint {
+    const m = this.lastMvp;
+    const cx = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+    const cy = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+    const cw = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+    if (cw <= 0) return { x: 0, y: 0, visible: false };
+    const ndcX = cx / cw;
+    const ndcY = cy / cw;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const cssW = this.viewW / dpr;
+    const cssH = this.viewH / dpr;
+    const x = (ndcX * 0.5 + 0.5) * cssW;
+    const y = (1 - (ndcY * 0.5 + 0.5)) * cssH;
+    const visible = ndcX >= -1 && ndcX <= 1 && ndcY >= -1 && ndcY <= 1;
+    return { x, y, visible };
+  }
+
   /** Fit the camera to a cloud — called once per binding so a fresh cloud is
    *  framed without fighting subsequent manual orbiting. Uses the centroid and
    *  a 90th-percentile horizontal radius rather than the raw bounding box: a
@@ -465,6 +628,53 @@ export class PointCloudRenderer {
     this.target = [cx, cy, cz];
     // Distance so the bulk of the cloud fits the vertical FOV, with headroom.
     this.dist = Math.max(8, (radius / Math.tan(FOV / 2)) * 1.25);
+    this.requestRender();
+  }
+
+  /** Fit the camera to a set of bounding boxes — the box equivalent of
+   *  `frameToBounds`. A `bounding_box` source carries no point cloud, so the
+   *  point-cloud auto-frame never fires and the boxes would sit off-screen at
+   *  the default camera. Computes the boxes' axis-aligned bounds (using each
+   *  box centre ± half its full extent, ignoring orientation — a small
+   *  over-estimate that only adds harmless headroom) and reuses the same
+   *  centroid+radius framing maths as `frameToBounds`. Called once per fresh
+   *  box set (the panel gates on `!hasFramed`) so manual orbiting afterwards is
+   *  never overridden. */
+  frameToBoxes(boxes: readonly SceneBox[]): void {
+    if (boxes.length === 0) return;
+    let minX = Infinity,
+      minY = Infinity,
+      minZ = Infinity;
+    let maxX = -Infinity,
+      maxY = -Infinity,
+      maxZ = -Infinity;
+    for (const b of boxes) {
+      const hx = Math.abs(b.size[0]) / 2;
+      const hy = Math.abs(b.size[1]) / 2;
+      const hz = Math.abs(b.size[2]) / 2;
+      // Conservative AABB: the box may be rotated, so pad by the largest
+      // half-extent on every axis. Cheap and only ever frames a touch wider.
+      const pad = Math.max(hx, hy, hz);
+      minX = Math.min(minX, b.center[0] - pad);
+      minY = Math.min(minY, b.center[1] - pad);
+      minZ = Math.min(minZ, b.center[2] - pad);
+      maxX = Math.max(maxX, b.center[0] + pad);
+      maxY = Math.max(maxY, b.center[1] + pad);
+      maxZ = Math.max(maxZ, b.center[2] + pad);
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const cz = (minZ + maxZ) / 2;
+    // Horizontal radius drives the framing (same as the cloud path, which fits
+    // the vertical FOV to the in-plane spread); include z so tall trucks/poles
+    // still fit. Floor keeps a single small box from zooming uncomfortably close.
+    const radius = Math.max(
+      Math.hypot(maxX - cx, maxY - cy),
+      (maxZ - minZ) / 2,
+      3,
+    );
+    this.target = [cx, cy, cz];
+    this.dist = Math.max(8, (radius / Math.tan(FOV / 2)) * 1.3);
     this.requestRender();
   }
 
@@ -501,6 +711,7 @@ export class PointCloudRenderer {
     const proj = perspective(FOV, this.viewW / this.viewH, 0.1, 4000);
     const view = lookAt(eye, this.target, [0, 0, 1]);
     const mvp = multiply(proj, view);
+    this.lastMvp = mvp;
 
     // Grid + axes first (depth-tested, drawn under the cloud).
     gl.useProgram(this.lineProg);
@@ -534,7 +745,32 @@ export class PointCloudRenderer {
       gl.bindVertexArray(this.pointVao);
       gl.drawArrays(gl.POINTS, 0, this.pointCount);
     }
+
+    // Bounding boxes last, in a bright amber that reads against both the dark
+    // background and the gray grid. Drawn with the LINE program regardless of
+    // whether a point cloud is present (a bounding_box source carries no
+    // points). Depth test stays on so boxes occlude correctly against geometry.
+    if (this.boxVertexCount > 0) {
+      gl.useProgram(this.lineProg);
+      gl.uniformMatrix4fv(
+        gl.getUniformLocation(this.lineProg, "u_mvp"),
+        false,
+        mvp,
+      );
+      gl.uniform4f(
+        gl.getUniformLocation(this.lineProg, "u_color"),
+        1.0,
+        0.8,
+        0.1,
+        1,
+      );
+      gl.bindVertexArray(this.boxVao);
+      gl.drawArrays(gl.LINES, 0, this.boxVertexCount);
+    }
     gl.bindVertexArray(null);
+
+    // Let the panel re-place its HTML label overlay against the fresh MVP.
+    this.onRender?.();
   }
 
   cameraInfo(): SceneCameraInfo {
@@ -548,6 +784,11 @@ export class PointCloudRenderer {
 
   pointCountValue(): number {
     return this.pointCount;
+  }
+
+  /** Number of boxes currently uploaded (24 line vertices per box). */
+  boxCountValue(): number {
+    return this.boxVertexCount / (BOX_EDGES.length * 2);
   }
 
   dispose(): void {
@@ -567,5 +808,6 @@ export class PointCloudRenderer {
     gl.deleteTexture(this.lut);
     gl.deleteBuffer(this.posBuf);
     gl.deleteBuffer(this.intBuf);
+    gl.deleteBuffer(this.boxBuf);
   }
 }
