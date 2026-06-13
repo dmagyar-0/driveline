@@ -455,28 +455,31 @@ describe("session store", () => {
     expect(ids).toEqual(["short.mcap", "short.mcap (2)"]);
   });
 
-  it("reports bucket errors without opening unrelated files", async () => {
+  it("routes unknown formats to the Format Agent queue, not errors", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
     const r = await useSession.getState().openFiles([
-      file("lone.mp4"), // no sidecar → queued for binding (Feature 1, not an error)
-      file("notes.txt"), // unknown extension → error
+      file("lone.mp4"), // no sidecar → queued for binding (Feature 1)
+      file("telemetry.acme"), // unknown extension → Format Agent queue
       file("short.mf4"), // opens fine
     ]);
     expect(r.opened).toEqual(["short.mf4"]);
-    // Only the unknown extension is an error now; the sidecar-less mp4 is
-    // deferred to the video-timestamp binding queue.
-    expect(r.errors).toHaveLength(1);
-    expect(r.errors[0].name).toBe("notes.txt");
+    // An unrecognised format is no longer an error: it's deferred to the
+    // Format Agent flow (no recipe in the registry under the node test env).
+    expect(r.errors).toHaveLength(0);
     expect(useSession.getState().sources).toHaveLength(1);
-    expect(useSession.getState().lastOpenErrors).toHaveLength(1);
+    expect(useSession.getState().lastOpenErrors).toHaveLength(0);
     expect(useSession.getState().pendingVideoBindings).toHaveLength(1);
+    const unknown = useSession.getState().pendingUnknownImports;
+    expect(unknown).toHaveLength(1);
+    expect(unknown[0].name).toBe("telemetry.acme");
   });
 
   it("dismissOpenErrors clears the lastOpenErrors slice", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession.getState().openFiles([file("notes.txt")]);
+    // An orphan sidecar (no matching mp4 in the drop) is a genuine error.
+    await useSession.getState().openFiles([file("cam.mp4.timestamps")]);
     expect(useSession.getState().lastOpenErrors).toHaveLength(1);
     useSession.getState().dismissOpenErrors();
     expect(useSession.getState().lastOpenErrors).toHaveLength(0);
@@ -485,7 +488,7 @@ describe("session store", () => {
   it("replaces lastOpenErrors on the next openFiles call", async () => {
     const worker = makeFakeWorker(defaultSummaries());
     useSession.getState().setWorker(worker);
-    await useSession.getState().openFiles([file("notes.txt")]);
+    await useSession.getState().openFiles([file("cam.mp4.timestamps")]);
     expect(useSession.getState().lastOpenErrors).toHaveLength(1);
     // A clean follow-up drop replaces the prior batch's errors with [].
     await useSession.getState().openFiles([file("short.mf4")]);

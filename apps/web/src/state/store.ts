@@ -28,6 +28,8 @@ import {
   type BasisDraft,
   type RawTabularSchema,
 } from "./tabularImport";
+import type { RawRecipeDryRunReport, Recipe } from "./recipe";
+import { matchRecipe, saveRecipe } from "./formatRegistry";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { loadLayoutFromStorage, type MapBinding } from "../layout/persist";
 import {
@@ -78,6 +80,7 @@ export type SourceKind =
   | "mf4"
   | "mp4+sidecar"
   | "tabular"
+  | "recipe"
   | "lidar"
   | "ros1"
   | "ros2db3";
@@ -210,6 +213,23 @@ export interface PendingTabularImport {
   schema: RawTabularSchema;
   /** The editable default basis derived from `schema.suggested`. */
   suggested: BasisDraft;
+}
+
+/**
+ * A dropped file whose format Driveline doesn't recognise and which the Format
+ * Registry has no recipe for. Queued by `openFiles` so the `UnknownFormatDialog`
+ * can resolve it — by importing an Ingest Recipe JSON, or (Phase 2) deriving one
+ * with Claude. The `File` is kept (not a byte copy) and re-read on confirm.
+ * See `docs/12-format-agent.md`.
+ */
+export interface PendingUnknownImport {
+  /** Stable queue key (monotonic), distinct from the eventual source id. */
+  id: string;
+  name: string;
+  /** Byte length, shown in the dialog and used to size the consent preview. */
+  size: number;
+  /** The dropped `File` — re-read by the worker on confirm. */
+  file: File;
 }
 
 /**
@@ -488,6 +508,13 @@ export interface SessionState {
    */
   pendingVideoBindings: PendingVideoBinding[];
   /**
+   * FIFO queue of dropped files in an unrecognised format with no matching
+   * Format Registry recipe. The `UnknownFormatDialog` renders the head;
+   * confirming (with a recipe) opens it as a `recipe` source, cancelling shifts
+   * it. Reset by `clear()`. See `docs/12-format-agent.md`.
+   */
+  pendingUnknownImports: PendingUnknownImport[];
+  /**
    * Progress/error state of the baked-in demo load. Written only by
    * `demo/demoSession.ts` (throttled while fetching); FirstRun renders the
    * progress bar and error row from it. Reset by `clear()`.
@@ -515,6 +542,26 @@ export interface SessionState {
   confirmTabularImport(id: string, basis: BasisDraft): Promise<void>;
   /** Cancel (drop) a queued tabular import by id. No-op on an unknown id. */
   cancelTabularImport(id: string): void;
+  /**
+   * Dry-run a candidate Ingest Recipe against a queued unknown import, returning
+   * the decode report (records, coverage, monotonicity, per-channel ranges) the
+   * dialog renders as a validation preview. No-op (`null`) on an unknown id.
+   * Mirrors the Format Agent's `validate_recipe` tool. See
+   * `docs/12-format-agent.md`.
+   */
+  dryRunRecipe(
+    id: string,
+    recipeJson: string,
+  ): Promise<RawRecipeDryRunReport | null>;
+  /**
+   * Confirm a queued unknown import with an Ingest Recipe: open the file as a
+   * `recipe` source, register it like any other source, save the recipe to the
+   * Format Registry (so future drops of this format match offline), and dequeue.
+   * No-op on an unknown id. Failures surface via `lastOpenErrors`.
+   */
+  confirmRecipeImport(id: string, recipeJson: string): Promise<void>;
+  /** Cancel (drop) a queued unknown import by id. No-op on an unknown id. */
+  cancelUnknownImport(id: string): void;
   /**
    * Confirm a queued sidecar-less mp4 binding (Feature 1): fetch the chosen
    * tabular source's converted ns time column, synthesize a `.mp4.timestamps`
@@ -1065,6 +1112,8 @@ export const useSession = create<SessionState>((set, get) => {
   // dialog confirm cycle; never reused so a dialog re-render can't target a
   // recycled slot).
   let tabularImportSeq = 0;
+  // Monotonic key for queued unknown-format imports (Format Agent flow).
+  let unknownImportSeq = 0;
   // Monotonic key for queued sidecar-less mp4 bindings (Feature 1). Never
   // reused so a dialog re-render can't target a recycled slot.
   let videoBindingSeq = 0;
@@ -1151,6 +1200,7 @@ export const useSession = create<SessionState>((set, get) => {
     loadedRanges: {},
     pendingFetch: {},
     pendingTabularImports: [],
+    pendingUnknownImports: [],
     pendingVideoBindings: [],
     demoLoad: { phase: "idle", receivedBytes: 0, totalBytes: 0, error: null },
 
@@ -2006,6 +2056,18 @@ export const useSession = create<SessionState>((set, get) => {
             );
             return shiftRangeArrowTs(bytes, offset);
           }
+          if (source.kind === "recipe") {
+            // A recipe source decodes to scalar `{ts,value}` batches, exactly
+            // like tabular — same Arrow schema, same ts-shift handling.
+            const bytes = await worker.recipeFetchRange(
+              source.handle,
+              channel.nativeId,
+              win.startNs,
+              win.endNs,
+              includePrev,
+            );
+            return shiftRangeArrowTs(bytes, offset);
+          }
           if (source.kind === "lidar") {
             // Point-cloud batches carry a List<Float32> geometry schema, not the
             // scalar `{ts,value}` shape `shiftRangeArrowTs` rewrites — and lidar
@@ -2284,7 +2346,56 @@ export const useSession = create<SessionState>((set, get) => {
             }
           }
 
+          // Unrecognised formats: first try the Format Registry for a recipe
+          // that matches (extension / magic bytes) and open it straight away —
+          // no agent, no network. Otherwise queue it for the Format Agent
+          // dialog. See docs/12-format-agent.md.
+          const newUnknownPending: PendingUnknownImport[] = [];
+          for (const f of buckets.unknown) {
+            try {
+              const recipe = await matchRecipe(f);
+              if (recipe) {
+                const handle = await w.openRecipe(f, JSON.stringify(recipe));
+                const summary = await w.recipeSummary(handle);
+                const sourceId = uniqueSourceId(f.name, [
+                  ...existing,
+                  ...newSources,
+                ]);
+                newSources.push({
+                  id: sourceId,
+                  kind: "recipe",
+                  name: f.name,
+                  handle,
+                  timeRange: {
+                    startNs: summary.start_ns,
+                    endNs: summary.end_ns,
+                  },
+                  channels: tabularChannels(sourceId, summary),
+                  timeOffsetNs: 0n,
+                });
+                opened.push(sourceId);
+              } else {
+                newUnknownPending.push({
+                  id: `unk-${unknownImportSeq++}`,
+                  name: f.name,
+                  size: f.size,
+                  file: f,
+                });
+              }
+            } catch (e) {
+              errors.push({ name: f.name, reason: String(e) });
+            }
+          }
+
           commitOpenedSources(newSources, errors);
+          if (newUnknownPending.length > 0) {
+            set({
+              pendingUnknownImports: [
+                ...get().pendingUnknownImports,
+                ...newUnknownPending,
+              ],
+            });
+          }
           if (newPending.length > 0) {
             set({
               pendingTabularImports: [
@@ -2383,6 +2494,74 @@ export const useSession = create<SessionState>((set, get) => {
       const cur = get().pendingTabularImports;
       const next = cur.filter((p) => p.id !== id);
       if (next.length !== cur.length) set({ pendingTabularImports: next });
+    },
+
+    async dryRunRecipe(id, recipeJson) {
+      if (!worker) throw new Error("session store: worker not initialised");
+      const pendingImport = get().pendingUnknownImports.find(
+        (p) => p.id === id,
+      );
+      if (!pendingImport) return null;
+      // Bounded record budget keeps the validation responsive on huge files;
+      // the agent loop (and the dialog preview) sample, not exhaustively decode.
+      return worker.recipeDryRun(pendingImport.file, recipeJson, 200_000);
+    },
+
+    async confirmRecipeImport(id, recipeJson) {
+      const run = async () => {
+        if (!worker) throw new Error("session store: worker not initialised");
+        const w = worker;
+        const pendingImport = get().pendingUnknownImports.find(
+          (p) => p.id === id,
+        );
+        if (!pendingImport) return;
+
+        const errors: BucketError[] = [];
+        const newSources: SourceMeta[] = [];
+        let savedRecipe: Recipe | null = null;
+        try {
+          const handle = await w.openRecipe(pendingImport.file, recipeJson);
+          const summary = await w.recipeSummary(handle);
+          const sourceId = uniqueSourceId(pendingImport.name, get().sources);
+          newSources.push({
+            id: sourceId,
+            kind: "recipe",
+            name: pendingImport.name,
+            handle,
+            timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
+            channels: tabularChannels(sourceId, summary),
+            timeOffsetNs: 0n,
+          });
+          // Only persist a recipe that actually opened.
+          try {
+            savedRecipe = JSON.parse(recipeJson) as Recipe;
+          } catch {
+            savedRecipe = null;
+          }
+        } catch (e) {
+          errors.push({ name: pendingImport.name, reason: String(e) });
+        }
+
+        commitOpenedSources(newSources, errors);
+        if (savedRecipe) saveRecipe(savedRecipe);
+        // Dequeue only on success; a failed open leaves it queued for a retry.
+        if (newSources.length > 0) {
+          set({
+            pendingUnknownImports: get().pendingUnknownImports.filter(
+              (p) => p.id !== id,
+            ),
+          });
+        }
+      };
+      const next = pending.then(run, run);
+      pending = next.catch(() => undefined);
+      await next;
+    },
+
+    cancelUnknownImport(id) {
+      const cur = get().pendingUnknownImports;
+      const next = cur.filter((p) => p.id !== id);
+      if (next.length !== cur.length) set({ pendingUnknownImports: next });
     },
 
     async confirmVideoBinding(id, tabularSourceId) {
@@ -2566,6 +2745,7 @@ export const useSession = create<SessionState>((set, get) => {
             else if (s.kind === "ros2db3") await w.closeRos2Db3(s.handle);
             else if (s.kind === "mf4") await w.closeMf4(s.handle);
             else if (s.kind === "tabular") await w.closeTabular(s.handle);
+            else if (s.kind === "recipe") await w.closeRecipe(s.handle);
             else if (s.kind === "lidar") await w.closeLidar(s.handle);
             else await w.closeMp4Sidecar(s.handle);
             // Drop the lazy sample cache — releases its `File` ref,
@@ -2614,6 +2794,7 @@ export const useSession = create<SessionState>((set, get) => {
           loadedRanges: {},
           pendingFetch: {},
           pendingTabularImports: [],
+          pendingUnknownImports: [],
           pendingVideoBindings: [],
           demoLoad: {
             phase: "idle",
@@ -2643,6 +2824,7 @@ export const useSession = create<SessionState>((set, get) => {
             else if (src.kind === "ros2db3") await w.closeRos2Db3(src.handle);
             else if (src.kind === "mf4") await w.closeMf4(src.handle);
             else if (src.kind === "tabular") await w.closeTabular(src.handle);
+            else if (src.kind === "recipe") await w.closeRecipe(src.handle);
             else if (src.kind === "lidar") await w.closeLidar(src.handle);
             else await w.closeMp4Sidecar(src.handle);
           } catch (err) {

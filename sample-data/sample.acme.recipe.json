@@ -1,0 +1,47 @@
+{
+  "recipeVersion": 1,
+  "name": "ACME Vehicle Telemetry Log",
+  "description": "In-house ACME data logger. 32-byte header (magic ACMELOG\\x01) followed by a stream of fixed 32-byte little-endian records at 100 Hz. Each record carries a microsecond absolute timestamp, vehicle speed, steering angle, engine RPM, gear, brake state, a lateral accelerometer value, and GPS latitude/longitude (int32 scaled 1e-7 degrees).",
+  "detect": {
+    "extensions": [".acme"],
+    "magic": [{ "offset": 0, "bytesHex": "41434d45" }]
+  },
+  "provenance": {
+    "createdBy": "format-agent",
+    "model": "claude-opus-4-8",
+    "createdAt": "2026-06-13T00:00:00Z"
+  },
+  "container": {
+    "type": "fixed_record",
+    "headerSkipBytes": 32,
+    "recordSizeBytes": 32
+  },
+  "time": {
+    "field": "t",
+    "unit": "micros",
+    "mode": "absolute",
+    "epochOffsetNs": "0",
+    "monotonicity": "strictly_increasing"
+  },
+  "fields": [
+    { "name": "t", "offset": 0, "dtype": "u64", "endian": "le" },
+    { "name": "speed", "offset": 8, "dtype": "f32", "endian": "le", "scale": 1.0, "valueOffset": 0.0, "unit": "m/s" },
+    { "name": "steering", "offset": 12, "dtype": "f32", "endian": "le", "scale": 1.0, "valueOffset": 0.0, "unit": "deg" },
+    { "name": "rpm", "offset": 16, "dtype": "i32", "endian": "le", "scale": 1.0, "valueOffset": 0.0, "unit": "rpm" },
+    { "name": "gear", "offset": 20, "dtype": "u8", "enumDict": { "0": "P", "1": "R", "2": "N", "3": "D" } },
+    { "name": "brake", "offset": 21, "dtype": "u8", "enumDict": { "0": "off", "1": "on" } },
+    { "name": "accel", "offset": 22, "dtype": "i16", "endian": "le", "scale": 0.001, "valueOffset": 0.0, "unit": "g" },
+    { "name": "lat", "offset": 24, "dtype": "i32", "endian": "le", "scale": 1e-7, "valueOffset": 0.0, "unit": "deg" },
+    { "name": "lon", "offset": 28, "dtype": "i32", "endian": "le", "scale": 1e-7, "valueOffset": 0.0, "unit": "deg" }
+  ],
+  "channels": [
+    { "nativeId": "speed", "name": "vehicle/speed", "kind": "scalar", "fields": ["speed"], "unit": "m/s" },
+    { "nativeId": "steering", "name": "vehicle/steering_angle", "kind": "scalar", "fields": ["steering"], "unit": "deg" },
+    { "nativeId": "rpm", "name": "engine/rpm", "kind": "scalar", "fields": ["rpm"], "unit": "rpm" },
+    { "nativeId": "gear", "name": "transmission/gear", "kind": "enum", "fields": ["gear"] },
+    { "nativeId": "brake", "name": "vehicle/brake", "kind": "enum", "fields": ["brake"] },
+    { "nativeId": "accel", "name": "imu/accel_lateral", "kind": "scalar", "fields": ["accel"], "unit": "g" },
+    { "nativeId": "lat", "name": "gps/latitude", "kind": "scalar", "fields": ["lat"], "unit": "deg" },
+    { "nativeId": "lon", "name": "gps/longitude", "kind": "scalar", "fields": ["lon"], "unit": "deg" }
+  ]
+}

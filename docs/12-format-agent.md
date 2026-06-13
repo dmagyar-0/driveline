@@ -604,3 +604,39 @@ pressure to bloat the DSL — while still unblocking users.
 Phase 1 has zero LLM surface and is independently valuable (recipes are a
 plugin system in their own right); it should land first and de-risk
 everything above it.
+
+## 14. Implementation status
+
+**Phase 1 (Recipe core) is implemented and verified end-to-end.** What shipped:
+
+- `crates/data-core/src/recipe.rs` — `RecipeReader` behind the existing
+  `Reader` trait (scalar f64 channels, identical Arrow schema to `tabular.rs`),
+  the `fixed_record` container, all integer/float dtypes + endianness, the
+  integer-domain time conversion, the safety clamps, and the `dry_run`
+  statistics report. Unit-tested (`cargo test -p data-core recipe`).
+- `crates/wasm-bindings` — `open_recipe` / `close_recipe` / `recipe_summary` /
+  `recipe_fetch_range` / `recipe_dry_run` over a thread-local slab.
+- JS: a `recipe` `SourceKind`, the worker methods, the `bucket.ts` `unknown`
+  bucket, registry-match-or-queue in `openFiles`, the `dryRunRecipe` /
+  `confirmRecipeImport` / `cancelUnknownImport` store actions, the Format
+  Registry persistence shard (`state/formatRegistry.ts`), the shared recipe
+  DSL types (`state/recipe.ts`), and the `UnknownFormatDialog` (manual +
+  import-recipe path with live validation; the "Decode with Claude" panel is
+  the Phase-2 placeholder).
+- A synthetic alien format: `sample-data/generate_acme.py` →
+  `sample-data/sample.acme`. A subagent role-playing the Format Agent
+  reverse-engineered it from a hexdump sample; its recipe and analyst
+  transcript are committed at `sample-data/sample.acme.recipe.json` and
+  `…agent-transcript.md`.
+- Verification: `crates/data-core/tests/recipe_acme.rs` runs the agent's recipe
+  through the real decoder over the real file (3000 records, 100% coverage, 0
+  rejects, plausible per-channel ranges); `apps/e2e/tests/recipeImport.spec.ts`
+  drives the full browser flow (drop → dialog → validate → open → plot, plus
+  registry auto-match) and captures `recipe-dialog.png` / `recipe-plot.png`.
+
+**Not yet built:** Phases 2–4 — the live BYOK agent loop (`llm/`), the
+structured-output layout proposal, the `__drivelineAgent` v2 write ops, the
+non-`fixed_record` container strategies, the `cargo-fuzz` target, and the
+sandbox-conversion escape hatch. The v1 simplification "every recipe channel is
+a scalar f64 series" (enum/vector kinds collapse to scalar) is also a
+deliberate Phase-1 limitation noted in `recipe.rs`.

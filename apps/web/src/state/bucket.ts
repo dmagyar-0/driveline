@@ -60,6 +60,15 @@ export interface Buckets {
    * routes to the tabular (scalar) import flow.
    */
   lidar: LidarInput[];
+  /**
+   * Drops with an extension Driveline doesn't recognise. No longer a hard
+   * error: each is routed to the Format Agent flow — `openFiles` first tries
+   * the Format Registry for a matching Ingest Recipe (extension / magic bytes),
+   * and otherwise queues a pending unknown import the `UnknownFormatDialog`
+   * resolves (import a recipe JSON, or derive one with Claude). See
+   * `docs/12-format-agent.md`.
+   */
+  unknown: File[];
   errors: BucketError[];
 }
 
@@ -75,6 +84,7 @@ export function bucketFiles(files: File[]): Buckets {
   const mp4s: File[] = [];
   const tabular: TabularInput[] = [];
   const lidar: LidarInput[] = [];
+  const unknown: File[] = [];
   const errors: BucketError[] = [];
 
   for (const f of files) {
@@ -108,7 +118,9 @@ export function bucketFiles(files: File[]): Buckets {
       // `.pq` is a common short alias for Parquet.
       tabular.push({ file: f, format: "parquet" });
     } else {
-      errors.push({ name, reason: `unknown file type: ${name}` });
+      // Unrecognised extension: hand to the Format Agent flow rather than
+      // failing the drop outright.
+      unknown.push(f);
     }
   }
 
@@ -145,6 +157,7 @@ export function bucketFiles(files: File[]): Buckets {
     videoNeedsTimestamps,
     tabular,
     lidar,
+    unknown,
     errors,
   };
 }

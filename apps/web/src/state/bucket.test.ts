@@ -54,13 +54,12 @@ describe("bucketFiles", () => {
     expect(r.errors).toHaveLength(0);
   });
 
-  it("reports unknown extensions as errors", () => {
-    const r = bucketFiles([f("notes.txt")]);
+  it("routes unknown extensions to the Format Agent flow, not errors", () => {
+    const r = bucketFiles([f("telemetry.acme")]);
     expect(r.ros1).toHaveLength(0);
     expect(r.ros2db3).toHaveLength(0);
-    expect(r.errors).toEqual([
-      { name: "notes.txt", reason: "unknown file type: notes.txt" },
-    ]);
+    expect(r.errors).toHaveLength(0);
+    expect(r.unknown.map((u) => u.name)).toEqual(["telemetry.acme"]);
   });
 
   it("handles multiple sources in one drop", () => {

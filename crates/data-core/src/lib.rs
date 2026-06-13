@@ -12,6 +12,7 @@ pub mod noop;
 pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
+pub mod recipe;
 pub mod ros;
 pub mod ros1_bag;
 pub mod ros2_db3;
@@ -29,6 +30,7 @@ pub use mf4_rs::index::ByteRangeReader;
 pub use mp4_sidecar::{Mp4SampleIndex, Mp4SidecarReader};
 pub use pointcloud::PointCloudReader;
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
+pub use recipe::{DryRunReport, Recipe, RecipeReader};
 pub use ros1_bag::Ros1BagReader;
 pub use ros2_db3::Ros2Db3Reader;
 pub use tabular::{

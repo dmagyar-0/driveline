@@ -32,6 +32,9 @@ sample-data/*
 !sample-data/README.md
 !sample-data/generate.py
 !sample-data/generate_tabular.py
+!sample-data/generate_acme.py
+!sample-data/sample.acme.recipe.json
+!sample-data/sample.acme.agent-transcript.md
 !sample-data/EXPECTED_HASHES.txt
 !sample-data/short.mp4.timestamps
 !sample-data/short.mf4
