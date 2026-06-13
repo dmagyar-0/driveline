@@ -6,10 +6,19 @@
 //   p_cam = quatRotate(quaternion, p_scene) + translation
 //
 // (scalar-last quaternion, identical formula to `quatRotate()` in
-// `pointCloudRenderer.ts`), then the OpenCV pinhole intrinsic with optional
-// Brown-Conrady radial-tangential distortion. A point is visible iff its
-// camera-frame Z > 0 (in front of the lens) and the projected pixel lands
-// inside the image rectangle.
+// `pointCloudRenderer.ts`), then one of two camera models:
+//
+//   - pinhole: the OpenCV pinhole intrinsic with optional Brown-Conrady
+//     radial-tangential distortion (`x = X/Z`, `u = fx·x_d + cx`).
+//   - ftheta:  NVIDIA's f-theta polynomial fisheye. The ray's angle from the
+//     optical axis `θ = atan2(hypot(X,Y), Z)` is mapped to a pixel radius
+//     `ρ = Σ cᵢ·θⁱ` by `forwardPoly`, placed along the `(X, Y)` direction from
+//     the principal point `(cx, cy)`. This captures wide-FOV lens curvature a
+//     pinhole `fx`/`fy` cannot (a 120° camera is ~70% off at the rim under a
+//     pinhole approximation).
+//
+// A point is visible iff its camera-frame Z > 0 (in front of the lens) and the
+// projected pixel lands inside the image rectangle.
 //
 // `projectPoint` is the readable single-point reference the unit tests pin to
 // the synthetic fixture's oracle. `projectPointsInto` is the batch helper the
@@ -80,10 +89,34 @@ function projectNormalised(
   out[1] = fy * yd + cy;
 }
 
+// Evaluate the f-theta forward polynomial `ρ(θ) = Σ cᵢ·θⁱ` (Horner). `coeffs`
+// is `[c0, c1, …]`; for NVIDIA f-theta `c0 ≈ 0` and `c1` is the focal length.
+function evalForwardPoly(coeffs: number[], theta: number): number {
+  let r = 0;
+  for (let i = coeffs.length - 1; i >= 0; i--) r = r * theta + coeffs[i];
+  return r;
+}
+
+// The largest ray angle (radians) for which `forwardPoly` is still increasing.
+// A real lens polynomial is monotonic across its design FOV; beyond the first
+// turning point it can *fold* (map a wider-angle ray back to a small radius and
+// thus spuriously into the image). Rays past this bound are culled. Scanned
+// once per camera over `[0, π)`; the coarse step is plenty for a safety bound.
+function fthetaMaxAngle(coeffs: number[]): number {
+  const STEP = 0.01;
+  let prev = evalForwardPoly(coeffs, 0);
+  for (let th = STEP; th < Math.PI; th += STEP) {
+    const cur = evalForwardPoly(coeffs, th);
+    if (cur < prev) return th - STEP;
+    prev = cur;
+  }
+  return Math.PI;
+}
+
 /**
  * Project a single scene/LiDAR-frame point through `calib`. Returns the pixel
  * `(u, v)`, the camera-frame depth, and a `visible` flag (Z > 0 AND inside the
- * image rectangle). Implements docs/13 exactly.
+ * image rectangle). Implements docs/13 exactly for both camera models.
  */
 export function projectPoint(
   calib: CameraCalibration,
@@ -99,9 +132,24 @@ export function projectPoint(
     return { u: NaN, v: NaN, depth: Z, visible: false };
   }
   const { fx, fy, cx, cy, width, height } = calib.intrinsics;
-  const px: [number, number] = [0, 0];
-  projectNormalised(X / Z, Y / Z, fx, fy, cx, cy, calib.distortion, px);
-  const [u, v] = px;
+  let u: number;
+  let v: number;
+  if (calib.model === "ftheta") {
+    const rxy = Math.hypot(X, Y);
+    const theta = Math.atan2(rxy, Z);
+    if (theta > fthetaMaxAngle(calib.forwardPoly)) {
+      return { u: NaN, v: NaN, depth: Z, visible: false };
+    }
+    const rho = evalForwardPoly(calib.forwardPoly, theta);
+    const scale = rxy > 1e-9 ? rho / rxy : 0;
+    u = cx + X * scale;
+    v = cy + Y * scale;
+  } else {
+    const px: [number, number] = [0, 0];
+    projectNormalised(X / Z, Y / Z, fx, fy, cx, cy, calib.distortion, px);
+    u = px[0];
+    v = px[1];
+  }
   const visible = u >= 0 && u < width && v >= 0 && v < height;
   return { u, v, depth: Z, visible };
 }
@@ -159,6 +207,15 @@ export function projectPointsInto(
   const p2 = hasDist ? dist[3] : 0;
   const k3 = hasDist ? dist[4] : 0;
 
+  // Model-specific setup, hoisted out of the per-point loop: the `isFtheta`
+  // branch inside the loop is loop-invariant (perfectly predicted), and the
+  // forward polynomial + its monotonic bound are read once per spin, not per
+  // point.
+  const isFtheta = calib.model === "ftheta";
+  const fwd = calib.forwardPoly;
+  const fwdDeg = fwd.length;
+  const maxAngle = isFtheta ? fthetaMaxAngle(fwd) : 0;
+
   const cam: [number, number, number] = [0, 0, 0];
   let visibleCount = 0;
   for (let i = 0; i < count; i++) {
@@ -174,18 +231,37 @@ export function projectPointsInto(
       out.visible[i] = 0;
       continue;
     }
-    let x = X / Z;
-    let y = Y / Z;
-    if (hasDist) {
-      const r2 = x * x + y * y;
-      const radial = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
-      const xd = x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x);
-      const yd = y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y;
-      x = xd;
-      y = yd;
+    let u: number;
+    let v: number;
+    if (isFtheta) {
+      const rxy = Math.hypot(X, Y);
+      const theta = Math.atan2(rxy, Z);
+      if (theta > maxAngle) {
+        out.us[i] = NaN;
+        out.vs[i] = NaN;
+        out.visible[i] = 0;
+        continue;
+      }
+      // ρ(θ) via inline Horner (no per-point call on the hot path).
+      let rho = 0;
+      for (let c = fwdDeg - 1; c >= 0; c--) rho = rho * theta + fwd[c];
+      const scale = rxy > 1e-9 ? rho / rxy : 0;
+      u = cx + X * scale;
+      v = cy + Y * scale;
+    } else {
+      let x = X / Z;
+      let y = Y / Z;
+      if (hasDist) {
+        const r2 = x * x + y * y;
+        const radial = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+        const xd = x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x);
+        const yd = y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y;
+        x = xd;
+        y = yd;
+      }
+      u = fx * x + cx;
+      v = fy * y + cy;
     }
-    const u = fx * x + cx;
-    const v = fy * y + cy;
     out.us[i] = u;
     out.vs[i] = v;
     const vis = u >= 0 && u < width && v >= 0 && v < height ? 1 : 0;

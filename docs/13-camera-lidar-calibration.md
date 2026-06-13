@@ -40,7 +40,19 @@ p_cam = quatRotate(quaternion, p_scene) + translation
 The ~90° rotation between ISO-8855 (z-up) and OpenCV (z-forward) optical axes is
 **baked into this quaternion** — there is no separate axis-convention flag.
 
-### The intrinsic (pinhole) + distortion
+### Camera models
+
+A camera carries a `model` selecting how a camera-frame point projects to a
+pixel. Two are supported:
+
+| `model`   | intrinsics used                 | typical source                |
+| --------- | ------------------------------- | ----------------------------- |
+| `pinhole` | `intrinsics` + `distortion`     | nuScenes, the synthetic scene |
+| `ftheta`  | `forward_poly` (+ `cx`,`cy`)    | Alpamayo / NVIDIA AV stacks   |
+
+`model` is **optional in the JSON** and defaults to `pinhole`.
+
+### The pinhole intrinsic + distortion
 
 `intrinsics = [fx, fy, cx, cy]` in pixels; `resolution = [width, height]` in
 pixels. Projection of a camera-frame point `(X, Y, Z)` with `Z > 0`:
@@ -57,8 +69,34 @@ v = fy * y_d + cy
 ```
 
 `distortion` is `[]` (no distortion, e.g. nuScenes — images are pre-undistorted)
-or exactly 5 floats `[k1, k2, p1, p2, k3]`. A point is **visible** iff `Z > 0`
-and `0 ≤ u < width` and `0 ≤ v < height`.
+or exactly 5 floats `[k1, k2, p1, p2, k3]`.
+
+### The f-theta (polynomial fisheye) intrinsic
+
+Wide-FOV cameras (Alpamayo's 120° cameras, most NVIDIA AV rigs) follow an
+**f-theta** model that a pinhole `fx`/`fy` cannot represent — at the rim of a
+120° lens the pinhole `f·tan θ` is ~70% larger than the true radius, so points
+slide off objects. Instead a `forward_poly` maps the ray's angle from the
+optical axis to a pixel radius from the principal point. Projection of a
+camera-frame point `(X, Y, Z)` with `Z > 0`:
+
+```
+θ   = atan2(hypot(X, Y), Z)        # angle of the ray from the +Z optical axis
+ρ   = Σ forward_poly[i] · θ^i      # pixel radius from the principal point (Horner)
+s   = ρ / hypot(X, Y)              # (on-axis hypot==0 → u=cx, v=cy)
+u   = cx + X · s
+v   = cy + Y · s
+```
+
+`forward_poly` is `[]` for `pinhole`, else ≥2 coefficients `[c0, c1, …]`
+(`c0 ≈ 0`, `c1 ≈` the focal length). `distortion` is unused for `ftheta`; the
+lens curvature lives entirely in the polynomial. `intrinsics.fx`/`fy` still
+carry the linear-term approximation (`c1`) so a pinhole-only consumer degrades
+gracefully, while `cx`/`cy` stay exact. Rays past the polynomial's first
+turning point (where it stops increasing) are culled to avoid fold-over.
+
+A point is **visible** (either model) iff `Z > 0` and `0 ≤ u < width` and
+`0 ≤ v < height`.
 
 ## Wire contract: Arrow IPC
 
@@ -71,14 +109,16 @@ one fetch returns all cameras (one row per camera).
   every vector field a `List<Float32>` / `List<Int32>` to match the OpenLABEL
   precedent (uniform, simple JS decode):
 
-| column        | Arrow type        | meaning                                   |
-| ------------- | ----------------- | ----------------------------------------- |
-| `name`        | `Utf8`            | camera name, e.g. `CAM_FRONT`             |
-| `intrinsics`  | `List<Float32>`   | length 4 = `[fx, fy, cx, cy]` (px)        |
-| `resolution`  | `List<Int32>`     | length 2 = `[width, height]` (px)         |
-| `distortion`  | `List<Float32>`   | length 0 or 5 = `[k1,k2,p1,p2,k3]`        |
-| `translation` | `List<Float32>`   | length 3 = `[tx, ty, tz]` (m)             |
-| `quaternion`  | `List<Float32>`   | length 4 = `[qx, qy, qz, qw]` scalar-last |
+| column         | Arrow type      | meaning                                    |
+| -------------- | --------------- | ------------------------------------------ |
+| `name`         | `Utf8`          | camera name, e.g. `CAM_FRONT`              |
+| `model`        | `Utf8`          | `"pinhole"` or `"ftheta"`                  |
+| `intrinsics`   | `List<Float32>` | length 4 = `[fx, fy, cx, cy]` (px)         |
+| `resolution`   | `List<Int32>`   | length 2 = `[width, height]` (px)          |
+| `distortion`   | `List<Float32>` | length 0 or 5 = `[k1,k2,p1,p2,k3]`         |
+| `forward_poly` | `List<Float32>` | length 0 (pinhole) or ≥2 ftheta coeffs     |
+| `translation`  | `List<Float32>` | length 3 = `[tx, ty, tz]` (m)              |
+| `quaternion`   | `List<Float32>` | length 4 = `[qx, qy, qz, qw]` scalar-last  |
 
 - Fixture: `test-fixtures/arrow_calibration.ipc` + generator
   `arrow_calibration_ipc()` in `crates/data-core/src/fixtures.rs`.
@@ -95,14 +135,27 @@ one fetch returns all cameras (one row per camera).
   "cameras": [
     {
       "name": "CAM_FRONT",
+      "model": "pinhole",                       // optional; "pinhole" (default) | "ftheta"
       "intrinsics": { "fx": 1266.4, "fy": 1266.4, "cx": 816.3, "cy": 491.5,
                       "width": 1600, "height": 900 },
-      "distortion": [0, 0, 0, 0, 0],            // optional; omit or [] = none
+      "distortion": [0, 0, 0, 0, 0],            // optional; omit or [] = none (pinhole only)
       "extrinsic": {                            // scene/LiDAR -> camera optical
         "translation": [0.0, 0.0, 0.0],
         "quaternion":  [-0.5, 0.5, -0.5, 0.5]   // [qx,qy,qz,qw], scalar-last
       },
       "target_frame": "lidar"                   // informational only
+    },
+    {
+      "name": "CAM_FISHEYE",
+      "model": "ftheta",
+      "intrinsics": { "fx": 926.1, "fy": 926.1, "cx": 960.0, "cy": 540.0,
+                      "width": 1920, "height": 1080 },  // fx/fy = forward_poly[1] approx
+      "forward_poly": [0, 926.1, -3.2, -19.3, 3.7],     // required for "ftheta"
+      "extrinsic": {
+        "translation": [0.0, 0.0, 0.0],
+        "quaternion":  [-0.5, 0.5, -0.5, 0.5]
+      },
+      "target_frame": "lidar"
     }
   ]
 }
@@ -114,16 +167,19 @@ one fetch returns all cameras (one row per camera).
   ```ts
   interface CameraCalibration {
     name: string;
+    model: "pinhole" | "ftheta";
     intrinsics: { fx: number; fy: number; cx: number; cy: number;
                   width: number; height: number };
-    distortion: number[];                       // [] or 5
+    distortion: number[];                       // [] or 5 (pinhole)
+    forwardPoly: number[];                      // [] (pinhole) or >=2 (ftheta)
     translation: [number, number, number];
     quaternion: [number, number, number, number]; // scalar-last
   }
   ```
 - `cameraProjection.ts` — pure, unit-tested:
-  `projectPoint(calib, p_scene): { u, v, depth, visible }` implementing the math
-  above. Reuses the scalar-last quaternion rotation already in the renderer.
+  `projectPoint(calib, p_scene): { u, v, depth, visible }` branching on
+  `calib.model` (pinhole or f-theta) per the math above. Reuses the scalar-last
+  quaternion rotation already in the renderer.
 - State (`store.ts`): a per-video-panel overlay binding
   ```ts
   interface PointCloudOverlayBinding {
@@ -159,3 +215,11 @@ one fetch returns all cameras (one row per camera).
    nuScenes gives `T_ego_from_sensor` per sensor. The direct LiDAR→camera
    extrinsic for a keyframe is `T_cam_from_lidar = inv(T_ego_from_cam) ∘
    T_ego_from_lidar`, i.e. `R = R_cam⁻¹ R_lidar`, `t = R_cam⁻¹ (t_lidar − t_cam)`.
+
+3. **Alpamayo** (NVIDIA PhysicalAI-AV, real, `model: "ftheta"`): the external
+   `build_bundle.py` converter emits a `<clip>.calib.json` from the dataset's
+   `camera_intrinsics` (the `fw_poly_*` f-theta coefficients → `forward_poly`,
+   `cx`/`cy` exact) and `sensor_extrinsics` (per-sensor → ego), composing the
+   same `R_cam⁻¹ R_lidar` / `R_cam⁻¹ (t_lidar − t_cam)` LiDAR→camera extrinsic as
+   nuScenes. The LiDAR cloud stays in the `lidar_top_360fov` sensor frame, so the
+   extrinsic targets that frame. License forbids redistribution → local only.

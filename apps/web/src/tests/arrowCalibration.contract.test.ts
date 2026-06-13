@@ -13,32 +13,37 @@ describe("Arrow IPC calibration contract fixture (Rust ↔ JS)", () => {
   const bytes = readFileSync(fixturePath);
   const table = tableFromIPC(bytes);
 
-  it("has the six calibration columns in order", () => {
+  it("has the eight calibration columns in order", () => {
     expect(table.schema.fields.map((f) => f.name)).toEqual([
       "name",
+      "model",
       "intrinsics",
       "resolution",
       "distortion",
+      "forward_poly",
       "translation",
       "quaternion",
     ]);
   });
 
-  it("all six fields are non-nullable", () => {
+  it("all eight fields are non-nullable", () => {
     for (const f of table.schema.fields) {
       expect(f.nullable).toBe(false);
     }
   });
 
-  it("name is Utf8", () => {
-    const field = table.schema.fields.find((f) => f.name === "name")!;
-    expect(DataType.isUtf8(field.type)).toBe(true);
+  it("name and model are Utf8", () => {
+    for (const name of ["name", "model"]) {
+      const field = table.schema.fields.find((f) => f.name === name)!;
+      expect(DataType.isUtf8(field.type)).toBe(true);
+    }
   });
 
-  it("intrinsics / distortion / translation / quaternion are List<Float32>", () => {
+  it("intrinsics / distortion / forward_poly / translation / quaternion are List<Float32>", () => {
     for (const name of [
       "intrinsics",
       "distortion",
+      "forward_poly",
       "translation",
       "quaternion",
     ]) {
@@ -69,6 +74,9 @@ describe("Arrow IPC calibration contract fixture (Rust ↔ JS)", () => {
     expect(res.cameras).toHaveLength(1);
     const cam = res.cameras[0];
     expect(cam.name).toBe("CAM_FRONT");
+    expect(cam.model).toBe("pinhole");
+    // Pinhole camera → empty forward polynomial.
+    expect(cam.forwardPoly).toEqual([]);
     expect(cam.intrinsics.width).toBe(1600);
     expect(cam.intrinsics.height).toBe(900);
     // Distortion is [] or 5.
