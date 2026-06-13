@@ -79,6 +79,16 @@ const RAIL_ITEMS: readonly RailItem[] = [
       </svg>
     ),
   },
+  {
+    id: "formats",
+    label: "Formats",
+    icon: (
+      <svg {...ICON_PROPS}>
+        <path d="M4 7l8-4 8 4-8 4-8-4z" />
+        <path d="M4 12l8 4 8-4M4 17l8 4 8-4" />
+      </svg>
+    ),
+  },
 ];
 
 export function Rail() {

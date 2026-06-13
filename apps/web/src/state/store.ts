@@ -29,7 +29,7 @@ import {
   type RawTabularSchema,
 } from "./tabularImport";
 import type { RawRecipeDryRunReport, Recipe } from "./recipe";
-import { matchRecipe, saveRecipe } from "./formatRegistry";
+import { matchRecipe, saveRecipe, removeRecipe } from "./formatRegistry";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { loadLayoutFromStorage, type MapBinding } from "../layout/persist";
 import {
@@ -153,6 +153,20 @@ export interface SourceMeta {
    * source literals that predate the field still type-check.
    */
   timeOffsetNs?: bigint;
+  /**
+   * Phase 4 (docs/12 §9) — opened from a *draft* recipe (a non-converged /
+   * gate-failing best attempt). Surfaced as a "low-confidence decode" banner on
+   * the source so the user knows the decode is unverified. Absent on every
+   * normal source.
+   */
+  lowConfidence?: boolean;
+  /**
+   * Phase 4 (docs/12 §10) — opened from the sandbox-conversion escape hatch: a
+   * one-shot converted copy (e.g. the sample/file converted to MCAP inside the
+   * code-execution sandbox). No reusable recipe exists and it is never
+   * registered, so the UI labels it "converted copy — recipe not available".
+   */
+  oneShot?: boolean;
 }
 
 export interface OpenResult {
@@ -230,6 +244,20 @@ export interface PendingUnknownImport {
   size: number;
   /** The dropped `File` — re-read by the worker on confirm. */
   file: File;
+  /**
+   * Phase 4 (docs/12 §9) — a registry recipe matched this drop but the
+   * open-time dry-run gate FAILED (coverage too low / framing errors), so the
+   * file is queued with the stale recipe attached instead of opening garbage.
+   * The dialog surfaces a "re-derive with agent" prompt; the old recipe is kept
+   * until replaced. `null`/absent for an ordinary unknown drop.
+   */
+  staleRecipe?: { name: string; coverage: number } | null;
+  /**
+   * Phase 4 (docs/12 §3.4) — this entry was queued by a "Re-derive with agent"
+   * action in the Formats drawer rather than a drop. Carries the name of the
+   * registry recipe being re-derived; on success the new recipe replaces it.
+   */
+  reDeriveName?: string | null;
 }
 
 /**
@@ -559,9 +587,44 @@ export interface SessionState {
    * Format Registry (so future drops of this format match offline), and dequeue.
    * No-op on an unknown id. Failures surface via `lastOpenErrors`.
    */
-  confirmRecipeImport(id: string, recipeJson: string): Promise<void>;
+  confirmRecipeImport(
+    id: string,
+    recipeJson: string,
+    opts?: {
+      /**
+       * Phase 4 — opened from a draft recipe: tag the source `lowConfidence`
+       * (the "low-confidence decode" banner) and do NOT save the recipe to the
+       * real registry (drafts live in the parallel drafts shard).
+       */
+      lowConfidence?: boolean;
+      /**
+       * Phase 4 re-derive: the name of the registry recipe this run replaces.
+       * On success the old recipe is overwritten with the freshly-derived one
+       * (kept until replaced, docs/12 §9). When set the recipe IS saved.
+       */
+      replaceRecipeName?: string;
+    },
+  ): Promise<void>;
   /** Cancel (drop) a queued unknown import by id. No-op on an unknown id. */
   cancelUnknownImport(id: string): void;
+  /**
+   * Phase 4 (docs/12 §3.4) — queue a "Re-derive with agent" run for an existing
+   * registry recipe, pointed at a representative file the user picks. Opens the
+   * Format Agent dialog in re-derive mode; on success the new recipe replaces
+   * the named one. No-op if the file is empty.
+   */
+  reDeriveRecipe(name: string, file: File): void;
+  /**
+   * Phase 4 (docs/12 §10) — ingest a sandbox-converted MCAP copy of an unknown
+   * file. Opens the bytes through the EXISTING MCAP path (`openFiles`), tags the
+   * resulting source `oneShot` ("converted copy — recipe not available"), and
+   * dequeues the originating unknown import. Never registers a recipe.
+   */
+  ingestConvertedMcap(
+    id: string,
+    name: string,
+    bytes: Uint8Array,
+  ): Promise<void>;
   /**
    * A freshly-opened source whose channels have not yet been placed on panels,
    * awaiting the visualisation-bootstrap "Layout proposal" affordance
@@ -2369,6 +2432,32 @@ export const useSession = create<SessionState>((set, get) => {
             try {
               const recipe = await matchRecipe(f);
               if (recipe) {
+                // Stale-recipe gate (docs/12 §9): before opening, dry-run the
+                // matched recipe over the file. A vendor that bumped the format
+                // (newer rev) yields low coverage / framing errors; rather than
+                // silently open garbage, queue it with the stale recipe so the
+                // dialog can offer "re-derive with agent" (old recipe kept).
+                const probe = await w.recipeDryRun(
+                  f,
+                  JSON.stringify(recipe),
+                  50_000,
+                );
+                if (
+                  probe.coverage < 0.99 ||
+                  Number(probe.records_rejected) > 0
+                ) {
+                  newUnknownPending.push({
+                    id: `unk-${unknownImportSeq++}`,
+                    name: f.name,
+                    size: f.size,
+                    file: f,
+                    staleRecipe: {
+                      name: recipe.name ?? "(unnamed)",
+                      coverage: probe.coverage,
+                    },
+                  });
+                  continue;
+                }
                 const handle = await w.openRecipe(f, JSON.stringify(recipe));
                 const summary = await w.recipeSummary(handle);
                 const sourceId = uniqueSourceId(f.name, [
@@ -2521,7 +2610,7 @@ export const useSession = create<SessionState>((set, get) => {
       return worker.recipeDryRun(pendingImport.file, recipeJson, 200_000);
     },
 
-    async confirmRecipeImport(id, recipeJson) {
+    async confirmRecipeImport(id, recipeJson, opts) {
       const run = async () => {
         if (!worker) throw new Error("session store: worker not initialised");
         const w = worker;
@@ -2530,6 +2619,7 @@ export const useSession = create<SessionState>((set, get) => {
         );
         if (!pendingImport) return;
 
+        const lowConfidence = opts?.lowConfidence === true;
         const errors: BucketError[] = [];
         const newSources: SourceMeta[] = [];
         let savedRecipe: Recipe | null = null;
@@ -2545,19 +2635,37 @@ export const useSession = create<SessionState>((set, get) => {
             timeRange: { startNs: summary.start_ns, endNs: summary.end_ns },
             channels: tabularChannels(sourceId, summary),
             timeOffsetNs: 0n,
+            // A draft-opened source carries the low-confidence banner and is NOT
+            // registered (docs/12 §9); a normal/re-derived one is.
+            ...(lowConfidence ? { lowConfidence: true } : {}),
           });
-          // Only persist a recipe that actually opened.
-          try {
-            savedRecipe = JSON.parse(recipeJson) as Recipe;
-          } catch {
-            savedRecipe = null;
+          // Only persist a recipe that actually opened — and never for a draft
+          // (drafts stay in the parallel drafts shard, never auto-matched).
+          if (!lowConfidence) {
+            try {
+              savedRecipe = JSON.parse(recipeJson) as Recipe;
+            } catch {
+              savedRecipe = null;
+            }
           }
         } catch (e) {
           errors.push({ name: pendingImport.name, reason: String(e) });
         }
 
         commitOpenedSources(newSources, errors);
-        if (savedRecipe) saveRecipe(savedRecipe);
+        if (savedRecipe) {
+          // Re-derive replacement (docs/12 §9): if the new recipe was named
+          // differently from the one it replaces, drop the stale entry so the
+          // registry doesn't keep both. `saveRecipe` itself overwrites a
+          // same-named entry.
+          if (
+            opts?.replaceRecipeName &&
+            opts.replaceRecipeName !== (savedRecipe.name ?? "")
+          ) {
+            removeRecipe(opts.replaceRecipeName);
+          }
+          saveRecipe(savedRecipe);
+        }
         // Dequeue only on success; a failed open leaves it queued for a retry.
         if (newSources.length > 0) {
           set({
@@ -2580,6 +2688,49 @@ export const useSession = create<SessionState>((set, get) => {
       const cur = get().pendingUnknownImports;
       const next = cur.filter((p) => p.id !== id);
       if (next.length !== cur.length) set({ pendingUnknownImports: next });
+    },
+
+    reDeriveRecipe(name, file) {
+      if (file.size === 0) return;
+      set({
+        pendingUnknownImports: [
+          ...get().pendingUnknownImports,
+          {
+            id: `unk-${unknownImportSeq++}`,
+            name: file.name,
+            size: file.size,
+            file,
+            reDeriveName: name,
+          },
+        ],
+      });
+    },
+
+    async ingestConvertedMcap(id, name, bytes) {
+      // Open the sandbox-produced MCAP through the EXISTING openFiles/McapReader
+      // path (docs/12 §10) — a converted copy is a normal MCAP source. Tag the
+      // freshly-opened source `oneShot` so the UI labels it "converted copy —
+      // recipe not available". Never registers a recipe.
+      const before = new Set(get().sources.map((s) => s.id));
+      const mcapName = name.toLowerCase().endsWith(".mcap")
+        ? name
+        : `${name}.mcap`;
+      // BlobPart copy keeps the worker re-reading the bytes (mirrors the dev
+      // `openFiles` hook), so peak memory stays near the file size.
+      const file = new File([bytes as BlobPart], mcapName);
+      await get().openFiles([file]);
+      const fresh = get().sources.filter((s) => !before.has(s.id));
+      if (fresh.length > 0) {
+        set({
+          sources: get().sources.map((s) =>
+            fresh.some((f) => f.id === s.id) ? { ...s, oneShot: true } : s,
+          ),
+          // Drop the originating unknown import — its escape hatch is done.
+          pendingUnknownImports: get().pendingUnknownImports.filter(
+            (p) => p.id !== id,
+          ),
+        });
+      }
     },
 
     proposeLayoutFor(sourceId) {

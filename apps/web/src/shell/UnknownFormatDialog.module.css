@@ -258,6 +258,30 @@
   font-weight: var(--fw-semibold);
 }
 
+/* Phase 4 — re-derive / stale-recipe intro banner in the dialog header. */
+.reDeriveBanner {
+  margin: var(--sp-3) 0 0;
+  padding: var(--sp-3) var(--sp-4);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  color: var(--color-warning, #e0a106);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  background: var(--color-bg-5);
+}
+
+/* Phase 4 — draft-save / sandbox-conversion fallback blocks on the failure
+ * surface. Boxed so they read as a distinct affordance from the retry row. */
+.fallbackBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-4);
+  background: var(--color-bg-5);
+}
+
 .keyInput {
   font-family: var(--font-mono);
   font-size: var(--fs-12);

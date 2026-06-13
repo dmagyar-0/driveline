@@ -27,7 +27,13 @@ export function clampDrawerWidth(px: number): number {
   return Math.round(Math.min(DRAWER_WIDTH_MAX, Math.max(DRAWER_WIDTH_MIN, px)));
 }
 
-export type RailTab = "sources" | "channels" | "layout" | "panel" | "events";
+export type RailTab =
+  | "sources"
+  | "channels"
+  | "layout"
+  | "panel"
+  | "events"
+  | "formats";
 
 const RAIL_TABS: readonly RailTab[] = [
   "sources",
@@ -35,6 +41,7 @@ const RAIL_TABS: readonly RailTab[] = [
   "layout",
   "panel",
   "events",
+  "formats",
 ];
 
 export interface PersistedUi {

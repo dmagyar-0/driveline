@@ -51,6 +51,17 @@ export {
   type FormatAgentEngineFactory,
 } from "./engineFactory";
 
+export {
+  getSampleConverterFactory,
+  resetSampleConverterFactory,
+  setSampleConverterFactory,
+  type ConvertInput,
+  type ConvertResult,
+  type ConverterConfig,
+  type SampleConverter,
+  type SampleConverterFactory,
+} from "./convert";
+
 export { proposeLayoutHeuristic, MAX_PLOT_SERIES } from "./layoutHeuristics";
 
 export {

@@ -347,12 +347,28 @@ declare global {
       // Install a fake that emits one event then hangs until aborted — for
       // exercising the Abort button + failure surface deterministically.
       installHangingEngine: () => Promise<void>;
+      // Install a fake that fails with a typed AgentError after optionally
+      // validating a best-attempt recipe (so the draft + convert failure
+      // affordances render deterministically). `kind` is the AgentError kind
+      // ("iteration-cap" | "acceptance-gate" | "unsupported"). When
+      // `bestRecipeJson` is provided it is dry-run first so the failure carries
+      // a real best-attempt report.
+      installFailingEngine: (
+        kind: string,
+        bestRecipeJson?: string,
+      ) => Promise<void>;
       resetEngine: () => Promise<void>;
       // Visualisation bootstrap (docs/12 §7) — swap the layout-proposal LLM
       // call's client factory for one that returns a canned proposal, so the
       // "Refine with Claude" path runs deterministically with no network/key.
       installFakeLayoutProposal: (proposal: unknown) => Promise<void>;
       resetLayoutProposal: () => Promise<void>;
+      // Sandbox-conversion escape hatch (docs/12 §10) — swap the converter
+      // factory for one that returns the supplied canned MCAP bytes, so the
+      // "Convert this file to MCAP" path ingests deterministically with no
+      // network/key.
+      installFakeConverter: (mcapBytes: Uint8Array) => Promise<void>;
+      resetConverter: () => Promise<void>;
     };
   }
 }
@@ -755,6 +771,52 @@ export function App() {
             },
           }));
         },
+        installFailingEngine: async (kind, bestRecipeJson) => {
+          const llm = await import("./llm");
+          llm.setFormatAgentEngineFactory(() => ({
+            async run({ validateLocally, onProgress, signal }) {
+              if (signal.aborted) {
+                throw new llm.AgentError("aborted", "cancelled");
+              }
+              onProgress({
+                type: "thinking",
+                text: "Probing framing on the head slice.",
+              });
+              // For draft paths, run the real local dry-run on the best attempt
+              // so the failure carries a genuine report (coverage etc.).
+              if (bestRecipeJson) {
+                const report = await validateLocally(bestRecipeJson);
+                onProgress({ type: "validation-verdict", attempt: 1, report });
+              }
+              if (kind === "unsupported") {
+                onProgress({
+                  type: "unsupported",
+                  reason: "zstd-compressed chunks",
+                  findings: "Payload is zstd-compressed; out of recipe DSL.",
+                  suggestedExport: "Export to MCAP from your vendor tool.",
+                });
+                throw new llm.AgentError(
+                  "unsupported",
+                  "Format reported as out of recipe scope",
+                  {
+                    unsupported: {
+                      reason: "zstd-compressed chunks",
+                      findings:
+                        "Payload is zstd-compressed; out of recipe DSL.",
+                      suggestedExport: "Export to MCAP from your vendor tool.",
+                    },
+                  },
+                );
+              }
+              // iteration-cap / acceptance-gate — surface a typed failure.
+              const k =
+                kind === "acceptance-gate"
+                  ? "acceptance-gate"
+                  : "iteration-cap";
+              throw new llm.AgentError(k as never, `Did not converge (${k}).`);
+            },
+          }));
+        },
         resetEngine: async () => {
           const llm = await import("./llm");
           llm.resetFormatAgentEngineFactory();
@@ -779,6 +841,21 @@ export function App() {
         resetLayoutProposal: async () => {
           const llm = await import("./llm");
           llm.resetLayoutProposalClientFactory();
+        },
+        installFakeConverter: async (mcapBytes) => {
+          // Swap the sandbox converter for one that returns canned MCAP bytes
+          // (e.g. a committed `.mcap` fixture). The dialog then ingests them
+          // through the real `openFiles`/McapReader path — no network or key.
+          const llm = await import("./llm");
+          llm.setSampleConverterFactory(() => ({
+            async convertToMcap() {
+              return { mcapBytes };
+            },
+          }));
+        },
+        resetConverter: async () => {
+          const llm = await import("./llm");
+          llm.resetSampleConverterFactory();
         },
       };
     }

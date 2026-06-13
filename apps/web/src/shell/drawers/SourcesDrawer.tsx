@@ -118,6 +118,30 @@ export function SourcesDrawer() {
                 </span>
                 <span className={s.kind}>{kindLabel(src.kind)}</span>
               </button>
+              {/* Phase 4 (docs/12 §9/§10) — provenance banners on the source.
+                  A draft-opened recipe is unverified; a sandbox-converted copy
+                  has no reusable recipe. Both render as plain-text nodes. */}
+              {src.lowConfidence ? (
+                <p
+                  className={s.banner}
+                  data-kind="low-confidence"
+                  role="note"
+                  data-testid={`source-low-confidence-${src.id}`}
+                >
+                  Low-confidence decode — opened from a draft recipe. The decode
+                  is unverified.
+                </p>
+              ) : null}
+              {src.oneShot ? (
+                <p
+                  className={s.banner}
+                  data-kind="one-shot"
+                  role="note"
+                  data-testid={`source-one-shot-${src.id}`}
+                >
+                  Converted copy — recipe not available.
+                </p>
+              ) : null}
               <button
                 type="button"
                 className={s.closeBtn}

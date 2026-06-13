@@ -22,6 +22,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import { parseRecipe, type RawRecipeDryRunReport } from "../state/recipe";
+// `formatRegistry` is already in the entry chunk (the store imports it), so
+// statically importing `saveDraft` here adds nothing to first-load and avoids a
+// dynamic/static double-import. It is plain localStorage — NOT the lazy `llm/`
+// chunk — so the SDK stays out of the entry bundle.
+import { saveDraft } from "../state/formatRegistry";
 // Type-only imports are erased at build time, so importing them here does NOT
 // pull the lazy `llm/` chunk (or the SDK) into the first-load bundle. The
 // runtime engine/sampler/keyManager are reached only via `await import("../llm")`
@@ -46,6 +51,7 @@ export function UnknownFormatDialog() {
   const dryRunRecipe = useSession((st) => st.dryRunRecipe);
   const confirmRecipeImport = useSession((st) => st.confirmRecipeImport);
   const cancelUnknownImport = useSession((st) => st.cancelUnknownImport);
+  const ingestConvertedMcap = useSession((st) => st.ingestConvertedMcap);
 
   if (!head) return null;
   return (
@@ -56,9 +62,12 @@ export function UnknownFormatDialog() {
       size={head.size}
       file={head.file}
       queueLen={queueLen}
+      staleRecipe={head.staleRecipe ?? null}
+      reDeriveName={head.reDeriveName ?? null}
       onValidate={dryRunRecipe}
       onConfirm={confirmRecipeImport}
       onCancel={cancelUnknownImport}
+      onIngestConverted={ingestConvertedMcap}
     />
   );
 }
@@ -69,12 +78,27 @@ interface FormProps {
   size: number;
   file: File;
   queueLen: number;
+  /** Phase 4 — set when a registry recipe matched but failed the open-time
+   *  dry-run gate (docs/12 §9): the dialog opens in BYOK re-derive mode. */
+  staleRecipe: { name: string; coverage: number } | null;
+  /** Phase 4 — set when the Formats drawer queued a "Re-derive with agent"
+   *  run for an existing recipe. */
+  reDeriveName: string | null;
   onValidate: (
     id: string,
     recipeJson: string,
   ) => Promise<RawRecipeDryRunReport | null>;
-  onConfirm: (id: string, recipeJson: string) => Promise<void>;
+  onConfirm: (
+    id: string,
+    recipeJson: string,
+    opts?: { lowConfidence?: boolean; replaceRecipeName?: string },
+  ) => Promise<void>;
   onCancel: (id: string) => void;
+  onIngestConverted: (
+    id: string,
+    name: string,
+    bytes: Uint8Array,
+  ) => Promise<void>;
 }
 
 type Verdict =
@@ -90,11 +114,17 @@ function UnknownFormatForm({
   size,
   file,
   queueLen,
+  staleRecipe,
+  reDeriveName,
   onValidate,
   onConfirm,
   onCancel,
+  onIngestConverted,
 }: FormProps) {
-  const [mode, setMode] = useState<Mode>("manual");
+  // A re-derive / stale-recipe run is inherently an agent job, so default the
+  // dialog to the BYOK tab in those modes (docs/12 §9, §3.4).
+  const reDerive = reDeriveName ?? staleRecipe?.name ?? null;
+  const [mode, setMode] = useState<Mode>(reDerive ? "byok" : "manual");
   const [recipeText, setRecipeText] = useState("");
   const [verdict, setVerdict] = useState<Verdict>({ kind: "idle" });
   const [busy, setBusy] = useState(false);
@@ -191,6 +221,18 @@ function UnknownFormatForm({
             decode it — or let Claude reverse-engineer one from a bounded
             sample. Recipes are saved per format, so this is a one-time step.
           </p>
+          {reDerive ? (
+            <p
+              className={s.reDeriveBanner}
+              data-testid="unknown-format-rederive"
+            >
+              {staleRecipe
+                ? `The saved recipe "${reDerive}" no longer decodes this file cleanly (` +
+                  `${(staleRecipe.coverage * 100).toFixed(0)}% coverage). ` +
+                  "Re-derive it — the old recipe is kept until a new one passes."
+                : `Re-deriving the saved recipe "${reDerive}". A new recipe will replace it on success.`}
+            </p>
+          ) : null}
         </header>
 
         <div className={s.modeTabs} role="tablist" aria-label="Decode method">
@@ -293,9 +335,11 @@ function UnknownFormatForm({
             name={name}
             size={size}
             file={file}
+            replaceRecipeName={reDerive ?? undefined}
             onValidate={onValidate}
             onConfirm={onConfirm}
             onCancel={onCancel}
+            onIngestConverted={onIngestConverted}
             onEscapeLockChange={setEscapeLocked}
             onUseManual={() => setMode("manual")}
           />
@@ -311,17 +355,41 @@ type ByokStep =
   | { kind: "key" }
   | { kind: "consent"; sample: SampleBundle }
   | { kind: "run"; sample: SampleBundle }
-  | { kind: "success"; report: RawRecipeDryRunReport; recipeJson: string }
-  | { kind: "failed"; error: AgentError };
+  | {
+      kind: "success";
+      report: RawRecipeDryRunReport;
+      recipeJson: string;
+      cost: CostTally | null;
+    }
+  | {
+      kind: "failed";
+      error: AgentError;
+      /** The best partial recipe seen during the run (iteration-cap /
+       *  acceptance-gate), captured so it can be saved as a draft. */
+      bestRecipeJson: string | null;
+      bestReport: RawRecipeDryRunReport | null;
+      cost: CostTally | null;
+      /** The sample bundle, kept so the sandbox-conversion escape hatch can run
+       *  without re-sampling (docs/12 §10). */
+      sample: SampleBundle | null;
+    };
+
+interface BestAttempt {
+  recipeJson: string;
+  report: RawRecipeDryRunReport;
+}
 
 interface ByokProps {
   importId: string;
   name: string;
   size: number;
   file: File;
+  /** Phase 4 re-derive: replace this registry recipe on success. */
+  replaceRecipeName?: string;
   onValidate: FormProps["onValidate"];
   onConfirm: FormProps["onConfirm"];
   onCancel: FormProps["onCancel"];
+  onIngestConverted: FormProps["onIngestConverted"];
   onEscapeLockChange: (locked: boolean) => void;
   onUseManual: () => void;
 }
@@ -331,9 +399,11 @@ function ByokFlow({
   name,
   size,
   file,
+  replaceRecipeName,
   onValidate,
   onConfirm,
   onCancel,
+  onIngestConverted,
   onEscapeLockChange,
   onUseManual,
 }: ByokProps) {
@@ -398,10 +468,17 @@ function ByokFlow({
     }
   };
 
+  // Track the best partial recipe + report across the run so a non-converging
+  // / gate-failing failure can offer "Save best attempt as draft" (docs/12 §9).
+  const bestRef = useRef<BestAttempt | null>(null);
+  const costRef = useRef<CostTally | null>(null);
+
   const startRun = async (sample: SampleBundle) => {
     setError(null);
     setEvents([]);
     setTally(null);
+    bestRef.current = null;
+    costRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
     setStep({ kind: "run", sample });
@@ -413,10 +490,15 @@ function ByokFlow({
 
       // The engine's `validateLocally` is the store's `dryRunRecipe`, adapted to
       // throw (rather than return null) so a dequeued import surfaces as an
-      // error inside the loop instead of a silent gate pass.
+      // error inside the loop instead of a silent gate pass. Each candidate's
+      // report is captured as the running "best attempt" (highest coverage).
       const validateLocally = (recipeJson: string) =>
         onValidate(importId, recipeJson).then((r) => {
           if (!r) throw new Error("import is no longer queued");
+          const prev = bestRef.current;
+          if (!prev || r.coverage >= prev.report.coverage) {
+            bestRef.current = { recipeJson, report: r };
+          }
           return r;
         });
 
@@ -426,7 +508,10 @@ function ByokFlow({
         validateLocally,
         onProgress: (msg) => {
           setEvents((prev) => [...prev, msg]);
-          if (msg.type === "cost") setTally(msg.tally);
+          if (msg.type === "cost") {
+            setTally(msg.tally);
+            costRef.current = msg.tally;
+          }
         },
         signal: controller.signal,
       });
@@ -435,10 +520,21 @@ function ByokFlow({
       // reuse the same ValidationReport the manual path shows.
       const recipeJson = JSON.stringify(result.recipe);
       const report = await validateLocally(recipeJson);
-      setStep({ kind: "success", report, recipeJson });
+      setStep({ kind: "success", report, recipeJson, cost: costRef.current });
     } catch (err) {
       const agentErr = asAgentError(err);
-      setStep({ kind: "failed", error: agentErr });
+      // Read through `as` so the synchronous `= null` reset in `startRun`
+      // doesn't narrow this to `null` (the closures that fill it aren't seen by
+      // control-flow analysis).
+      const best = bestRef.current as BestAttempt | null;
+      setStep({
+        kind: "failed",
+        error: agentErr,
+        bestRecipeJson: best ? best.recipeJson : null,
+        bestReport: best ? best.report : null,
+        cost: costRef.current,
+        sample,
+      });
     } finally {
       abortRef.current = null;
     }
@@ -449,9 +545,72 @@ function ByokFlow({
   const confirmSuccess = async (recipeJson: string) => {
     setBusy(true);
     try {
-      await onConfirm(importId, recipeJson);
+      await onConfirm(
+        importId,
+        recipeJson,
+        replaceRecipeName ? { replaceRecipeName } : undefined,
+      );
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Save the best partial attempt as a low-confidence DRAFT (docs/12 §9): it
+  // goes into the parallel drafts shard (never auto-matched) and opens here
+  // read-only with the low-confidence banner.
+  const saveDraftAndOpen = async (
+    recipeJson: string,
+    report: RawRecipeDryRunReport,
+  ) => {
+    setBusy(true);
+    try {
+      const recipe = JSON.parse(recipeJson);
+      saveDraft({
+        recipe,
+        reason: "agent run did not converge",
+        capturedAt: new Date().toISOString(),
+        coverage: report.coverage,
+        cost: costRef.current
+          ? {
+              inputTokens: costRef.current.inputTokens,
+              outputTokens: costRef.current.outputTokens,
+              estimatedUsd: costRef.current.estimatedUsd,
+              derivedAt: new Date().toISOString(),
+            }
+          : undefined,
+      });
+      // Open the draft read-only through the normal recipe path, tagged
+      // low-confidence so the source carries the banner.
+      await onConfirm(importId, recipeJson, { lowConfidence: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Sandbox-conversion escape hatch (docs/12 §10): convert sample (or full file)
+  // to MCAP and ingest it as a one-shot source.
+  const convertAndIngest = async (
+    sample: SampleBundle,
+    fullFile: boolean,
+  ): Promise<string | null> => {
+    const { getSampleConverterFactory, getKey } = await import("../llm");
+    const key = getKey() ?? apiKey.trim();
+    const converter = getSampleConverterFactory()({ apiKey: key });
+    const controller = new AbortController();
+    abortRef.current = controller;
+    try {
+      const { mcapBytes } = await converter.convertToMcap({
+        sample,
+        fullFile: fullFile ? file : undefined,
+        hint: hint.trim() || undefined,
+        signal: controller.signal,
+      });
+      await onIngestConverted(importId, name, mcapBytes);
+      return null;
+    } catch (err) {
+      return String((err as { message?: string })?.message ?? err);
+    } finally {
+      abortRef.current = null;
     }
   };
 
@@ -550,6 +709,7 @@ function ByokFlow({
           ✓ Claude derived a verified recipe for {name}.
         </p>
         <ValidationReport report={step.report} />
+        {step.cost ? <CostSummary tally={step.cost} /> : null}
         <div className={s.actions}>
           <button
             type="button"
@@ -578,10 +738,32 @@ function ByokFlow({
   return (
     <FailureStep
       error={step.error}
+      cost={step.cost}
+      bestRecipeJson={step.bestRecipeJson}
+      bestReport={step.bestReport}
+      sample={step.sample}
+      busy={busy}
       onUseManual={onUseManual}
       onRetry={() => setStep({ kind: "key" })}
       onCancel={() => onCancel(importId)}
+      onSaveDraft={saveDraftAndOpen}
+      onConvert={convertAndIngest}
     />
+  );
+}
+
+// --- Per-run cost summary (docs/12 §4.5, Phase 4) ----------------------------
+
+function CostSummary({ tally }: { tally: CostTally }) {
+  const usd =
+    tally.estimatedUsd >= 0.01
+      ? `$${tally.estimatedUsd.toFixed(2)}`
+      : `$${tally.estimatedUsd.toFixed(4)}`;
+  return (
+    <p className={s.costLine} data-testid="byok-cost-summary">
+      This run: {tally.inputTokens.toLocaleString()} in /{" "}
+      {tally.outputTokens.toLocaleString()} out tokens · est. {usd}
+    </p>
   );
 }
 
@@ -828,18 +1010,62 @@ function ProgressLine({ ev }: { ev: AgentProgress }) {
 
 function FailureStep({
   error,
+  cost,
+  bestRecipeJson,
+  bestReport,
+  sample,
+  busy,
   onUseManual,
   onRetry,
   onCancel,
+  onSaveDraft,
+  onConvert,
 }: {
   error: AgentError;
+  cost: CostTally | null;
+  bestRecipeJson: string | null;
+  bestReport: RawRecipeDryRunReport | null;
+  sample: SampleBundle | null;
+  busy: boolean;
   onUseManual: () => void;
   onRetry: () => void;
   onCancel: () => void;
+  onSaveDraft: (
+    recipeJson: string,
+    report: RawRecipeDryRunReport,
+  ) => Promise<void>;
+  onConvert: (
+    sample: SampleBundle,
+    fullFile: boolean,
+  ) => Promise<string | null>;
 }) {
   const { headline, detail, findings } = describeError(error);
   // "aborted" is a user action, not a failure — offer a clean retry path.
   const isAbort = error.kind === "aborted";
+  // A non-converging / gate-failing run with a best partial recipe can be saved
+  // as a draft (docs/12 §9).
+  const canDraft =
+    (error.kind === "iteration-cap" || error.kind === "acceptance-gate") &&
+    bestRecipeJson !== null &&
+    bestReport !== null;
+  // An out-of-DSL format offers the sandbox-conversion escape hatch (docs/12 §10).
+  const canConvert = error.kind === "unsupported" && sample !== null;
+
+  // Full-file conversion is gated behind an explicit extra consent checkbox.
+  const [convertFull, setConvertFull] = useState(false);
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState<string | null>(null);
+
+  const runConvert = async () => {
+    if (!sample) return;
+    setConverting(true);
+    setConvertError(null);
+    const err = await onConvert(sample, convertFull);
+    setConverting(false);
+    if (err) setConvertError(err);
+    // On success the source ingests and the dialog dequeues, so nothing else.
+  };
+
   return (
     <div className={s.byokFlow} data-testid="byok-failed">
       <p className={s.failHead} data-kind={error.kind}>
@@ -850,6 +1076,64 @@ function FailureStep({
         <pre className={s.findings} data-testid="byok-findings">
           {findings}
         </pre>
+      ) : null}
+      {cost ? <CostSummary tally={cost} /> : null}
+
+      {canDraft ? (
+        <div className={s.fallbackBlock} data-testid="byok-draft-block">
+          <p className={s.byokNote}>
+            Claude reached{" "}
+            <strong>{(bestReport!.coverage * 100).toFixed(1)}%</strong> coverage
+            but didn&rsquo;t fully converge. You can save the best attempt as a{" "}
+            <strong>draft</strong> and open it read-only — it&rsquo;s flagged
+            low-confidence and never auto-matches future drops.
+          </p>
+          <button
+            type="button"
+            className={s.confirm}
+            disabled={busy}
+            onClick={() => onSaveDraft(bestRecipeJson!, bestReport!)}
+            data-testid="byok-save-draft"
+          >
+            {busy ? "Saving…" : "Save best attempt as draft"}
+          </button>
+        </div>
+      ) : null}
+
+      {canConvert ? (
+        <div className={s.fallbackBlock} data-testid="byok-convert-block">
+          <p className={s.byokNote}>
+            This format is outside the recipe DSL. Claude can still convert{" "}
+            <strong>this file</strong> to MCAP in its sandbox so you can view it
+            once — a converted copy with no reusable recipe.
+          </p>
+          <label className={s.checkboxRow}>
+            <input
+              type="checkbox"
+              checked={convertFull}
+              onChange={(e) => setConvertFull(e.target.checked)}
+              data-testid="byok-convert-full"
+            />
+            <span>
+              Convert the <strong>full file</strong> (uploads the whole file,
+              not just the bounded sample).
+            </span>
+          </label>
+          {convertError ? (
+            <p className={s.errorBox} data-testid="byok-convert-error">
+              {convertError}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            className={s.confirm}
+            disabled={converting}
+            onClick={runConvert}
+            data-testid="byok-convert"
+          >
+            {converting ? "Converting…" : "Convert this file to MCAP"}
+          </button>
+        </div>
       ) : null}
 
       {!isAbort ? (
