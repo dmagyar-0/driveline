@@ -1,0 +1,31 @@
+{
+  "schema": "driveline.calibration/v1",
+  "cameras": [
+    {
+      "name": "CAM_FRONT",
+      "intrinsics": {
+        "fx": 900.0,
+        "fy": 900.0,
+        "cx": 640.0,
+        "cy": 360.0,
+        "width": 1280,
+        "height": 720
+      },
+      "distortion": [],
+      "extrinsic": {
+        "translation": [
+          0.0,
+          1.5,
+          0.0
+        ],
+        "quaternion": [
+          0.5,
+          -0.5,
+          0.5,
+          0.5
+        ]
+      },
+      "target_frame": "lidar"
+    }
+  ]
+}
