@@ -348,6 +348,11 @@ declare global {
       // exercising the Abort button + failure surface deterministically.
       installHangingEngine: () => Promise<void>;
       resetEngine: () => Promise<void>;
+      // Visualisation bootstrap (docs/12 §7) — swap the layout-proposal LLM
+      // call's client factory for one that returns a canned proposal, so the
+      // "Refine with Claude" path runs deterministically with no network/key.
+      installFakeLayoutProposal: (proposal: unknown) => Promise<void>;
+      resetLayoutProposal: () => Promise<void>;
     };
   }
 }
@@ -753,6 +758,27 @@ export function App() {
         resetEngine: async () => {
           const llm = await import("./llm");
           llm.resetFormatAgentEngineFactory();
+        },
+        installFakeLayoutProposal: async (proposal) => {
+          // Swap the layout-proposal client factory for one whose single
+          // `createMessage` returns the canned proposal as structured-output
+          // text. The real `requestLayoutProposal` then schema-validates and
+          // sanitizes it against the live channels — exercising the whole path
+          // with no network or key.
+          const llm = await import("./llm");
+          llm.setLayoutProposalClientFactory(() => ({
+            async createMessage() {
+              return {
+                role: "assistant" as const,
+                content: [{ type: "text", text: JSON.stringify(proposal) }],
+                stop_reason: "end_turn" as const,
+              };
+            },
+          }));
+        },
+        resetLayoutProposal: async () => {
+          const llm = await import("./llm");
+          llm.resetLayoutProposalClientFactory();
         },
       };
     }

@@ -138,6 +138,11 @@ test("Format Agent BYOK: consent → progress → recipe → plot", async ({
   await page.getByTestId("byok-open").click();
   await expect(page.getByTestId("unknown-format-dialog")).toHaveCount(0);
 
+  // Opening the recipe source surfaces the layout proposal (docs/12 §7); this
+  // test verifies the agent-derived channels + manual binding, so Skip it.
+  await page.getByTestId("layout-proposal-skip").click();
+  await expect(page.getByTestId("layout-proposal-dialog")).toHaveCount(0);
+
   // 6. Channels appear in the rail (same set the manual path registers).
   const channels = await page.evaluate(() => {
     const h = window.__drivelineDevHooks as unknown as Hooks;

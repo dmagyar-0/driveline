@@ -50,3 +50,42 @@ export {
   setFormatAgentEngineFactory,
   type FormatAgentEngineFactory,
 } from "./engineFactory";
+
+export { proposeLayoutHeuristic, MAX_PLOT_SERIES } from "./layoutHeuristics";
+
+export {
+  requestLayoutProposal,
+  sanitizeProposal,
+  validateProposalAgainstSchema,
+  buildProposalPrompt,
+  DEFAULT_LAYOUT_MODEL,
+  LAYOUT_PROPOSAL_V1_SCHEMA,
+  type CreateMessagesClient,
+  type MessagesClient,
+  type RequestLayoutProposalInput,
+} from "./layoutProposal";
+
+export {
+  runLayoutProposal,
+  setLayoutProposalClientFactory,
+  resetLayoutProposalClientFactory,
+} from "./layoutProposalFactory";
+
+export {
+  applyLayoutProposal,
+  applyLayoutPanels,
+  type ApplyResult,
+  type LayoutAgent,
+} from "./applyLayoutProposal";
+
+export type {
+  LayoutProposal,
+  PanelProposal,
+  PlotPanelProposal,
+  MapPanelProposal,
+  EnumPanelProposal,
+  TablePanelProposal,
+  ValuePanelProposal,
+  ProposalChannel,
+  ProposalChannelStat,
+} from "./layoutProposal.types";

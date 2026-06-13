@@ -78,7 +78,10 @@ v1 was analysis-and-annotation only — layout mutation lived on the
 DEV-only dev-hook surface. v2 lifts the _minimum_ layout surface the
 Format Agent's visualisation bootstrap needs (docs/12 §7: the
 `LayoutProposal` applier) onto the production agent API, so the same code
-path serves external agents and Playwright. These are thin wrappers over
+path serves external agents and Playwright. The applier
+(`apps/web/src/llm/applyLayoutProposal.ts`) places a proposal's panels by
+calling exactly these v2 ops (`createPanel` → `bindChannels` /
+`setMapBinding`) — it has no parallel panel-creation path. These are thin wrappers over
 the existing FlexLayout workspace and the store's binding actions — exactly
 what the Layout drawer does when a human clicks "add a panel" and binds
 channels — not a new layout engine.

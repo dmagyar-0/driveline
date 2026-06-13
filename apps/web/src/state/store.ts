@@ -563,6 +563,19 @@ export interface SessionState {
   /** Cancel (drop) a queued unknown import by id. No-op on an unknown id. */
   cancelUnknownImport(id: string): void;
   /**
+   * A freshly-opened source whose channels have not yet been placed on panels,
+   * awaiting the visualisation-bootstrap "Layout proposal" affordance
+   * (docs/12-format-agent.md §7). `confirmRecipeImport` sets this after a recipe
+   * source opens; the `LayoutProposalDialog` renders the heuristic proposal +
+   * the "Refine with Claude" / Apply / Skip controls. `null` when there is
+   * nothing to propose. Reset by `clear()`.
+   */
+  pendingLayoutProposal: { sourceId: string } | null;
+  /** Queue a layout proposal for a just-opened source (no-op on unknown id). */
+  proposeLayoutFor(sourceId: string): void;
+  /** Dismiss the pending layout proposal (Apply / Skip / Escape). */
+  dismissLayoutProposal(): void;
+  /**
    * Confirm a queued sidecar-less mp4 binding (Feature 1): fetch the chosen
    * tabular source's converted ns time column, synthesize a `.mp4.timestamps`
    * sidecar from it (row i → frame i), open the mp4 via the EXISTING
@@ -1202,6 +1215,7 @@ export const useSession = create<SessionState>((set, get) => {
     pendingTabularImports: [],
     pendingUnknownImports: [],
     pendingVideoBindings: [],
+    pendingLayoutProposal: null,
     demoLoad: { phase: "idle", receivedBytes: 0, totalBytes: 0, error: null },
 
     setWorker(w) {
@@ -2550,6 +2564,10 @@ export const useSession = create<SessionState>((set, get) => {
             pendingUnknownImports: get().pendingUnknownImports.filter(
               (p) => p.id !== id,
             ),
+            // Offer the visualisation-bootstrap layout proposal for the source
+            // we just opened (docs/12 §7). The dialog renders the heuristic
+            // floor immediately; "Refine with Claude" upgrades it.
+            pendingLayoutProposal: { sourceId: newSources[0].id },
           });
         }
       };
@@ -2562,6 +2580,16 @@ export const useSession = create<SessionState>((set, get) => {
       const cur = get().pendingUnknownImports;
       const next = cur.filter((p) => p.id !== id);
       if (next.length !== cur.length) set({ pendingUnknownImports: next });
+    },
+
+    proposeLayoutFor(sourceId) {
+      if (!get().sources.some((s) => s.id === sourceId)) return;
+      set({ pendingLayoutProposal: { sourceId } });
+    },
+    dismissLayoutProposal() {
+      if (get().pendingLayoutProposal !== null) {
+        set({ pendingLayoutProposal: null });
+      }
     },
 
     async confirmVideoBinding(id, tabularSourceId) {
@@ -2796,6 +2824,7 @@ export const useSession = create<SessionState>((set, get) => {
           pendingTabularImports: [],
           pendingUnknownImports: [],
           pendingVideoBindings: [],
+          pendingLayoutProposal: null,
           demoLoad: {
             phase: "idle",
             receivedBytes: 0,
