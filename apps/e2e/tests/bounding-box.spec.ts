@@ -34,11 +34,12 @@ const COMMA_EXPECTED_BOXES = 7;
 const COMMA_BASE_SEC = 1704067200;
 const COMMA_CURSOR_NS = String(BigInt(COMMA_BASE_SEC + 1) * 1_000_000_000n);
 
-// The Vicomtech VCD file: 2 objects, but only car1 uses the 9-element `val`
-// form the reader understands (car2 uses the separate quaternion/translation/
-// size fields with `val: null`, which the strict reader skips). So exactly one
-// box reaches the GPU — enough for the real-world ingestion smoke test.
+// The Vicomtech VCD file: 2 objects. car1 uses the 9-element `val` form; car2
+// uses OpenLABEL's convenience-field form (separate quaternion/translation/size
+// with `val: null`). The reader now parses both, so both cars reach the GPU —
+// exactly 2 boxes for the real-world ingestion smoke test.
 const VCD_FILE = "vcd-cuboids.openlabel.json";
+const VCD_EXPECTED_BOXES = 2;
 
 declare global {
   interface Window {
@@ -213,7 +214,8 @@ test.describe("OpenLABEL 3D bounding boxes", () => {
     );
     expect(sync?.glOk).toBe(true);
     expect(sync?.error).toBeNull();
-    expect(sync?.boxCount).toBeGreaterThan(0);
+    // Both cars now parse (car1 via `val`, car2 via the convenience fields).
+    expect(sync?.boxCount).toBe(VCD_EXPECTED_BOXES);
 
     await page.waitForTimeout(400);
     await page.screenshot({

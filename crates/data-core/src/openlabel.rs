@@ -362,35 +362,16 @@ fn collect_cuboids(obj: &Value, label: &str, frame: &mut Frame) {
     };
 
     for cuboid in cuboids {
-        let val = match cuboid.get("val").and_then(Value::as_array) {
-            Some(v) => v,
-            None => continue,
+        let parsed = match cuboid.get("val").and_then(Value::as_array) {
+            // `val`-array form (the canonical OpenLABEL encoding).
+            Some(val) => parse_cuboid_val(val),
+            // `val` absent or `null` → OpenLABEL convenience-field form, where
+            // geometry lives in sibling fields on the cuboid object.
+            None => parse_cuboid_convenience(cuboid),
         };
-        let nums: Vec<f64> = val.iter().filter_map(Value::as_f64).collect();
-        // Guard: if any element wasn't numeric the lengths won't line up below
-        // and the cuboid is skipped — exactly the "any other length → skip"
-        // behaviour we want.
-        let (center, quat, size) = match nums.len() {
-            10 => {
-                // [x, y, z, qx, qy, qz, qw, sx, sy, sz]
-                let center = [nums[0] as f32, nums[1] as f32, nums[2] as f32];
-                let quat = [
-                    nums[3] as f32,
-                    nums[4] as f32,
-                    nums[5] as f32,
-                    nums[6] as f32,
-                ];
-                let size = [nums[7] as f32, nums[8] as f32, nums[9] as f32];
-                (center, quat, size)
-            }
-            9 => {
-                // [x, y, z, rx, ry, rz, sx, sy, sz] — Euler XYZ radians.
-                let center = [nums[0] as f32, nums[1] as f32, nums[2] as f32];
-                let quat = euler_xyz_to_quat(nums[3], nums[4], nums[5]);
-                let size = [nums[6] as f32, nums[7] as f32, nums[8] as f32];
-                (center, quat, size)
-            }
-            _ => continue,
+        let (center, quat, size) = match parsed {
+            Some(t) => t,
+            None => continue,
         };
 
         frame.centers.extend_from_slice(&center);
@@ -398,6 +379,95 @@ fn collect_cuboids(obj: &Value, label: &str, frame: &mut Frame) {
         frame.rotations.extend_from_slice(&quat);
         frame.labels.push(label.to_string());
     }
+}
+
+/// Parse a cuboid's `val` array into `(center, quat_scalar_last, size)`. The
+/// array is either length 10 (quaternion, scalar-last) or length 9 (Euler XYZ
+/// radians); any other length (or non-numeric entries) → `None` (skip).
+fn parse_cuboid_val(val: &[Value]) -> Option<([f32; 3], [f32; 4], [f32; 3])> {
+    let nums: Vec<f64> = val.iter().filter_map(Value::as_f64).collect();
+    // Guard: if any element wasn't numeric the lengths won't line up below
+    // and the cuboid is skipped — exactly the "any other length → skip"
+    // behaviour we want.
+    match nums.len() {
+        10 => {
+            // [x, y, z, qx, qy, qz, qw, sx, sy, sz]
+            let center = [nums[0] as f32, nums[1] as f32, nums[2] as f32];
+            let quat = [
+                nums[3] as f32,
+                nums[4] as f32,
+                nums[5] as f32,
+                nums[6] as f32,
+            ];
+            let size = [nums[7] as f32, nums[8] as f32, nums[9] as f32];
+            Some((center, quat, size))
+        }
+        9 => {
+            // [x, y, z, rx, ry, rz, sx, sy, sz] — Euler XYZ radians.
+            let center = [nums[0] as f32, nums[1] as f32, nums[2] as f32];
+            let quat = euler_xyz_to_quat(nums[3], nums[4], nums[5]);
+            let size = [nums[6] as f32, nums[7] as f32, nums[8] as f32];
+            Some((center, quat, size))
+        }
+        _ => None,
+    }
+}
+
+/// Parse a cuboid in OpenLABEL's **convenience-field form** (`val` absent or
+/// `null`), where geometry lives in sibling fields on the cuboid object. Used
+/// by externally authored files such as the Vicomtech VCD cuboid fixture.
+///
+/// Field precedence:
+/// - center: `"translation"` OR the VCD misspelling `"traslation"` → `[x,y,z]`
+///   metres. **Required** — no translation → `None` (skip).
+/// - size: `"size"` → `[sx, sy, sz]` full extents, metres. **Required**.
+/// - rotation, in priority order:
+///   1. `"quaternion"` as **scalar-FIRST** `[qw, qx, qy, qz]` (note: the
+///      `val`-array quaternion is scalar-LAST `[qx,qy,qz,qw]`); converted to
+///      scalar-last here.
+///   2. else `"euler"` / `"rotation"` as `[rx, ry, rz]` radians XYZ.
+///   3. else identity `[0, 0, 0, 1]`.
+fn parse_cuboid_convenience(cuboid: &Value) -> Option<([f32; 3], [f32; 4], [f32; 3])> {
+    let center = read_vec3(
+        cuboid
+            .get("translation")
+            .or_else(|| cuboid.get("traslation"))?,
+    )?;
+    let size = read_vec3(cuboid.get("size")?)?;
+
+    let quat = if let Some(q) = cuboid.get("quaternion").and_then(Value::as_array) {
+        let n: Vec<f64> = q.iter().filter_map(Value::as_f64).collect();
+        if n.len() != 4 {
+            return None;
+        }
+        // Scalar-first [qw, qx, qy, qz] → scalar-last [qx, qy, qz, qw].
+        [n[1] as f32, n[2] as f32, n[3] as f32, n[0] as f32]
+    } else if let Some(e) = cuboid
+        .get("euler")
+        .or_else(|| cuboid.get("rotation"))
+        .and_then(Value::as_array)
+    {
+        let n: Vec<f64> = e.iter().filter_map(Value::as_f64).collect();
+        if n.len() != 3 {
+            return None;
+        }
+        euler_xyz_to_quat(n[0], n[1], n[2])
+    } else {
+        // No rotation field → identity.
+        [0.0, 0.0, 0.0, 1.0]
+    };
+
+    Some((center, quat, size))
+}
+
+/// Read a JSON array of exactly three numbers into `[f32; 3]`, else `None`.
+fn read_vec3(v: &Value) -> Option<[f32; 3]> {
+    let arr = v.as_array()?;
+    let n: Vec<f64> = arr.iter().filter_map(Value::as_f64).collect();
+    if n.len() != 3 {
+        return None;
+    }
+    Some([n[0] as f32, n[1] as f32, n[2] as f32])
 }
 
 /// Resolve a frame's timestamp (ns). Reads
@@ -697,6 +767,113 @@ mod tests {
         assert_eq!(r.frame_times(), &[0]);
         assert_eq!(r.meta().channels[0].sample_count, 1);
         assert_eq!(r.meta().channels[0].name, "objects");
+    }
+
+    #[test]
+    fn parses_convenience_field_cuboid() {
+        // `val: null` with sibling translation/quaternion/size fields — the
+        // OpenLABEL convenience form (Vicomtech VCD writes `traslation`). The
+        // quaternion is scalar-FIRST [qw,qx,qy,qz]; identity here.
+        let json = r#"
+        { "openlabel": {
+          "objects": {
+            "1": { "type": "car", "object_data": { "cuboid": [
+              { "name": "box3D",
+                "quaternion": [1.0, 0.0, 0.0, 0.0],
+                "traslation": [0.0, 10.0, -0.85],
+                "size": [1.5, 4.5, 1.7],
+                "val": null }
+            ] } }
+          }
+        } }
+        "#;
+        let r = OpenLabelReader::open(json.as_bytes()).unwrap();
+        assert_eq!(r.frame_times(), &[0]);
+        assert_eq!(r.meta().channels[0].sample_count, 1);
+
+        let ipc = r
+            .fetch_range(
+                &"objects".to_string(),
+                TimeRange {
+                    start_ns: 0,
+                    end_ns: 1,
+                },
+                FetchOpts::default(),
+            )
+            .unwrap();
+        let batch = parse_ipc(&ipc);
+
+        let centers = batch.column(1).as_list::<i32>().value(0);
+        let c = centers.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(c.values(), &[0.0, 10.0, -0.85]);
+
+        let sizes = batch.column(2).as_list::<i32>().value(0);
+        let s = sizes.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(s.values(), &[1.5, 4.5, 1.7]);
+
+        // Scalar-first identity [1,0,0,0] → scalar-last [0,0,0,1].
+        let rots = batch.column(3).as_list::<i32>().value(0);
+        let q = rots.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert_eq!(q.values(), &[0.0, 0.0, 0.0, 1.0]);
+
+        let labels = batch.column(4).as_list::<i32>().value(0);
+        let l = labels.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(l.value(0), "car");
+    }
+
+    #[test]
+    fn convenience_quaternion_scalar_first_conversion() {
+        // Scalar-first [qw,qx,qy,qz] = [c, 0, 0, s] (yaw about z) must emit
+        // scalar-last [0, 0, s, c].
+        let s = (std::f64::consts::FRAC_PI_4).sin();
+        let c = (std::f64::consts::FRAC_PI_4).cos();
+        let json = format!(
+            r#"
+        {{ "openlabel": {{
+          "objects": {{
+            "0": {{ "type": "car", "object_data": {{ "cuboid": [
+              {{ "quaternion": [{c}, 0.0, 0.0, {s}],
+                 "translation": [1.0, 2.0, 3.0],
+                 "size": [1.0, 1.0, 1.0] }}
+            ] }} }}
+          }}
+        }} }}
+        "#
+        );
+        let r = OpenLabelReader::open(json.as_bytes()).unwrap();
+        let ipc = r
+            .fetch_range(
+                &"objects".to_string(),
+                TimeRange {
+                    start_ns: 0,
+                    end_ns: 1,
+                },
+                FetchOpts::default(),
+            )
+            .unwrap();
+        let batch = parse_ipc(&ipc);
+        let rots = batch.column(3).as_list::<i32>().value(0);
+        let q = rots.as_any().downcast_ref::<Float32Array>().unwrap();
+        assert!((q.value(0)).abs() < 1e-6);
+        assert!((q.value(1)).abs() < 1e-6);
+        assert!((q.value(2) - s as f32).abs() < 1e-6);
+        assert!((q.value(3) - c as f32).abs() < 1e-6);
+    }
+
+    #[test]
+    fn convenience_missing_translation_skipped() {
+        // No translation/traslation and no `val` → skip (not an error).
+        let json = r#"
+        { "openlabel": {
+          "objects": {
+            "0": { "type": "car", "object_data": { "cuboid": [
+              { "size": [1.0, 1.0, 1.0], "quaternion": [1.0, 0.0, 0.0, 0.0], "val": null }
+            ] } }
+          }
+        } }
+        "#;
+        let r = OpenLabelReader::open(json.as_bytes()).unwrap();
+        assert_eq!(r.meta().channels[0].sample_count, 0);
     }
 
     #[test]
