@@ -33,10 +33,19 @@ let uninstall: (() => void) | null = null;
 
 beforeEach(async () => {
   await useSession.getState().clear();
+  // `clear()` only resets session state when a worker is attached; these unit
+  // tests run without one, so reset the session slice directly (the inline
+  // ingestion tests load real sources, which would otherwise leak forward).
+  useSession.setState({
+    sources: [],
+    channels: [],
+    globalRange: null,
+    cursorNs: 0n,
+  });
   for (const b of [...useSession.getState().bookmarks]) {
     useSession.getState().removeBookmark(b.id);
   }
-  uninstall = installAgentApi();
+  uninstall = installAgentApi(true);
 });
 
 afterEach(() => {
@@ -144,10 +153,137 @@ describe("install gating", () => {
 
   it("install exposes the api; the uninstaller removes it", () => {
     expect(api().version).toBe(AGENT_API_VERSION);
-    expect(AGENT_API_VERSION).toBe(2);
+    expect(AGENT_API_VERSION).toBe(3);
     uninstall?.();
     uninstall = null;
     expect(window.__drivelineAgent).toBeUndefined();
+  });
+
+  it("read-only install (no ?agent) exposes only the discovery trio", () => {
+    // Re-install in the no-?agent mode: discovery is always on, but the
+    // mutating surface (addDataSource, fetchChannelRange, …) is absent.
+    uninstall?.();
+    uninstall = installAgentApi(false);
+    const a = api();
+    expect(a.version).toBe(AGENT_API_VERSION);
+    expect(typeof a.getSkill()).toBe("string");
+    expect(a.getSkill().length).toBeGreaterThan(0);
+    const manifest = a.describe();
+    expect(manifest.version).toBe(AGENT_API_VERSION);
+    expect(manifest.agentParamRequired).toBe(true);
+    // The gated ops are not installed on the read-only surface.
+    expect(
+      (a as unknown as { addDataSource?: unknown }).addDataSource,
+    ).toBeUndefined();
+    expect(
+      (a as unknown as { fetchChannelRange?: unknown }).fetchChannelRange,
+    ).toBeUndefined();
+  });
+});
+
+describe("discovery (getSkill / describe)", () => {
+  it("getSkill returns the BYOA guide with the spec + worked example", () => {
+    const skill = api().getSkill();
+    expect(skill).toContain("AgentDataSourceSpec");
+    expect(skill).toContain("addDataSource");
+    expect(skill).toContain("?agent");
+    // The BigInt rule and a concrete worked example must be present.
+    expect(skill).toContain("DECIMAL STRING");
+    expect(skill).toContain("vehicle/speed");
+  });
+
+  it("describe lists every method with mutating flags", () => {
+    const m = api().describe();
+    const byName = new Map(m.capabilities.map((c) => [c.name, c]));
+    expect(byName.get("getSkill")?.mutating).toBe(false);
+    expect(byName.get("describe")?.mutating).toBe(false);
+    expect(byName.get("addDataSource")?.mutating).toBe(true);
+    expect(byName.get("fetchChannelRange")?.mutating).toBe(true);
+    // The full surface is the gated set + the discovery trio.
+    expect(m.capabilities.length).toBeGreaterThan(10);
+  });
+});
+
+describe("addDataSource (inline ingestion)", () => {
+  const N = 50;
+  function sineSpec() {
+    const startNs = 1_700_000_000_000_000_000n;
+    const stepNs = 20_000_000n;
+    const timestampsNs: string[] = [];
+    const values: number[] = [];
+    for (let i = 0; i < N; i++) {
+      timestampsNs.push((startNs + stepNs * BigInt(i)).toString());
+      values.push(Math.sin(i / 5));
+    }
+    return {
+      name: "agent-run",
+      channels: [
+        { name: "vehicle/speed", unit: "m/s", timestampsNs, values },
+        {
+          name: "vehicle/gear",
+          kind: "enum" as const,
+          timestampsNs,
+          values: values.map((_, i) => (i % 4) + 1),
+        },
+      ],
+    };
+  }
+
+  it("registers channels that appear in listChannels and widen the range", () => {
+    const res = api().addDataSource(sineSpec());
+    expect(res).not.toBeNull();
+    expect(res!.channels).toHaveLength(2);
+    const names = api()
+      .listChannels()
+      .map((c) => c.name);
+    expect(names).toContain("/vehicle/speed");
+    expect(names).toContain("/vehicle/gear");
+    const snap = api().getSessionSnapshot();
+    expect(snap.globalRange).not.toBeNull();
+    expect(snap.globalRange!.startNs).toBe("1700000000000000000");
+  });
+
+  it("the pushed channel is fetchable and decodes to the right samples", async () => {
+    const res = api().addDataSource(sineSpec());
+    const speedId = res!.channels.find((c) => c.name === "/vehicle/speed")!.id;
+    const range = await api().fetchChannelRange(
+      speedId,
+      "1700000000000000000",
+      "1700000001000000000",
+    );
+    expect(range).not.toBeNull();
+    expect(range!.rows).toBeGreaterThan(0);
+    const tsCol = range!.columns.find((c) => c.name === "ts")!;
+    const valCol = range!.columns.find((c) => c.name === "value")!;
+    // ts arrives as decimal strings; value as numbers.
+    expect(typeof tsCol.values[0]).toBe("string");
+    expect(tsCol.values[0]).toBe("1700000000000000000");
+    expect(typeof valCol.values[0]).toBe("number");
+  });
+
+  it("returns null on invalid specs (never throws)", () => {
+    const bad: unknown[] = [
+      { name: "", channels: [] },
+      { name: "x", channels: [] },
+      {
+        name: "x",
+        channels: [{ name: "a", timestampsNs: ["1", "2"], values: [1] }],
+      },
+      {
+        name: "x",
+        channels: [{ name: "a", timestampsNs: ["2", "1"], values: [1, 2] }],
+      },
+      {
+        name: "x",
+        channels: [{ name: "a", timestampsNs: ["nope"], values: [1] }],
+      },
+    ];
+    for (const spec of bad) {
+      const add = api().addDataSource as (s: unknown) => unknown;
+      expect(add(spec)).toBeNull();
+    }
+    // None of the bad specs leaked a channel into the session.
+    expect(api().listChannels()).toHaveLength(0);
   });
 });
 

@@ -26,22 +26,33 @@ video, and record findings as tagged events. `__drivelineAgent` is that
 surface — nothing on it can ingest files, mutate layout, or touch
 anything the user at the keyboard couldn't already do.
 
-It installs when:
+It installs in two tiers (see docs/13 for the BYOA rationale):
 
-- the page URL carries `?agent` (any value), in any build, or
-- the app runs in DEV (so e2e and local automation get it for free).
+- **Always on (any build, no opt-in):** the read-only discovery trio
+  `version`, `getSkill()`, `describe()` — pure documentation + a capability
+  manifest, no mutation and no session-data read.
+- **Gated:** the full mutating / data-reading surface (the v1/v2 ops plus
+  v3's `addDataSource`) installs only when the page URL carries `?agent`
+  (any value), or the app runs in DEV (so e2e and local automation get it
+  for free).
 
-App unmount uninstalls it (mirrors the dev hooks).
+Every load prints a one-line console banner pointing agents at `getSkill()`
+and noting that `?agent` unlocks the full surface. App unmount uninstalls the
+whole thing (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v2)
+## `window.__drivelineAgent` (v3)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. The `version` field reports `2`; v2 is a
-superset of v1 (the read/transport/event/video surface is unchanged) plus
-the four layout write ops documented below. Summary:
+is the authoritative reference. The `version` field reports `3`; v3 is a
+superset of v2 (itself a superset of v1) and adds the always-on discovery
+trio (`getSkill`/`describe`) plus inline data-source ingestion
+(`addDataSource`, the "Bring Your Own Agent" surface — see
+docs/13-bring-your-own-agent.md). Summary:
 
 | Group              | Methods                                                                                                                                                                          |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery (always on, v3) | `getSkill()`, `describe()`                                                                                                                                                |
+| Ingestion (v3)     | `addDataSource(spec)` — register an inline columnar source                                                                                                                       |
 | Session (read)     | `getSessionSnapshot()`, `listSources()`, `listChannels()`                                                                                                                        |
 | Data (read)        | `fetchChannelRange(channelId, startNs, endNs, includePrev?)`                                                                                                                     |
 | Transport          | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)`                                                                                                                              |
@@ -147,6 +158,28 @@ await page.evaluate(async () => {
 });
 ```
 
+### v3 additions: discovery + inline ingestion
+
+v3 lifts two capabilities onto the surface for the "Bring Your Own Agent"
+flow (docs/13). The mutating split changed: the discovery trio installs on
+every load, the rest stays gated.
+
+| Method                       | Availability      | Returns                                              | Semantics                                                                                                                       |
+| ---------------------------- | ----------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `getSkill()`                 | always (no opt-in)| `string`                                            | The full BYOA guide as Markdown (what Driveline is, the timestamp rule, the `AgentDataSourceSpec` shape + worked example).      |
+| `describe()`                 | always (no opt-in)| `{ version, capabilities[], agentParamRequired }`   | Machine-readable manifest of every method (name, summary, `mutating`). `agentParamRequired: true` when the gated ops are off.  |
+| `addDataSource(spec)`        | gated (`?agent`)  | `{ sourceId, channels: [{ id, name }] } \| null`    | Register the agent's own inline columnar data source (no file bytes, no URL). `null` on any validation failure; never throws.   |
+
+`addDataSource` takes an `AgentDataSourceSpec`: a source `name` plus
+`channels[]`, each with a `name` (slashes build the Channels tree), optional
+`unit`, optional `kind` (`"scalar"` default / `"enum"`), a `timestampsNs`
+decimal-string array (non-decreasing, length N), and a `values` number array
+(length N; enum → integer codes). The data is held on the main thread and
+ranged-fetched as Arrow IPC matching the exact scalar/enum schema
+`seriesFromArrow.ts` expects, so an inline source is indistinguishable to the
+panels from a reader-backed one. See docs/13 for the inline-source model and
+how BYOA differs from the BYOK Format Agent (docs/12).
+
 ## Event JSON format
 
 `exportEvents()` / the drawer's **Export** button write the same
@@ -213,4 +246,5 @@ layout operations beyond the v2 create/bind/close ops, e.g. drag-rearrange
 and saved layouts). Treat renaming them as a breaking change to automation,
 same as a method change on `AgentApi`. Bump `AGENT_API_VERSION` on any
 breaking change to the `window.__drivelineAgent` surface (it was raised to
-`2` when the layout write ops landed).
+`2` when the layout write ops landed, and to `3` for the always-on
+discovery trio + inline `addDataSource` ingestion — see docs/13).

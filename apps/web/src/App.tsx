@@ -223,7 +223,8 @@ declare global {
           | "recipe"
           | "lidar"
           | "ros1"
-          | "ros2db3";
+          | "ros2db3"
+          | "inline";
         name: string;
         timeRange: { startNs: string; endNs: string };
         channelIds: string[];
@@ -860,13 +861,13 @@ export function App() {
       };
     }
     // Agent interface — unlike the dev hooks above this ships in the
-    // production bundle, but only installs when the page opts in with
-    // `?agent` (always installed in DEV so e2e and local automation get
-    // it for free). See docs/11-agent-interface.md.
-    const uninstallAgentApi =
-      import.meta.env.DEV || agentApiRequested(window.location.search)
-        ? installAgentApi()
-        : null;
+    // production bundle. The discovery trio (version/getSkill/describe) is
+    // ALWAYS installed; the full mutating surface unlocks only with `?agent`
+    // (or in DEV, so e2e and local automation get it for free). See
+    // docs/11-agent-interface.md + docs/13-bring-your-own-agent.md.
+    const uninstallAgentApi = installAgentApi(
+      import.meta.env.DEV || agentApiRequested(window.location.search),
+    );
     // Public deep-link: `?demo` starts the baked demo session on an empty
     // boot (the share-link view state lives in the hash, so the query is
     // ours). The loader waits for worker registration itself and no-ops if

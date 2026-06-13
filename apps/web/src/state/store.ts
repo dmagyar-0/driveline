@@ -74,6 +74,13 @@ import { readMp4HeaderBytes } from "./mp4HeaderSlice";
 import { synthesizeSidecarBytes } from "./videoTimestampBinding";
 import { shiftFetchWindow, shiftRangeArrowTs } from "./offsetShift";
 import { parseEpochOffsetNs } from "./tabularImport";
+import {
+  setInlineSource,
+  dropInlineSource,
+  resetInlineSources,
+  fetchRange as inlineFetchRange,
+  type InlineChannelData,
+} from "./inlineSource";
 
 export type SourceKind =
   | "mcap"
@@ -83,7 +90,10 @@ export type SourceKind =
   | "recipe"
   | "lidar"
   | "ros1"
-  | "ros2db3";
+  | "ros2db3"
+  // JS-only: agent-pushed columnar data held on the main thread (no Rust
+  // reader, no wasm handle). See `state/inlineSource.ts` + docs/13.
+  | "inline";
 export type ChannelKind = ChannelKindWire;
 
 export interface TimeRange {
@@ -172,6 +182,32 @@ export interface SourceMeta {
 export interface OpenResult {
   opened: string[];
   errors: BucketError[];
+}
+
+/** One channel of an inline (agent-pushed) data source. Timestamps cross the
+ *  API as DECIMAL STRINGS (the project-wide BigInt rule); they are parsed to
+ *  `bigint` at the `addInlineSource` boundary. */
+export interface InlineChannelSpec {
+  name: string;
+  unit?: string;
+  kind?: "scalar" | "enum";
+  /** Decimal-string ns, non-decreasing, length N. */
+  timestampsNs: string[];
+  /** Length N; enum channels carry integer codes. */
+  values: number[];
+}
+
+/** Spec for `addInlineSource` — the agent-pushed columnar dataset. */
+export interface InlineSourceSpec {
+  name: string;
+  channels: InlineChannelSpec[];
+}
+
+/** What `addInlineSource` returns on success: the new source id and the
+ *  qualified id + display name of every channel it registered. */
+export interface InlineSourceResult {
+  sourceId: string;
+  channels: Array<{ id: string; name: string }>;
 }
 
 /** Lifecycle of the baked-in "Try the demo" load (see `demo/demoSession.ts`).
@@ -951,6 +987,15 @@ export interface SessionState {
    * changes (not once per cursor tick). Throws for non-lidar channels.
    */
   lidarSpinTimes(channelId: string): Promise<BigInt64Array>;
+  /**
+   * Register an inline (agent-pushed) data source: validate `spec`, build its
+   * `Channel[]`, store its columnar data on the main thread (no worker), and
+   * widen `globalRange` / reseat the cursor exactly like a file open so it
+   * appears in the Channels rail and the scrubber covers it. Returns the new
+   * source id + channel ids, or `null` on ANY validation failure (never
+   * throws). See `state/inlineSource.ts` + docs/13.
+   */
+  addInlineSource(spec: InlineSourceSpec): InlineSourceResult | null;
 }
 
 export const MIN_SPEED = 0.25;
@@ -1096,6 +1141,126 @@ function lidarChannels(sourceId: string, s: Mf4Summary): Channel[] {
     sampleCount: c.sample_count,
     timeRange: { startNs: c.start_ns, endNs: c.end_ns },
   }));
+}
+
+// Validate + build an inline (agent-pushed) source from its spec: parse every
+// decimal-string timestamp to `bigint`, enforce equal-length non-decreasing
+// columns, and produce the `SourceMeta` (synthetic handle, `kind: "inline"`),
+// the per-channel columnar storage, and the qualified channel id/name list the
+// API returns. Returns `null` on ANY violation (never throws) so the agent
+// surface can probe without try/catch. Leading-slash the displayed channel name
+// (matching how MCAP topics surface) so the Channels tree splits on `/`.
+function buildInlineSource(
+  spec: InlineSourceSpec,
+  existing: SourceMeta[],
+): {
+  source: SourceMeta;
+  data: Map<string, InlineChannelData>;
+  channels: Array<{ id: string; name: string }>;
+} | null {
+  if (
+    spec === null ||
+    typeof spec !== "object" ||
+    typeof spec.name !== "string" ||
+    spec.name.trim().length === 0 ||
+    !Array.isArray(spec.channels) ||
+    spec.channels.length === 0
+  ) {
+    return null;
+  }
+
+  const sourceId = uniqueSourceId(spec.name.trim(), existing);
+  const data = new Map<string, InlineChannelData>();
+  const channels: Channel[] = [];
+  const channelOut: Array<{ id: string; name: string }> = [];
+  const seenNative = new Set<string>();
+
+  let srcStart: bigint | null = null;
+  let srcEnd: bigint | null = null;
+
+  for (const c of spec.channels) {
+    if (
+      c === null ||
+      typeof c !== "object" ||
+      typeof c.name !== "string" ||
+      c.name.trim().length === 0 ||
+      !Array.isArray(c.timestampsNs) ||
+      !Array.isArray(c.values) ||
+      c.timestampsNs.length === 0 ||
+      c.timestampsNs.length !== c.values.length
+    ) {
+      return null;
+    }
+    const kind = c.kind === "enum" ? "enum" : "scalar";
+    // The native id is the raw channel name; uniqueness within the source keeps
+    // `qualifiedChannelId` injective and the storage map keyed cleanly.
+    const nativeName = c.name.trim();
+    if (seenNative.has(nativeName)) return null;
+    seenNative.add(nativeName);
+
+    const n = c.timestampsNs.length;
+    const tsNs = new BigInt64Array(n);
+    let prev: bigint | null = null;
+    for (let i = 0; i < n; i++) {
+      const raw = c.timestampsNs[i];
+      if (typeof raw !== "string") return null;
+      let v: bigint;
+      try {
+        v = BigInt(raw);
+      } catch {
+        return null;
+      }
+      if (prev !== null && v < prev) return null; // must be non-decreasing
+      tsNs[i] = v;
+      prev = v;
+    }
+    for (let i = 0; i < n; i++) {
+      if (typeof c.values[i] !== "number") return null;
+    }
+    const values =
+      kind === "enum"
+        ? Int32Array.from(c.values, (x) => x | 0)
+        : Float64Array.from(c.values);
+
+    data.set(nativeName, { kind, tsNs, values });
+
+    const chStart = tsNs[0];
+    const chEnd = tsNs[n - 1];
+    srcStart = srcStart === null ? chStart : bigMin(srcStart, chStart);
+    srcEnd = srcEnd === null ? chEnd : bigMax(srcEnd, chEnd);
+
+    // Display name leading-slashed so the Channels tree splits it like a topic.
+    const displayName = nativeName.startsWith("/")
+      ? nativeName
+      : `/${nativeName}`;
+    const id = qualifiedChannelId(sourceId, nativeName);
+    channels.push({
+      id,
+      nativeId: nativeName,
+      sourceId,
+      name: displayName,
+      group: null,
+      kind,
+      dtype: kind === "enum" ? "i32" : "f64",
+      unit: typeof c.unit === "string" && c.unit.length > 0 ? c.unit : null,
+      sampleCount: n,
+      timeRange: { startNs: chStart, endNs: chEnd },
+    });
+    channelOut.push({ id, name: displayName });
+  }
+
+  if (srcStart === null || srcEnd === null) return null;
+
+  const source: SourceMeta = {
+    id: sourceId,
+    kind: "inline",
+    name: sourceId,
+    handle: -1, // synthetic: inline sources hold no wasm slab handle
+    timeRange: { startNs: srcStart, endNs: srcEnd },
+    channels,
+    timeOffsetNs: 0n,
+  };
+  return { source, data, channels: channelOut };
 }
 
 // Binding-pruning helpers used by `removeSource`. Each returns the *same*
@@ -2052,12 +2217,33 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {
-      if (!worker) throw new Error("session store: worker not initialised");
       const { channels, sources } = get();
       const channel = channels.find((c) => c.id === channelId);
       if (!channel) throw new Error(`unknown channel: ${channelId}`);
       const source = sources.find((s) => s.id === channel.sourceId);
       if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+
+      // Inline (agent-pushed) sources are served straight from the main-thread
+      // store — no worker round-trip. They honour the same per-source offset
+      // contract (0n by default = pass-through), built into the shifted window
+      // + the returned-ts shift, exactly like the signal readers below.
+      if (source.kind === "inline") {
+        const offset = source.timeOffsetNs ?? 0n;
+        const win = shiftFetchWindow(startNs, endNs, offset);
+        const bytes = inlineFetchRange(
+          source.id,
+          channel.nativeId,
+          win.startNs,
+          win.endNs,
+          includePrev ?? false,
+        );
+        if (bytes === null) {
+          throw new Error(`unknown inline channel: ${channelId}`);
+        }
+        return shiftRangeArrowTs(bytes, offset);
+      }
+
+      if (!worker) throw new Error("session store: worker not initialised");
 
       // In-flight dedup: two panels bound to the same channel that issue
       // concurrent fetches for the same window share one worker round-trip.
@@ -2181,6 +2367,19 @@ export const useSession = create<SessionState>((set, get) => {
         throw new Error(`not a point-cloud channel: ${channelId}`);
       }
       return worker.lidarSpinTimes(source.handle);
+    },
+
+    addInlineSource(spec) {
+      const built = buildInlineSource(spec, get().sources);
+      if (built === null) return null;
+      const { source, data, channels } = built;
+      // Stash the columnar data on the main thread BEFORE committing the
+      // source, so the first `fetchChannelRange` after registration finds it.
+      setInlineSource(source.id, data);
+      // Widen `globalRange`, seed/reseat the cursor, and surface the source +
+      // channels — the same derived-state recompute every file open uses.
+      commitOpenedSources([source], []);
+      return { sourceId: source.id, channels };
     },
 
     async openFiles(files) {
@@ -2915,10 +3114,14 @@ export const useSession = create<SessionState>((set, get) => {
 
     async clear() {
       const run = async () => {
+        // Inline (agent-pushed) storage lives on the main thread, not in the
+        // worker — wipe it regardless of worker presence.
+        resetInlineSources();
         if (!worker) return;
         const w = worker;
         for (const s of get().sources) {
           try {
+            if (s.kind === "inline") continue; // no wasm handle to free
             if (s.kind === "mcap") await w.closeMcap(s.handle);
             else if (s.kind === "ros1") await w.closeRos1Bag(s.handle);
             else if (s.kind === "ros2db3") await w.closeRos2Db3(s.handle);
@@ -2996,7 +3199,10 @@ export const useSession = create<SessionState>((set, get) => {
         // Unknown id (already removed, or a stale click): nothing to do.
         if (!src) return;
 
-        if (worker) {
+        if (src.kind === "inline") {
+          // Main-thread storage, no wasm handle — drop it directly.
+          dropInlineSource(sourceId);
+        } else if (worker) {
           const w = worker;
           try {
             if (src.kind === "mcap") await w.closeMcap(src.handle);
