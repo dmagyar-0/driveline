@@ -193,6 +193,36 @@ extrinsic translation: [0.0119, -0.3250, -0.7590]
 extrinsic quaternion (xyzw): [0.70050, 0.00364, 0.00113, 0.71364]
 ```
 
+#### Recording the fusion demo video
+
+`apps/e2e/tests/_demo-nuscenes-fusion.spec.ts` records a shareable demo video
+of the full camera + LiDAR capability set this data unlocks: the CAM_FRONT
+dashcam with the LiDAR point cloud projected onto it (overlay), the same spin
+in the 3D Scene panel, and the raw dashcam — one continuous replay, with a
+title card and a persistent on-screen attribution/licence banner.
+
+```sh
+# 1. Convert (see above) and copy the four outputs into sample-data/realworld/
+#    (the dir is gitignored except README.md, so they never get committed):
+python3 scripts/convert_nuscenes_to_driveline.py
+cp /tmp/datasets/nuscenes_demo/nuscenes.lidar.parquet \
+   /tmp/datasets/nuscenes_demo/nuscenes_cam_front.mp4 \
+   /tmp/datasets/nuscenes_demo/nuscenes_cam_front.mp4.timestamps \
+   /tmp/datasets/nuscenes_demo/nuscenes_cam_front.calib.json \
+   sample-data/realworld/
+
+# 2. Record (Playwright writes a .webm under apps/e2e/test-results/):
+pnpm wasm:build
+pnpm --filter e2e exec playwright test _demo-nuscenes-fusion.spec.ts --timeout=240000
+```
+
+> ⚠️ **Licence.** The recording is a derivative of nuScenes, so it inherits
+> **CC BY-NC-SA 4.0**: attribute Motional, keep it **non-commercial**, and
+> share it **under the same licence**. The spec bakes the attribution banner
+> into the video for this reason. The video itself is **not** committed (it's
+> NC-licensed and multi-MB). For an unrestricted demo, record the MIT-licensed
+> comma2k19 path instead (the `_demo-comma2k19-*-record.spec.ts` specs).
+
 ### Splitting signals across MCAP and MF4
 
 `scripts/convert_comma2k19_to_mf4.py` emits a second copy of the
