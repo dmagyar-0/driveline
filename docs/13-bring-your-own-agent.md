@@ -192,3 +192,18 @@ Scene 2 self-skips when the comma2k19 fixtures are absent, so scene 1 always
 records. See `sample-data/realworld/README.md` for the fixture pipeline. The
 stitched `.webm` is a generated artefact (git-ignored, like the WASM bundle) —
 regenerate it locally rather than committing it.
+
+### Live agent-driven recording
+
+The spec above is deterministic. To capture a **real agent driving the surface
+live** — making decisions from data it actually reads back, with its calls and
+reasoning shown on-screen — `scripts/agent-drive/live-driver.mjs` keeps one
+screen-recorded browser alive and executes commands handed to it turn-by-turn
+over a tiny file/FIFO protocol. The driver can be any agent; Claude Code itself
+can drive it (no API key needed — it is already a live model in the loop). An
+on-screen "agent HUD" logs every `window.__drivelineAgent` call + decision, so
+the recording is self-evidently agent-driven rather than a hand-clicked walk.
+Start the web dev server, run the driver from `apps/e2e`, then push commands
+(`cmd-<n>.js`) and read results (`results` FIFO); `__QUIT__` flushes the video.
+Because the agent's between-turn thinking shows as dead air, trim the raw clip
+with ffmpeg's `mpdecimate` for a tight cut.
