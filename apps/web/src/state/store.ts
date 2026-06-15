@@ -1107,14 +1107,30 @@ function pruneOrphanTags(
   set({ bookmarks: next });
 }
 
-function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
-  // Config-only sources (e.g. a calibration `*.calib.json`) carry no
-  // meaningful time span — their reader reports an empty range. Folding that
-  // `[0, 0]` into the merge would drag `startNs` to the epoch and stretch the
-  // timeline across ~54 years. Only sources with a real span define the
-  // global range.
+// Source kinds that are STATIC / config layers, not part of the playable
+// timeline. They either carry no time (`calibration`, an empty `[0, 0]`) or a
+// purely cosmetic single-frame placeholder anchored at ts 0 (`map_geometry`,
+// e.g. `[0, 33ms]`). Folding either into the union would drag `startNs` to the
+// epoch: combined with epoch-scale sensor data (~1.7e18 ns), the resulting
+// `[0, 1.7e18]` span blows past `Number.MAX_SAFE_INTEGER`, so every pixel
+// projection that does `Number(off) / Number(span)` (the Transport scrubber's
+// `percentOf`/`nsFromRatio`, the plot's `cursorXPx`) collapses to the right
+// edge and playback looks frozen / unscrubbable. These kinds never define the
+// global range; the real sensor sources do.
+const CONFIG_SOURCE_KINDS: ReadonlySet<SourceKind> = new Set([
+  "calibration",
+  "map_geometry",
+]);
+
+export function mergeGlobalRange(sources: SourceMeta[]): TimeRange | null {
+  // Only sources that (a) are NOT a static/config layer and (b) carry a real,
+  // non-empty span define the playable timeline. The kind guard is what stops
+  // a static `map_geometry` frame at `[0, 33ms]` from surviving the span check
+  // and pulling the timeline start down to the epoch.
   const spanned = sources.filter(
-    (s) => s.timeRange.endNs > s.timeRange.startNs,
+    (s) =>
+      !CONFIG_SOURCE_KINDS.has(s.kind) &&
+      s.timeRange.endNs > s.timeRange.startNs,
   );
   if (spanned.length === 0) return null;
   let start = spanned[0].timeRange.startNs;
