@@ -193,6 +193,74 @@ extrinsic translation: [0.0119, -0.3250, -0.7590]
 extrinsic quaternion (xyzw): [0.70050, 0.00364, 0.00113, 0.71364]
 ```
 
+#### Recording the fusion demo video
+
+`apps/e2e/tests/_demo-nuscenes-fusion.spec.ts` records a shareable demo video
+of the full camera + LiDAR capability set this data unlocks, in one continuous
+replay with a title card and a persistent attribution/licence banner:
+
+- **left** — CAM_FRONT dashcam with the LiDAR point cloud projected onto it
+  (point-cloud-on-camera overlay),
+- **top-right** — the same spin in the 3D Scene panel,
+- **bottom-right** — a Plot of the ego signals (speed + yaw-rate) derived from
+  the scene's `ego_pose` track by `convert_nuscenes_signals_to_mcap.py`.
+
+> There is exactly **one** video panel by design: two video panels bound to the
+> *same* mp4 contend for that source's single decoder and the second lags it by
+> seconds (a stuck/desynced-looking camera). Two camera feeds need two separate
+> files — see the comma2k19 dashboard-record spec's hflipped second mp4.
+
+```sh
+# 1. Convert geometry + derive signals, then copy all five outputs into
+#    sample-data/realworld/ (gitignored except README.md, never committed):
+pip install 'mcap>=1.2,<2' 'pyarrow>=14,<20' 'numpy>=1.24,<3'   # + ffmpeg
+python3 scripts/convert_nuscenes_to_driveline.py
+python3 scripts/convert_nuscenes_signals_to_mcap.py
+cp /tmp/datasets/nuscenes_demo/nuscenes.lidar.parquet \
+   /tmp/datasets/nuscenes_demo/nuscenes_cam_front.mp4 \
+   /tmp/datasets/nuscenes_demo/nuscenes_cam_front.mp4.timestamps \
+   /tmp/datasets/nuscenes_demo/nuscenes_cam_front.calib.json \
+   /tmp/datasets/nuscenes_demo/nuscenes.signals.mcap \
+   sample-data/realworld/
+
+# 2. Record (Playwright writes a .webm under apps/e2e/test-results/):
+pnpm wasm:build
+pnpm --filter e2e exec playwright test _demo-nuscenes-fusion.spec.ts --timeout=240000
+
+# 3. Post-process the .webm into a shareable .mp4. The spec holds a title card
+#    over the (multi-second) point-cloud load, then plays the scene. Find where
+#    the card ends (first frame that is much larger than the static card frames)
+#    and concatenate a short card slice + the replay:
+WEBM=$(find apps/e2e/test-results -name '*.webm' | head -1)
+ffmpeg -y -i "$WEBM" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p /tmp/raw.mp4
+# inspect: ffmpeg -ss <t> -i /tmp/raw.mp4 -frames:v 1 /tmp/probe.png   (bytes jump when content appears)
+CARD_END=3.2          # ~3 s of title card is plenty
+CONTENT_START=...     # the t where the dashboard appears (load-dependent; ~5 s with a GPU)
+END=...               # /tmp/raw.mp4 duration
+ffmpeg -y -i /tmp/raw.mp4 -filter_complex \
+  "[0:v]trim=0.6:${CARD_END},setpts=PTS-STARTPTS[a]; \
+   [0:v]trim=${CONTENT_START}:${END},setpts=PTS-STARTPTS[b];[a][b]concat=n=2:v=1[o]" \
+  -map "[o]" -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \
+  driveline-nuscenes-fusion.mp4
+```
+
+> **GPU vs. headless.** Playback is decode-aware: it holds the cursor while the
+> video decoder catches up. With **GPU-accelerated WebCodecs + WebGL** the
+> decoder keeps up and the scene plays at full **1×** — so the title-card load
+> is short and the replay is a smooth single take. In a headless / GPU-less box
+> (no `/dev/dri`, software decode + SwiftShader) the gate engages often and
+> playback runs under 1×, so the load is longer and ~16 s of wall time covers
+> only part of the scene. On a GPU machine, raise the play window in the spec
+> (`page.waitForTimeout(16000)`) to ~**20000** ms to cover the whole ~19 s scene
+> in one pass.
+
+> ⚠️ **Licence.** The recording is a derivative of nuScenes, so it inherits
+> **CC BY-NC-SA 4.0**: attribute Motional, keep it **non-commercial**, and
+> share it **under the same licence**. The spec bakes the attribution banner
+> into the video for this reason. The video itself is **not** committed (it's
+> NC-licensed and multi-MB). For an unrestricted demo, record the MIT-licensed
+> comma2k19 path instead (the `_demo-comma2k19-*-record.spec.ts` specs).
+
 ### Splitting signals across MCAP and MF4
 
 `scripts/convert_comma2k19_to_mf4.py` emits a second copy of the

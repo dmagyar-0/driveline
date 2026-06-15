@@ -21,8 +21,10 @@ import {
   MIN_SPEED,
   effectivePlotZoomX,
   isPlotTimeAxisSynced,
+  mergeGlobalRange,
   useSession,
 } from "./store";
+import type { SourceKind, SourceMeta, TimeRange } from "./store";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { DEFAULT_EVENT_TAG_CONFIG } from "./persist/eventTagConfig";
 import type { Bookmark } from "./persist/bookmarks";
@@ -444,6 +446,69 @@ describe("session store", () => {
     // three (mp4 wins at 20_000).
     expect(s.globalRange).toEqual({ startNs: 500n, endNs: 20_000n });
     expect(s.channels).toHaveLength(3);
+  });
+
+  // Regression: a static `map_geometry` source reports a cosmetic single-frame
+  // placeholder span anchored at ts 0 (`[0, DEFAULT_FRAME_PERIOD_NS]` ≈
+  // `[0, 33ms]`, see crates/data-core/src/map_geometry.rs). That `endNs >
+  // startNs`, so the OLD span-only filter let it through and dragged the global
+  // range start to the epoch. Combined with epoch-scale sensor data (~1.7e18
+  // ns) the union became `[0, 1.7e18]` — a span far past
+  // Number.MAX_SAFE_INTEGER, which collapses every `Number(off)/Number(span)`
+  // pixel projection (scrubber + plot cursor) to the right edge and makes
+  // playback look frozen / unscrubbable. A static/config kind must never
+  // define the playable timeline.
+  describe("mergeGlobalRange excludes static/config source kinds", () => {
+    const EPOCH_START = 1_704_067_200_000_000_000n; // 2024-01-01T00:00:00Z
+    const EPOCH_END = EPOCH_START + 3_000_000_000n; // 3 s of real data
+
+    function src(
+      id: string,
+      kind: SourceKind,
+      timeRange: TimeRange,
+    ): SourceMeta {
+      return { id, kind, name: id, handle: 0, timeRange, channels: [] };
+    }
+
+    it("ignores a map_geometry placeholder [0, 33ms] so the range stays at the sensor data", () => {
+      const sensor = src("signal", "inline", {
+        startNs: EPOCH_START,
+        endNs: EPOCH_END,
+      });
+      const mapGeom = src("map", "map_geometry", {
+        startNs: 0n,
+        endNs: 33_333_333n,
+      });
+      const range = mergeGlobalRange([sensor, mapGeom]);
+      // MUST be the epoch-scale sensor window, NOT [0, EPOCH_END].
+      expect(range).toEqual({ startNs: EPOCH_START, endNs: EPOCH_END });
+      // The span must stay safely representable as a Float64 (the pixel
+      // projection precondition the bug violated).
+      expect(Number(range!.endNs - range!.startNs)).toBeLessThan(
+        Number.MAX_SAFE_INTEGER,
+      );
+    });
+
+    it("ignores a calibration [0, 0] source the same way", () => {
+      const sensor = src("signal", "inline", {
+        startNs: EPOCH_START,
+        endNs: EPOCH_END,
+      });
+      const calib = src("calib", "calibration", { startNs: 0n, endNs: 0n });
+      expect(mergeGlobalRange([sensor, calib])).toEqual({
+        startNs: EPOCH_START,
+        endNs: EPOCH_END,
+      });
+    });
+
+    it("returns null when only static/config sources are loaded", () => {
+      const mapGeom = src("map", "map_geometry", {
+        startNs: 0n,
+        endNs: 33_333_333n,
+      });
+      const calib = src("calib", "calibration", { startNs: 0n, endNs: 0n });
+      expect(mergeGlobalRange([mapGeom, calib])).toBeNull();
+    });
   });
 
   it("assigns a ' (2)' suffix to duplicate basenames", async () => {
