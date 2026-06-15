@@ -3,16 +3,83 @@
 Standalone helper scripts that sit *beside* the Driveline app (not part of the
 build). Run them with your own Python — they're not wired into `pnpm`/`cargo`.
 
-## `alpamayo_lidar_to_driveline.py`
+## NVIDIA Alpamayo (PhysicalAI-AV) dataset
 
-Converts one LiDAR clip from NVIDIA's **PhysicalAI-Autonomous-Vehicles
-(Alpamayo)** dataset into a **Driveline point-cloud Parquet** (`*.lidar.parquet`)
-that drops straight onto the app and binds to a 3D **Scene** panel.
-
-Alpamayo ships LiDAR as Draco-compressed point clouds packed in per-chunk zips
+**Driveline opens the dataset's raw LiDAR natively — no conversion.** Alpamayo
+ships LiDAR as Draco-compressed point clouds packed in per-chunk zips
 (`lidar_top_360fov.chunk_XXXX.zip`, one Parquet per clip, one row per ~10 Hz
-spin). This script decodes the Draco blobs and re-emits the columns the
-viewer's `PointCloudReader` expects:
+spin: `spin_start_timestamp` µs + a `draco_encoded_pointcloud` blob). Driveline
+content-sniffs that schema, decodes the Draco spins **in the browser** (Google's
+reference decoder, loaded lazily), and renders them in a 3D **Scene** panel —
+positions + intensity, stepping with the cursor. The file opens under any name
+(`*.parquet` or `*.lidar.parquet`).
+
+So all you need to do is get one clip's files out of the chunk zips.
+
+### `alpamayo_open.py` — extract a drop-ready clip
+
+Pulls one clip's files out of the dataset's chunk zips into a folder you drag
+onto the app. **LiDAR extraction needs nothing but the Python standard library**
+(no `DracoPy`, no `pyarrow` — the app does the Draco decode):
+
+```powershell
+# LiDAR only, first clip of chunk 0:
+python tools\alpamayo_open.py --root C:\Users\you\alpamayo\data --clip 0 --out clip0
+
+# A specific clip id, plus cameras + egomotion (these need pyarrow + numpy):
+python tools\alpamayo_open.py --root ...\data --clip 25cd4769 `
+  --with-cameras --with-egomotion --out my_clip
+```
+
+`--clip` is an index into the LiDAR chunk zip or a clip-id substring; `--chunk`
+picks the chunk (default `0`). Then drag the `--out` folder's files onto the
+window:
+
+- **LiDAR** → add a **Scene** panel (Panel drawer) and bind the point-cloud
+  channel. Coloured by intensity, steps with the cursor.
+- **Cameras** → a **Video** panel each (the `.mp4` auto-pairs with the
+  `.mp4.timestamps` sidecar the tool generated).
+- **Egomotion** → opens via the tabular import dialog (time column `timestamp`,
+  unit **microseconds**, mode **Absolute**).
+
+Already have a single clip's `<clip>.lidar_top_360fov.parquet` extracted? Just
+drop it — no tool needed.
+
+### Driving it from an agent (headless)
+
+The dataset is driveable end-to-end with no human clicking. File **bytes** enter
+through the page's drop seam (file ingestion is intentionally off the
+`window.__drivelineAgent` surface); everything after is `__drivelineAgent`:
+
+1. Open the page with `?agent` to unlock the mutating ops (always unlocked in a
+   dev build). `window.__drivelineAgent.getSkill()` prints the full guide.
+2. Feed the LiDAR parquet to the page:
+   - **dev build:** `window.__drivelineDevHooks.openFiles([{ name, bytes }])`
+     (one call — what the e2e uses).
+   - **packaged build (browser-automation agent):** drop the file on
+     `[data-testid="drop-zone"]`, or use the Sources drawer's **Load** input
+     (`[data-testid="sources-load-btn"]`).
+3. Drive `__drivelineAgent`:
+
+   ```js
+   const a = window.__drivelineAgent;
+   const cloud = a.listChannels().find((c) => c.kind === "point_cloud");
+   const panel = a.createPanel("scene");
+   a.setSceneBinding(panel, cloud.id);   // display the LiDAR
+   a.setCursor("89971000");              // ns as a decimal STRING; play()/pause() to animate
+   ```
+
+`setSceneBinding(panelId, channelId)` (agent API v4+) is how a scene panel binds
+a `point_cloud` / `bounding_box` / `trajectory` / `map_geometry` channel — it's
+one-at-a-time, so it's a setter, not the list-oriented `bindChannels`. See
+`docs/13-bring-your-own-agent.md`.
+
+### `alpamayo_lidar_to_driveline.py` — optional offline conversion
+
+You no longer need this to *view* a clip's LiDAR. It's still useful to
+**subsample** (`--max-points`), batch-convert offline, or produce a slimmed,
+hostable file. It decodes the Draco blobs into a **Driveline point-cloud
+Parquet** (`*.lidar.parquet`) with the columns `PointCloudReader::open` expects:
 
 | column        | type             | meaning                                |
 | ------------- | ---------------- | -------------------------------------- |
@@ -20,7 +87,7 @@ viewer's `PointCloudReader` expects:
 | `positions`   | `list<float32>`  | flattened xyz, length `3·N` (metres)   |
 | `intensities` | `list<uint8>`    | per-point intensity 0..255             |
 
-Requires `DracoPy` + `pyarrow` (already in the Alpamayo dev-kit venv):
+Requires `DracoPy` + `pyarrow`:
 
 ```powershell
 C:\Users\david\alpamayo\.venv\Scripts\python.exe `
@@ -33,10 +100,6 @@ Flags: `--clip` (index into the zip or a clip-id substring), `--max-points`
 (per-spin cap, uniform subsample; `0` keeps all ~250k), `--max-spins`,
 `--sensor`, `--seed`. Snappy compression is used deliberately — the WASM
 Parquet reader is built without the zstd codec (size budget).
-
-Then drop the `.lidar.parquet` on the Driveline window and bind it to a Scene
-panel from the Panel drawer. Points are coloured by intensity and step with the
-cursor as you scrub or play.
 
 ## PCD files (`*.pcd`) — no conversion needed
 

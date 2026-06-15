@@ -103,12 +103,15 @@ driving the transport (`setCursor` / `play` / `pause`).
 
 The `scene` panel renders 3D geometry channels — `point_cloud` (LiDAR),
 `bounding_box` (OpenLABEL boxes), `trajectory` (predicted ego paths), and
-`map_geometry` (road networks). These bind one-at-a-time through the scene
-binding hook (`setSceneChannelBinding` on the dev hooks, or the PanelDrawer in
-the UI), **not** `bindChannels` (which targets the plot/enum/table/value list
-kinds). A shell-only agent loads geometry through the normal file-open path
-(`openFiles` / drag-drop) rather than `addDataSource`, which is scalar/enum
-only.
+`map_geometry` (road networks). These bind one-at-a-time via
+`setSceneBinding(panelId, channelId)` (added in agent API v4;
+`setSceneChannelBinding` on the dev hooks, or the PanelDrawer in the UI),
+**not** `bindChannels` (which targets the plot/enum/table/value list kinds). An
+agent loads geometry through the file-open path (`openFiles` / drag-drop on
+`[data-testid="drop-zone"]`) rather than `addDataSource` (which is scalar/enum
+only) — e.g. a raw **NVIDIA Alpamayo** LiDAR `.parquet`, Draco-decoded
+in-browser (no conversion) into a `point_cloud` channel. The full display flow
+is then `createPanel("scene")` → `setSceneBinding(panel, cloudChannelId)`.
 
 **Road maps (`map_geometry`).** Two input shapes load straight into a scene
 panel: an OpenDRIVE `.xodr` (routed by extension) and a simple `drivelineMap`

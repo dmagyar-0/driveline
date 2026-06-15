@@ -1,6 +1,13 @@
 #!/usr/bin/env python3
 """Convert one Alpamayo LiDAR clip into a Driveline point-cloud Parquet.
 
+NOTE: This converter is now **optional**. Driveline reads the raw Alpamayo
+LiDAR parquet (the `<clip>.lidar_top_360fov.parquet` below) directly — drop one
+on the window and the Draco spins are decoded in the browser (see
+`PointCloudReader::open_alpamayo_parquet` and `apps/web/src/workers/dracoDecode.ts`).
+This tool is still handy for batch/offline conversion, subsampling
+(`--max-points`), or producing a slimmed, hostable `.lidar.parquet`.
+
 The NVIDIA PhysicalAI-AV dataset ships LiDAR as Draco-compressed point clouds
 packed in per-chunk zips (`lidar_top_360fov.chunk_XXXX.zip`, ~100 clips each).
 Each zip entry `<clip_id>.lidar_top_360fov.parquet` has one row per spin:

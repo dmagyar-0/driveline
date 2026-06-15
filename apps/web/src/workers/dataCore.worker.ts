@@ -27,6 +27,7 @@ import init, {
   close_tabular,
   open_lidar,
   open_lidar_pcd,
+  open_alpamayo_lidar,
   lidar_summary,
   lidar_fetch_range,
   lidar_spin_times,
@@ -702,6 +703,23 @@ export const dataCoreApi = {
   async openLidarPcd(file: File): Promise<number> {
     await ready;
     return open_lidar_pcd(new Uint8Array(await file.arrayBuffer()));
+  },
+  /**
+   * Open a **raw NVIDIA Alpamayo LiDAR** Parquet (Draco-compressed spins),
+   * decoding the Draco blobs in-browser so no Python pre-conversion is needed.
+   * The Draco decoder (Google's reference build) is imported lazily here — only
+   * when a raw clip is actually dropped — and resolved to a synchronous spin
+   * decoder that the wasm reader calls once per spin. Surfaces as a
+   * `kind: "lidar"` source, identical to `openLidar`, so every other `lidar*`
+   * method works unchanged. Pass the `File` directly so its (large) bytes stay
+   * on the worker side.
+   */
+  async openAlpamayoLidar(file: File): Promise<number> {
+    await ready;
+    const { loadDracoSpinDecoder } = await import("./dracoDecode");
+    const decode = await loadDracoSpinDecoder();
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    return open_alpamayo_lidar(bytes, decode, undefined);
   },
   /**
    * `SourceMeta` for an open point-cloud reader, in the MF4-style shape

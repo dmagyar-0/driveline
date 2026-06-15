@@ -25,9 +25,12 @@ export interface TabularInput {
 }
 
 /** Point-cloud (LiDAR) drops carry which reader opens them: a Driveline
- *  point-cloud Parquet (`*.lidar.parquet`) or a PCL/ROS `.pcd` file. Both open
- *  into the same 3D scene pipeline but call different wasm entry points. */
-export type LidarFormat = "parquet" | "pcd";
+ *  point-cloud Parquet (`*.lidar.parquet`), a PCL/ROS `.pcd` file, or a **raw
+ *  NVIDIA Alpamayo** LiDAR parquet (Draco-compressed spins, decoded in-browser).
+ *  All open into the same 3D scene pipeline but call different wasm entry
+ *  points. The raw-Alpamayo case is content-sniffed (`sniffAlpamayoLidar`), not
+ *  matched by extension — its files carry a plain `.parquet` name. */
+export type LidarFormat = "parquet" | "pcd" | "alpamayo";
 
 export interface LidarInput {
   file: File;
@@ -341,6 +344,66 @@ export function sniffDrivelineMapBytes(bytes: Uint8Array): boolean {
   const head = bytes.subarray(0, MAP_GEOMETRY_SNIFF_BYTES);
   const text = new TextDecoder("utf-8", { fatal: false }).decode(head);
   return /"drivelineMap"\s*:/i.test(text);
+}
+
+/** The raw-Alpamayo-LiDAR signature: the binary column holding each spin's
+ *  Draco blob. Present in the parquet footer schema, absent from any converted
+ *  Driveline / tabular parquet. */
+const ALPAMAYO_LIDAR_COLUMN = "draco_encoded_pointcloud";
+
+/** Find an ASCII `needle` within `haystack` (byte search; no decode). */
+function bytesContainAscii(haystack: Uint8Array, needle: string): boolean {
+  if (needle.length === 0 || haystack.length < needle.length) return false;
+  const first = needle.charCodeAt(0);
+  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
+    if (haystack[i] !== first) continue;
+    for (let j = 1; j < needle.length; j++) {
+      if (haystack[i + j] !== needle.charCodeAt(j)) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Sniff a `.parquet` drop for the **raw NVIDIA Alpamayo LiDAR** schema so it
+ * routes to the in-browser Draco decode path instead of the tabular (scalar)
+ * import flow. Both share the `.parquet` extension, so `bucketFiles` leaves
+ * these in `tabular` and `openFiles` re-routes the ones that match here.
+ *
+ * Reads only the parquet **footer** (located via the trailing 4-byte length +
+ * `PAR1` magic) and looks for the `draco_encoded_pointcloud` column name in the
+ * serialized schema — cheap and exact, no full-file read, no parquet parse.
+ */
+export async function sniffAlpamayoLidar(file: File): Promise<boolean> {
+  try {
+    if (file.size < 12) return false;
+    const tail = new Uint8Array(await file.slice(file.size - 8).arrayBuffer());
+    // Trailing magic must be "PAR1".
+    if (
+      tail[4] !== 0x50 ||
+      tail[5] !== 0x41 ||
+      tail[6] !== 0x52 ||
+      tail[7] !== 0x31
+    ) {
+      return false;
+    }
+    const footerLen =
+      tail[0] | (tail[1] << 8) | (tail[2] << 16) | (tail[3] << 24);
+    if (footerLen <= 0 || footerLen > file.size - 8) return false;
+    const footer = new Uint8Array(
+      await file.slice(file.size - 8 - footerLen, file.size - 8).arrayBuffer(),
+    );
+    return sniffAlpamayoLidarBytes(footer);
+  } catch {
+    return false;
+  }
+}
+
+/** The column-name scan of [`sniffAlpamayoLidar`], over already-read parquet
+ *  footer bytes — shared with the dev-hook path and unit tests. */
+export function sniffAlpamayoLidarBytes(footer: Uint8Array): boolean {
+  return bytesContainAscii(footer, ALPAMAYO_LIDAR_COLUMN);
 }
 
 /** A URL input classified by the reader that can open it. */

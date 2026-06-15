@@ -8,7 +8,9 @@
 // push the agent's OWN inline data source (`addDataSource`). The v2 write ops
 // are the minimum the Format Agent's visualisation bootstrap (docs/12 §7
 // `LayoutProposal` applier) needs, shared with external agents + Playwright;
-// v3 adds the "Bring Your Own Agent" surface (docs/13).
+// v3 adds the "Bring Your Own Agent" surface (docs/13); v4 completes the
+// scene-geometry binding (`setSceneBinding`) so an agent can display a point
+// cloud / boxes / trajectory — not just create the panel.
 //
 // File ingestion (decoding bytes through a Rust reader) still stays on the
 // dev-hook surface — but that restriction is RELAXED for inline agent data:
@@ -56,7 +58,7 @@ import { getWorkspaceBridge } from "../layout/workspaceBridge";
 import { panelKindOf, panelNameFor, type PanelKind } from "../layout/panelId";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 
-export const AGENT_API_VERSION = 3 as const;
+export const AGENT_API_VERSION = 4 as const;
 
 /**
  * Spec for `addDataSource` — the agent's own inline (columnar) dataset.
@@ -243,6 +245,16 @@ export interface AgentApi {
    */
   setMapBinding(panelId: string, latId: string, lonId: string): boolean;
   /**
+   * Bind a 3D-geometry channel — `point_cloud` (LiDAR), `bounding_box`,
+   * `trajectory`, or `map_geometry` — to a `scene` panel. Scene panels hold one
+   * geometry channel at a time, so this is a single-channel setter rather than
+   * the list-oriented `bindChannels` (which only covers plot/enum/table/value).
+   * Pass `null` to clear the binding. Validates the panel is a scene and (when
+   * non-null) the channel exists; returns `false` otherwise. This is how an
+   * agent displays a point cloud — e.g. a raw NVIDIA Alpamayo LiDAR clip.
+   */
+  setSceneBinding(panelId: string, channelId: string | null): boolean;
+  /**
    * Delete a panel's tab from the layout. Returns `true` if the tab existed
    * and was removed, `false` otherwise.
    */
@@ -347,6 +359,11 @@ const AGENT_CAPABILITIES: readonly AgentCapability[] = [
     mutating: true,
   },
   { name: "setMapBinding", summary: "Bind a map's lat/lon.", mutating: true },
+  {
+    name: "setSceneBinding",
+    summary: "Bind a 3D-geometry channel to a scene panel.",
+    mutating: true,
+  },
   { name: "closePanel", summary: "Delete a panel.", mutating: true },
 ];
 
@@ -597,6 +614,18 @@ function makeAgentApi(): AgentApi {
       const known = new Set(st.channels.map((c) => c.id));
       if (!known.has(latId) || !known.has(lonId)) return false;
       st.setMapBinding(panelId, { latChannelId: latId, lonChannelId: lonId });
+      return true;
+    },
+
+    setSceneBinding(panelId, channelId) {
+      if (panelKindOf(panelId) !== "scene") return false;
+      const st = useSession.getState();
+      if (!panelExists(st.layoutJson, panelId)) return false;
+      // `null` clears the binding; a non-null id must name a real channel.
+      if (channelId !== null && !st.channels.some((c) => c.id === channelId)) {
+        return false;
+      }
+      st.setSceneBinding(panelId, channelId);
       return true;
     },
 
