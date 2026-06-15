@@ -191,8 +191,13 @@ jobs:
       # version in their footer, so an unpinned bump would change their bytes
       # and trip the freshness check. Keep in sync with the version used to
       # regenerate test-fixtures/tabular/*.parquet.
+      #
+      # Pillow is required by generate_calib_scene.py, which renders the calib
+      # scene PNGs that ffmpeg encodes into scene_cam_front.mp4. It's pinned
+      # for the same reason: the rasterised pixels feed straight into the
+      # hash-checked MP4, so an unpinned bump could alter those bytes.
       - name: Install fixture generator deps
-        run: pip3 install numpy mcap asammdf pyarrow==24.0.0
+        run: pip3 install numpy mcap asammdf pyarrow==24.0.0 pillow==12.2.0
 
       # Regenerate from scratch (produces the gitignored out.h264 the hash
       # check needs), then verify the committed out.h264 hash is fresh.

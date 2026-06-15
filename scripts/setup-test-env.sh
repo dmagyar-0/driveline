@@ -79,12 +79,15 @@ fi
 # 5 · Python deps for the fixture generator. PEP 668 systems require
 # --break-system-packages; older pips don't recognise the flag, so try
 # the plain install first and fall back.
-log "python deps (numpy, mcap, asammdf)"
-if python3 -c "import numpy, mcap, asammdf" >/dev/null 2>&1; then
+log "python deps (numpy, mcap, asammdf, pyarrow, pillow)"
+if python3 -c "import numpy, mcap, asammdf, pyarrow, PIL" >/dev/null 2>&1; then
   echo "already installed"
 else
-  if ! pip3 install numpy mcap asammdf 2>/dev/null; then
-    pip3 install --break-system-packages numpy mcap asammdf
+  # pyarrow/pillow back the calib + tabular fixture generators; keep them
+  # in sync with the pins in .github/workflows/ci.yml (fixtures-check).
+  deps="numpy mcap asammdf pyarrow==24.0.0 pillow==12.2.0"
+  if ! pip3 install $deps 2>/dev/null; then
+    pip3 install --break-system-packages $deps
   fi
 fi
 
