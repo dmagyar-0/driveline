@@ -226,7 +226,33 @@ cp /tmp/datasets/nuscenes_demo/nuscenes.lidar.parquet \
 # 2. Record (Playwright writes a .webm under apps/e2e/test-results/):
 pnpm wasm:build
 pnpm --filter e2e exec playwright test _demo-nuscenes-fusion.spec.ts --timeout=240000
+
+# 3. Post-process the .webm into a shareable .mp4. The spec holds a title card
+#    over the (multi-second) point-cloud load, then plays the scene. Find where
+#    the card ends (first frame that is much larger than the static card frames)
+#    and concatenate a short card slice + the replay:
+WEBM=$(find apps/e2e/test-results -name '*.webm' | head -1)
+ffmpeg -y -i "$WEBM" -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p /tmp/raw.mp4
+# inspect: ffmpeg -ss <t> -i /tmp/raw.mp4 -frames:v 1 /tmp/probe.png   (bytes jump when content appears)
+CARD_END=3.2          # ~3 s of title card is plenty
+CONTENT_START=...     # the t where the dashboard appears (load-dependent; ~5 s with a GPU)
+END=...               # /tmp/raw.mp4 duration
+ffmpeg -y -i /tmp/raw.mp4 -filter_complex \
+  "[0:v]trim=0.6:${CARD_END},setpts=PTS-STARTPTS[a]; \
+   [0:v]trim=${CONTENT_START}:${END},setpts=PTS-STARTPTS[b];[a][b]concat=n=2:v=1[o]" \
+  -map "[o]" -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \
+  driveline-nuscenes-fusion.mp4
 ```
+
+> **GPU vs. headless.** Playback is decode-aware: it holds the cursor while the
+> video decoder catches up. With **GPU-accelerated WebCodecs + WebGL** the
+> decoder keeps up and the scene plays at full **1×** — so the title-card load
+> is short and the replay is a smooth single take. In a headless / GPU-less box
+> (no `/dev/dri`, software decode + SwiftShader) the gate engages often and
+> playback runs under 1×, so the load is longer and ~16 s of wall time covers
+> only part of the scene. On a GPU machine, raise the play window in the spec
+> (`page.waitForTimeout(16000)`) to ~**20000** ms to cover the whole ~19 s scene
+> in one pass.
 
 > ⚠️ **Licence.** The recording is a derivative of nuScenes, so it inherits
 > **CC BY-NC-SA 4.0**: attribute Motional, keep it **non-commercial**, and
