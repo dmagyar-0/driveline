@@ -7,7 +7,15 @@
 //                  the image via the calibration (point-cloud-on-video overlay)
 //   - top-right  : the same LiDAR spin in the 3D Scene panel (orbit camera,
 //                  turbo-coloured by intensity)
-//   - bot-right  : the raw CAM_FRONT dashcam, for an overlay/clean contrast
+//   - bot-right  : a Plot panel of the ego signals (speed + yaw-rate) derived
+//                  from the scene's ego_pose track
+//
+// NOTE: there is exactly ONE video panel on purpose. Two video panels bound to
+// the *same* mp4 source contend for that source's single decoder, and the
+// second one lags it by seconds (looks like a stuck/desynced camera). The repo
+// pattern for two camera feeds is two separate files (see the comma2k19
+// dashboard-record spec's hflipped second mp4); here the second right-hand slot
+// is better spent on the signal plot anyway.
 //
 // It presses Play and dwells, then steps the cursor forward so the whole scene
 // replays while Playwright records the page to a .webm.
@@ -42,6 +50,7 @@ const REL = {
   mp4: "realworld/nuscenes_cam_front.mp4",
   ts: "realworld/nuscenes_cam_front.mp4.timestamps",
   calib: "realworld/nuscenes_cam_front.calib.json",
+  signals: "realworld/nuscenes.signals.mcap",
 };
 const ABS = Object.fromEntries(
   Object.entries(REL).map(([k, v]) => [
@@ -53,7 +62,11 @@ const ABS = Object.fromEntries(
 const CAMERA_NAME = "CAM_FRONT";
 const VIDEO_OVERLAY_PANEL = "video-overlay";
 const SCENE_PANEL = "scene-lidar";
-const VIDEO_RAW_PANEL = "video-raw";
+const PLOT_PANEL = "plot-ego";
+// Ego signals to plot (derived by convert_nuscenes_signals_to_mcap.py). Speed
+// (m/s) and yaw-rate (deg/s) sit on separate y-axes and tell the scene's story:
+// the dip + heading swing as the car slows and turns through the intersection.
+const PLOT_SIGNALS = ["/ego/speed", "/ego/yaw_rate"];
 
 test.use({
   video: { mode: "on", size: { width: 1600, height: 900 } },
@@ -257,9 +270,9 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
                 children: [
                   {
                     type: "tab",
-                    id: VIDEO_RAW_PANEL,
-                    name: "CAM_FRONT · dashcam",
-                    component: "video",
+                    id: PLOT_PANEL,
+                    name: "Ego speed · yaw-rate",
+                    component: "plot",
                   },
                 ],
               },
@@ -329,11 +342,18 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       [SCENE_PANEL, pointcloud!.id] as const,
     );
 
-    // The raw dashcam (no overlay).
+    // The plot panel: the ego signals from the MCAP, bound by topic name.
+    const plotIds = PLOT_SIGNALS.map((name) => {
+      const ch = channels.find((c) => c.name === name);
+      if (!ch) throw new Error(`signal channel not found: ${name}`);
+      return ch.id;
+    });
     await page.evaluate(
-      ([pid, id]) =>
-        window.__drivelineDevHooks!.setVideoChannelBinding(pid, id),
-      [VIDEO_RAW_PANEL, video!.id] as const,
+      ([pid, ...ids]) => {
+        const h = window.__drivelineDevHooks!;
+        for (const id of ids) h.addPlotChannelBinding(pid, id);
+      },
+      [PLOT_PANEL, ...plotIds] as const,
     );
 
     // Land near the start and prove the overlay + scene have real content
@@ -365,6 +385,16 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
         { timeout: 30_000, intervals: [300, 600, 1000] },
       )
       .toBeGreaterThan(1000);
+    await expect
+      .poll(
+        async () =>
+          page.evaluate((id) => {
+            const s = window.__drivelineDevHooks!.getPlotPanelSeriesStats(id);
+            return s !== null && s.length === 2 && s.every((x) => x.count > 0);
+          }, PLOT_PANEL),
+        { timeout: 30_000, intervals: [300, 600, 1000] },
+      )
+      .toBe(true);
 
     // Content is ready behind the card — reveal the loaded dashboard.
     await hideTitleCard(page);

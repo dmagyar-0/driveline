@@ -196,19 +196,31 @@ extrinsic quaternion (xyzw): [0.70050, 0.00364, 0.00113, 0.71364]
 #### Recording the fusion demo video
 
 `apps/e2e/tests/_demo-nuscenes-fusion.spec.ts` records a shareable demo video
-of the full camera + LiDAR capability set this data unlocks: the CAM_FRONT
-dashcam with the LiDAR point cloud projected onto it (overlay), the same spin
-in the 3D Scene panel, and the raw dashcam — one continuous replay, with a
-title card and a persistent on-screen attribution/licence banner.
+of the full camera + LiDAR capability set this data unlocks, in one continuous
+replay with a title card and a persistent attribution/licence banner:
+
+- **left** — CAM_FRONT dashcam with the LiDAR point cloud projected onto it
+  (point-cloud-on-camera overlay),
+- **top-right** — the same spin in the 3D Scene panel,
+- **bottom-right** — a Plot of the ego signals (speed + yaw-rate) derived from
+  the scene's `ego_pose` track by `convert_nuscenes_signals_to_mcap.py`.
+
+> There is exactly **one** video panel by design: two video panels bound to the
+> *same* mp4 contend for that source's single decoder and the second lags it by
+> seconds (a stuck/desynced-looking camera). Two camera feeds need two separate
+> files — see the comma2k19 dashboard-record spec's hflipped second mp4.
 
 ```sh
-# 1. Convert (see above) and copy the four outputs into sample-data/realworld/
-#    (the dir is gitignored except README.md, so they never get committed):
+# 1. Convert geometry + derive signals, then copy all five outputs into
+#    sample-data/realworld/ (gitignored except README.md, never committed):
+pip install 'mcap>=1.2,<2' 'pyarrow>=14,<20' 'numpy>=1.24,<3'   # + ffmpeg
 python3 scripts/convert_nuscenes_to_driveline.py
+python3 scripts/convert_nuscenes_signals_to_mcap.py
 cp /tmp/datasets/nuscenes_demo/nuscenes.lidar.parquet \
    /tmp/datasets/nuscenes_demo/nuscenes_cam_front.mp4 \
    /tmp/datasets/nuscenes_demo/nuscenes_cam_front.mp4.timestamps \
    /tmp/datasets/nuscenes_demo/nuscenes_cam_front.calib.json \
+   /tmp/datasets/nuscenes_demo/nuscenes.signals.mcap \
    sample-data/realworld/
 
 # 2. Record (Playwright writes a .webm under apps/e2e/test-results/):
