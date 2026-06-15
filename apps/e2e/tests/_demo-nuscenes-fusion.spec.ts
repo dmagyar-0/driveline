@@ -17,11 +17,9 @@
 // dashboard-record spec's hflipped second mp4); here the second right-hand slot
 // is better spent on the signal plot anyway.
 //
-// It marches the cursor forward through the scene with explicit stepped seeks
-// (NOT continuous playback) while Playwright records the page to a .webm.
-// Pressing Play on this session loops a few seconds of data over and over —
-// the cursor sawtooths back to the play origin instead of advancing — so the
-// demo steps the (paused) cursor itself for a smooth, monotonic forward pass.
+// It presses Play and lets the scene replay as one continuous take while
+// Playwright records the page to a .webm, then pauses before the end and holds
+// a hero frame.
 //
 // LICENCE: nuScenes is CC BY-NC-SA 4.0 (NonCommercial, ShareAlike). This
 // recording is a derivative of that data, so a persistent on-screen credit
@@ -120,6 +118,18 @@ async function dataWindow(page: Page): Promise<{ start: bigint; end: bigint }> {
     .split("\n")
     .map((l) => BigInt(l.split("\t")[1]));
   return { start: ts[0], end: ts[ts.length - 1] };
+}
+
+async function setPlaying(page: Page, want: boolean): Promise<void> {
+  const playPause = page.getByTestId("play-pause");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const playing = await page.evaluate(
+      () => window.__drivelineDevHooks!.getSessionSnapshot().playing,
+    );
+    if (playing === want) return;
+    await playPause.click();
+    await page.waitForTimeout(150);
+  }
 }
 
 // A persistent, non-interactive attribution + licence banner so the recording
@@ -391,21 +401,21 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     await hideTitleCard(page);
     await page.waitForTimeout(1200);
 
-    // March the cursor forward through the scene with explicit stepped seeks
-    // rather than continuous playback. Pressing Play on this session makes the
-    // cursor *loop* a few seconds of data over and over (sawtooths back to the
-    // play origin instead of advancing) — the "camera jumps back again and
-    // again" symptom. Stepping the cursor ourselves is deterministic, stays
-    // paused (no loop), and gives a smooth monotonic forward pass that the
-    // dashcam, overlay, 3D cloud, and plot cursor all track. We stop at 0.92 so
-    // the cursor never reaches the LiDAR's last spin, which sits ~35 ms past the
+    // One clean continuous pass with real playback: press Play and let the
+    // dashcam, overlay, 3D cloud, and plot cursor all advance together as a
+    // single take. (This used to sawtooth — the cursor jumped back to the play
+    // origin again and again — because the decode-aware gate re-anchored only
+    // the wall clock when it engaged mid-play; fixed in timeline/playback.ts so
+    // a hold/release resumes forward from the live cursor.) The decode gate may
+    // still briefly hold the cursor while the 4K frames catch up, so ~16 s of
+    // wall time covers most of the ~19 s scene without ever reaching the very
+    // end — we PAUSE before the LiDAR's last spin, which sits ~35 ms past the
     // final camera frame (that frame has no video → "no video at this time").
-    const STEPS = 26;
-    for (let k = 0; k <= STEPS; k++) {
-      const f = 0.04 + ((0.92 - 0.04) * k) / STEPS;
-      await seekToTs(page, at(f));
-      await page.waitForTimeout(560);
-    }
+    await seekToTs(page, at(0.02));
+    await setPlaying(page, true);
+    await page.waitForTimeout(16000);
+    await setPlaying(page, false);
+    await page.waitForTimeout(400);
 
     // Finish on a strong mid-scene hero frame.
     await seekToTs(page, at(0.5));
