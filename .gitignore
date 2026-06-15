@@ -71,6 +71,11 @@ sample-data/realworld/*
 # artefacts only, never committed.
 /apps/e2e/recordings
 
+# Stitched "Bring Your Own Agent" screencast from
+# `scripts/record-byoa-demo.sh` — multi-MB generated artefact, regenerate
+# locally rather than committing.
+/demo
+
 # Driveline point-cloud Parquet emitted by `tools/alpamayo_lidar_to_driveline.py`
 # — multi-MB generated demo data (like the wasm bundle), never committed.
 *.lidar.parquet

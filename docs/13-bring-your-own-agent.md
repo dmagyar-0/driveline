@@ -22,24 +22,24 @@ adds two things to the production `window.__drivelineAgent` surface (v3):
 
 ## How it differs from the Format Agent (docs/12)
 
-The **Format Agent (BYOK)** is about *unknown file formats*: a model reverse-
+The **Format Agent (BYOK)** is about _unknown file formats_: a model reverse-
 engineers a binary log's framing and emits a declarative **Ingest Recipe** that
 a Rust reader decodes on the user's machine. It is server-assisted (BYOK), the
 data is the user's file, and the output is a reusable recipe.
 
-**BYOA** is the inverse: the agent already *has* the data (it computed it, or
+**BYOA** is the inverse: the agent already _has_ the data (it computed it, or
 pulled it from elsewhere) and just wants Driveline to plot it. There is no
 file, no format to reverse-engineer, no Rust reader, and no recipe — the agent
 hands over decoded columns and Driveline renders them. It is pure JS, runs
 entirely in the browser, and needs no API key.
 
-| | Format Agent (docs/12) | Bring Your Own Agent (this doc) |
-| --- | --- | --- |
-| Input | Bytes of an unknown file | Decoded columnar channels |
-| Decoder | Rust reader + declarative recipe | None — data is already decoded |
-| Where it runs | Sandbox + wasm reader | Main thread, in-memory |
-| Output | A reusable Ingest Recipe | An in-session `inline` source |
-| Who drives | BYOK LLM via the Format Agent UI | Any agent on `window.__drivelineAgent` |
+|               | Format Agent (docs/12)           | Bring Your Own Agent (this doc)        |
+| ------------- | -------------------------------- | -------------------------------------- |
+| Input         | Bytes of an unknown file         | Decoded columnar channels              |
+| Decoder       | Rust reader + declarative recipe | None — data is already decoded         |
+| Where it runs | Sandbox + wasm reader            | Main thread, in-memory                 |
+| Output        | A reusable Ingest Recipe         | An in-session `inline` source          |
+| Who drives    | BYOK LLM via the Format Agent UI | Any agent on `window.__drivelineAgent` |
 
 ## The inline source model
 
@@ -49,13 +49,13 @@ thing is main-thread:
 
 - **Storage** (`state/inlineSource.ts`): a module-scoped map keyed by source id
   → native channel id → `{ tsNs: BigInt64Array, values: Float64Array |
-  Int32Array }`. Timestamps cross the API as decimal strings (the BigInt rule)
+Int32Array }`. Timestamps cross the API as decimal strings (the BigInt rule)
   and are parsed to `bigint` / stored as `BigInt64Array` at the
   `addInlineSource` boundary.
 - **Ranged Arrow IPC**: `fetchRange(sourceId, nativeId, startNs, endNs,
-  includePrev)` builds an Arrow batch matching the EXACT scalar/enum schema
+includePrev)` builds an Arrow batch matching the EXACT scalar/enum schema
   `panels/seriesFromArrow.ts` (`decodeSeries`) validates — scalar `{ ts:
-  Timestamp(ns, UTC) [BigInt64], value: Float64 }`, enum `{ ts, code: Int32 }`
+Timestamp(ns, UTC) [BigInt64], value: Float64 }`, enum `{ ts, code: Int32 }`
   — using apache-arrow builders (`makeData`/`makeVector` + `new Table` +
   `tableToIPC`, stream format). It serves only samples in `[startNs, endNs)`,
   and with `includePrev` prepends the last sample with `ts < startNs`
@@ -64,7 +64,7 @@ thing is main-thread:
 - **Store wiring**: `addInlineSource(spec)` validates the spec, builds the
   `Channel[]` (qualified ids via `qualifiedChannelId`, kind/unit/dtype/
   sampleCount/per-channel `timeRange`), registers a `SourceMeta` with `kind:
-  "inline"` and a synthetic handle (`-1`), and runs the same derived-state
+"inline"` and a synthetic handle (`-1`), and runs the same derived-state
   recompute (`commitOpenedSources`) a file open uses — so `globalRange` and the
   cursor reseat. `fetchChannelRange` gained an `inline` branch that serves from
   the module (no worker call) while honouring the per-source `timeOffsetNs`
@@ -115,10 +115,29 @@ panel: an OpenDRIVE `.xodr` (routed by extension) and a simple `drivelineMap`
 JSON, content-sniffed for a top-level `"drivelineMap"` key:
 
 ```json
-{ "drivelineMap": { "version": 1, "name": "intersection", "features": [
-  { "id": "b0", "type": "lane_boundary", "polyline": [[0,0,0],[10,0,0]] },
-  { "type": "road_edge", "polyline": [[0,-2],[10,-2]] }
-] } }
+{
+  "drivelineMap": {
+    "version": 1,
+    "name": "intersection",
+    "features": [
+      {
+        "id": "b0",
+        "type": "lane_boundary",
+        "polyline": [
+          [0, 0, 0],
+          [10, 0, 0]
+        ]
+      },
+      {
+        "type": "road_edge",
+        "polyline": [
+          [0, -2],
+          [10, -2]
+        ]
+      }
+    ]
+  }
+}
 ```
 
 `polyline` is an array of `[x,y]` or `[x,y,z]` (z optional → 0; ≥2 points or
@@ -145,3 +164,76 @@ v1/v2 read/transport/event/video/layout surface) installs only under `?agent`
 `addDataSource` holds the agent's samples in memory and serves them as ranged
 Arrow batches to the panels. Nothing is uploaded, written to disk, or sent to a
 server — it stays in the browser tab, like every other Driveline source.
+
+## Demo screencast
+
+There is a recorded walkthrough of this whole loop for sharing — the clip we
+hand to people trying Driveline as an open-source tool. It is produced by
+`apps/e2e/tests/_demo-byoa-agent.spec.ts` (driven through the production
+`window.__drivelineAgent` surface) and stitched by `scripts/record-byoa-demo.sh`
+into `demo/byoa-demo.webm`:
+
+- **Scene 1 — pure BYOA.** Everything runs through the agent surface: discover
+  the API, `addDataSource` an inline drive (speed + longitudinal accel + gear),
+  bind it to a plot and an enum strip, `fetchChannelRange` it back, scan for the
+  hardest braking / strongest relaunch, and `addEvent` agent-authored findings
+  (each gets an "agent NN%" confidence badge + tag chips). No fixtures — runs
+  anywhere.
+- **Scene 2 — BYOA on a real dashcam.** Loads the comma2k19 segment-10 dashcam
+  - CAN signals, then the agent reads the real `/vehicle/speed` channel, finds
+    the steepest deceleration, tags it, and jumps the dashcam to that frame.
+
+```bash
+scripts/record-byoa-demo.sh                # both scenes (fetches comma2k19)
+scripts/record-byoa-demo.sh --scene1-only  # no dataset download
+```
+
+Scene 2 self-skips when the comma2k19 fixtures are absent, so scene 1 always
+records. See `sample-data/realworld/README.md` for the fixture pipeline. The
+stitched `.webm` is a generated artefact (git-ignored, like the WASM bundle) —
+regenerate it locally rather than committing it.
+
+### Live agent-driven recording
+
+The spec above is deterministic. To capture a **real agent driving the surface
+live** — making decisions from data it actually reads back, with its calls and
+reasoning shown on-screen — `scripts/agent-drive/live-driver.mjs` keeps one
+screen-recorded browser alive and executes commands handed to it turn-by-turn
+over a tiny file/FIFO protocol:
+
+- **Results FIFO** (`$AGENT_Q/results`): the driver writes `READY` once the
+  browser has booted and the HUD is installed, then one JSON line per command.
+  The caller `cat`s it to stay in lockstep — no polling.
+- **Commands**: the caller atomically `mv`s a file to `$AGENT_Q/cmd-<n>.js`
+  whose contents are a JS expression (sync or promise-returning) evaluated in
+  the page against `window.__drivelineAgent`. `__QUIT__` closes the context
+  (flushing the `.webm`) and exits.
+
+The driver can be any agent; Claude Code itself can drive it (no API key needed
+— it is already a live model in the loop). An on-screen "agent HUD" logs every
+call + decision via `window.__agentLog(...)`, so the recording is
+self-evidently agent-driven rather than a hand-clicked walk.
+
+**Reproduce the committed live clip with one command:**
+
+```bash
+scripts/agent-drive/record-byoa-live.sh   # -> demo/byoa-agent-live.webm
+```
+
+It starts the dev server (if needed), launches the recorded browser, replays
+the exact call sequence the agent issued when the clip was recorded — discover
+→ load the comma2k19 dashcam + CAN → bind → `fetchChannelRange` + profile the
+real data → tag the honest findings (no hard braking; it is a steady ~31 m/s
+cruise, with one notable maneuver, the −11.7° steering peak at 28.3 s) → jump
+the dashcam there and play — then compacts the recording to VP9. Because the
+replay runs back-to-back there is no dead air; the only pauses are deliberate
+in-page dwells.
+
+When an agent drives the harness _interactively_ (one command per turn), its
+between-turn thinking shows up as dead air. Trim that case with ffmpeg's
+`mpdecimate`, which drops near-duplicate frames:
+
+```bash
+ffmpeg -i raw.webm -vf "mpdecimate=hi=64*16:lo=64*6:frac=0.30,setpts=N/FRAME_RATE/TB" \
+  -c:v libvpx-vp9 -b:v 2M -an tight.webm
+```
