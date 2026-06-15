@@ -18,6 +18,7 @@ import { create } from "zustand";
 import {
   bucketFiles,
   classifyUrl,
+  sniffAlpamayoLidar,
   sniffCalibration,
   sniffDrivelineMap,
   sniffOpenlabel,
@@ -2759,6 +2760,38 @@ export const useSession = create<SessionState>((set, get) => {
             }
             buckets.unknown = stillUnknown;
           }
+          // A raw NVIDIA Alpamayo LiDAR parquet (Draco-compressed spins) can
+          // land in either bucket: named `*.parquet` it parks in `tabular`;
+          // named `*.lidar.parquet` it parks in `lidar` as `"parquet"` — and the
+          // Driveline-schema reader (`openLidar`) would choke on its Draco
+          // columns. So content-sniff every parquet (footer scan for the
+          // `draco_encoded_pointcloud` column) regardless of name and tag the
+          // matches for the in-browser Draco path — the file opens no matter
+          // what it's called.
+          {
+            // `*.lidar.parquet` arrivals already in the lidar bucket.
+            for (const l of buckets.lidar) {
+              if (
+                l.format === "parquet" &&
+                (await sniffAlpamayoLidar(l.file))
+              ) {
+                l.format = "alpamayo";
+              }
+            }
+            // `*.parquet` arrivals parked in tabular — move matches across.
+            const stillTabular: typeof buckets.tabular = [];
+            for (const t of buckets.tabular) {
+              if (
+                t.format === "parquet" &&
+                (await sniffAlpamayoLidar(t.file))
+              ) {
+                buckets.lidar.push({ file: t.file, format: "alpamayo" });
+              } else {
+                stillTabular.push(t);
+              }
+            }
+            buckets.tabular = stillTabular;
+          }
           const opened: string[] = [];
           const errors: BucketError[] = [...buckets.errors];
           const newSources: SourceMeta[] = [];
@@ -2865,13 +2898,16 @@ export const useSession = create<SessionState>((set, get) => {
             try {
               // Point-cloud sources open eagerly: decoded into per-spin buffers
               // in wasm. Pass the `File` directly — the worker reads it there so
-              // no full-file clone crosses the Comlink boundary. Parquet carries
-              // many spins; a `.pcd` carries a single cloud — both surface as
-              // `kind: "lidar"`.
+              // no full-file clone crosses the Comlink boundary. A Driveline
+              // point-cloud parquet carries many spins; a `.pcd` carries a single
+              // cloud; a raw Alpamayo parquet is Draco-decoded in-browser — all
+              // three surface as `kind: "lidar"`.
               const handle =
                 format === "pcd"
                   ? await w.openLidarPcd(f)
-                  : await w.openLidar(f);
+                  : format === "alpamayo"
+                    ? await w.openAlpamayoLidar(f)
+                    : await w.openLidar(f);
               const summary = await w.lidarSummary(handle);
               const id = uniqueSourceId(f.name, [...existing, ...newSources]);
               const channels = lidarChannels(id, summary);

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   bucketFiles,
   classifyUrl,
+  sniffAlpamayoLidar,
+  sniffAlpamayoLidarBytes,
   sniffCalibrationBytes,
   sniffDrivelineMapBytes,
   urlBasename,
@@ -228,6 +230,58 @@ describe("sniffDrivelineMapBytes", () => {
   });
   it("rejects an unrelated JSON", () => {
     expect(sniffDrivelineMapBytes(bytes('{ "foo": 1 }'))).toBe(false);
+  });
+});
+
+describe("sniffAlpamayoLidarBytes", () => {
+  it("matches the draco_encoded_pointcloud column in footer bytes", () => {
+    expect(
+      sniffAlpamayoLidarBytes(
+        bytes("schemaspin_start_timestampdraco_encoded_pointcloudmore"),
+      ),
+    ).toBe(true);
+  });
+  it("rejects a converted Driveline point-cloud footer", () => {
+    expect(
+      sniffAlpamayoLidarBytes(bytes("t_nspositionsintensitiespointcloud")),
+    ).toBe(false);
+  });
+});
+
+describe("sniffAlpamayoLidar", () => {
+  // Build a minimal parquet-shaped buffer: [footer][footerLen u32 LE]["PAR1"].
+  function fakeParquet(footer: Uint8Array): File {
+    const len = footer.length;
+    const trailer = new Uint8Array([
+      len & 0xff,
+      (len >> 8) & 0xff,
+      (len >> 16) & 0xff,
+      (len >> 24) & 0xff,
+      0x50,
+      0x41,
+      0x52,
+      0x31, // "PAR1"
+    ]);
+    const buf = new Uint8Array(footer.length + trailer.length);
+    buf.set(footer, 0);
+    buf.set(trailer, footer.length);
+    return new File([buf], "clip.parquet");
+  }
+
+  it("locates the footer via the trailing length + magic and matches", async () => {
+    const f = fakeParquet(bytes("schema…draco_encoded_pointcloud…"));
+    expect(await sniffAlpamayoLidar(f)).toBe(true);
+  });
+  it("rejects a parquet whose footer lacks the Draco column", async () => {
+    const f = fakeParquet(bytes("t_ns positions intensities"));
+    expect(await sniffAlpamayoLidar(f)).toBe(false);
+  });
+  it("rejects a file without the PAR1 trailer", async () => {
+    const f = new File(
+      [new Uint8Array(bytes("draco_encoded_pointcloud but not parquet"))],
+      "x",
+    );
+    expect(await sniffAlpamayoLidar(f)).toBe(false);
   });
 });
 

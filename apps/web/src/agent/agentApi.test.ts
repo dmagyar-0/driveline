@@ -153,7 +153,7 @@ describe("install gating", () => {
 
   it("install exposes the api; the uninstaller removes it", () => {
     expect(api().version).toBe(AGENT_API_VERSION);
-    expect(AGENT_API_VERSION).toBe(3);
+    expect(AGENT_API_VERSION).toBe(4);
     uninstall?.();
     uninstall = null;
     expect(window.__drivelineAgent).toBeUndefined();
@@ -568,6 +568,41 @@ describe("layout write ops (v2)", () => {
 
     it("returns false for an unknown panel id", () => {
       expect(api().setMapBinding("map-999", "/lat", "/lon")).toBe(false);
+    });
+  });
+
+  describe("setSceneBinding", () => {
+    beforeEach(() => {
+      detach = installFakeBridge().detach;
+      seedChannels(["/cloud"]);
+    });
+
+    it("binds a geometry channel to a scene panel", () => {
+      const id = api().createPanel("scene")!;
+      expect(api().setSceneBinding(id, "/cloud")).toBe(true);
+      expect(useSession.getState().sceneBindings[id]).toBe("/cloud");
+    });
+
+    it("clears the binding with null", () => {
+      const id = api().createPanel("scene")!;
+      api().setSceneBinding(id, "/cloud");
+      expect(api().setSceneBinding(id, null)).toBe(true);
+      expect(useSession.getState().sceneBindings[id] ?? null).toBeNull();
+    });
+
+    it("returns false when the panel is not a scene", () => {
+      const id = api().createPanel("plot")!;
+      expect(api().setSceneBinding(id, "/cloud")).toBe(false);
+    });
+
+    it("returns false when the channel is unknown", () => {
+      const id = api().createPanel("scene")!;
+      expect(api().setSceneBinding(id, "/missing")).toBe(false);
+      expect(useSession.getState().sceneBindings[id] ?? null).toBeNull();
+    });
+
+    it("returns false for an unknown panel id", () => {
+      expect(api().setSceneBinding("scene-999", "/cloud")).toBe(false);
     });
   });
 

@@ -15,7 +15,7 @@
 // initialises. `agentSkill.test.ts` asserts this literal matches
 // `AGENT_API_VERSION`, so a version bump that forgets to update it fails CI.
 
-export const AGENT_SKILL = `# Driveline — Bring Your Own Agent (BYOA) skill (v3)
+export const AGENT_SKILL = `# Driveline — Bring Your Own Agent (BYOA) skill (v4)
 
 Driveline is a browser-first, server-less viewer for synchronised video and
 high-rate signal data. Everything runs in the page: the data you push stays in
@@ -129,11 +129,23 @@ The \`scene\` panel renders 3D geometry channels. A channel's \`kind\` (from
 \`listChannels()\`) selects what it shows: \`point_cloud\` (LiDAR), \`bounding_box\`
 (labelled 3D boxes), \`trajectory\` (predicted ego paths), and \`map_geometry\`
 (a road network — lane boundaries, road edges, centerlines, crosswalks, stop
-lines — coloured by feature type). Scene channels bind one-at-a-time via the
-scene binding hook, not \`bindChannels\` (which targets plot/enum/table/value).
+lines — coloured by feature type).
 
-Road maps load through the normal file-open path (no inline form yet): drop an
-OpenDRIVE \`.xodr\`, or a simple \`drivelineMap\` JSON:
+Scene channels bind one-at-a-time via \`setSceneBinding(panelId, channelId)\`
+(v4+) — NOT \`bindChannels\` (which targets plot/enum/table/value); pass \`null\`
+to clear. To display a LiDAR cloud:
+
+\`\`\`js
+const cloud = listChannels().find((c) => c.kind === "point_cloud");
+const panel = createPanel("scene");
+setSceneBinding(panel, cloud.id);
+\`\`\`
+
+Geometry sources load through the file-open path — file BYTES enter via the
+page's drop seam (\`[data-testid="drop-zone"]\`, or \`openFiles\` on the DEV hook),
+not this API. A raw **NVIDIA Alpamayo** LiDAR \`.parquet\` is Draco-decoded
+in-browser (no conversion) and surfaces as a \`point_cloud\` channel; road maps
+are an OpenDRIVE \`.xodr\` or a simple \`drivelineMap\` JSON:
 
 \`\`\`json
 { "drivelineMap": { "version": 1, "name": "intersection", "features": [

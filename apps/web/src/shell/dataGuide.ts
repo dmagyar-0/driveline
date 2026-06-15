@@ -49,7 +49,8 @@ export const FORMATS: readonly FormatEntry[] = [
     exts: [".mp4", ".mp4.timestamps"],
     blurb: "Dashcam / camera video paired with an external per-frame clock.",
     note: "Drop the two files together — drive.mp4 pairs with drive.mp4.timestamps. The sidecar is plain UTF-8 text: one `frameIndex<TAB>timestampNs` line per video frame, in order, and the line count must equal the frame count. An .mp4 dropped without a sidecar can instead borrow the time column of a table you load.",
-    example: "0\t1532671467005757531\n1\t1532671467038757531\n2\t1532671467071757531",
+    example:
+      "0\t1532671467005757531\n1\t1532671467038757531\n2\t1532671467071757531",
   },
   {
     name: "Tables (CSV / Parquet)",
@@ -76,16 +77,22 @@ export const FORMATS: readonly FormatEntry[] = [
     note: ".lidar.parquet is a Driveline schema — one row per 360° spin with t_ns, a flattened positions list (xyz × N, metres) and per-point intensities; it's matched before generic .parquet. .pcd is a single PCL/ROS cloud and reads ASCII, binary, or binary_compressed payloads.",
   },
   {
+    name: "Raw NVIDIA Alpamayo LiDAR",
+    exts: [".parquet", "content-sniffed"],
+    blurb: "The dataset's native Draco-compressed spins — no pre-conversion.",
+    note: "Recognised by content (a draco_encoded_pointcloud column in the parquet footer), not extension, so it routes ahead of the tabular import. Each spin's Draco blob is decoded in the browser via Google's reference decoder (loaded lazily on first use); positions + the intensity attribute render in the Scene panel exactly like a .lidar.parquet. spin_start_timestamp (µs) becomes the spin's absolute ns clock. The tools/alpamayo_lidar_to_driveline.py converter is no longer required.",
+  },
+  {
     name: "OpenLABEL annotations",
     exts: [".json", "content-sniffed"],
     blurb: "ASAM OpenLABEL 3D bounding boxes over the Scene.",
-    note: "Recognised by content, not extension: the file must have a top-level \"openlabel\" key. Cuboids may be 10 numbers (position + size + quaternion) or 9 (Euler XYZ), in ISO-8855 vehicle coordinates. Works as a per-frame sequence or a single static set.",
+    note: 'Recognised by content, not extension: the file must have a top-level "openlabel" key. Cuboids may be 10 numbers (position + size + quaternion) or 9 (Euler XYZ), in ISO-8855 vehicle coordinates. Works as a per-frame sequence or a single static set.',
   },
   {
     name: "Predicted trajectories",
     exts: [".json", "content-sniffed"],
     blurb: "Candidate ego future paths drawn in the Scene panel.",
-    note: "Also content-sniffed — a top-level \"trajectory\" key. Each frame holds one or more candidate paths with a confidence and a points polyline. 2D points get z = 0; a numeric timestamp above 1e15 is read as nanoseconds, otherwise as seconds.",
+    note: 'Also content-sniffed — a top-level "trajectory" key. Each frame holds one or more candidate paths with a confidence and a points polyline. 2D points get z = 0; a numeric timestamp above 1e15 is read as nanoseconds, otherwise as seconds.',
     example:
       '{ "trajectory": { "frames": [\n  { "timestamp": 1532671467005757531,\n    "paths": [ { "confidence": 0.92,\n                 "points": [[0,0,0],[1.4,0,0]] } ] } ] } }',
   },
@@ -119,6 +126,6 @@ export const AGENTS: readonly AgentEntry[] = [
     name: "Format Agent (Bring Your Own Key)",
     blurb:
       "Let Claude work out an unknown binary format for you, using your own Anthropic API key.",
-    note: "When you drop a file Driveline can't read, the unknown-format dialog can decode it with BYOK. Your key is sent only to api.anthropic.com — never to a Driveline server — and stays in memory unless you tick \"Remember on this device\". It samples slices of the file, proposes an Ingest Recipe, and validates it locally before accepting; the saved recipe then reads matching files for free. Tip: mint a dedicated key with a low spend limit.",
+    note: 'When you drop a file Driveline can\'t read, the unknown-format dialog can decode it with BYOK. Your key is sent only to api.anthropic.com — never to a Driveline server — and stays in memory unless you tick "Remember on this device". It samples slices of the file, proposes an Ingest Recipe, and validates it locally before accepting; the saved recipe then reads matching files for free. Tip: mint a dedicated key with a low spend limit.',
   },
 ];

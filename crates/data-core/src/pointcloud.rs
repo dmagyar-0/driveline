@@ -4,6 +4,10 @@
 //! Draco-compressed point clouds in the NVIDIA Alpamayo dataset, but the schema
 //! is sensor-agnostic: anything that can write the three columns below loads.
 //!
+//! [`PointCloudReader::open_alpamayo_parquet`] reads the **raw** Alpamayo LiDAR
+//! parquet directly (Draco blobs in, decoded via an injected closure), so the
+//! converter is no longer required to view a clip's LiDAR — see that method.
+//!
 //! ## Source schema (what `open` expects)
 //!
 //! | column        | Arrow type          | meaning                              |
@@ -222,6 +226,117 @@ impl PointCloudReader {
             // `batch` drops here, before the next one is decoded.
         }
 
+        Ok(Self::from_spins(spins, name))
+    }
+
+    /// Open a **raw NVIDIA Alpamayo LiDAR** Parquet — the format the dataset
+    /// ships, *before* any conversion. One row per spin:
+    ///
+    /// | column                     | Arrow type | meaning                       |
+    /// | -------------------------- | ---------- | ----------------------------- |
+    /// | `spin_start_timestamp`     | `Int64`    | spin timestamp, MICROSECONDS  |
+    /// | `draco_encoded_pointcloud` | `Binary`   | Draco-compressed point cloud  |
+    ///
+    /// (Extra columns like `spin_index` / `spin_end_timestamp` are ignored.)
+    ///
+    /// `data-core` deliberately does **not** bundle a Draco decoder — the codec
+    /// is a large C++ library and would blow the WASM size budget — so the blob
+    /// decode is injected as a closure. `decode(blob)` returns the spin's
+    /// flattened `xyz` (`len == 3 * N`, metres) and per-point `intensity`
+    /// (`0..=255`, `len == N`). The browser backs this with Google's reference
+    /// Draco decoder compiled to WASM; native callers (tests, the CLI) supply
+    /// their own. A decode `Err(msg)` aborts the open with `msg` attached.
+    ///
+    /// Spins are read **one row at a time** (batch size 1), so peak memory is
+    /// the compressed file + accumulated spins + a single decoded spin — never
+    /// every Draco blob decoded at once. `sensor` names the channel (defaults to
+    /// `lidar_top_360fov`, the only LiDAR Alpamayo ships).
+    pub fn open_alpamayo_parquet<F>(
+        bytes: Vec<u8>,
+        sensor: Option<String>,
+        mut decode: F,
+    ) -> crate::Result<Self>
+    where
+        F: FnMut(&[u8]) -> std::result::Result<(Vec<f32>, Vec<u8>), String>,
+    {
+        let builder = ParquetRecordBatchReaderBuilder::try_new(bytes::Bytes::from(bytes))
+            .map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
+        let schema = builder.schema().clone();
+
+        let ts_idx = schema.index_of("spin_start_timestamp").map_err(|_| {
+            crate::Error::PointCloudSchema(
+                "missing `spin_start_timestamp` column (not a raw Alpamayo LiDAR parquet)".into(),
+            )
+        })?;
+        let blob_idx = schema.index_of("draco_encoded_pointcloud").map_err(|_| {
+            crate::Error::PointCloudSchema(
+                "missing `draco_encoded_pointcloud` column (not a raw Alpamayo LiDAR parquet)"
+                    .into(),
+            )
+        })?;
+
+        let total_rows = usize::try_from(builder.metadata().file_metadata().num_rows())
+            .unwrap_or(0)
+            .min(65_536);
+
+        // One row per batch: a single ~1.3 MB Draco blob is materialised as
+        // Arrow at a time, decoded, and pushed before the next is read.
+        let reader = builder
+            .with_batch_size(1)
+            .build()
+            .map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
+
+        let name = sensor.unwrap_or_else(|| "lidar_top_360fov".to_string());
+        let mut spins: Vec<Spin> = Vec::with_capacity(total_rows);
+        for batch in reader {
+            let batch = batch.map_err(|e| crate::Error::PointCloudParse(e.to_string()))?;
+            let ts_col = batch.column(ts_idx);
+            let ts_vals: &[i64] = match ts_col.data_type() {
+                DataType::Int64 => ts_col.as_primitive::<Int64Type>().values(),
+                other => {
+                    return Err(crate::Error::PointCloudSchema(format!(
+                        "`spin_start_timestamp` must be Int64, got {other:?}"
+                    )))
+                }
+            };
+            let blob_col = batch.column(blob_idx);
+            for (row, &ts_us) in ts_vals.iter().enumerate() {
+                let blob: &[u8] = match blob_col.data_type() {
+                    DataType::Binary => blob_col.as_binary::<i32>().value(row),
+                    DataType::LargeBinary => blob_col.as_binary::<i64>().value(row),
+                    other => {
+                        return Err(crate::Error::PointCloudSchema(format!(
+                            "`draco_encoded_pointcloud` must be Binary, got {other:?}"
+                        )))
+                    }
+                };
+                // `spins.len()` is this spin's file-absolute index.
+                let idx = spins.len();
+                let (positions, intensities) = decode(blob).map_err(|m| {
+                    crate::Error::PointCloudParse(format!("spin {idx}: Draco decode failed: {m}"))
+                })?;
+                if positions.len() != intensities.len() * 3 {
+                    return Err(crate::Error::PointCloudSchema(format!(
+                        "spin {idx}: decoded positions ({}) != 3 * intensities ({})",
+                        positions.len(),
+                        intensities.len()
+                    )));
+                }
+                spins.push(Spin {
+                    // us -> ns, absolute on the clip timeline (same clock the
+                    // bundle's video sidecars and egomotion land on).
+                    ts_ns: ts_us.saturating_mul(1_000),
+                    positions,
+                    intensities,
+                });
+            }
+        }
+
+        if spins.is_empty() {
+            return Err(crate::Error::PointCloudSchema(
+                "raw Alpamayo LiDAR parquet has no spins".into(),
+            ));
+        }
         Ok(Self::from_spins(spins, name))
     }
 
@@ -553,6 +668,158 @@ mod tests {
                 ],
             ),
         ])
+    }
+
+    // --- raw Alpamayo LiDAR (Draco-blob) path -------------------------------
+
+    /// Encode one "spin" the test's stub decoder understands: each point is 13
+    /// bytes — `x,y,z` little-endian `f32` then a `u8` intensity. Stands in for
+    /// a real Draco blob; `open_alpamayo_parquet` is decoder-agnostic, so the
+    /// round-trip still exercises the full parquet + spin-assembly path.
+    fn encode_fake_blob(points: &[(f32, f32, f32, u8)]) -> Vec<u8> {
+        let mut b = Vec::with_capacity(points.len() * 13);
+        for &(x, y, z, i) in points {
+            b.extend_from_slice(&x.to_le_bytes());
+            b.extend_from_slice(&y.to_le_bytes());
+            b.extend_from_slice(&z.to_le_bytes());
+            b.push(i);
+        }
+        b
+    }
+
+    /// Inverse of [`encode_fake_blob`] — the closure `open_alpamayo_parquet`
+    /// invokes per spin.
+    fn decode_fake_blob(blob: &[u8]) -> std::result::Result<(Vec<f32>, Vec<u8>), String> {
+        if !blob.len().is_multiple_of(13) {
+            return Err(format!("blob len {} not a multiple of 13", blob.len()));
+        }
+        let mut pos = Vec::new();
+        let mut int = Vec::new();
+        for c in blob.chunks_exact(13) {
+            pos.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+            pos.push(f32::from_le_bytes([c[4], c[5], c[6], c[7]]));
+            pos.push(f32::from_le_bytes([c[8], c[9], c[10], c[11]]));
+            int.push(c[12]);
+        }
+        Ok((pos, int))
+    }
+
+    /// Build a **raw Alpamayo LiDAR** parquet in memory: `spin_index` +
+    /// `spin_start_timestamp` (µs) + `draco_encoded_pointcloud` (the fake blob).
+    /// `spins` carries ns timestamps for parity with the other fixtures; they're
+    /// converted back to µs here so the µs→ns round-trip in `open_alpamayo_parquet`
+    /// lands on the original ns value.
+    fn write_alpamayo_parquet(spins: &[TestSpin]) -> Vec<u8> {
+        use arrow_array::BinaryArray;
+        use parquet::arrow::ArrowWriter;
+
+        let spin_index = Int64Array::from((0..spins.len() as i64).collect::<Vec<_>>());
+        let ts = Int64Array::from(spins.iter().map(|(t, _)| *t / 1_000).collect::<Vec<_>>());
+        let blobs: Vec<Vec<u8>> = spins.iter().map(|(_, p)| encode_fake_blob(p)).collect();
+        let blob_arr = BinaryArray::from_iter_values(blobs.iter());
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("spin_index", DataType::Int64, false),
+            Field::new("spin_start_timestamp", DataType::Int64, false),
+            Field::new("draco_encoded_pointcloud", DataType::Binary, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(spin_index), Arc::new(ts), Arc::new(blob_arr)],
+        )
+        .unwrap();
+        let mut buf = Vec::new();
+        {
+            let mut w = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+            w.write(&batch).unwrap();
+            w.close().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn open_alpamayo_decodes_spins_via_closure() {
+        // Same logical spins as `sample()` (ns timestamps), so the expectations
+        // carry over after the µs round-trip.
+        let raw = write_alpamayo_parquet(&[
+            (
+                1_000_000_000,
+                vec![(1.0, 2.0, 3.0, 0), (4.0, 5.0, 6.0, 255)],
+            ),
+            (
+                1_100_000_000,
+                vec![
+                    (7.0, 8.0, 9.0, 128),
+                    (-1.0, -2.0, -3.0, 64),
+                    (0.0, 0.0, 0.0, 200),
+                ],
+            ),
+        ]);
+        let r = PointCloudReader::open_alpamayo_parquet(raw, None, decode_fake_blob).unwrap();
+        assert_eq!(r.meta().kind, SourceKind::Lidar);
+        assert_eq!(r.meta().channels[0].name, "lidar_top_360fov");
+        assert_eq!(r.meta().channels[0].sample_count, 3); // peak points/spin
+                                                          // µs in the file × 1000 == the ns timestamps we started from.
+        assert_eq!(r.spin_times(), &[1_000_000_000, 1_100_000_000]);
+
+        // The decoded points survive the full parquet → closure → spin path.
+        let range = TimeRange {
+            start_ns: 1_150_000_000,
+            end_ns: 1_150_000_000,
+        };
+        let ipc = r
+            .fetch_range(
+                &"lidar_top_360fov".to_string(),
+                range,
+                FetchOpts { include_prev: true },
+            )
+            .unwrap();
+        let batch = parse_ipc(&ipc);
+        let pos = batch.column(1).as_list::<i32>().value(0);
+        let f = pos
+            .as_any()
+            .downcast_ref::<arrow_array::Float32Array>()
+            .unwrap();
+        assert_eq!(
+            f.values(),
+            &[7.0, 8.0, 9.0, -1.0, -2.0, -3.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn open_alpamayo_custom_sensor_name() {
+        let raw = write_alpamayo_parquet(&[(2_000_000_000, vec![(0.0, 0.0, 0.0, 1)])]);
+        let r = PointCloudReader::open_alpamayo_parquet(
+            raw,
+            Some("roof_lidar".into()),
+            decode_fake_blob,
+        )
+        .unwrap();
+        assert_eq!(r.meta().channels[0].name, "roof_lidar");
+        assert_eq!(r.spin_times(), &[2_000_000_000]); // 2_000_000 µs × 1000
+    }
+
+    #[test]
+    fn open_alpamayo_rejects_driveline_parquet() {
+        // A *converted* Driveline parquet lacks the raw columns → a clear schema
+        // error (so the caller can fall back), never a panic.
+        let err = PointCloudReader::open_alpamayo_parquet(sample(), None, decode_fake_blob)
+            .err()
+            .unwrap();
+        assert!(
+            matches!(err, crate::Error::PointCloudSchema(_)),
+            "got {err:?}"
+        );
+        assert!(err.to_string().contains("spin_start_timestamp"));
+    }
+
+    #[test]
+    fn open_alpamayo_propagates_decode_error() {
+        let raw = write_alpamayo_parquet(&[(1_000_000_000, vec![(1.0, 1.0, 1.0, 9)])]);
+        let err = PointCloudReader::open_alpamayo_parquet(raw, None, |_| Err("boom".to_string()))
+            .err()
+            .unwrap();
+        assert!(err.to_string().contains("boom"), "got {err}");
     }
 
     #[test]

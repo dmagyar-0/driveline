@@ -40,14 +40,16 @@ Every load prints a one-line console banner pointing agents at `getSkill()`
 and noting that `?agent` unlocks the full surface. App unmount uninstalls the
 whole thing (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v3)
+## `window.__drivelineAgent` (v4)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. The `version` field reports `3`; v3 is a
-superset of v2 (itself a superset of v1) and adds the always-on discovery
+is the authoritative reference. The `version` field reports `4`; v4 is a
+superset of v3 (itself a superset of v2/v1): v3 adds the always-on discovery
 trio (`getSkill`/`describe`) plus inline data-source ingestion
 (`addDataSource`, the "Bring Your Own Agent" surface — see
-docs/13-bring-your-own-agent.md). Summary:
+docs/13-bring-your-own-agent.md); v4 adds `setSceneBinding`, completing the
+scene-geometry binding so an agent can _display_ a point cloud / boxes /
+trajectory it loaded, not just create the panel. Summary:
 
 | Group              | Methods                                                                                                                                                                          |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -59,7 +61,7 @@ docs/13-bring-your-own-agent.md). Summary:
 | Events             | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
 | Events IO          | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
 | Video              | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
-| Layout (write, v2) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `closePanel(panelId)`                                                          |
+| Layout (write, v2; `setSceneBinding` v4) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `setSceneBinding(panelId, channelId)`, `closePanel(panelId)`        |
 
 Behavioural notes:
 
@@ -110,6 +112,7 @@ lives in one place.
 | `createPanel(kind)`                    | `panelId` or `null` | `kind` is a `PanelKind` (`plot` / `map` / `enum` / `table` / `value` / `video` / `scene`). Mints a tab and returns its freshly-minted id. `null` when the kind is unknown/unsupported, or when the workspace has not mounted yet. |
 | `bindChannels(panelId, channelIds)`    | `boolean`           | Appends scalar channels to a `plot` / `enum` / `table` / `value` panel via the matching store action.                                                                                                                             |
 | `setMapBinding(panelId, latId, lonId)` | `boolean`           | Sets a `map` panel's lat/lon pair.                                                                                                                                                                                                |
+| `setSceneBinding(panelId, channelId)`  | `boolean`           | Binds a 3D-geometry channel (`point_cloud` / `bounding_box` / `trajectory` / `map_geometry`) to a `scene` panel — one at a time. `null` clears it. (v4)                                                                            |
 | `closePanel(panelId)`                  | `boolean`           | Deletes the tab via FlexLayout `Actions.deleteTab`. `true` if the tab existed, else `false`.                                                                                                                                      |
 
 Validation & caps (mechanically enforced, never trusted from the caller —
@@ -121,8 +124,8 @@ the Format Agent's proposal is model-authored, see docs/12 §6):
   would silently drop a proposal's intent.
 - **Panel existence + kind.** The `panelId` must name a live tab in the
   layout and be of a kind the call supports. `bindChannels` only accepts
-  the four list-binding kinds; `map` (use `setMapBinding`) and
-  `video`/`scene` (single-channel store actions) return `false`.
+  the four list-binding kinds; `map` (use `setMapBinding`), `scene` (use
+  `setSceneBinding`), and `video` (single-channel store action) return `false`.
 - **Per-panel cap.** `bindChannels` enforces `MAX_PLOT_SERIES` against the
   panel's _current_ bindings: a request that would push the total over the
   cap is rejected whole (`false`), binding nothing. Re-binding an
@@ -139,10 +142,12 @@ user dragged in — it persists, reloads, and re-binds identically.
 
 **Scene geometry channels.** The `scene` panel renders four 3D geometry
 kinds — `point_cloud`, `bounding_box`, `trajectory`, and `map_geometry` (road
-networks). These bind one-at-a-time through the single-channel scene action
-(`setSceneChannelBinding` on the dev hooks, or the PanelDrawer), **not**
-`bindChannels`. Geometry sources load through the file-open path (`openFiles` /
-drag-drop), not `addDataSource`. A `map_geometry` source comes from an
+networks). These bind one-at-a-time via `setSceneBinding(panelId, channelId)`
+(agent API v4+; `setSceneChannelBinding` on the dev hooks, or the PanelDrawer),
+**not** `bindChannels`. Geometry sources load through the file-open path
+(`openFiles` / drag-drop), not `addDataSource` — including a raw **NVIDIA
+Alpamayo** LiDAR `.parquet`, which is Draco-decoded in-browser (no conversion)
+and surfaces as a `point_cloud` channel. A `map_geometry` source comes from an
 OpenDRIVE `.xodr` (routed by extension) or a simple `drivelineMap` JSON
 (content-sniffed for a top-level `"drivelineMap"` key, like OpenLABEL and
 trajectory). Map geometry is **static** — a single frame at ts=0 — so it

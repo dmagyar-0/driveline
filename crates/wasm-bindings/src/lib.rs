@@ -968,6 +968,54 @@ pub fn open_lidar_pcd(bytes: &[u8]) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
+/// Open a **raw NVIDIA Alpamayo LiDAR** Parquet (Draco-compressed spins,
+/// `spin_start_timestamp` + `draco_encoded_pointcloud`) and register the
+/// resulting `PointCloudReader` in the same slab as `open_lidar`, so every other
+/// `lidar_*` endpoint then works unchanged — no pre-conversion step.
+///
+/// `data-core` deliberately ships no Draco decoder (the codec is a large C++
+/// library that would blow the WASM size budget), so the per-spin blob decode is
+/// delegated to `decode`, a JS callback backed by Google's reference Draco
+/// decoder compiled to WASM and loaded **lazily** only when a raw clip is
+/// dropped. The callback is `(blob: Uint8Array) => { positions: Float32Array,
+/// intensities: Uint8Array }` — flattened xyz (len `3N`, metres) and per-point
+/// intensity (len `N`, `0..=255`). It is invoked once per spin, synchronously,
+/// from inside the parquet stream (so the JS Draco module must already be
+/// initialised before this is called).
+///
+/// `sensor` names the channel (defaults to `lidar_top_360fov`). Takes the
+/// parquet bytes **by value** so the wasm-side copy isn't duplicated.
+#[wasm_bindgen]
+pub fn open_alpamayo_lidar(
+    bytes: Vec<u8>,
+    decode: &js_sys::Function,
+    sensor: Option<String>,
+) -> Result<u32, JsError> {
+    let reader = PointCloudReader::open_alpamayo_parquet(bytes, sensor, |blob| {
+        // Copy the blob into a fresh Uint8Array (not a `view`): calling into JS
+        // may grow wasm memory and invalidate a borrowed view.
+        let arg = Uint8Array::new_with_length(blob.len() as u32);
+        arg.copy_from(blob);
+        let ret = decode
+            .call1(&JsValue::NULL, &arg)
+            .map_err(|e| format!("js error: {e:?}"))?;
+        let positions = js_sys::Reflect::get(&ret, &JsValue::from_str("positions"))
+            .ok()
+            .and_then(|v| v.dyn_into::<js_sys::Float32Array>().ok())
+            .ok_or_else(|| "decode result missing Float32Array `positions`".to_string())?
+            .to_vec();
+        let intensities = js_sys::Reflect::get(&ret, &JsValue::from_str("intensities"))
+            .ok()
+            .and_then(|v| v.dyn_into::<Uint8Array>().ok())
+            .ok_or_else(|| "decode result missing Uint8Array `intensities`".to_string())?
+            .to_vec();
+        Ok((positions, intensities))
+    })
+    .map_err(|e| JsError::new(&format!("open alpamayo lidar failed: {e}")))?;
+    let key = LIDAR_READERS.with(|cell| cell.borrow_mut().insert(reader));
+    u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
+}
+
 /// Drop the lidar reader at `handle`. No-op if the handle is stale.
 #[wasm_bindgen]
 pub fn close_lidar(handle: u32) {
