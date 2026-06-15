@@ -199,11 +199,41 @@ The spec above is deterministic. To capture a **real agent driving the surface
 live** — making decisions from data it actually reads back, with its calls and
 reasoning shown on-screen — `scripts/agent-drive/live-driver.mjs` keeps one
 screen-recorded browser alive and executes commands handed to it turn-by-turn
-over a tiny file/FIFO protocol. The driver can be any agent; Claude Code itself
-can drive it (no API key needed — it is already a live model in the loop). An
-on-screen "agent HUD" logs every `window.__drivelineAgent` call + decision, so
-the recording is self-evidently agent-driven rather than a hand-clicked walk.
-Start the web dev server, run the driver from `apps/e2e`, then push commands
-(`cmd-<n>.js`) and read results (`results` FIFO); `__QUIT__` flushes the video.
-Because the agent's between-turn thinking shows as dead air, trim the raw clip
-with ffmpeg's `mpdecimate` for a tight cut.
+over a tiny file/FIFO protocol:
+
+- **Results FIFO** (`$AGENT_Q/results`): the driver writes `READY` once the
+  browser has booted and the HUD is installed, then one JSON line per command.
+  The caller `cat`s it to stay in lockstep — no polling.
+- **Commands**: the caller atomically `mv`s a file to `$AGENT_Q/cmd-<n>.js`
+  whose contents are a JS expression (sync or promise-returning) evaluated in
+  the page against `window.__drivelineAgent`. `__QUIT__` closes the context
+  (flushing the `.webm`) and exits.
+
+The driver can be any agent; Claude Code itself can drive it (no API key needed
+— it is already a live model in the loop). An on-screen "agent HUD" logs every
+call + decision via `window.__agentLog(...)`, so the recording is
+self-evidently agent-driven rather than a hand-clicked walk.
+
+**Reproduce the committed live clip with one command:**
+
+```bash
+scripts/agent-drive/record-byoa-live.sh   # -> demo/byoa-agent-live.webm
+```
+
+It starts the dev server (if needed), launches the recorded browser, replays
+the exact call sequence the agent issued when the clip was recorded — discover
+→ load the comma2k19 dashcam + CAN → bind → `fetchChannelRange` + profile the
+real data → tag the honest findings (no hard braking; it is a steady ~31 m/s
+cruise, with one notable maneuver, the −11.7° steering peak at 28.3 s) → jump
+the dashcam there and play — then compacts the recording to VP9. Because the
+replay runs back-to-back there is no dead air; the only pauses are deliberate
+in-page dwells.
+
+When an agent drives the harness _interactively_ (one command per turn), its
+between-turn thinking shows up as dead air. Trim that case with ffmpeg's
+`mpdecimate`, which drops near-duplicate frames:
+
+```bash
+ffmpeg -i raw.webm -vf "mpdecimate=hi=64*16:lo=64*6:frac=0.30,setpts=N/FRAME_RATE/TB" \
+  -c:v libvpx-vp9 -b:v 2M -an tight.webm
+```
