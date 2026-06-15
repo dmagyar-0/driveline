@@ -159,7 +159,22 @@ export function startPlaybackLoop(
       }
       if (!allReady) {
         cursorGated = true;
-        anchor = { ...a, nowMs: now() };
+        // Re-anchor BOTH the wall clock AND the cursor base to the live
+        // store value. The anchor advances the cursor as `base + (now −
+        // nowMs)·speed`, where `base` (`a.cursorNs`) is fixed across
+        // ungated ticks for drift-free playback. If we only reset
+        // `nowMs` here (keeping the stale `base` from play-start), the
+        // next ungated tick computes `base + ~0` and snaps the cursor
+        // all the way back to the play origin — the "camera jumps back
+        // again and again" sawtooth that appears whenever the decoder
+        // trips the gate *after* the cursor has already advanced (e.g.
+        // a 4K stream under render load). Reading the live cursor as the
+        // new base pins the hold at the cursor's real position so play
+        // resumes forward from there. `state.cursorNs` is the most
+        // recent value the loop wrote via `advanceCursor` (or an
+        // external scrub the subscribe listener already re-captured).
+        anchor = { cursorNs: state.cursorNs, nowMs: now(), speed: a.speed };
+        lastWritten = state.cursorNs;
         mark("tick:gated");
         rafId = raf(tick);
         return;

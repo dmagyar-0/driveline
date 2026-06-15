@@ -418,6 +418,70 @@ describe("playback loop gating (Issue #2)", () => {
     stop();
   });
 
+  it("gate engaging AFTER the cursor has advanced must not rewind it (sawtooth regression)", async () => {
+    // Regression for the "camera jumps back to the same time again and
+    // again" bug. The earlier gate code re-anchored only `nowMs` when it
+    // engaged, keeping the play-origin as the cursor base. After the
+    // cursor had already advanced (the steady state on a 4K stream that
+    // intermittently trips the gate under render load), the next ungated
+    // tick recomputed `base(origin) + ~0` and snapped the cursor all the
+    // way back — net forward progress collapsed into a sawtooth.
+    //
+    // The fix re-anchors the cursor base to the LIVE position on the
+    // gated tick, so a hold/release cycle resumes forward from where the
+    // cursor actually is. This test reproduces the precise sequence the
+    // prior unit tests missed: advance → gate → release → advance, and
+    // asserts the cursor is monotonic across it.
+    await loadSession();
+    const clock = makeFakeClock();
+    const ready = readinessMap([["video-1", "ready"]]);
+    const stop = startPlaybackLoop(useSession, {
+      ...clock,
+      readiness: () => ready,
+      boundVideoPanelIds: () => ["video-1"],
+    });
+
+    useSession.getState().play();
+
+    // Phase 1 — healthy: advance the cursor by 2 s while ready.
+    clock.advance(2000);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(2_000_000_000n);
+
+    // Phase 2 — decoder falls behind: gate engages for 500 ms. The
+    // cursor must HOLD at 2 s (not advance, not rewind).
+    ready.set("video-1", {
+      state: "waiting",
+      lastReadyMs: 0,
+      waitingSinceMs: 0,
+      lastBlitPtsNs: 2_000_000_000n,
+    });
+    clock.advance(500);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(2_000_000_000n);
+    expect(isCursorGated()).toBe(true);
+
+    // Phase 3 — decoder catches up: the next 16 ms tick must advance by
+    // ~16 ms FORWARD from the held 2 s, NOT collapse back to the play
+    // origin (0) which was the bug.
+    ready.set("video-1", {
+      state: "ready",
+      lastReadyMs: 0,
+      waitingSinceMs: null,
+      lastBlitPtsNs: 2_016_000_000n,
+    });
+    clock.advance(16);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(2_016_000_000n);
+    expect(isCursorGated()).toBe(false);
+
+    // Phase 4 — another healthy stretch keeps advancing monotonically.
+    clock.advance(1000);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(3_016_000_000n);
+    stop();
+  });
+
   it("skips the gate when no video panel is bound", async () => {
     await loadSession();
     const clock = makeFakeClock();
