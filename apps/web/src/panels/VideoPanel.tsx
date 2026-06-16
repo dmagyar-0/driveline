@@ -687,7 +687,8 @@ export function VideoPanel({
         overlayCanvas.height,
       );
       const { near, far } = overlayDepthsRef.current;
-      const radius = Math.max(1.2, rect.width / 640);
+      const radius = Math.max(1, rect.width / 760);
+      const depthSpan = Math.max(1e-3, far - near);
       for (let i = 0; i < count; i++) {
         if (buf.visible[i] === 0) continue;
         const [cx, cy] = imagePixelToContent(
@@ -697,11 +698,20 @@ export function VideoPanel({
           calib.intrinsics.height,
           rect,
         );
+        // Fade far returns so the dense far scan-rings recede instead of
+        // smearing into horizontal streaks when the frame is viewed small;
+        // near structure stays solid (near→far alpha 0.98→0.48).
+        const tDepth = Math.min(
+          1,
+          Math.max(0, (buf.depths[i] - near) / depthSpan),
+        );
+        overlayCtx.globalAlpha = 0.98 - 0.5 * tDepth;
         overlayCtx.fillStyle = depthColor(buf.depths[i], near, far);
         overlayCtx.beginPath();
         overlayCtx.arc(rect.left + cx, rect.top + cy, radius, 0, Math.PI * 2);
         overlayCtx.fill();
       }
+      overlayCtx.globalAlpha = 1;
       mark(OVERLAY_DRAW_END);
       measure(OVERLAY_DRAW, OVERLAY_DRAW_START, OVERLAY_DRAW_END);
     };

@@ -341,7 +341,7 @@ def write_camera_video(
     per = 1.0 / fps
     lines = []
     for sd in sds:
-        p = (dataset_dir / sd["filename"]).resolve()
+        p = (dataset_dir / sd["filename"]).resolve().as_posix()
         lines.append(f"file '{p}'")
         lines.append(f"duration {per:.6f}")
     list_path.write_text("\n".join(lines) + "\n")

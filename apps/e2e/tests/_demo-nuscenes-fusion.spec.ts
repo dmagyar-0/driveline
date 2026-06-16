@@ -255,7 +255,7 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
             children: [
               {
                 type: "tabset",
-                weight: 55,
+                weight: 62,
                 children: [
                   {
                     type: "tab",
@@ -267,7 +267,7 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
               },
               {
                 type: "tabset",
-                weight: 45,
+                weight: 38,
                 children: [
                   {
                     type: "tab",
@@ -290,8 +290,16 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     // Title card up *before* the load so the multi-second point-cloud open is
     // hidden behind it (no empty splash in the capture).
     await installCreditBanner(page);
+    // Hide the dev-only video stats strip + perf HUD so they never leak into
+    // the capture (advisory overlays, not part of the product story).
+    await page.evaluate(() => {
+      const s = document.createElement("style");
+      s.textContent =
+        '[data-testid="video-stats"],[data-testid="video-hud"]{display:none !important}';
+      document.head.appendChild(s);
+    });
     await showTitleCard(page);
-    await page.waitForTimeout(2200);
+    await page.waitForTimeout(1200);
 
     // Open the four converter outputs as one drop (mp4 + sidecar pair = one
     // source, so this is 3 sources: video, point cloud, calibration).
@@ -352,7 +360,12 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     await page.evaluate(
       ([pid, ...ids]) => {
         const h = window.__drivelineDevHooks!;
-        for (const id of ids) h.addPlotChannelBinding(pid, id);
+        ids.forEach((id, i) => {
+          h.addPlotChannelBinding(pid, id);
+          // yaw-rate (2nd signal) on its own y-axis so the turn spike pops
+          // instead of being flattened onto the speed scale.
+          if (i === 1) h.setPlotChannelAxis(pid, id, 1);
+        });
       },
       [PLOT_PANEL, ...plotIds] as const,
     );
@@ -397,28 +410,86 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       )
       .toBe(true);
 
-    // Content is ready behind the card — reveal the loaded dashboard.
-    await hideTitleCard(page);
-    await page.waitForTimeout(1200);
+    // Tilt the 3D scene off its near-top-down default toward a volumetric
+    // 3/4 view (cosmetic for the capture). Drag on the scene canvas content —
+    // never the tab header — so FlexLayout treats it as an orbit, not a move.
+    // The renderer maps drag dy → camera elevation (`el += dy*0.006`, with
+    // eye.z = dist*sin(el)); the default el≈0.5 rad (~29° above horizon). Drag
+    // *up* (negative dy) to LOWER the elevation toward the horizon so the LiDAR
+    // rings open into ellipses and vertical structure reads as 3D — dragging
+    // *down* would instead push el toward the ~86° clamp (a flat top-down). A
+    // modest 0.12·height lift lands el≈0.1 rad (~6°): a low, dramatic 3/4 that
+    // stays above the horizon (no looking up at the cloud from underneath).
+    // Defensive: if the canvas/testid isn't found, skip rather than fail.
+    try {
+      const sceneBox = await page
+        .getByTestId("scene-canvas-host")
+        .boundingBox();
+      if (sceneBox) {
+        const sx = sceneBox.x + sceneBox.width / 2;
+        const sy = sceneBox.y + sceneBox.height / 2;
+        await page.mouse.move(sx, sy);
+        await page.mouse.down();
+        await page.mouse.move(sx, sy - Math.round(sceneBox.height * 0.12), {
+          steps: 14,
+        });
+        await page.mouse.up();
+        await page.waitForTimeout(200);
+      }
+    } catch {
+      /* orbit is cosmetic; ignore if the canvas isn't drag-targetable */
+    }
 
-    // One clean continuous pass with real playback: press Play and let the
-    // dashcam, overlay, 3D cloud, and plot cursor all advance together as a
-    // single take. (This used to sawtooth — the cursor jumped back to the play
-    // origin again and again — because the decode-aware gate re-anchored only
-    // the wall clock when it engaged mid-play; fixed in timeline/playback.ts so
-    // a hold/release resumes forward from the live cursor.) The decode gate may
-    // still briefly hold the cursor while the 4K frames catch up, so ~16 s of
-    // wall time covers most of the ~19 s scene without ever reaching the very
-    // end — we PAUSE before the LiDAR's last spin, which sits ~35 ms past the
-    // final camera frame (that frame has no video → "no video at this time").
-    await seekToTs(page, at(0.02));
+    // Pick the overlay-densest moment (most LiDAR points painted on the
+    // camera) so the reveal + hero land on the signature fusion shot rather
+    // than the sparse open road. This sweep runs behind the title card, so it
+    // costs no visible time in the capture.
+    const overlayCountAt = async (f: number): Promise<number> => {
+      await seekToTs(page, at(f));
+      await page.waitForTimeout(450);
+      return page.evaluate(
+        (id) =>
+          window.__drivelineDevHooks!.getVideoOverlaySync(id)
+            .projectedVisibleCount,
+        VIDEO_OVERLAY_PANEL,
+      );
+    };
+    let bestFrac = 0.55;
+    let bestCount = -1;
+    for (const f of [0.35, 0.45, 0.55, 0.65, 0.75, 0.85]) {
+      const c = await overlayCountAt(f);
+      if (c > bestCount) {
+        bestCount = c;
+        bestFrac = f;
+      }
+    }
+    console.log(
+      `[demo] densest overlay frame: frac=${bestFrac} ` +
+        `projectedVisibleCount=${bestCount}`,
+    );
+
+    // Reveal a beat BEFORE the densest moment, then make ONE smooth forward
+    // pass straight through the dense + turning section (no rewind): the
+    // opening is already well-painted and only gets denser, and we stop before
+    // the scene's no-video tail. At 1x (GPU) the wall time below ≈ the scene
+    // span it covers.
+    const spanMs = Number(end - start) / 1e6;
+    // Open ON the densest frame (minus ~1 frame of lead) so the very first
+    // revealed frame is heavily painted with LiDAR — fusion "wow" up front, not
+    // 5 s of sparse open road — then pass forward through the turn.
+    const startFrac = Math.max(0.03, bestFrac - 0.05);
+    const endFrac = Math.min(0.85, startFrac + 0.4);
+    await seekToTs(page, at(startFrac));
+    await page.waitForTimeout(700);
+    await hideTitleCard(page);
+    await page.waitForTimeout(400);
     await setPlaying(page, true);
-    await page.waitForTimeout(16000);
+    await page.waitForTimeout(Math.round((endFrac - startFrac) * spanMs));
     await setPlaying(page, false);
     await page.waitForTimeout(400);
 
-    // Finish on a strong mid-scene hero frame.
-    await seekToTs(page, at(0.5));
-    await page.waitForTimeout(2200);
+    // Finish on the densest fusion frame — the hero.
+    await seekToTs(page, at(bestFrac));
+    await page.waitForTimeout(1500);
   });
 });
