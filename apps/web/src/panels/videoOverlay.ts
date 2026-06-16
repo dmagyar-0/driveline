@@ -58,16 +58,85 @@ export function imagePixelToContent(
 
 /**
  * Depth -> RGB ramp for the overlay dots: near = warm (red/orange), far = cool
- * (blue), clamped to `[nearM, farM]`. Returns a CSS `rgb(...)` string. A simple
- * three-stop ramp (warm -> green -> cool) reads well over arbitrary video.
+ * (blue), clamped to `[nearM, farM]`. A simple three-stop ramp (warm -> green
+ * -> cool) reads well over arbitrary video.
  */
-export function depthColor(depth: number, nearM: number, farM: number): string {
+function depthRgb(
+  depth: number,
+  nearM: number,
+  farM: number,
+): [number, number, number] {
   const span = farM - nearM;
   const t = span > 0 ? Math.min(1, Math.max(0, (depth - nearM) / span)) : 0;
   // Hue from 0deg (red, near) through 120deg (green) to 240deg (blue, far).
   const hue = t * 240;
-  const [r, g, b] = hslToRgb(hue / 360, 0.9, 0.5);
+  return hslToRgb(hue / 360, 0.9, 0.5);
+}
+
+/**
+ * Depth -> CSS `rgb(...)` string for a single dot. Kept for callers/tests that
+ * want one colour; the per-frame overlay draw uses a precomputed `DepthPalette`
+ * instead so it never builds a colour string per point.
+ */
+export function depthColor(depth: number, nearM: number, farM: number): string {
+  const [r, g, b] = depthRgb(depth, nearM, farM);
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+/**
+ * Per-dot alpha as a function of normalised depth `t` (0 = near, 1 = far). Near
+ * structure stays solid; far returns fade so the dense far scan-rings recede
+ * instead of smearing into horizontal streaks when the frame is viewed small
+ * (near->far alpha 0.98->0.48).
+ */
+export function depthAlpha(t: number): number {
+  const c = t < 0 ? 0 : t > 1 ? 1 : t;
+  return 0.98 - 0.5 * c;
+}
+
+/**
+ * A depth -> colour lookup precomputed once per `[near, far]` range. Each bucket
+ * is a ready-to-use `rgba(...)` string with the depth-fade alpha baked in, so
+ * the per-frame overlay draw can bucket points by depth and emit a single fill
+ * per bucket — no `rgb(...)` string allocation or `fillStyle` churn per point.
+ */
+export interface DepthPalette {
+  near: number;
+  far: number;
+  /** Number of colour buckets (>= 2). */
+  buckets: number;
+  /** `rgba(...)` strings, one per bucket, alpha baked in. */
+  colors: string[];
+}
+
+/**
+ * Build a `DepthPalette` of `buckets` evenly-spaced `rgba(...)` strings across
+ * `[near, far]`. 64 buckets keep the gradient visually smooth while collapsing
+ * a per-point colour computation into a tiny lookup.
+ */
+export function buildDepthPalette(
+  near: number,
+  far: number,
+  buckets = 64,
+): DepthPalette {
+  const n = Math.max(2, buckets | 0);
+  const colors = new Array<string>(n);
+  for (let b = 0; b < n; b++) {
+    const t = b / (n - 1);
+    const depth = near + t * (far - near);
+    const [r, g, bl] = depthRgb(depth, near, far);
+    colors[b] = `rgba(${r}, ${g}, ${bl}, ${depthAlpha(t).toFixed(3)})`;
+  }
+  return { near, far, buckets: n, colors };
+}
+
+/** Bucket index (0 .. `palette.buckets - 1`) for a raw depth value. */
+export function depthBucketIndex(depth: number, palette: DepthPalette): number {
+  const span = palette.far - palette.near;
+  const t = span > 0 ? (depth - palette.near) / span : 0;
+  const c = t < 0 ? 0 : t > 1 ? 1 : t;
+  const idx = Math.round(c * (palette.buckets - 1));
+  return idx < 0 ? 0 : idx > palette.buckets - 1 ? palette.buckets - 1 : idx;
 }
 
 // Minimal HSL->RGB (0..1 inputs, 0..255 integer outputs). Inlined so the

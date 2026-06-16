@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { contentRect, depthColor, imagePixelToContent } from "./videoOverlay";
+import {
+  buildDepthPalette,
+  contentRect,
+  depthAlpha,
+  depthBucketIndex,
+  depthColor,
+  imagePixelToContent,
+} from "./videoOverlay";
 
 describe("contentRect (object-fit: contain letterbox)", () => {
   it("pillarboxes a 16:9 frame in a square panel", () => {
@@ -54,5 +61,67 @@ describe("depthColor", () => {
   it("clamps out-of-range depths", () => {
     expect(depthColor(-5, 0, 100)).toBe(depthColor(0, 0, 100));
     expect(depthColor(500, 0, 100)).toBe(depthColor(100, 0, 100));
+  });
+});
+
+describe("depthAlpha", () => {
+  it("fades from near (solid) to far (translucent)", () => {
+    expect(depthAlpha(0)).toBeCloseTo(0.98, 5);
+    expect(depthAlpha(1)).toBeCloseTo(0.48, 5);
+    expect(depthAlpha(0.5)).toBeCloseTo(0.73, 5);
+  });
+
+  it("clamps t outside [0, 1]", () => {
+    expect(depthAlpha(-1)).toBe(depthAlpha(0));
+    expect(depthAlpha(2)).toBe(depthAlpha(1));
+  });
+});
+
+describe("buildDepthPalette / depthBucketIndex", () => {
+  it("emits one rgba string per bucket with alpha baked in", () => {
+    const p = buildDepthPalette(0, 100, 8);
+    expect(p.buckets).toBe(8);
+    expect(p.colors).toHaveLength(8);
+    for (const c of p.colors) {
+      expect(c).toMatch(/^rgba\(\d+, \d+, \d+, [\d.]+\)$/);
+    }
+    // Near bucket is warm + near-solid; far bucket is cool + faded.
+    const near = p.colors[0].match(/[\d.]+/g)!.map(Number);
+    const far = p.colors[7].match(/[\d.]+/g)!.map(Number);
+    expect(near[0]).toBeGreaterThan(near[2]); // R > B near
+    expect(far[2]).toBeGreaterThan(far[0]); // B > R far
+    expect(near[3]).toBeGreaterThan(far[3]); // near more opaque than far
+  });
+
+  it("never returns fewer than two buckets", () => {
+    expect(buildDepthPalette(0, 1, 1).buckets).toBe(2);
+    expect(buildDepthPalette(0, 1, 0).buckets).toBe(2);
+  });
+
+  it("maps depths to in-range bucket indices, clamping the extremes", () => {
+    const p = buildDepthPalette(10, 110, 64);
+    expect(depthBucketIndex(10, p)).toBe(0);
+    expect(depthBucketIndex(110, p)).toBe(63);
+    expect(depthBucketIndex(-100, p)).toBe(0); // below near -> first bucket
+    expect(depthBucketIndex(1000, p)).toBe(63); // above far -> last bucket
+    const mid = depthBucketIndex(60, p);
+    expect(mid).toBeGreaterThan(0);
+    expect(mid).toBeLessThan(63);
+  });
+
+  it("is monotonic in depth", () => {
+    const p = buildDepthPalette(0, 100, 32);
+    let prev = -1;
+    for (let d = 0; d <= 100; d += 5) {
+      const b = depthBucketIndex(d, p);
+      expect(b).toBeGreaterThanOrEqual(prev);
+      prev = b;
+    }
+  });
+
+  it("collapses a degenerate range to the first bucket", () => {
+    const p = buildDepthPalette(50, 50, 16);
+    expect(depthBucketIndex(50, p)).toBe(0);
+    expect(depthBucketIndex(999, p)).toBe(0);
   });
 });

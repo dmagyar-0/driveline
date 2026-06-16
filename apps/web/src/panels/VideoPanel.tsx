@@ -33,7 +33,12 @@ import {
   projectPointsInto,
   type ProjectionBuffers,
 } from "./cameraProjection";
-import { contentRect, depthColor, imagePixelToContent } from "./videoOverlay";
+import {
+  buildDepthPalette,
+  contentRect,
+  depthBucketIndex,
+  type DepthPalette,
+} from "./videoOverlay";
 import {
   clearVideoOverlayInfo,
   setVideoOverlayInfo,
@@ -160,6 +165,23 @@ export function VideoPanel({
     near: 1,
     far: 60,
   });
+  // Bumped whenever the cached projection changes (new spin landed, or it
+  // emptied). The per-tick overlay draw compares this against the last paint to
+  // skip a redundant clear+redraw when nothing visible changed.
+  const overlayGenRef = useRef<number>(0);
+  // The (gen, canvas size, depth range) actually last painted onto the overlay.
+  // A sentinel `gen: -1` means the overlay canvas currently holds nothing.
+  const overlayDrawnRef = useRef<{
+    gen: number;
+    w: number;
+    h: number;
+    near: number;
+    far: number;
+  }>({ gen: -1, w: -1, h: -1, near: NaN, far: NaN });
+  // Cached depth->colour palette (rebuilt only when the depth range changes)
+  // and the per-bucket Path2D scratch reused across redraws.
+  const overlayPaletteRef = useRef<DepthPalette | null>(null);
+  const overlayBucketPathsRef = useRef<Path2D[] | null>(null);
   // True while an async spin fetch+project is inflight, so the tick coalesces
   // to ≤1 outstanding overlay refresh (never stacks fetches per rAF).
   const overlayBusyRef = useRef<boolean>(false);
@@ -618,6 +640,7 @@ export function VideoPanel({
           if (!res.ok || res.count === 0) {
             overlayProjCountRef.current = 0;
             overlaySpinIdxRef.current = idx;
+            overlayGenRef.current += 1;
             return;
           }
           // Grow the reusable projection buffers when the spin gets denser.
@@ -634,6 +657,7 @@ export function VideoPanel({
           );
           overlayProjCountRef.current = res.count;
           overlaySpinIdxRef.current = idx;
+          overlayGenRef.current += 1;
           setVideoOverlayInfo(panelId, {
             enabled: true,
             cameraName: binding.cameraName,
@@ -649,9 +673,12 @@ export function VideoPanel({
       })();
     };
 
-    // Per-tick overlay paint. Sizes the overlay canvas to the panel, clears it,
-    // and redraws the cached projection at the letterboxed content rect. When
-    // the active spin index changed, kicks a (coalesced) async refresh first.
+    // Per-tick overlay paint. Sizes the overlay canvas to the panel and, when
+    // the active spin index changed, kicks a (coalesced) async refresh. The
+    // actual clear + redraw of the cached projection only runs when the painted
+    // pixels would differ from the last frame (see the dirty check below), so a
+    // 60 Hz tick does not force a 60 Hz redraw of a cloud that changes at the
+    // spin rate.
     const drawOverlay = () => {
       const overlayCanvas = overlayCanvasRef.current;
       const overlayCtx = overlayCanvas?.getContext("2d") ?? null;
@@ -660,58 +687,106 @@ export function VideoPanel({
       const calib = overlayCalibRef.current;
       const times = overlaySpinTimesRef.current;
       const blitPts = lastBlitPtsRef.current;
+      const drawn = overlayDrawnRef.current;
       // Match the overlay canvas's pixel buffer to its CSS box (the panel) so
-      // its coordinate space is panel pixels.
+      // its coordinate space is panel pixels. Setting width/height clears the
+      // canvas, so only touch it on an actual size change.
       const cw = overlayCanvas.clientWidth;
       const ch = overlayCanvas.clientHeight;
       if (cw > 0 && ch > 0) {
         if (overlayCanvas.width !== cw) overlayCanvas.width = cw;
         if (overlayCanvas.height !== ch) overlayCanvas.height = ch;
       }
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-      if (!binding || !calib || !times || blitPts === null) return;
+
+      if (!binding || !calib || !times || blitPts === null) {
+        // Nothing to project. Clear once on the transition into this state so a
+        // stale cloud doesn't linger; then stay idle (no per-tick clears).
+        if (drawn.gen !== -1) {
+          overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          drawn.gen = -1;
+        }
+        return;
+      }
       // Refetch only when the active spin actually changes.
       const idx = activeSpinIndex(times, blitPts);
       if (idx !== overlaySpinIdxRef.current && idx >= 0) {
         refreshOverlaySpin(idx);
       }
-      const buf = overlayProjRef.current;
-      const count = overlayProjCountRef.current;
-      if (!buf || count === 0) return;
+      const { near, far } = overlayDepthsRef.current;
+
+      // The overlay canvas is a separate layer stacked over the video, and
+      // zoom/pan is a CSS transform on the element — not a pixel redraw. So the
+      // painted pixels are a pure function of the projected spin
+      // (`overlayGenRef`), the canvas size, and the depth range. When none of
+      // those changed since the last paint, the cached pixels are still correct
+      // and we skip the (expensive) clear + per-point redraw entirely. This
+      // collapses a ~60 Hz redraw into a ~spin-rate one, freeing the main
+      // thread for the video blit and keeping playback smooth under load.
+      const gen = overlayGenRef.current;
+      if (
+        drawn.gen === gen &&
+        drawn.w === overlayCanvas.width &&
+        drawn.h === overlayCanvas.height &&
+        drawn.near === near &&
+        drawn.far === far
+      ) {
+        return;
+      }
+      drawn.gen = gen;
+      drawn.w = overlayCanvas.width;
+      drawn.h = overlayCanvas.height;
+      drawn.near = near;
+      drawn.far = far;
 
       mark(OVERLAY_DRAW_START);
-      const rect = contentRect(
-        calib.intrinsics.width,
-        calib.intrinsics.height,
-        overlayCanvas.width,
-        overlayCanvas.height,
-      );
-      const { near, far } = overlayDepthsRef.current;
-      const radius = Math.max(1, rect.width / 760);
-      const depthSpan = Math.max(1e-3, far - near);
-      for (let i = 0; i < count; i++) {
-        if (buf.visible[i] === 0) continue;
-        const [cx, cy] = imagePixelToContent(
-          buf.us[i],
-          buf.vs[i],
+      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      const buf = overlayProjRef.current;
+      const count = overlayProjCountRef.current;
+      if (buf && count > 0) {
+        // Rebuild the colour palette only when the depth range changes.
+        let palette = overlayPaletteRef.current;
+        if (!palette || palette.near !== near || palette.far !== far) {
+          palette = buildDepthPalette(near, far);
+          overlayPaletteRef.current = palette;
+        }
+        const rect = contentRect(
           calib.intrinsics.width,
           calib.intrinsics.height,
-          rect,
+          overlayCanvas.width,
+          overlayCanvas.height,
         );
-        // Fade far returns so the dense far scan-rings recede instead of
-        // smearing into horizontal streaks when the frame is viewed small;
-        // near structure stays solid (near→far alpha 0.98→0.48).
-        const tDepth = Math.min(
-          1,
-          Math.max(0, (buf.depths[i] - near) / depthSpan),
-        );
-        overlayCtx.globalAlpha = 0.98 - 0.5 * tDepth;
-        overlayCtx.fillStyle = depthColor(buf.depths[i], near, far);
-        overlayCtx.beginPath();
-        overlayCtx.arc(rect.left + cx, rect.top + cy, radius, 0, Math.PI * 2);
-        overlayCtx.fill();
+        const radius = Math.max(1, rect.width / 760);
+        const fw = calib.intrinsics.width;
+        const fh = calib.intrinsics.height;
+        const sx = rect.width / fw;
+        const sy = rect.height / fh;
+        // One Path2D per depth bucket: accumulate every dot, then emit a single
+        // fill per bucket. Turns a fillStyle assignment + beginPath + arc +
+        // fill *per point* into ~`buckets` fills total — the dominant overlay
+        // cost when a dense spin lands. Path2D has no clear, so re-allocate.
+        let paths = overlayBucketPathsRef.current;
+        if (!paths || paths.length !== palette.buckets) {
+          paths = Array.from({ length: palette.buckets }, () => new Path2D());
+        } else {
+          for (let b = 0; b < paths.length; b++) paths[b] = new Path2D();
+        }
+        overlayBucketPathsRef.current = paths;
+        const TWO_PI = Math.PI * 2;
+        for (let i = 0; i < count; i++) {
+          if (buf.visible[i] === 0) continue;
+          const px = rect.left + buf.us[i] * sx;
+          const py = rect.top + buf.vs[i] * sy;
+          const path = paths[depthBucketIndex(buf.depths[i], palette)];
+          // `moveTo` before `arc` starts a fresh subpath so the dots don't get
+          // chained together by an implicit line from the previous arc's end.
+          path.moveTo(px + radius, py);
+          path.arc(px, py, radius, 0, TWO_PI);
+        }
+        for (let b = 0; b < paths.length; b++) {
+          overlayCtx.fillStyle = palette.colors[b];
+          overlayCtx.fill(paths[b]);
+        }
       }
-      overlayCtx.globalAlpha = 1;
       mark(OVERLAY_DRAW_END);
       measure(OVERLAY_DRAW, OVERLAY_DRAW_START, OVERLAY_DRAW_END);
     };
