@@ -43,6 +43,7 @@ import {
   projectPointsInto,
   type ProjectionBuffers,
 } from "./cameraProjection";
+import { pickOverlayCamera, pickOverlayPointCloud } from "./overlayDefaults";
 import {
   buildDepthPalette,
   contentRect,
@@ -103,6 +104,12 @@ interface VideoPanelProps {
   /** FlexLayout panel id — keys per-panel UI state in the store
    *  (HUD overlay bit, future per-panel toggles). */
   panelId: string;
+  /** Source filename for the bound video (e.g. `camera_front_wide_120fov.mp4`).
+   *  The mp4 *channel* name is a generic `track_0`, so this is what the LiDAR
+   *  overlay matches against a calibration camera name to pick a default camera
+   *  on a multi-camera rig. Optional (undefined → fall back to the first
+   *  camera). */
+  videoSourceName?: string;
 }
 
 export interface VideoHudSnapshot {
@@ -154,6 +161,7 @@ export function VideoPanel({
   sourceHandle,
   channelId,
   panelId,
+  videoSourceName,
 }: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Point-cloud overlay (docs/13). A second canvas sized to the letterboxed
@@ -1366,20 +1374,35 @@ export function VideoPanel({
       setOverlayMenuOpen(false);
       return;
     }
-    setOverlayMenuOpen((v) => !v);
-    // Best-effort: auto-commit when there's an obvious single choice so the
-    // toggle "just works" with one calibration camera + one point cloud.
-    const cam = camerasForActiveCalib[0]?.name;
-    const pc = pointCloudChannels[0]?.id;
-    if (activeCalibChannelId && cam && pc) {
-      setOverlay(panelId, {
-        calibrationChannelId: activeCalibChannelId,
-        cameraName: cam,
-        pointcloudChannelId: pc,
-      });
-    } else if (activeCalibChannelId) {
-      // Ensure the cameras get decoded so the camera picker populates.
-      void useSession.getState().loadCalibration(activeCalibChannelId);
+    // Open the pickers so the auto-chosen defaults can be adjusted (an Alpamayo
+    // bundle carries 7 cameras — the user may want a different one).
+    setOverlayMenuOpen(true);
+    if (!activeCalibChannelId) return;
+    const pc = pickOverlayPointCloud(pointCloudChannels);
+    if (!pc) return;
+    // Auto-commit a binding so the toggle "just works" in one click. Pick the
+    // calibration camera that matches THIS panel's video (by source filename)
+    // and a LiDAR cloud, so a multi-camera rig gets a *correct* overlay rather
+    // than the wrong camera's extrinsic (which projects the spin nowhere
+    // sensible). On the first toggle the calibration may not be decoded yet
+    // (cold cache): commit synchronously when warm, else await the decode.
+    const commit = (cams: CameraCalibration[]) => {
+      const cam = pickOverlayCamera(cams, videoSourceName);
+      if (cam) {
+        setOverlay(panelId, {
+          calibrationChannelId: activeCalibChannelId,
+          cameraName: cam,
+          pointcloudChannelId: pc,
+        });
+      }
+    };
+    if (camerasForActiveCalib.length > 0) {
+      commit(camerasForActiveCalib);
+    } else {
+      void useSession
+        .getState()
+        .loadCalibration(activeCalibChannelId)
+        .then(commit);
     }
   };
   const onPickCalibration = (id: string) => {
@@ -1495,28 +1518,32 @@ export function VideoPanel({
           </div>
         )}
       </div>
-      {/* Reset-zoom affordance — only mounted while magnified, so it stays
-       *  out of the way during normal playback. Top-left to clear the HUD
-       *  toggle (top-right) and the stats strip (bottom-right). */}
-      {zoomed && (
+      {/* Top-right cluster: the HUD toggle, plus the Reset-zoom affordance to
+       *  its left while magnified. Grouping them in one pinned row keeps them
+       *  from overlapping each other or the LiDAR overlay controls (top-left).
+       *  Reset zoom is only mounted while magnified, so it stays out of the
+       *  way during normal playback. */}
+      <div className={styles.topRightControls}>
+        {zoomed && (
+          <button
+            type="button"
+            data-testid="video-zoom-reset"
+            className={styles.zoomReset}
+            onClick={resetZoom}
+          >
+            Reset zoom
+          </button>
+        )}
         <button
           type="button"
-          data-testid="video-zoom-reset"
-          className={styles.zoomReset}
-          onClick={resetZoom}
+          data-testid="video-hud-toggle"
+          className={styles.hudToggle}
+          aria-pressed={hudOn}
+          onClick={toggleHud}
         >
-          Reset zoom
+          HUD
         </button>
-      )}
-      <button
-        type="button"
-        data-testid="video-hud-toggle"
-        className={styles.hudToggle}
-        aria-pressed={hudOn}
-        onClick={toggleHud}
-      >
-        HUD
-      </button>
+      </div>
       {hudOn && (
         <div ref={hudDomRef} data-testid="video-hud" className={styles.hud} />
       )}

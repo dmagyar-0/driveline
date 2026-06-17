@@ -10,9 +10,11 @@
   flex: 1;
 }
 
+/* Anchored bottom-left: clears the LiDAR overlay controls + HUD/Reset-zoom
+ * cluster (both top) and the stats strip (bottom-right). Hover-revealed. */
 .clearBtn {
   position: absolute;
-  top: 0.5rem;
+  bottom: 0.5rem;
   left: 0.5rem;
   background: var(--scrim-hud);
   color: var(--color-fg-2);
