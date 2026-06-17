@@ -367,9 +367,9 @@ export function VideoPanel({
   decodeErrorRef.current = decodeError;
 
   // `lastSeekTargetRef` starts null and is set to the initial `open()`
-  // target once the worker has accepted it. The debounced cursor effect
-  // skips a `seek()` that matches this — preventing a redundant seek on
-  // mount when the cursor equals `globalRange.startNs`.
+  // target (the cursor at mount) once the worker has accepted it. The
+  // debounced cursor effect skips a `seek()` that matches this — preventing
+  // a redundant seek on mount when the cursor hasn't moved since open.
   const lastSeekTargetRef = useRef<bigint | null>(null);
   // Watermark of the cursor most recently pushed via `client.setCursor`.
   // Used to coalesce 60 Hz cursor ticks to ~30 Hz — the worker's pacing
@@ -514,7 +514,17 @@ export function VideoPanel({
     };
 
     let cancelled = false;
-    const startNs = globalRange?.startNs ?? 0n;
+    // Open at the CURRENT cursor, not the session start. A VideoPanel is keyed
+    // by source:channel and remounts whenever the bound channel changes, so
+    // picking a different video track mid-session re-runs this effect. Opening
+    // at `globalRange.startNs` would blit the first frame of the stream and
+    // leave it parked there until playback advanced the cursor far enough for
+    // the worker to catch up — the frame wouldn't sync to the cursor on its
+    // own. The store guarantees `cursorNs` is always inside `globalRange`
+    // (seeded to `startNs` on first load), so on a fresh drop this is still
+    // `startNs`; on a re-pick it's where the user is actually looking. The
+    // readers clamp the target to the nearest preceding keyframe.
+    const openTargetNs = useSession.getState().cursorNs;
     // Worker-to-worker MCAP video bridge. `connectMcapVideoBridge` exposes
     // `{ openMcapVideoStream, mcapVideoNextBatch, closeMcapVideoStream }` on
     // bridge.port1 directly inside the dataCore worker, so MCAP chunk batches
@@ -617,12 +627,12 @@ export function VideoPanel({
           sourceKind,
           sourceHandle,
           channelId,
-          startNs,
+          openTargetNs,
         );
         codecRef.current = result.codec || null;
         // Seed the seek-dedupe ref so the mount cursor effect doesn't
         // issue a seek back to the same target that `open()` already took.
-        lastSeekTargetRef.current = startNs;
+        lastSeekTargetRef.current = openTargetNs;
       } catch (e) {
         console.error("VideoPanel: open failed", e);
       }
@@ -1031,6 +1041,9 @@ export function VideoPanel({
       lastWorkerFrameArrivedMsRef.current = 0;
       clearPanelReadiness(panelId);
       window.__drivelineVideoHud = undefined;
+      // Don't leave a ghost blit PTS behind: the next panel to mount (e.g. a
+      // track re-pick) must not read a stale frame timestamp from this one.
+      window.__drivelineVideoLastBlitPtsNs = null;
       const dc = videoDecodeRef.current;
       const w = videoDecodeWorkerRef.current;
       videoDecodeRef.current = null;
