@@ -95,11 +95,22 @@
   color: var(--color-fg-3);
 }
 
-.hudToggle {
+/* Top-right control cluster — the HUD toggle, plus the Reset-zoom button when
+ * magnified. Laid out as a row so the two never overlap each other, the LiDAR
+ * overlay cluster (top-left), or the stats strip (bottom-right). The cluster's
+ * RIGHT edge is pinned (right:6px, auto width), so the HUD toggle keeps its
+ * place when Reset zoom mounts/unmounts to its left. */
+.topRightControls {
   position: absolute;
   top: 6px;
   right: 6px;
-  z-index: 2;
+  z-index: 3;
+  display: flex;
+  gap: 4px;
+  align-items: flex-start;
+}
+
+.hudToggle {
   padding: 2px 6px;
   font-size: var(--fs-11);
   font-family: var(--font-mono);
@@ -115,13 +126,9 @@
   color: var(--color-fg-1);
 }
 
-/* Reset-zoom button — mirrors the HUD toggle styling but anchored top-left
- * so the two controls don't overlap. Only rendered while magnified. */
+/* Reset-zoom button — mirrors the HUD toggle styling and sits beside it in the
+ * top-right cluster (`.topRightControls`). Only rendered while magnified. */
 .zoomReset {
-  position: absolute;
-  top: 6px;
-  left: 6px;
-  z-index: 3;
   padding: 2px 6px;
   font-size: var(--fs-11);
   font-family: var(--font-mono);
