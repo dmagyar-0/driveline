@@ -1,11 +1,20 @@
 // T5.1 · VideoPanel (MCAP path) — extended in T5.2 with a perf HUD and a
 // tighter seek pipeline.
 //
-// Owns: a <canvas>, a small VideoFrame queue fed by the videoDecode worker
-// over a MessagePort, and a rAF loop that blits the frame whose PTS is
-// closest to the current cursor. Seek is a trailing-debounced side effect
-// on `cursorNs`. FlexLayout docking is T6.2 — for now the panel renders in
-// a plain container from App.tsx.
+// v5 (off-thread blit): the per-frame video BLIT now happens in the
+// videoDecode worker, not here. The panel transfers its video <canvas> to the
+// worker via `transferControlToOffscreen()` + `setRenderCanvas`; the worker
+// owns the frame queue, the MAX_QUEUE drop policy, and the blit (driven by its
+// own decode/cursor events — workers have no rAF). The panel keeps its rAF
+// tick, but that tick no longer touches the video canvas: it reads the latest
+// worker STATUS (blit PTS, frame index, decode/blit queue, dropped, decoder
+// liveness) off the sink MessagePort, then drives the LiDAR OVERLAY canvas
+// (still main-thread), readiness, the HUD/stats DOM, and the
+// VIDEO_FIRST_FRAME / VIDEO_SEEK_TO_BLIT perf marks (which the worker signals
+// via one-shot flags in the status message). Seek is a trailing-debounced
+// side effect on `seekEpoch`. Pan/zoom stays a CSS transform on the (now
+// placeholder) canvas element — transferControlToOffscreen leaves the element
+// usable for CSS transforms.
 //
 // T5.2 additions: a toggleable HUD (current PTS, frame index, decode queue,
 // blit queue, dropped frames, codec) and guards that skip seeks that
@@ -16,6 +25,7 @@ import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
+import type { BlitStatus } from "../workers/videoDecode.worker";
 import {
   mark,
   measure,
@@ -27,13 +37,18 @@ import {
   VIDEO_SEEK_START,
   VIDEO_SEEK_TO_BLIT,
 } from "../perf";
-import { decodePointCloud } from "./pointCloudFromArrow";
+import { fetchDecodedSpin } from "./pointCloudSpinCache";
 import {
   makeProjectionBuffers,
   projectPointsInto,
   type ProjectionBuffers,
 } from "./cameraProjection";
-import { contentRect, depthColor, imagePixelToContent } from "./videoOverlay";
+import {
+  buildDepthPalette,
+  contentRect,
+  depthBucketIndex,
+  type DepthPalette,
+} from "./videoOverlay";
 import {
   clearVideoOverlayInfo,
   setVideoOverlayInfo,
@@ -48,7 +63,10 @@ import {
   type PanelReadiness,
   type ReadyState,
 } from "./videoReadiness";
-import { setVideoCanvas, clearVideoCanvas } from "./videoCanvasRegistry";
+import {
+  registerVideoPanel,
+  unregisterVideoPanel,
+} from "./videoCanvasRegistry";
 import styles from "./VideoPanel.module.css";
 
 // Issue #2 — readiness predicate constants. The panel reports "ready"
@@ -87,13 +105,6 @@ interface VideoPanelProps {
   panelId: string;
 }
 
-interface QueueEntry {
-  ptsNs: bigint;
-  frame: VideoFrame;
-  frameIndex: number;
-  decodeQueue: number;
-}
-
 export interface VideoHudSnapshot {
   ptsNs: bigint | null;
   frameIndex: number;
@@ -105,6 +116,9 @@ export interface VideoHudSnapshot {
 }
 
 const SEEK_DEBOUNCE_MS = 50;
+// Display-only mirror of the worker's blit-queue cap (the real bound + drop
+// policy live in `videoDecode.worker.ts`). Used purely to render `q N/16` in
+// the HUD/stats strip.
 const MAX_QUEUE = 16;
 
 // Video zoom bounds. 1× is "fit" (the object-fit: contain default); we let
@@ -160,40 +174,65 @@ export function VideoPanel({
     near: 1,
     far: 60,
   });
+  // Bumped whenever the cached projection changes (new spin landed, or it
+  // emptied). The per-tick overlay draw compares this against the last paint to
+  // skip a redundant clear+redraw when nothing visible changed.
+  const overlayGenRef = useRef<number>(0);
+  // The (gen, canvas size, depth range) actually last painted onto the overlay.
+  // A sentinel `gen: -1` means the overlay canvas currently holds nothing.
+  const overlayDrawnRef = useRef<{
+    gen: number;
+    w: number;
+    h: number;
+    near: number;
+    far: number;
+  }>({ gen: -1, w: -1, h: -1, near: NaN, far: NaN });
+  // Cached depth->colour palette (rebuilt only when the depth range changes)
+  // and the per-bucket Path2D scratch reused across redraws.
+  const overlayPaletteRef = useRef<DepthPalette | null>(null);
+  const overlayBucketPathsRef = useRef<Path2D[] | null>(null);
   // True while an async spin fetch+project is inflight, so the tick coalesces
   // to ≤1 outstanding overlay refresh (never stacks fetches per rAF).
   const overlayBusyRef = useRef<boolean>(false);
   // Monotonic token so a late spin fetch result for a stale binding is dropped.
   const overlayReqRef = useRef<number>(0);
-  const queueRef = useRef<QueueEntry[]>([]);
   const cursorRef = useRef<bigint>(0n);
   const rafRef = useRef<number | null>(null);
   const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sizedRef = useRef<boolean>(false);
+  // v5: set once we've transferred the video canvas to the worker. The
+  // transfer is one-shot per element (a second `transferControlToOffscreen`
+  // throws), so this guards the effect from re-transferring on a re-run.
+  const offscreenTransferredRef = useRef<boolean>(false);
   // T7 — bound source's frame-coverage bounds, mirrored into refs so the
-  // rAF blit loop can read them without a reactive selector on the hot path.
-  // `uncoveredPaintedRef` debounces the black-fill so we clear the canvas
-  // once on entry into an uncovered region rather than every tick.
+  // rAF loop can read them without a reactive selector on the hot path.
+  // `uncoveredPaintedRef` debounces the worker-side black-fill request so we
+  // clear the canvas once on entry into an uncovered region, not every tick.
   const coverageStartRef = useRef<bigint | null>(null);
   const coverageEndRef = useRef<bigint | null>(null);
   const uncoveredPaintedRef = useRef<boolean>(false);
   const videoDecodeRef = useRef<Comlink.Remote<VideoDecodeApi> | null>(null);
   const videoDecodeWorkerRef = useRef<Worker | null>(null);
-  // Task 4 — set true when a debounced seek is dispatched (VIDEO_SEEK_START
-  // marked); the rAF blit loop consumes it on the first post-seek blit to
-  // stamp VIDEO_SEEK_END and emit the VIDEO_SEEK_TO_BLIT measure. A plain
-  // boolean ref so the hot path neither allocates nor touches the store.
-  const seekPendingBlitRef = useRef<boolean>(false);
 
   // HUD refs. We keep them off React state so metric updates don't churn
   // the reconciler; the rAF loop writes directly into the HUD DOM.
   // Task 3 — cache last written HUD/stats strings to skip identical DOM writes.
   const lastHudTextRef = useRef<string>("");
   const lastStatsTextRef = useRef<string>("");
+  // v5: these mirror the latest worker STATUS message (no local frame queue
+  // anymore). `lastBlitPtsRef` is the PTS of the frame the worker last blitted
+  // to the OffscreenCanvas — it drives the overlay spin pick, readiness, and
+  // the HUD, exactly as it did when the panel owned the blit.
   const lastFrameIndexRef = useRef<number>(0);
   const lastDecodeQueueRef = useRef<number>(0);
+  const blitQueueLenRef = useRef<number>(0);
   const droppedFramesRef = useRef<number>(0);
   const lastBlitPtsRef = useRef<bigint | null>(null);
+  // Main-thread receipt time of the most recent status whose `frameArrivedMs`
+  // advanced (i.e. the worker decoded a fresh frame). Drives the "decoder is
+  // alive" readiness arm using OUR clock, so worker↔main clock skew can't
+  // poison the FRAME_LIVE_WINDOW_MS check.
+  const lastFrameArrivedLocalMsRef = useRef<number>(0);
+  const lastWorkerFrameArrivedMsRef = useRef<number>(0);
   const codecRef = useRef<string | null>(null);
   const hudDomRef = useRef<HTMLDivElement | null>(null);
   const hudOnRef = useRef<boolean>(false);
@@ -296,9 +335,9 @@ export function VideoPanel({
   // `waitingSinceMsRef` is the wall clock at which the panel last
   // transitioned out of "ready"; the rAF loop derives the "have we
   // been waiting long enough to escalate to stalled" check from this.
-  // `lastFrameArrivedMsRef` is bumped on every decoder frame arrival
-  // (in `port.onmessage`) — drives the "decoder alive" arm of the
-  // readiness predicate.
+  // The "decoder alive" arm of the readiness predicate is driven by
+  // `lastFrameArrivedLocalMsRef` (declared above), which is bumped whenever a
+  // worker STATUS message reports a fresh frame arrival.
   const readinessScratchRef = useRef<PanelReadiness>({
     state: "absent",
     lastReadyMs: 0,
@@ -308,7 +347,6 @@ export function VideoPanel({
   const waitingSinceMsRef = useRef<number | null>(null);
   const lastFrameIndexAtWaitStartRef = useRef<number>(0);
   const lastReadyMsRef = useRef<number>(0);
-  const lastFrameArrivedMsRef = useRef<number>(0);
 
   // Issue #2 — inline stalled badge inside the panel. The rAF loop
   // doesn't write to React state directly (no per-frame renders); the
@@ -402,21 +440,18 @@ export function VideoPanel({
   coverageStartRef.current = coverageStartNs;
   coverageEndRef.current = coverageEndNs;
 
-  // Expose the blit canvas to the agent API's `captureVideoFrame` for
-  // the lifetime of the panel (registry pattern, like sceneDevState).
+  // Mark this panel live for the agent API's `listVideoPanels()` /
+  // `captureVideoFrame` for the panel's lifetime (registry pattern, like
+  // sceneDevState). v5: we no longer register the canvas element — it's been
+  // transferred to the worker and can't be read back — only the panel id.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    setVideoCanvas(panelId, canvas);
-    return () => clearVideoCanvas(panelId);
+    registerVideoPanel(panelId);
+    return () => unregisterVideoPanel(panelId);
   }, [panelId]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
-    const ctx = canvas.getContext("2d", { alpha: false });
-    if (!ctx) return;
 
     const { proxy: videoDecode, worker: videoDecodeWorker } =
       makeVideoDecodeClient();
@@ -425,70 +460,57 @@ export function VideoPanel({
     const channel = new MessageChannel();
     const port = channel.port1;
 
+    // v5: the sink port no longer carries VideoFrames — the worker owns the
+    // blit. It carries (a) a one-time decode-error control message and (b) a
+    // lightweight STATUS object on every blit. The rAF tick reads the latest
+    // status; here we just stash it and react to the edges (decode-error
+    // recovery, the first-blit/seek-blit perf marks, decoder-liveness clock).
     port.onmessage = (ev: MessageEvent) => {
       const data = ev.data as
-        | {
-            ptsNs: bigint;
-            frame: VideoFrame;
-            frameIndex: number;
-            decodeQueue: number;
-          }
+        | BlitStatus
         | { type: "decode-error"; reason: string }
         | null;
       if (!data) return;
       // Task 2 — control message: the worker latched a fatal decode fault.
       // Surface it proactively so the panel doesn't sit on a frozen canvas
-      // until the 5 s stall timeout escalates. No VideoFrame to close here
-      // (control messages carry no transferables).
-      if ("type" in data) {
+      // until the 5 s stall timeout escalates.
+      if (data.type === "decode-error") {
         if (decodeErrorRef.current === null) {
           decodeErrorRef.current = data.reason;
           setDecodeError(data.reason);
         }
         return;
       }
-      const { ptsNs, frame, frameIndex, decodeQueue } = data;
-      // A fresh frame means the stream recovered (e.g. after a forced-seek
-      // retry re-primed the decoder); clear any standing decode-error badge.
+      // STATUS message. A blit means the stream is producing frames — clear
+      // any standing decode-error badge (a forced-retry re-prime recovered).
       if (decodeErrorRef.current !== null) {
         decodeErrorRef.current = null;
         setDecodeError(null);
       }
-      lastFrameIndexRef.current = frameIndex;
-      lastDecodeQueueRef.current = decodeQueue;
-      // Issue #2 — wall clock of the most recent frame arrival.
-      // Drives the "decoder is alive" arm of the readiness predicate
-      // so a healthy 4K stream that briefly outpaces ε is still
-      // reported as ready instead of constantly tripping the gate.
-      lastFrameArrivedMsRef.current = performance.now();
-      if (!sizedRef.current) {
-        canvas.width = frame.displayWidth;
-        canvas.height = frame.displayHeight;
-        sizedRef.current = true;
+      lastFrameIndexRef.current = data.frameIndex;
+      lastDecodeQueueRef.current = data.decodeQueue;
+      blitQueueLenRef.current = data.blitQueueLen;
+      droppedFramesRef.current = data.dropped;
+      lastBlitPtsRef.current = data.blitPtsNs;
+      // Issue #2 — track decoder liveness on OUR clock. When the worker's
+      // `frameArrivedMs` advances (a fresh frame decoded), stamp the local
+      // receipt time; the readiness predicate's "decoder alive" arm compares
+      // that against FRAME_LIVE_WINDOW_MS, immune to worker↔main clock skew.
+      if (data.frameArrivedMs !== lastWorkerFrameArrivedMsRef.current) {
+        lastWorkerFrameArrivedMsRef.current = data.frameArrivedMs;
+        lastFrameArrivedLocalMsRef.current = performance.now();
       }
-      // The decoder produces frames in PTS order, often far faster than
-      // real-time on a 4K stream with HW acceleration. A naïve
-      // drop-oldest policy lets the queue's PTS window slide past the
-      // cursor, after which the blit loop (which picks the newest
-      // frame ≤ cursor) has nothing to draw — the canvas stays frozen
-      // on the first frame for the rest of playback. Only evict the
-      // head once the cursor has passed it; otherwise drop the
-      // incoming frame, which keeps the queue anchored at / behind
-      // the cursor.
-      if (queueRef.current.length >= MAX_QUEUE) {
-        const cursor = cursorRef.current;
-        const oldest = queueRef.current[0];
-        if (oldest.ptsNs < cursor) {
-          queueRef.current.shift();
-          oldest.frame.close();
-          droppedFramesRef.current += 1;
-        } else {
-          frame.close();
-          droppedFramesRef.current += 1;
-          return;
-        }
+      // First-blit + seek-to-blit perf marks must land on the MAIN-thread
+      // perf timeline (so __drivelinePerf / e2e budgets read them). The worker
+      // can't mark there, so it flags the edge and we stamp it here.
+      if (data.firstBlit) {
+        mark(VIDEO_FIRST_FRAME);
       }
-      queueRef.current.push({ ptsNs, frame, frameIndex, decodeQueue });
+      if (data.seekBlit) {
+        mark(VIDEO_SEEK_END);
+        measure(VIDEO_SEEK_TO_BLIT, VIDEO_SEEK_START, VIDEO_SEEK_END);
+      }
+      window.__drivelineVideoLastBlitPtsNs = data.blitPtsNs;
     };
 
     let cancelled = false;
@@ -564,6 +586,32 @@ export function VideoPanel({
         Comlink.transfer(channel.port2, [channel.port2]),
       );
       if (cancelled) return;
+      // v5: transfer the visible video canvas to the worker so it owns the
+      // blit. `transferControlToOffscreen` is one-shot per element (a second
+      // call throws) and detaches the element from any main-thread 2D/WebGL
+      // context — which is exactly why the panel no longer draws here. The
+      // element stays usable for CSS transforms (pan/zoom). jsdom/happy-dom
+      // don't implement it, so guard for that (unit tests run the status path
+      // without a real blit). Post the desired pixel size first so the worker
+      // can pre-size the surface before the first frame lands.
+      try {
+        const desiredW = canvas.clientWidth || canvas.width || 1600;
+        const desiredH = canvas.clientHeight || canvas.height || 900;
+        await videoDecode.setRenderSize(desiredW, desiredH);
+        if (
+          !offscreenTransferredRef.current &&
+          typeof canvas.transferControlToOffscreen === "function"
+        ) {
+          const offscreen = canvas.transferControlToOffscreen();
+          offscreenTransferredRef.current = true;
+          await videoDecode.setRenderCanvas(
+            Comlink.transfer(offscreen, [offscreen]),
+          );
+        }
+      } catch (e) {
+        console.error("VideoPanel: OffscreenCanvas transfer failed", e);
+      }
+      if (cancelled) return;
       try {
         const result = await videoDecode.open(
           sourceKind,
@@ -610,14 +658,14 @@ export function VideoPanel({
       const ts = times[idx];
       void (async () => {
         try {
-          const bytes = await useSession
-            .getState()
-            .fetchChannelRange(binding.pointcloudChannelId, ts, ts + 1n, false);
+          // Shared with the 3D scene panel: the spin is decoded once per
+          // (channel, ts) and both viewers read the same buffers.
+          const res = await fetchDecodedSpin(binding.pointcloudChannelId, ts);
           if (token !== overlayReqRef.current) return;
-          const res = decodePointCloud(bytes);
           if (!res.ok || res.count === 0) {
             overlayProjCountRef.current = 0;
             overlaySpinIdxRef.current = idx;
+            overlayGenRef.current += 1;
             return;
           }
           // Grow the reusable projection buffers when the spin gets denser.
@@ -634,6 +682,7 @@ export function VideoPanel({
           );
           overlayProjCountRef.current = res.count;
           overlaySpinIdxRef.current = idx;
+          overlayGenRef.current += 1;
           setVideoOverlayInfo(panelId, {
             enabled: true,
             cameraName: binding.cameraName,
@@ -649,9 +698,12 @@ export function VideoPanel({
       })();
     };
 
-    // Per-tick overlay paint. Sizes the overlay canvas to the panel, clears it,
-    // and redraws the cached projection at the letterboxed content rect. When
-    // the active spin index changed, kicks a (coalesced) async refresh first.
+    // Per-tick overlay paint. Sizes the overlay canvas to the panel and, when
+    // the active spin index changed, kicks a (coalesced) async refresh. The
+    // actual clear + redraw of the cached projection only runs when the painted
+    // pixels would differ from the last frame (see the dirty check below), so a
+    // 60 Hz tick does not force a 60 Hz redraw of a cloud that changes at the
+    // spin rate.
     const drawOverlay = () => {
       const overlayCanvas = overlayCanvasRef.current;
       const overlayCtx = overlayCanvas?.getContext("2d") ?? null;
@@ -660,64 +712,111 @@ export function VideoPanel({
       const calib = overlayCalibRef.current;
       const times = overlaySpinTimesRef.current;
       const blitPts = lastBlitPtsRef.current;
+      const drawn = overlayDrawnRef.current;
       // Match the overlay canvas's pixel buffer to its CSS box (the panel) so
-      // its coordinate space is panel pixels.
+      // its coordinate space is panel pixels. Setting width/height clears the
+      // canvas, so only touch it on an actual size change.
       const cw = overlayCanvas.clientWidth;
       const ch = overlayCanvas.clientHeight;
       if (cw > 0 && ch > 0) {
         if (overlayCanvas.width !== cw) overlayCanvas.width = cw;
         if (overlayCanvas.height !== ch) overlayCanvas.height = ch;
       }
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-      if (!binding || !calib || !times || blitPts === null) return;
+
+      if (!binding || !calib || !times || blitPts === null) {
+        // Nothing to project. Clear once on the transition into this state so a
+        // stale cloud doesn't linger; then stay idle (no per-tick clears).
+        if (drawn.gen !== -1) {
+          overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+          drawn.gen = -1;
+        }
+        return;
+      }
       // Refetch only when the active spin actually changes.
       const idx = activeSpinIndex(times, blitPts);
       if (idx !== overlaySpinIdxRef.current && idx >= 0) {
         refreshOverlaySpin(idx);
       }
-      const buf = overlayProjRef.current;
-      const count = overlayProjCountRef.current;
-      if (!buf || count === 0) return;
+      const { near, far } = overlayDepthsRef.current;
+
+      // The overlay canvas is a separate layer stacked over the video, and
+      // zoom/pan is a CSS transform on the element — not a pixel redraw. So the
+      // painted pixels are a pure function of the projected spin
+      // (`overlayGenRef`), the canvas size, and the depth range. When none of
+      // those changed since the last paint, the cached pixels are still correct
+      // and we skip the (expensive) clear + per-point redraw entirely. This
+      // collapses a ~60 Hz redraw into a ~spin-rate one, freeing the main
+      // thread for the video blit and keeping playback smooth under load.
+      const gen = overlayGenRef.current;
+      if (
+        drawn.gen === gen &&
+        drawn.w === overlayCanvas.width &&
+        drawn.h === overlayCanvas.height &&
+        drawn.near === near &&
+        drawn.far === far
+      ) {
+        return;
+      }
+      drawn.gen = gen;
+      drawn.w = overlayCanvas.width;
+      drawn.h = overlayCanvas.height;
+      drawn.near = near;
+      drawn.far = far;
 
       mark(OVERLAY_DRAW_START);
-      const rect = contentRect(
-        calib.intrinsics.width,
-        calib.intrinsics.height,
-        overlayCanvas.width,
-        overlayCanvas.height,
-      );
-      const { near, far } = overlayDepthsRef.current;
-      const radius = Math.max(1, rect.width / 760);
-      const depthSpan = Math.max(1e-3, far - near);
-      for (let i = 0; i < count; i++) {
-        if (buf.visible[i] === 0) continue;
-        const [cx, cy] = imagePixelToContent(
-          buf.us[i],
-          buf.vs[i],
+      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      const buf = overlayProjRef.current;
+      const count = overlayProjCountRef.current;
+      if (buf && count > 0) {
+        // Rebuild the colour palette only when the depth range changes.
+        let palette = overlayPaletteRef.current;
+        if (!palette || palette.near !== near || palette.far !== far) {
+          palette = buildDepthPalette(near, far);
+          overlayPaletteRef.current = palette;
+        }
+        const rect = contentRect(
           calib.intrinsics.width,
           calib.intrinsics.height,
-          rect,
+          overlayCanvas.width,
+          overlayCanvas.height,
         );
-        // Fade far returns so the dense far scan-rings recede instead of
-        // smearing into horizontal streaks when the frame is viewed small;
-        // near structure stays solid (near→far alpha 0.98→0.48).
-        const tDepth = Math.min(
-          1,
-          Math.max(0, (buf.depths[i] - near) / depthSpan),
-        );
-        overlayCtx.globalAlpha = 0.98 - 0.5 * tDepth;
-        overlayCtx.fillStyle = depthColor(buf.depths[i], near, far);
-        overlayCtx.beginPath();
-        overlayCtx.arc(rect.left + cx, rect.top + cy, radius, 0, Math.PI * 2);
-        overlayCtx.fill();
+        const radius = Math.max(1, rect.width / 760);
+        const fw = calib.intrinsics.width;
+        const fh = calib.intrinsics.height;
+        const sx = rect.width / fw;
+        const sy = rect.height / fh;
+        // One Path2D per depth bucket: accumulate every dot, then emit a single
+        // fill per bucket. Turns a fillStyle assignment + beginPath + arc +
+        // fill *per point* into ~`buckets` fills total — the dominant overlay
+        // cost when a dense spin lands. Path2D has no clear, so re-allocate.
+        let paths = overlayBucketPathsRef.current;
+        if (!paths || paths.length !== palette.buckets) {
+          paths = Array.from({ length: palette.buckets }, () => new Path2D());
+        } else {
+          for (let b = 0; b < paths.length; b++) paths[b] = new Path2D();
+        }
+        overlayBucketPathsRef.current = paths;
+        const TWO_PI = Math.PI * 2;
+        for (let i = 0; i < count; i++) {
+          if (buf.visible[i] === 0) continue;
+          const px = rect.left + buf.us[i] * sx;
+          const py = rect.top + buf.vs[i] * sy;
+          const path = paths[depthBucketIndex(buf.depths[i], palette)];
+          // `moveTo` before `arc` starts a fresh subpath so the dots don't get
+          // chained together by an implicit line from the previous arc's end.
+          path.moveTo(px + radius, py);
+          path.arc(px, py, radius, 0, TWO_PI);
+        }
+        for (let b = 0; b < paths.length; b++) {
+          overlayCtx.fillStyle = palette.colors[b];
+          overlayCtx.fill(paths[b]);
+        }
       }
-      overlayCtx.globalAlpha = 1;
       mark(OVERLAY_DRAW_END);
       measure(OVERLAY_DRAW, OVERLAY_DRAW_START, OVERLAY_DRAW_END);
     };
 
     const tick = () => {
-      const q = queueRef.current;
       const cursor = cursorRef.current;
       // T7 — is the cursor inside this source's frame coverage?
       const covStart = coverageStartRef.current;
@@ -727,53 +826,21 @@ export function VideoPanel({
         covEnd !== null &&
         (cursor < covStart || cursor > covEnd);
 
+      // v5: the worker owns the video blit, so the panel no longer draws a
+      // frame here. Coverage handling moves to a worker request: on entry into
+      // an uncovered region, ask the worker to paint the canvas black once (so
+      // a stale frame from another time doesn't linger); reset the latch on
+      // re-entry into coverage. Readiness below reports "uncovered"
+      // (non-gating), so playback keeps rolling for the other panels.
       if (outOfCoverage) {
-        // No frame exists at this cursor. Don't leave a stale frame from a
-        // different time on the canvas — paint it black once on entry so the
-        // panel reads as honestly empty. Readiness below reports "uncovered"
-        // (non-gating), so playback keeps rolling for the other panels.
-        if (!uncoveredPaintedRef.current && sizedRef.current) {
-          ctx.fillStyle = "#000";
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        if (!uncoveredPaintedRef.current) {
           uncoveredPaintedRef.current = true;
+          lastBlitPtsRef.current = null;
+          window.__drivelineVideoLastBlitPtsNs = null;
+          void videoDecodeRef.current?.paintBlack().catch(() => undefined);
         }
       } else {
         uncoveredPaintedRef.current = false;
-        // Walk forward while the next frame's PTS is also <= cursor. That
-        // leaves us with the newest frame in [−∞, cursor], exactly the one
-        // we want to blit.
-        let blitIdx = -1;
-        for (let i = 0; i < q.length; i++) {
-          if (q[i].ptsNs <= cursor) blitIdx = i;
-          else break;
-        }
-        if (blitIdx >= 0) {
-          // Close every frame strictly before the one we're about to blit,
-          // plus the one we blit (we keep it on the canvas via drawImage,
-          // but drop the handle; the canvas owns its own pixels from here).
-          const target = q[blitIdx];
-          for (let i = 0; i < blitIdx; i++) q[i].frame.close();
-          q.splice(0, blitIdx);
-          ctx.drawImage(target.frame, 0, 0, canvas.width, canvas.height);
-          if (lastBlitPtsRef.current === null) {
-            mark(VIDEO_FIRST_FRAME);
-          }
-          // Task 4 — close the seek-to-blit bracket on the first frame
-          // blitted after a seek was dispatched. `mark`/`measure` are cheap
-          // (no allocation in the steady-state path: the flag is false on
-          // every non-seek tick), and the measure lands on the standard
-          // `performance` timeline so `__drivelinePerf`/e2e can assert the
-          // T5.2 P50<120ms / P95<250ms budget.
-          if (seekPendingBlitRef.current) {
-            seekPendingBlitRef.current = false;
-            mark(VIDEO_SEEK_END);
-            measure(VIDEO_SEEK_TO_BLIT, VIDEO_SEEK_START, VIDEO_SEEK_END);
-          }
-          window.__drivelineVideoLastBlitPtsNs = target.ptsNs;
-          lastBlitPtsRef.current = target.ptsNs;
-          target.frame.close();
-          q.shift();
-        }
       }
 
       // Point-cloud overlay (docs/13). After the video blit, project the LiDAR
@@ -790,7 +857,7 @@ export function VideoPanel({
         ptsNs: lastBlitPtsRef.current,
         frameIndex: lastFrameIndexRef.current,
         decodeQueue: lastDecodeQueueRef.current,
-        blitQueueLen: queueRef.current.length,
+        blitQueueLen: blitQueueLenRef.current,
         dropped: droppedFramesRef.current,
         codec: codecRef.current,
         hudOn: hudOnRef.current,
@@ -870,23 +937,18 @@ export function VideoPanel({
           // worker pacing would follow the gated cursor, and playback
           // would throttle into a feedback loop.
           if (
-            nowMsRead - lastFrameArrivedMsRef.current <=
+            nowMsRead - lastFrameArrivedLocalMsRef.current <=
             FRAME_LIVE_WINDOW_MS
           ) {
             isReady = true;
-          } else {
-            // Loose arm B: queue still holds undelivered frames
-            // straddling the cursor — decoder finished its lookahead
-            // burst and went idle by design (worker pacing). The
-            // panel will catch up as cursor advances; this is not a
-            // stall. Walking the queue once is O(MAX_QUEUE=16),
-            // which is fine for a 60 Hz tick.
-            for (let i = 0; i < q.length; i++) {
-              if (q[i].ptsNs >= cursor) {
-                isReady = true;
-                break;
-              }
-            }
+          } else if (blitQueueLenRef.current > 0) {
+            // Loose arm B: the worker's blit queue still holds frames the
+            // panel hasn't reached yet. The worker always blits the newest
+            // frame ≤ cursor immediately, so anything still queued is ahead
+            // of the cursor — the decoder finished its lookahead burst and
+            // went idle by design (worker pacing). The panel catches up as
+            // the cursor advances; this is not a stall.
+            isReady = true;
           }
         }
       }
@@ -947,16 +1009,16 @@ export function VideoPanel({
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
       port.onmessage = null;
-      for (const e of queueRef.current) e.frame.close();
-      queueRef.current = [];
+      // v5: no local frame queue to close — the worker owns/closes frames.
+      // The worker is terminated below, which drops its canvas + queue.
       lastSeekTargetRef.current = null;
       lastCursorSentRef.current = null;
       codecRef.current = null;
       lastFrameIndexRef.current = 0;
       lastDecodeQueueRef.current = 0;
+      blitQueueLenRef.current = 0;
       droppedFramesRef.current = 0;
       lastBlitPtsRef.current = null;
-      seekPendingBlitRef.current = false;
       decodeErrorRef.current = null;
       lastHudTextRef.current = "";
       lastStatsTextRef.current = "";
@@ -965,7 +1027,8 @@ export function VideoPanel({
       waitingSinceMsRef.current = null;
       lastFrameIndexAtWaitStartRef.current = 0;
       lastReadyMsRef.current = 0;
-      lastFrameArrivedMsRef.current = 0;
+      lastFrameArrivedLocalMsRef.current = 0;
+      lastWorkerFrameArrivedMsRef.current = 0;
       clearPanelReadiness(panelId);
       window.__drivelineVideoHud = undefined;
       const dc = videoDecodeRef.current;
@@ -1060,6 +1123,27 @@ export function VideoPanel({
 
   useEffect(() => () => clearVideoOverlayInfo(panelId), [panelId]);
 
+  // v5: keep the worker's notion of the panel's pixel size current. The worker
+  // can't read the transferred OffscreenCanvas's CSS box, and it can't be sized
+  // from the main thread post-transfer, so the panel posts the desired size on
+  // mount (in the worker effect) and on every resize here. Sizing is advisory
+  // today — the worker sizes the surface to the decoded frame's intrinsic
+  // dimensions and CSS object-fit letterboxes the element — but honouring the
+  // contract keeps the seam correct for a future intrinsic-vs-container mode.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      if (w > 0 && h > 0) {
+        void videoDecodeRef.current?.setRenderSize(w, h).catch(() => undefined);
+      }
+    });
+    ro.observe(canvas);
+    return () => ro.disconnect();
+  }, []);
+
   // Wheel-to-zoom. Registered as a native, non-passive listener because
   // React's synthetic onWheel is passive — `preventDefault` there is a
   // no-op and the page/panel would scroll instead of zooming. The anchor
@@ -1129,9 +1213,10 @@ export function VideoPanel({
     // fails again the worker re-posts `decode-error` and we flip back.
     decodeErrorRef.current = null;
     setDecodeError(null);
-    // Bracket the retry's seek-to-blit latency too (Task 4).
+    // Bracket the retry's seek-to-blit latency too (Task 4). The worker arms
+    // its seek-blit flag inside `seek()`; the first post-seek STATUS message
+    // carries `seekBlit: true`, and the sink handler closes the bracket here.
     mark(VIDEO_SEEK_START);
-    seekPendingBlitRef.current = true;
     void client.seek(target, true).catch(() => undefined);
   };
 
@@ -1197,14 +1282,12 @@ export function VideoPanel({
         // The seek itself resets the worker's notion of cursor, so the
         // setCursor coalescer should re-baseline at the same target.
         lastCursorSentRef.current = target;
-        // Drop stale frames ahead of the seek so the blit loop converges fast.
-        for (const e of queueRef.current) e.frame.close();
-        queueRef.current = [];
-        // Task 4 — open the seek-to-blit bracket. The rAF blit loop closes
-        // it (VIDEO_SEEK_END + VIDEO_SEEK_TO_BLIT measure) on the first
-        // frame it draws after this dispatch.
+        // Task 4 — open the seek-to-blit bracket on the MAIN-thread perf
+        // timeline. The worker flushes its blit queue + arms its seek-blit
+        // flag inside `seek()`; the first post-seek STATUS carries
+        // `seekBlit: true`, and the sink handler stamps VIDEO_SEEK_END +
+        // the VIDEO_SEEK_TO_BLIT measure here on the main thread.
         mark(VIDEO_SEEK_START);
-        seekPendingBlitRef.current = true;
         void client.seek(target).catch(() => undefined);
       }, SEEK_DEBOUNCE_MS);
     });

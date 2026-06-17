@@ -36,6 +36,7 @@ import {
 import type { RawRecipeDryRunReport, Recipe } from "./recipe";
 import { matchRecipe, saveRecipe, removeRecipe } from "./formatRegistry";
 import { MAX_PLOT_SERIES } from "../panels/palette";
+import { clearPointCloudSpinCache } from "../panels/pointCloudSpinCache";
 import {
   loadLayoutFromStorage,
   type MapBinding,
@@ -3638,6 +3639,10 @@ export const useSession = create<SessionState>((set, get) => {
         // Inline (agent-pushed) storage lives on the main thread, not in the
         // worker — wipe it regardless of worker presence.
         resetInlineSources();
+        // Drop the shared decoded-LiDAR-spin cache so a fresh load can't serve
+        // geometry decoded from a previous session's (possibly same-named)
+        // channel.
+        clearPointCloudSpinCache();
         if (!worker) return;
         const w = worker;
         for (const s of get().sources) {
@@ -3758,6 +3763,10 @@ export const useSession = create<SessionState>((set, get) => {
         // Drop the lazy sample cache regardless of worker presence —
         // releases its `File` ref and detaches subscribers.
         src.mp4Cache?.dispose();
+        // A removed source's channel ids could be reused by a later same-named
+        // open, so drop the shared decoded-spin cache too (tiny — capped at a
+        // few entries).
+        clearPointCloudSpinCache();
 
         // Re-read in case `openFiles` mutated state while the close awaited.
         const cur = get();

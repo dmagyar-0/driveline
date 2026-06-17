@@ -1,29 +1,35 @@
-// Module-scoped registry of the live <canvas> element behind every
-// VideoPanel, keyed by panel id. Mirrors `sceneDevState.ts`: the panel
-// registers on mount and clears on unmount, so the agent API
-// (`captureVideoFrame`) can grab the decoded pixels at the cursor via
-// `canvas.toDataURL()` without scraping the DOM or owning panel
-// internals. The blit path draws with a plain 2D context (no WebGL, no
-// OffscreenCanvas transfer), so reading the canvas back is always legal.
+// Module-scoped registry of live VideoPanels, keyed by panel id. The panel
+// registers on mount and clears on unmount.
+//
+// v5 (off-thread blit): the video canvas is now `transferControlToOffscreen`d
+// to the videoDecode worker, which owns the blit. After the transfer the main
+// thread can no longer read the canvas back — `canvas.toDataURL()` throws on a
+// transferred element — so the registry no longer stores the `<canvas>`. Its
+// job is now just "which panel ids have a live video panel", which the agent
+// surface uses for `listVideoPanels()`. `captureVideoFrame(panelId?)` resolves
+// the panel's bound video channel and decodes the frame at the current cursor
+// off the playback path (see `agentApi.ts` / `videoCapture.ts`), so it never
+// touches the live canvas. The registration still mirrors `sceneDevState.ts`:
+// register on mount, clear on unmount.
 
-const registry = new Map<string, HTMLCanvasElement>();
+const registry = new Set<string>();
 
-export function setVideoCanvas(
-  panelId: string,
-  canvas: HTMLCanvasElement,
-): void {
-  registry.set(panelId, canvas);
+/** Register a live video panel by id (called on mount). */
+export function registerVideoPanel(panelId: string): void {
+  registry.add(panelId);
 }
 
-export function clearVideoCanvas(panelId: string): void {
+/** Drop a video panel from the registry (called on unmount). */
+export function unregisterVideoPanel(panelId: string): void {
   registry.delete(panelId);
 }
 
-export function getVideoCanvas(panelId: string): HTMLCanvasElement | null {
-  return registry.get(panelId) ?? null;
+/** Whether a panel id currently has a live video panel. */
+export function hasVideoPanel(panelId: string): boolean {
+  return registry.has(panelId);
 }
 
-/** Panel ids with a live canvas, in registration order. */
+/** Panel ids with a live video panel, in registration order. */
 export function listVideoCanvasPanelIds(): string[] {
-  return [...registry.keys()];
+  return [...registry];
 }

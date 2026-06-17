@@ -53,6 +53,15 @@ export interface PlaybackDeps {
   raf: (cb: FrameRequestCallback) => number;
   /** Cancels a previously-returned rAF handle. */
   caf: (id: number) => void;
+  /** Schedules `cb` after ~`ms`; returns a numeric handle. The rAF
+   *  starvation fallback (see `startPlaybackLoop`): rAF is throttled to
+   *  a crawl in backgrounded/headless tabs because no display drives
+   *  frames, but `setTimeout` keeps firing. Defaults to `setTimeout`
+   *  (cast to a number so the handle type matches `raf`'s; Node returns
+   *  a Timeout object, the browser returns a number). */
+  setTimer: (cb: () => void, ms: number) => number;
+  /** Cancels a previously-returned `setTimer` handle. */
+  clearTimer: (handle: number) => void;
   /** Issue #2 — readiness map source. Defaults to the live registry;
    *  unit tests inject a hand-rolled Map so the gate can be exercised
    *  without spinning up a VideoPanel. */
@@ -77,11 +86,18 @@ function defaultBoundVideoPanelIds(state: SessionState): string[] {
   return out;
 }
 
+// ~16 ms ≈ one 60 Hz frame. When rAF is starved the timer keeps the
+// cursor advancing at roughly 60 Hz; when rAF is healthy it almost
+// always wins the race and cancels the timer before it fires.
+const FALLBACK_INTERVAL_MS = 16;
+
 function defaultDeps(): PlaybackDeps {
   return {
     now: () => performance.now(),
     raf: (cb) => requestAnimationFrame(cb),
     caf: (id) => cancelAnimationFrame(id),
+    setTimer: (cb, ms) => setTimeout(cb, ms) as unknown as number,
+    clearTimer: (handle) => clearTimeout(handle),
     readiness: defaultGetReadinessSnapshot,
     boundVideoPanelIds: defaultBoundVideoPanelIds,
   };
@@ -97,12 +113,20 @@ export function startPlaybackLoop(
   store: SessionStore,
   deps?: Partial<PlaybackDeps>,
 ): () => void {
-  const { now, raf, caf, readiness, boundVideoPanelIds } = {
-    ...defaultDeps(),
-    ...deps,
-  };
+  const { now, raf, caf, setTimer, clearTimer, readiness, boundVideoPanelIds } =
+    {
+      ...defaultDeps(),
+      ...deps,
+    };
 
+  // The cursor is driven from BOTH rAF and a setTimeout fallback,
+  // whichever fires first (see `arm`/`disarm`). rAF keeps foreground
+  // playback vsync-smooth; the timer guarantees ~60 Hz progress when
+  // rAF is starved (backgrounded / headless tabs, where no display
+  // drives frames). Both handles are tracked so a tick can cancel its
+  // still-pending sibling and `cancel()` can clear the pair.
   let rafId: number | null = null;
+  let timerId: number | null = null;
   let anchor: Anchor | null = null;
   // The last value the loop itself wrote via `advanceCursor`. The store
   // clamps, so the post-write `cursorNs` may differ (end-of-session),
@@ -115,15 +139,38 @@ export function startPlaybackLoop(
     lastWritten = state.cursorNs;
   }
 
-  function cancel(): void {
+  // Arm both schedulers for the next tick. Whichever fires first runs
+  // `tick`, which calls `disarm()` to cancel the loser before doing any
+  // work — so the tick body runs exactly once per scheduling round.
+  function arm(): void {
+    if (rafId === null) rafId = raf(tick);
+    if (timerId === null) timerId = setTimer(tick, FALLBACK_INTERVAL_MS);
+  }
+
+  // Cancel whichever of the rAF / timer pair is still pending.
+  function disarm(): void {
     if (rafId !== null) {
       caf(rafId);
       rafId = null;
     }
+    if (timerId !== null) {
+      clearTimer(timerId);
+      timerId = null;
+    }
+  }
+
+  function cancel(): void {
+    disarm();
   }
 
   function tick(): void {
-    rafId = null;
+    // Either rAF or the timer fired; cancel the still-pending sibling so
+    // the tick body runs once, then re-arm both at the end. The tick is
+    // absolute (computes `nextNs` from the fixed anchor + wall clock and
+    // clamps), so even an extra firing could only yield a finer step,
+    // never an overshoot — but cancelling avoids needless back-to-back
+    // ticks.
+    disarm();
     const a = anchor;
     if (!a) return;
     const state = store.getState();
@@ -176,7 +223,7 @@ export function startPlaybackLoop(
         anchor = { cursorNs: state.cursorNs, nowMs: now(), speed: a.speed };
         lastWritten = state.cursorNs;
         mark("tick:gated");
-        rafId = raf(tick);
+        arm();
         return;
       }
     }
@@ -197,14 +244,12 @@ export function startPlaybackLoop(
     // the subscribe listener will have already cleared `anchor` in that
     // case, so re-check before scheduling the next frame.
     if (store.getState().playing && anchor !== null) {
-      rafId = raf(tick);
+      arm();
     }
   }
 
   function schedule(): void {
-    if (rafId === null) {
-      rafId = raf(tick);
-    }
+    arm();
   }
 
   const unsubscribe = store.subscribe((state, prev) => {

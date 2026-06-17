@@ -20,8 +20,8 @@ import {
 import { useSession } from "../state/store";
 import type { Channel } from "../state/store";
 import {
-  setVideoCanvas,
-  clearVideoCanvas,
+  registerVideoPanel,
+  unregisterVideoPanel,
 } from "../panels/videoCanvasRegistry";
 import {
   setWorkspaceBridge,
@@ -153,7 +153,7 @@ describe("install gating", () => {
 
   it("install exposes the api; the uninstaller removes it", () => {
     expect(api().version).toBe(AGENT_API_VERSION);
-    expect(AGENT_API_VERSION).toBe(4);
+    expect(AGENT_API_VERSION).toBe(6);
     uninstall?.();
     uninstall = null;
     expect(window.__drivelineAgent).toBeUndefined();
@@ -263,6 +263,45 @@ describe("addDataSource (inline ingestion)", () => {
     expect(typeof tsCol.values[0]).toBe("string");
     expect(tsCol.values[0]).toBe("1700000000000000000");
     expect(typeof valCol.values[0]).toBe("number");
+  });
+
+  it("snapshotAt samples scalars at T and lists channels (no video/cloud here)", async () => {
+    api().addDataSource(sineSpec());
+    const startNs = 1_700_000_000_000_000_000n;
+    const stepNs = 20_000_000n;
+    const T = (startNs + stepNs * 10n).toString();
+    const snap = await api().snapshotAt(T);
+    expect(snap.tsNs).toBe(T);
+    expect(snap.cameras).toEqual([]); // no video channel in an inline session
+    expect(snap.pointClouds).toEqual([]); // no point-cloud channel either
+    const speed = snap.scalars.find((s) => s.name === "/vehicle/speed");
+    expect(speed).toBeTruthy();
+    expect(speed!.sampleNs).toBe(T);
+    expect(speed!.value).toBeCloseTo(Math.sin(10 / 5), 6);
+    // The enum channel is not a scalar, so it's excluded from `scalars` but
+    // still present in the channel inventory.
+    expect(snap.scalars.some((s) => s.name === "/vehicle/gear")).toBe(false);
+    expect(snap.channels.map((c) => c.name).sort()).toEqual([
+      "/vehicle/gear",
+      "/vehicle/speed",
+    ]);
+  });
+
+  it("captureVideoFrameAt / snapshotAt never throw on bad input", async () => {
+    const res = api().addDataSource(sineSpec());
+    const speedId = res!.channels.find((c) => c.name === "/vehicle/speed")!.id;
+    // A scalar channel is not video → null, no worker spun up.
+    expect(
+      await api().captureVideoFrameAt(speedId, "1700000000000000000"),
+    ).toBeNull();
+    // Unknown channel → null.
+    expect(
+      await api().captureVideoFrameAt("nope", "1700000000000000000"),
+    ).toBeNull();
+    // Unparseable ns falls back to the cursor and still resolves a bundle.
+    const snap = await api().snapshotAt("not-a-number");
+    expect(snap).toBeTruthy();
+    expect(Array.isArray(snap.cameras)).toBe(true);
   });
 
   it("returns null on invalid specs (never throws)", () => {
@@ -401,32 +440,34 @@ describe("data access guard rails", () => {
   });
 });
 
-describe("captureVideoFrame", () => {
-  it("returns null when no video panel is registered", () => {
+describe("captureVideoFrame (v6, off-thread)", () => {
+  // v6 reworked `captureVideoFrame`: the live video canvas is now transferred
+  // to the decode worker (transferControlToOffscreen), so it can't be read
+  // back. `captureVideoFrame(panelId?)` instead resolves the panel's bound
+  // video channel and decodes the frame at the current cursor off the
+  // playback path (same code path as `captureVideoFrameAt`). The happy path
+  // needs a real videoDecode worker + a loaded session, which jsdom can't
+  // run — that's covered by the e2e specs. Here we pin the no-throw guard
+  // rails: it's async now, and returns null without a live panel / binding /
+  // worker rather than throwing.
+  it("returns null when no video panel is registered", async () => {
     expect(api().listVideoPanels()).toEqual([]);
-    expect(api().captureVideoFrame()).toBeNull();
+    await expect(api().captureVideoFrame()).resolves.toBeNull();
   });
 
-  it("captures the registered canvas as a PNG data URL", () => {
-    const canvas = document.createElement("canvas");
-    canvas.width = 4;
-    canvas.height = 3;
-    // jsdom has no real raster backend — stub the encoder; the agent
-    // contract is "PNG data URL of the registered canvas".
-    canvas.toDataURL = () => "data:image/png;base64,stub";
-    setVideoCanvas("video-test", canvas);
+  it("listVideoPanels tracks registered panels; capture is null without a binding/worker", async () => {
+    registerVideoPanel("video-test");
     try {
       expect(api().listVideoPanels()).toEqual(["video-test"]);
-      const shot = api().captureVideoFrame();
-      expect(shot).toEqual({
-        panelId: "video-test",
-        dataUrl: "data:image/png;base64,stub",
-        width: 4,
-        height: 3,
-      });
-      expect(api().captureVideoFrame("missing-panel")).toBeNull();
+      // No `videoBindings["video-test"]` and no worker → resolves null,
+      // never throws (the surface contract for bad/absent input).
+      await expect(api().captureVideoFrame()).resolves.toBeNull();
+      await expect(api().captureVideoFrame("video-test")).resolves.toBeNull();
+      await expect(
+        api().captureVideoFrame("missing-panel"),
+      ).resolves.toBeNull();
     } finally {
-      clearVideoCanvas("video-test");
+      unregisterVideoPanel("video-test");
     }
   });
 });

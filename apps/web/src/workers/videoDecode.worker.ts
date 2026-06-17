@@ -3,10 +3,21 @@
 // This worker owns a single `VideoDecoder` configured from the first MCAP
 // keyframe's inline SPS. It pulls encoded Annex-B chunks from the dataCore
 // worker in batches (user-chosen wire shape — see plan), feeds the decoder,
-// and posts `VideoFrame` objects over a `MessagePort` back to `VideoPanel`
-// so the main thread can blit them. `VideoFrame` is the only thing that
-// must stay in JS land — everything upstream is plain bytes owned by Rust
-// until it crosses the wasm boundary.
+// and BLITS the decoded `VideoFrame`s onto an `OffscreenCanvas` transferred
+// from `VideoPanel` (the v5 off-thread blit). `VideoFrame` never leaves the
+// worker now — everything upstream is plain bytes owned by Rust until it
+// crosses the wasm boundary, and the decoded frames live and die here.
+//
+// v5 (off-thread blit): the worker owns the visible video canvas. The panel
+// calls `setRenderCanvas(OffscreenCanvas)` (Comlink-transferred) and posts
+// the desired pixel size via `setRenderSize`. The worker keeps a small queue
+// of decoded frames and, on every decoded frame (`onFrame`) and on
+// `setCursor`, blits the newest frame whose `ptsNs <= cursorNs` to the
+// canvas's 2D context. The frame-drop / `MAX_QUEUE` policy that used to live
+// in `VideoPanel`'s sink `onmessage` lives here now. Instead of transferring
+// frames, the worker posts a lightweight STATUS object over the same sink
+// MessagePort on each blit so the main thread can drive the LiDAR overlay,
+// readiness, the HUD, and the seek/first-frame perf marks.
 //
 // T5.3: the worker is reader-agnostic. `open()` takes a `sourceKind` and
 // dispatches to the mcap or mp4 pull/close bindings; both readers emit
@@ -38,6 +49,64 @@ export type { VideoSourceKind };
 interface OpenResult {
   codec: string;
 }
+
+// A single decoded frame captured off the playback path (see
+// `captureFrameAtInternal`). `png` is transferred (zero-copy) to the caller.
+export interface CapturedFrame {
+  /** PTS (ns) of the frame actually returned — the newest at/<= the request. */
+  ptsNs: bigint;
+  width: number;
+  height: number;
+  /** PNG-encoded RGBA bytes of the frame. */
+  png: ArrayBuffer;
+}
+
+// Lightweight per-blit status posted to the main thread over the sink port
+// (v5 off-thread blit). Replaces the per-frame `VideoFrame` transfer: the main
+// thread reads the latest status to drive the LiDAR overlay, readiness, the
+// HUD, and the seek/first-frame perf marks. `blitPtsNs` crosses as a bigint
+// (Comlink/structured-clone carries bigint fine over a raw MessagePort).
+export interface BlitStatus {
+  type: "status";
+  /** PTS (ns) of the frame currently on the canvas, or null before any blit. */
+  blitPtsNs: bigint | null;
+  /** Monotonic visible-frame counter (mirrors `session.frameIndex`). */
+  frameIndex: number;
+  /** Decoder's `decodeQueueSize` at the moment of the blit (HUD metric). */
+  decodeQueue: number;
+  /** Total frames dropped by the worker's MAX_QUEUE policy since open. */
+  dropped: number;
+  /** `performance.now()` (worker clock) of the most recent frame arrival —
+   *  the main thread maps this onto its own clock-skew-free "decoder alive"
+   *  check via a delta against the status it just received. */
+  frameArrivedMs: number;
+  /** Length of the worker's blit queue at status time (HUD `blitQueue`). */
+  blitQueueLen: number;
+  /** True on the very first blit since the worker started, so the main thread
+   *  can stamp `VIDEO_FIRST_FRAME` on its own perf timeline. */
+  firstBlit: boolean;
+  /** True on the first blit after a seek was armed via `armSeekBlit`, so the
+   *  main thread can close the `VIDEO_SEEK_TO_BLIT` bracket. */
+  seekBlit: boolean;
+}
+
+// A decoded frame held in the worker's blit queue (v5). Mirrors the
+// `QueueEntry` that used to live in `VideoPanel`.
+interface QueueEntry {
+  ptsNs: bigint;
+  frame: VideoFrame;
+  frameIndex: number;
+  decodeQueue: number;
+}
+
+// Bounded blit queue. The decoder produces frames in PTS order, often far
+// faster than real-time on a 4K stream with HW acceleration. A naïve
+// drop-oldest policy lets the queue's PTS window slide past the cursor, after
+// which the blit (which picks the newest frame ≤ cursor) has nothing to draw —
+// the canvas stays frozen. Only evict the head once the cursor has passed it;
+// otherwise drop the incoming frame, keeping the queue anchored at/behind the
+// cursor. Mirrors the constant that used to live in `VideoPanel`.
+const MAX_QUEUE = 16;
 
 interface SessionState {
   sourceKind: VideoSourceKind;
@@ -84,6 +153,34 @@ let mp4Lazy: Comlink.Remote<Mp4LazyPortApi> | null = null;
 let session: SessionState | null = null;
 // Sink port set before open() lands; adopted by the session at open() time.
 let pendingSink: MessagePort | null = null;
+
+// --- v5 off-thread blit state ----------------------------------------------
+//
+// The worker owns the visible video canvas (transferred from the panel via
+// `setRenderCanvas`) and the blit queue. Both live module-level (like `session`
+// and `cursorNs`) so the blit can run from `onFrame`/`setCursor` without
+// threading them through the session — the canvas survives open/seek/close,
+// only the queue is flushed on a stream change.
+let renderCanvas: OffscreenCanvas | null = null;
+let renderCtx: OffscreenCanvasRenderingContext2D | null = null;
+// Desired pixel size posted by the main thread (mount + ResizeObserver). The
+// canvas is sized from the decoded frame's display dimensions on first blit
+// (so the pixel buffer matches the video), but the panel's requested size is
+// recorded so a future intrinsic-size mode could honour it; CSS object-fit on
+// the element handles the visual letterboxing today, exactly as before.
+let renderSizeW = 0;
+let renderSizeH = 0;
+let canvasSized = false;
+// Worker-side blit queue + the metrics the status message carries.
+const blitQueue: QueueEntry[] = [];
+let droppedFrames = 0;
+let lastBlitPtsNs: bigint | null = null;
+let lastFrameArrivedMs = 0;
+// First-blit / post-seek-blit flags so the main thread can stamp the
+// VIDEO_FIRST_FRAME and VIDEO_SEEK_TO_BLIT marks on ITS perf timeline (the
+// budget measure must land on the main thread; the worker only signals when).
+let firstBlitDone = false;
+let seekBlitPending = false;
 
 // ---------------------------------------------------------------------------
 // isConfigSupported cache
@@ -169,6 +266,75 @@ function onDecoderError(e: DOMException | Error): void {
     }
   }
   postSinkControl({ type: "decode-error", reason });
+}
+
+// Post the current blit metrics to the main thread over the sink port. Cheap
+// (a plain object, no transferables). `firstBlit`/`seekBlit` are one-shot
+// edges consumed by the caller, so they're passed in explicitly.
+function postBlitStatus(firstBlit: boolean, seekBlit: boolean): void {
+  const sink = session?.sink ?? pendingSink;
+  if (!sink) return;
+  const status: BlitStatus = {
+    type: "status",
+    blitPtsNs: lastBlitPtsNs,
+    frameIndex: session?.frameIndex ?? 0,
+    decodeQueue: session?.decoder?.decodeQueueSize ?? 0,
+    dropped: droppedFrames,
+    frameArrivedMs: lastFrameArrivedMs,
+    blitQueueLen: blitQueue.length,
+    firstBlit,
+    seekBlit,
+  };
+  sink.postMessage(status);
+}
+
+// Blit the newest queued frame whose PTS <= cursor onto the render canvas,
+// then drop every frame up to and including it. No-op when there is no canvas
+// yet or no frame at/<= cursor. Runs from `onFrame` (a fresh frame may now be
+// blittable) and `setCursor` (the cursor advanced past a queued frame) — the
+// worker has no `requestAnimationFrame`, so these two events drive the blit.
+function blitForCursor(): void {
+  const ctx = renderCtx;
+  if (!ctx || !renderCanvas) return;
+  // Walk forward while the next frame's PTS is also <= cursor: leaves us with
+  // the newest frame in [−∞, cursor], exactly the one we want to blit.
+  let blitIdx = -1;
+  for (let i = 0; i < blitQueue.length; i++) {
+    if (blitQueue[i].ptsNs <= cursorNs) blitIdx = i;
+    else break;
+  }
+  if (blitIdx < 0) return;
+  const target = blitQueue[blitIdx];
+  // Size the canvas pixel buffer to the decoded frame once (clears the canvas,
+  // so only on first blit / a dimension change). Sizing the *transferred*
+  // OffscreenCanvas is the worker's job — the main thread can't touch it.
+  const fw = target.frame.displayWidth || target.frame.codedWidth;
+  const fh = target.frame.displayHeight || target.frame.codedHeight;
+  if (!canvasSized || renderCanvas.width !== fw || renderCanvas.height !== fh) {
+    renderCanvas.width = fw;
+    renderCanvas.height = fh;
+    canvasSized = true;
+  }
+  // Close every frame strictly before the one we blit, plus the one we blit
+  // (the canvas owns its pixels after drawImage).
+  for (let i = 0; i < blitIdx; i++) blitQueue[i].frame.close();
+  blitQueue.splice(0, blitIdx);
+  ctx.drawImage(target.frame, 0, 0, renderCanvas.width, renderCanvas.height);
+  const firstBlit = !firstBlitDone;
+  firstBlitDone = true;
+  const seekBlit = seekBlitPending;
+  seekBlitPending = false;
+  lastBlitPtsNs = target.ptsNs;
+  target.frame.close();
+  blitQueue.shift();
+  postBlitStatus(firstBlit, seekBlit);
+}
+
+// Drop and close every queued frame. Called on seek/close so the blit loop
+// converges to the new stream instead of drawing stale frames.
+function flushBlitQueue(): void {
+  for (const e of blitQueue) e.frame.close();
+  blitQueue.length = 0;
 }
 
 function getDataCore(): Comlink.Remote<DataCorePortApi> {
@@ -402,8 +568,12 @@ async function openInternal(
   return result;
 }
 
+// Enqueue a decoded frame for the off-thread blit (v5). Replaces the old
+// per-frame transfer to the panel: the frame stays in the worker, gets queued
+// under the MAX_QUEUE drop policy that used to live in `VideoPanel`'s sink
+// `onmessage`, and `blitForCursor` draws the newest queued frame ≤ cursor.
 function emitFrame(frame: VideoFrame, ptsNs: bigint): void {
-  if (!session || !session.sink) {
+  if (!session) {
     frame.close();
     return;
   }
@@ -415,12 +585,28 @@ function emitFrame(frame: VideoFrame, ptsNs: bigint): void {
   // `decodeQueueSize` is a hint per spec; some backends report 0 even with
   // chunks in flight. Surface it anyway — it's the metric `T5.2` asks for.
   const decodeQueue = session.decoder.decodeQueueSize;
-  // Transfer the VideoFrame to VideoPanel. The panel owns `close()` from
-  // here on.
-  session.sink.postMessage(
-    { ptsNs, frame, frameIndex: session.frameIndex, decodeQueue },
-    [frame],
-  );
+  // Bounded queue: only evict the head once the cursor has passed it, else
+  // drop the incoming frame so the queue stays anchored at/behind the cursor.
+  if (blitQueue.length >= MAX_QUEUE) {
+    const oldest = blitQueue[0];
+    if (oldest.ptsNs < cursorNs) {
+      blitQueue.shift();
+      oldest.frame.close();
+      droppedFrames += 1;
+    } else {
+      frame.close();
+      droppedFrames += 1;
+      return;
+    }
+  }
+  blitQueue.push({
+    ptsNs,
+    frame,
+    frameIndex: session.frameIndex,
+    decodeQueue,
+  });
+  // A fresh frame may now be blittable for the current cursor.
+  blitForCursor();
 }
 
 function onFrame(frame: VideoFrame): void {
@@ -429,6 +615,10 @@ function onFrame(frame: VideoFrame): void {
     return;
   }
   session.inFlight = Math.max(0, session.inFlight - 1);
+  // Wall clock (worker) of this frame's arrival — surfaced in the status
+  // message so the main thread can run the "decoder is alive" arm of the
+  // readiness predicate against its own receipt time.
+  lastFrameArrivedMs = performance.now();
   const ptsNs = BigInt(frame.timestamp) * 1000n;
   if (ptsNs < session.discardBeforePtsNs) {
     // Pre-target frame: hold the most recent one so we can emit it just
@@ -441,8 +631,9 @@ function onFrame(frame: VideoFrame): void {
     void maybeRefill();
     return;
   }
-  if (!session.sink) {
-    // No consumer connected yet. Drop to keep the GPU pool from starving.
+  if (!renderCanvas) {
+    // No canvas connected yet (the panel hasn't transferred one). Drop to
+    // keep the GPU pool from starving.
     if (session.pendingPreTargetFrame) {
       session.pendingPreTargetFrame.close();
       session.pendingPreTargetFrame = null;
@@ -496,6 +687,11 @@ async function closeInternal(): Promise<void> {
   if (!session) return;
   const s = session;
   session = null;
+  // Drop any frames still queued for the (now-dead) stream so they don't get
+  // blitted against the next stream's cursor. The canvas itself is left as-is
+  // (last frame stays visible until the new stream produces one) — the panel
+  // owns when to clear via coverage logic on the main thread.
+  flushBlitQueue();
   if (s.pendingPreTargetFrame) {
     s.pendingPreTargetFrame.close();
     s.pendingPreTargetFrame = null;
@@ -514,6 +710,106 @@ async function closeInternal(): Promise<void> {
       await s.ops.close(s.streamId);
     } catch {
       // Stream handle may already be freed on the Rust side.
+    }
+  }
+}
+
+// --- agent frame capture (off the playback path) ---------------------------
+//
+// Decode the single frame nearest (at or before) `atPtsNs` on a THROWAWAY
+// decoder + stream and return it as PNG bytes. Used by the agent surface's
+// `snapshotAt` so an automation can read the camera at any timestamp without a
+// video panel, without disturbing live playback, and without the cursor having
+// to be there. It never touches the module-level `session`: it owns its own
+// `streamId` and `VideoDecoder`, both torn down before it returns. Runs under
+// `runExclusive` (below) so it never overlaps a playback open/seek teardown.
+async function captureFrameAtInternal(
+  sourceKind: VideoSourceKind,
+  sourceHandle: number,
+  channelId: string,
+  atPtsNs: bigint,
+): Promise<CapturedFrame | null> {
+  const dc = getDataCore();
+  const ops = videoStreamOps(dc, sourceKind, mp4Lazy ?? undefined);
+  const { streamId, description, framing } = await ops.open(
+    sourceHandle,
+    channelId,
+    atPtsNs,
+  );
+  // Newest frame whose PTS is <= the target; a frame strictly after the target
+  // is only kept as a fallback when the target precedes the very first frame.
+  let best: VideoFrame | null = null;
+  let captureError: Error | null = null;
+  const decoder = new VideoDecoder({
+    output: (frame) => {
+      const pts = BigInt(frame.timestamp) * 1000n;
+      if (pts <= atPtsNs) {
+        if (best) best.close();
+        best = frame;
+      } else if (best === null) {
+        best = frame;
+      } else {
+        frame.close();
+      }
+    },
+    error: (e) => {
+      captureError = e as Error;
+    },
+  });
+  try {
+    let batch = (await ops.next(streamId, PRIMING_BATCH)) as EncodedChunkWire[];
+    if (batch.length === 0) return null;
+    await configureFromFirstKeyframe(batch, description, framing, decoder);
+    // Feed forward until we have decoded past the target (so the reorder
+    // window definitely contains the frame at/just before it), then flush.
+    let fedPastTarget = false;
+    while (batch.length > 0) {
+      for (const c of batch) {
+        if (captureError) throw captureError;
+        decoder.decode(
+          new EncodedVideoChunk({
+            type: c.is_keyframe ? "key" : "delta",
+            timestamp: ptsToMicros(c.pts_ns),
+            data: c.data,
+          }),
+        );
+        if (c.pts_ns > atPtsNs) fedPastTarget = true;
+      }
+      if (fedPastTarget) break;
+      batch = (await ops.next(streamId, PULL_BATCH)) as EncodedChunkWire[];
+    }
+    if (decoder.state === "configured") {
+      try {
+        await decoder.flush();
+      } catch {
+        // A flush race shouldn't fail the capture once we already hold a frame.
+      }
+    }
+    if (captureError) throw captureError;
+    const frame = best as VideoFrame | null;
+    if (!frame) return null;
+    const width = frame.displayWidth || frame.codedWidth;
+    const height = frame.displayHeight || frame.codedHeight;
+    const oc = new OffscreenCanvas(width, height);
+    const ctx = oc.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(frame, 0, 0, width, height);
+    const blob = await oc.convertToBlob({ type: "image/png" });
+    const png = await blob.arrayBuffer();
+    return { ptsNs: BigInt(frame.timestamp) * 1000n, width, height, png };
+  } finally {
+    if (best) (best as VideoFrame).close();
+    if (decoder.state !== "closed") {
+      try {
+        decoder.close();
+      } catch {
+        // already closed
+      }
+    }
+    try {
+      await ops.close(streamId);
+    } catch {
+      // stream handle may already be freed on the Rust side
     }
   }
 }
@@ -563,10 +859,60 @@ export const videoDecodeApi = {
   },
   setCursor(ns: bigint): void {
     cursorNs = ns;
+    // The cursor advanced — a queued frame may now be the newest ≤ cursor, so
+    // blit it. This is one of the two events that drive the off-thread blit
+    // (the other is `onFrame`); the worker has no `requestAnimationFrame`.
+    blitForCursor();
     // Wake the pull loop in case the pacing gate was the only reason it
     // stopped — `maybeRefill` is otherwise driven by `onFrame`, which a
     // gated decoder no longer fires.
     void maybeRefill();
+  },
+  // v5 off-thread blit: adopt the visible video canvas transferred from the
+  // panel (Comlink-transferred OffscreenCanvas). The worker owns its 2D
+  // context and all blits from here on. `alpha: false` matches the panel's
+  // old main-thread context (opaque video, no compositing cost). If a frame
+  // is already queued for the current cursor, draw it immediately so a
+  // late-attached canvas (or a re-attach) paints without waiting for the next
+  // decode/cursor event.
+  setRenderCanvas(canvas: OffscreenCanvas): void {
+    renderCanvas = canvas;
+    renderCtx = canvas.getContext("2d", {
+      alpha: false,
+    }) as OffscreenCanvasRenderingContext2D | null;
+    canvasSized = false;
+    // Pre-size to the panel's requested size if we have it, so the canvas is
+    // never a 0×0 surface before the first decoded frame lands (the agent's
+    // capture path + the overlay sizing read off the element box, not this
+    // buffer, but a non-zero buffer avoids a one-frame flash). The first blit
+    // re-sizes to the frame's intrinsic dimensions.
+    if (renderSizeW > 0 && renderSizeH > 0) {
+      canvas.width = renderSizeW;
+      canvas.height = renderSizeH;
+    }
+    blitForCursor();
+  },
+  // The panel posts its desired pixel size on mount and on resize (it can't
+  // size the transferred canvas itself). We record it; the canvas is sized to
+  // the decoded frame's intrinsic dimensions on blit (CSS object-fit on the
+  // element letterboxes it visually, exactly as the pre-v5 path did), so this
+  // is advisory today — kept so the contract is honoured and a future
+  // intrinsic-vs-container sizing mode has the value.
+  setRenderSize(w: number, h: number): void {
+    renderSizeW = w;
+    renderSizeH = h;
+  },
+  // T7: paint the canvas black. The panel asks for this once on entry into a
+  // region its source doesn't cover, so a stale frame from another time
+  // doesn't linger while the cursor sits outside coverage. No-op without a
+  // canvas. Also clears the blit queue so a frame buffered for the old cursor
+  // can't immediately repaint over the black fill.
+  paintBlack(): void {
+    if (!renderCtx || !renderCanvas) return;
+    flushBlitQueue();
+    renderCtx.fillStyle = "#000";
+    renderCtx.fillRect(0, 0, renderCanvas.width, renderCanvas.height);
+    lastBlitPtsNs = null;
   },
   async open(
     sourceKind: VideoSourceKind,
@@ -591,6 +937,12 @@ export const videoDecodeApi = {
     // coalescing skip and the duplicate-target guard so a user can always
     // re-prime a stream that has gone bad at the current cursor.
     const myGen = ++seekGeneration;
+    // v5: arm the seek-to-blit bracket. The main thread marks VIDEO_SEEK_START
+    // when it dispatches the (debounced) seek; the first blit after this seek
+    // lands carries `seekBlit: true` so the main thread can close the
+    // VIDEO_SEEK_TO_BLIT measure on its own perf timeline. Armed on every seek
+    // call (including the forced retry), matching the pre-v5 main-thread flag.
+    seekBlitPending = true;
     await runExclusive(async () => {
       // Coalesce: a queued seek that a later seek has already superseded does
       // nothing — the newer one will reopen at the final target.
@@ -609,6 +961,11 @@ export const videoDecodeApi = {
       )
         return;
       const { sourceKind, sourceHandle, channelId, ops } = session;
+      // Drop stale queued frames ahead of the seek so the blit converges to
+      // the new target fast (the canvas keeps showing its last blit until the
+      // first post-seek frame lands). Mirrors the queue flush that used to run
+      // in VideoPanel's debounced seek effect.
+      flushBlitQueue();
       try {
         session.decoder.reset();
       } catch {
@@ -641,6 +998,22 @@ export const videoDecodeApi = {
   },
   async close(): Promise<void> {
     await runExclusive(() => closeInternal());
+  },
+  // Agent surface: decode the camera frame nearest `atPtsNs` and return it as
+  // PNG bytes, independent of playback. Serialised behind `runExclusive` so it
+  // never interleaves with a playback open/seek teardown. Returns null when no
+  // frame covers the timestamp (e.g. before the first sample or empty stream).
+  async captureFrameAt(
+    sourceKind: VideoSourceKind,
+    sourceHandle: number,
+    channelId: string,
+    atPtsNs: bigint,
+  ): Promise<CapturedFrame | null> {
+    const captured = await runExclusive(() =>
+      captureFrameAtInternal(sourceKind, sourceHandle, channelId, atPtsNs),
+    );
+    if (!captured) return null;
+    return Comlink.transfer(captured, [captured.png]);
   },
 };
 
