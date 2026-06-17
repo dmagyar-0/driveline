@@ -114,6 +114,14 @@ LiDAR points stay out of the snapshot bundle — fetch them per spin with
 `fetchChannelRange(channelId, spinTsNs, spinTsNs+1)` using the `spinTsNs` the
 bundle reports.
 
+`captureVideoFrame(panelId?)` (v6) is the panel-centric shortcut: it's now
+async and off-thread too. It resolves a live video panel's bound channel and
+decodes the frame at the **current cursor** via the same path, returning the
+same `{ channelId, cameraName, ptsNs, width, height, dataUrl }` shape (or
+`null`). The earlier synchronous "read the panel's canvas" form is gone — the
+off-thread blit refactor transfers each video panel's canvas to its decode
+worker, so the live canvas can't be read back from the main thread.
+
 ### 3D scene geometry, including road maps
 
 The `scene` panel renders 3D geometry channels — `point_cloud` (LiDAR),

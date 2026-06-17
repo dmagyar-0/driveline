@@ -50,17 +50,20 @@ import {
   type Bookmark,
 } from "../state/persist/bookmarks";
 import type { EventTagConfig } from "../state/persist/eventTagConfig";
-import {
-  getVideoCanvas,
-  listVideoCanvasPanelIds,
-} from "../panels/videoCanvasRegistry";
+import { listVideoCanvasPanelIds } from "../panels/videoCanvasRegistry";
 import { getWorkspaceBridge } from "../layout/workspaceBridge";
 import { panelKindOf, panelNameFor, type PanelKind } from "../layout/panelId";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import { captureVideoFrameAt as captureFrameOffThread } from "./videoCapture";
 import { decodeSeries } from "../panels/seriesFromArrow";
 
-export const AGENT_API_VERSION = 5 as const;
+// v6: `captureVideoFrame` went sync → async (breaking). After the off-thread
+// blit refactor the video canvas is transferred to the worker, so the live
+// canvas can no longer be read back (`toDataURL` throws on a transferred
+// canvas). `captureVideoFrame` now resolves the panel's bound channel and
+// decodes the frame at the current cursor off the playback path — the same
+// path as `captureVideoFrameAt`, returning an `AgentCapturedFrame`.
+export const AGENT_API_VERSION = 6 as const;
 
 /**
  * Spec for `addDataSource` — the agent's own inline (columnar) dataset.
@@ -117,14 +120,6 @@ export interface AddAgentEventInput {
   tags?: Record<string, string>;
   /** Confidence in [0, 1]; clamped. */
   confidence?: number;
-}
-
-export interface AgentFrameCapture {
-  panelId: string;
-  /** PNG data URL of the decoded frame currently on the panel canvas. */
-  dataUrl: string;
-  width: number;
-  height: number;
 }
 
 /** A camera frame decoded off the playback path at a requested timestamp
@@ -264,10 +259,17 @@ export interface AgentApi {
   /** Panel ids that currently have a live video canvas. */
   listVideoPanels(): string[];
   /**
-   * PNG-capture the decoded frame on a video panel's canvas (defaults
-   * to the first registered panel). `null` when no panel/canvas exists.
+   * Capture the camera frame for a video panel at the CURRENT cursor
+   * (defaults to the first live panel). v6: async + off the playback path —
+   * the panel's video canvas is now owned by the decode worker
+   * (`transferControlToOffscreen`), so the live canvas can't be read back.
+   * This resolves the panel's bound video channel and decodes the frame
+   * nearest the cursor via the same path as `captureVideoFrameAt` (returning
+   * an `AgentCapturedFrame`). Resolves `null` when no live panel exists, the
+   * panel has no resolvable video binding, or the cursor has no covering
+   * frame. Never throws.
    */
-  captureVideoFrame(panelId?: string): AgentFrameCapture | null;
+  captureVideoFrame(panelId?: string): Promise<AgentCapturedFrame | null>;
   /**
    * Decode the camera frame nearest `ns` on `channelId`, OFF the playback path:
    * no video panel required, the playback cursor is not moved, and live
@@ -473,8 +475,9 @@ const AGENT_CAPABILITIES: readonly AgentCapability[] = [
   },
   {
     name: "captureVideoFrame",
-    summary: "PNG of the decoded frame.",
-    mutating: false,
+    summary:
+      "PNG of a panel's camera frame at the current cursor (off-thread, async).",
+    mutating: true,
   },
   { name: "createPanel", summary: "Mint a panel of a kind.", mutating: true },
   {
@@ -671,18 +674,27 @@ function makeAgentApi(): AgentApi {
 
     listVideoPanels: () => listVideoCanvasPanelIds(),
 
-    captureVideoFrame(panelId) {
+    async captureVideoFrame(panelId) {
+      // v6: thin async alias for "the camera frame this panel shows at the
+      // current cursor". The panel's video canvas is owned by the decode
+      // worker now (transferControlToOffscreen), so we can't read it back;
+      // instead resolve the panel's bound video channel and decode the frame
+      // nearest the cursor off the playback path (same code path as
+      // `captureVideoFrameAt`). No-throw: null for an unknown/unbound panel.
+      const st = useSession.getState();
       const id = panelId ?? listVideoCanvasPanelIds()[0];
       if (id === undefined) return null;
-      const canvas = getVideoCanvas(id);
-      if (canvas === null || canvas.width === 0 || canvas.height === 0) {
-        return null;
-      }
+      const channelId = st.videoBindings[id] ?? null;
+      if (channelId === null) return null;
+      const cap = await captureFrameOffThread(channelId, st.cursorNs);
+      if (!cap) return null;
       return {
-        panelId: id,
-        dataUrl: canvas.toDataURL("image/png"),
-        width: canvas.width,
-        height: canvas.height,
+        channelId: cap.channelId,
+        cameraName: cap.cameraName,
+        ptsNs: cap.ptsNs.toString(),
+        width: cap.width,
+        height: cap.height,
+        dataUrl: cap.dataUrl,
       };
     },
 

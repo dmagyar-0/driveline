@@ -1,7 +1,7 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
 exports[`AGENT_SKILL > is pinned to an exact, reviewed guide 1`] = `
-"# Driveline — Bring Your Own Agent (BYOA) skill (v5)
+"# Driveline — Bring Your Own Agent (BYOA) skill (v6)
 
 Driveline is a browser-first, server-less viewer for synchronised video and
 high-rate signal data. Everything runs in the page: the data you push stays in
@@ -161,7 +161,7 @@ it renders without scrubbing the cursor.
 - Events: \`addEvent({ ns?, label?, tags?, confidence? })\`, \`listEvents()\`,
   \`exportEvents()\`, \`importEvents(json, mode?)\` record machine findings.
 
-## Read a moment without playing it (v5)
+## Read a moment without playing it (v5+)
 
 You don't have to drive the transport (or open any panel) to inspect a frame.
 These decode/sample at an explicit timestamp, off the live playback path, so a
@@ -171,9 +171,11 @@ human can keep watching uninterrupted while you analyse a different instant:
   width, height, dataUrl }\` — the camera frame nearest (at/before) \`ns\`,
   decoded on a throwaway decoder and returned as a PNG \`data:\` URL. Resolves
   \`null\` for an unknown/non-video channel or a \`ns\` with no covering frame.
-  (\`captureVideoFrame(panelId?)\` still exists but only reads whatever is
-  currently on a panel's canvas — prefer \`...At\` for frame-accurate, headless
-  reads.)
+  (\`captureVideoFrame(panelId?)\` is now an async alias that decodes a live
+  video panel's camera frame at the CURRENT cursor via this same off-thread
+  path — the panel's canvas is owned by the decode worker and can't be read
+  back. It resolves \`{ channelId, cameraName, ptsNs, width, height, dataUrl }\`
+  or \`null\`. Prefer \`...At\` when you want a specific timestamp.)
 - \`snapshotAt(ns)\` → \`{ tsNs, cameras[], pointClouds[], scalars[], channels[] }\`
   — one call for everything at \`ns\`: a decoded frame per camera, the active
   LiDAR \`spinTsNs\` per point-cloud channel (fetch its points with

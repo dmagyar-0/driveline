@@ -40,12 +40,12 @@ Every load prints a one-line console banner pointing agents at `getSkill()`
 and noting that `?agent` unlocks the full surface. App unmount uninstalls the
 whole thing (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v5)
+## `window.__drivelineAgent` (v6)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. The `version` field reports `5`; v5 is a
-superset of v4 (itself a superset of v3/v2/v1): v3 adds the always-on discovery
-trio (`getSkill`/`describe`) plus inline data-source ingestion
+is the authoritative reference. The `version` field reports `6`; v6 is a
+superset of v5 (itself a superset of v4/v3/v2/v1): v3 adds the always-on
+discovery trio (`getSkill`/`describe`) plus inline data-source ingestion
 (`addDataSource`, the "Bring Your Own Agent" surface — see
 docs/13-bring-your-own-agent.md); v4 adds `setSceneBinding`, completing the
 scene-geometry binding so an agent can _display_ a point cloud / boxes /
@@ -53,20 +53,25 @@ trajectory it loaded, not just create the panel; v5 adds the
 **playback-independent read** ops `captureVideoFrameAt(channelId, ns)` and
 `snapshotAt(ns)`, which decode/sample at an explicit timestamp off the live
 playback path (no panel required, cursor untouched) so an agent can analyse any
-instant while a human keeps watching. Summary:
+instant while a human keeps watching; v6 reworks `captureVideoFrame(panelId?)`
+into an **async, off-thread** read (breaking: sync→async) — the off-thread blit
+refactor transfers each video panel's canvas to its decode worker, so the live
+canvas can no longer be read back, and `captureVideoFrame` now decodes the
+panel's bound channel at the current cursor via the same path as
+`captureVideoFrameAt`. Summary:
 
-| Group              | Methods                                                                                                                                                                          |
-| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discovery (always on, v3) | `getSkill()`, `describe()`                                                                                                                                                |
-| Ingestion (v3)     | `addDataSource(spec)` — register an inline columnar source                                                                                                                       |
-| Session (read)     | `getSessionSnapshot()`, `listSources()`, `listChannels()`                                                                                                                        |
-| Data (read)        | `fetchChannelRange(channelId, startNs, endNs, includePrev?)`                                                                                                                     |
-| Transport          | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)`                                                                                                                              |
-| Events             | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
-| Events IO          | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
-| Video              | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
-| Read-at-time (v5)  | `captureVideoFrameAt(channelId, ns)`, `snapshotAt(ns)` — decode/sample at a timestamp, off the playback path                                                                      |
-| Layout (write, v2; `setSceneBinding` v4) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `setSceneBinding(panelId, channelId)`, `closePanel(panelId)`        |
+| Group                                    | Methods                                                                                                                                                                          |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discovery (always on, v3)                | `getSkill()`, `describe()`                                                                                                                                                       |
+| Ingestion (v3)                           | `addDataSource(spec)` — register an inline columnar source                                                                                                                       |
+| Session (read)                           | `getSessionSnapshot()`, `listSources()`, `listChannels()`                                                                                                                        |
+| Data (read)                              | `fetchChannelRange(channelId, startNs, endNs, includePrev?)`                                                                                                                     |
+| Transport                                | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)`                                                                                                                              |
+| Events                                   | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
+| Events IO                                | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
+| Video                                    | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
+| Read-at-time (v5)                        | `captureVideoFrameAt(channelId, ns)`, `snapshotAt(ns)` — decode/sample at a timestamp, off the playback path                                                                     |
+| Layout (write, v2; `setSceneBinding` v4) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `setSceneBinding(panelId, channelId)`, `closePanel(panelId)`                   |
 
 Behavioural notes:
 
@@ -82,10 +87,15 @@ Behavioural notes:
   stored on the event and surfaced in the Events drawer as an
   `agent NN%` badge, so reviewers can tell machine findings from human
   ones.
-- `captureVideoFrame` returns a PNG data URL of the decoded frame
-  currently blitted to a video panel's canvas (pixels only, no UI
-  chrome) — pair with `setCursor` + a readiness wait to grab the frame
-  at a moment of interest for VLM classification.
+- `captureVideoFrame(panelId?)` (v6, async) resolves a live video panel's
+  bound camera channel and decodes the frame nearest the **current cursor**
+  off the playback path, returning the same
+  `{ channelId, cameraName, ptsNs, width, height, dataUrl }` shape as
+  `captureVideoFrameAt` (or `null` when there is no live panel, no resolvable
+  binding, or no covering frame). It used to read a panel canvas synchronously;
+  after the off-thread blit refactor the canvas is owned by the decode worker
+  (`transferControlToOffscreen`) and can't be read back, hence the off-thread
+  decode. Prefer `captureVideoFrameAt` when you want a specific timestamp.
 - `captureVideoFrameAt(channelId, ns)` (v5) is the frame-accurate,
   **headless** counterpart: it decodes the camera frame nearest (at/before)
   `ns` on a throwaway decoder in a dedicated capture worker — no video panel,
@@ -99,7 +109,7 @@ Behavioural notes:
   `{ tsNs, cameras[], pointClouds[], scalars[], channels[] }` — a decoded frame
   per camera, the active LiDAR `spinTsNs` per point-cloud channel (raw points
   stay out of the bundle; fetch them with `fetchChannelRange(channelId,
-  spinTsNs, spinTsNs+1)`), every scalar's value at `ns`, and the channel
+spinTsNs, spinTsNs+1)`), every scalar's value at `ns`, and the channel
   inventory. It always resolves a bundle (empty arrays when nothing is loaded)
   and never throws; an unparseable `ns` falls back to the current cursor.
 - The transport methods go through the store's normal actions, so the
@@ -133,7 +143,7 @@ lives in one place.
 | `createPanel(kind)`                    | `panelId` or `null` | `kind` is a `PanelKind` (`plot` / `map` / `enum` / `table` / `value` / `video` / `scene`). Mints a tab and returns its freshly-minted id. `null` when the kind is unknown/unsupported, or when the workspace has not mounted yet. |
 | `bindChannels(panelId, channelIds)`    | `boolean`           | Appends scalar channels to a `plot` / `enum` / `table` / `value` panel via the matching store action.                                                                                                                             |
 | `setMapBinding(panelId, latId, lonId)` | `boolean`           | Sets a `map` panel's lat/lon pair.                                                                                                                                                                                                |
-| `setSceneBinding(panelId, channelId)`  | `boolean`           | Binds a 3D-geometry channel (`point_cloud` / `bounding_box` / `trajectory` / `map_geometry`) to a `scene` panel — one at a time. `null` clears it. (v4)                                                                            |
+| `setSceneBinding(panelId, channelId)`  | `boolean`           | Binds a 3D-geometry channel (`point_cloud` / `bounding_box` / `trajectory` / `map_geometry`) to a `scene` panel — one at a time. `null` clears it. (v4)                                                                           |
 | `closePanel(panelId)`                  | `boolean`           | Deletes the tab via FlexLayout `Actions.deleteTab`. `true` if the tab existed, else `false`.                                                                                                                                      |
 
 Validation & caps (mechanically enforced, never trusted from the caller —
@@ -175,10 +185,28 @@ trajectory). Map geometry is **static** — a single frame at ts=0 — so it
 renders on bind without scrubbing the cursor. The `drivelineMap` shape:
 
 ```json
-{ "drivelineMap": { "version": 1, "name": "intersection", "features": [
-  { "type": "lane_boundary", "polyline": [[0,0,0],[10,0,0]] },
-  { "type": "road_edge", "polyline": [[0,-2],[10,-2]] }
-] } }
+{
+  "drivelineMap": {
+    "version": 1,
+    "name": "intersection",
+    "features": [
+      {
+        "type": "lane_boundary",
+        "polyline": [
+          [0, 0, 0],
+          [10, 0, 0]
+        ]
+      },
+      {
+        "type": "road_edge",
+        "polyline": [
+          [0, -2],
+          [10, -2]
+        ]
+      }
+    ]
+  }
+}
 ```
 
 Feature `type` is one of `lane_boundary` / `road_edge` / `centerline` /
@@ -212,11 +240,11 @@ v3 lifts two capabilities onto the surface for the "Bring Your Own Agent"
 flow (docs/13). The mutating split changed: the discovery trio installs on
 every load, the rest stays gated.
 
-| Method                       | Availability      | Returns                                              | Semantics                                                                                                                       |
-| ---------------------------- | ----------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `getSkill()`                 | always (no opt-in)| `string`                                            | The full BYOA guide as Markdown (what Driveline is, the timestamp rule, the `AgentDataSourceSpec` shape + worked example).      |
-| `describe()`                 | always (no opt-in)| `{ version, capabilities[], agentParamRequired }`   | Machine-readable manifest of every method (name, summary, `mutating`). `agentParamRequired: true` when the gated ops are off.  |
-| `addDataSource(spec)`        | gated (`?agent`)  | `{ sourceId, channels: [{ id, name }] } \| null`    | Register the agent's own inline columnar data source (no file bytes, no URL). `null` on any validation failure; never throws.   |
+| Method                | Availability       | Returns                                           | Semantics                                                                                                                     |
+| --------------------- | ------------------ | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `getSkill()`          | always (no opt-in) | `string`                                          | The full BYOA guide as Markdown (what Driveline is, the timestamp rule, the `AgentDataSourceSpec` shape + worked example).    |
+| `describe()`          | always (no opt-in) | `{ version, capabilities[], agentParamRequired }` | Machine-readable manifest of every method (name, summary, `mutating`). `agentParamRequired: true` when the gated ops are off. |
+| `addDataSource(spec)` | gated (`?agent`)   | `{ sourceId, channels: [{ id, name }] } \| null`  | Register the agent's own inline columnar data source (no file bytes, no URL). `null` on any validation failure; never throws. |
 
 `addDataSource` takes an `AgentDataSourceSpec`: a source `name` plus
 `channels[]`, each with a `name` (slashes build the Channels tree), optional
