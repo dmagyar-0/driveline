@@ -87,35 +87,67 @@ interface FakeClock {
   now: () => number;
   raf: (cb: FrameRequestCallback) => number;
   caf: (id: number) => void;
+  setTimer: (cb: () => void, ms: number) => number;
+  clearTimer: (handle: number) => void;
   advance: (ms: number) => void;
-  flush: () => number; // returns count of callbacks invoked
-  pendingCount: () => number;
+  flush: () => number; // returns count of callbacks invoked (drains BOTH)
+  flushRaf: () => number; // flushes only the rAF queue
+  flushTimer: () => number; // flushes only the timer queue
+  pendingCount: () => number; // total armed schedulers (rAF + timer)
+  rafPending: () => number;
+  timerPending: () => number;
 }
 
+// The loop arms BOTH a rAF and a timer per scheduling round. The fake
+// clock keeps two independent queues so a test can fire one in
+// isolation (e.g. starve rAF and only fire the timer) and assert the
+// loop cancelled the sibling. Both share one id space so handles never
+// collide across queues.
 function makeFakeClock(): FakeClock {
   let nowMs = 0;
   let nextId = 1;
-  const pending = new Map<number, FrameRequestCallback>();
+  const rafQueue = new Map<number, FrameRequestCallback>();
+  const timerQueue = new Map<number, () => void>();
+  function drain(
+    q: Map<number, () => void> | Map<number, FrameRequestCallback>,
+  ): number {
+    const cbs = Array.from(q.values());
+    q.clear();
+    for (const cb of cbs) (cb as (t: number) => void)(nowMs);
+    return cbs.length;
+  }
   return {
     now: () => nowMs,
     raf(cb) {
       const id = nextId++;
-      pending.set(id, cb);
+      rafQueue.set(id, cb);
       return id;
     },
     caf(id) {
-      pending.delete(id);
+      rafQueue.delete(id);
+    },
+    setTimer(cb) {
+      const id = nextId++;
+      timerQueue.set(id, cb);
+      return id;
+    },
+    clearTimer(id) {
+      timerQueue.delete(id);
     },
     advance(ms) {
       nowMs += ms;
     },
     flush() {
-      const cbs = Array.from(pending.values());
-      pending.clear();
-      for (const cb of cbs) cb(nowMs);
-      return cbs.length;
+      // Drain the rAF queue first (it's what wins the race in the
+      // browser foreground); the tick cancels the timer sibling, so by
+      // the time we drain timers there's nothing left from this round.
+      return drain(rafQueue) + drain(timerQueue);
     },
-    pendingCount: () => pending.size,
+    flushRaf: () => drain(rafQueue),
+    flushTimer: () => drain(timerQueue),
+    pendingCount: () => rafQueue.size + timerQueue.size,
+    rafPending: () => rafQueue.size,
+    timerPending: () => timerQueue.size,
   };
 }
 
@@ -148,14 +180,17 @@ describe("playback loop (T3.3)", () => {
 
     useSession.getState().play();
     expect(useSession.getState().playing).toBe(true);
-    expect(clock.pendingCount()).toBe(1);
+    // Both the rAF and the timer fallback are armed.
+    expect(clock.pendingCount()).toBe(2);
+    expect(clock.rafPending()).toBe(1);
+    expect(clock.timerPending()).toBe(1);
 
     clock.advance(16);
     clock.flush();
     // 16 ms at 1× = 16 000 000 ns.
     expect(useSession.getState().cursorNs).toBe(16_000_000n);
-    // The tick should have scheduled the next frame.
-    expect(clock.pendingCount()).toBe(1);
+    // The tick should have re-armed both schedulers for the next frame.
+    expect(clock.pendingCount()).toBe(2);
 
     stop();
   });
@@ -297,8 +332,9 @@ describe("playback loop (T3.3)", () => {
     const stop = startPlaybackLoop(useSession, clock);
 
     useSession.getState().play();
-    expect(clock.pendingCount()).toBe(1);
+    expect(clock.pendingCount()).toBe(2);
     useSession.getState().pause();
+    // pause() must clear BOTH the rAF and the timer fallback — no leak.
     expect(clock.pendingCount()).toBe(0);
 
     // Any further fake time should not move the cursor.
@@ -315,7 +351,7 @@ describe("playback loop (T3.3)", () => {
     const stop = startPlaybackLoop(useSession, clock);
 
     useSession.getState().play();
-    expect(clock.pendingCount()).toBe(1);
+    expect(clock.pendingCount()).toBe(2);
     stop();
     expect(clock.pendingCount()).toBe(0);
 
@@ -333,13 +369,110 @@ describe("playback loop (T3.3)", () => {
     const clock = makeFakeClock();
     const stop = startPlaybackLoop(useSession, clock);
     // Loop was started after `play()` — it must seed an anchor and
-    // schedule a frame immediately.
-    expect(clock.pendingCount()).toBe(1);
+    // arm both schedulers immediately.
+    expect(clock.pendingCount()).toBe(2);
 
     clock.advance(50);
     clock.flush();
     expect(useSession.getState().cursorNs).toBe(50_000_000n);
     stop();
+  });
+});
+
+// rAF-starvation resilience. In headless Chromium and backgrounded
+// tabs the browser throttles requestAnimationFrame — sometimes stalling
+// for seconds because no display is driving frames — so a cursor driven
+// purely from rAF advances in large jumps. setTimeout is NOT tied to
+// display refresh and keeps firing. The loop arms BOTH per round and
+// runs whichever fires first, cancelling the sibling.
+describe("playback loop rAF starvation resilience", () => {
+  it("advances the cursor from the timer when rAF never fires", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const stop = startPlaybackLoop(useSession, clock);
+
+    useSession.getState().play();
+    // rAF is armed but we deliberately never flush it (display starved).
+    expect(clock.rafPending()).toBe(1);
+    expect(clock.timerPending()).toBe(1);
+
+    // Drive 10 timer-only ticks of 16 ms each. The cursor must keep
+    // advancing at wall-clock rate even though rAF never fired once.
+    for (let i = 0; i < 10; i++) {
+      clock.advance(16);
+      clock.flushTimer();
+    }
+    // 160 ms × 1e6 = 160 000 000 ns — exact, because the anchor math is
+    // wall-clock-based, not per-frame accumulation.
+    expect(useSession.getState().cursorNs).toBe(160_000_000n);
+    expect(useSession.getState().playing).toBe(true);
+    // Both schedulers re-armed for the next round (rAF still pending,
+    // never fired; a fresh timer was armed each tick).
+    expect(clock.timerPending()).toBe(1);
+    stop();
+  });
+
+  it("when rAF fires it cancels the timer sibling so the tick runs once", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const stop = startPlaybackLoop(useSession, clock);
+
+    useSession.getState().play();
+    expect(clock.rafPending()).toBe(1);
+    expect(clock.timerPending()).toBe(1);
+
+    // rAF wins the race for this round. The tick must cancel the still
+    // pending timer (so it can't fire a second, redundant tick), advance
+    // once, then re-arm both.
+    clock.advance(16);
+    clock.flushRaf();
+    expect(useSession.getState().cursorNs).toBe(16_000_000n);
+
+    // Flushing the timer queue now must invoke nothing from the round
+    // rAF just handled — the old timer was cancelled. (The newly armed
+    // timer fires here at the same clock, so it advances by 0 ns.)
+    const before = useSession.getState().cursorNs;
+    clock.flushTimer();
+    expect(useSession.getState().cursorNs).toBe(before);
+
+    // Symmetric re-arm: both schedulers present again.
+    expect(clock.rafPending()).toBe(1);
+    expect(clock.timerPending()).toBe(1);
+    stop();
+  });
+
+  it("pause() clears both the rAF and the timer handle (no leaked timer)", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const stop = startPlaybackLoop(useSession, clock);
+
+    useSession.getState().play();
+    expect(clock.rafPending()).toBe(1);
+    expect(clock.timerPending()).toBe(1);
+
+    useSession.getState().pause();
+    expect(clock.rafPending()).toBe(0);
+    expect(clock.timerPending()).toBe(0);
+
+    // A leaked timer would still fire and move the cursor; assert it
+    // does not.
+    const before = useSession.getState().cursorNs;
+    clock.advance(500);
+    clock.flush();
+    expect(useSession.getState().cursorNs).toBe(before);
+    stop();
+  });
+
+  it("stop() clears both handles", async () => {
+    await loadSession();
+    const clock = makeFakeClock();
+    const stop = startPlaybackLoop(useSession, clock);
+
+    useSession.getState().play();
+    expect(clock.pendingCount()).toBe(2);
+    stop();
+    expect(clock.rafPending()).toBe(0);
+    expect(clock.timerPending()).toBe(0);
   });
 });
 
@@ -379,10 +512,10 @@ describe("playback loop gating (Issue #2)", () => {
     // advance the cursor.
     expect(useSession.getState().cursorNs).toBe(0n);
     expect(isCursorGated()).toBe(true);
-    // The loop must keep scheduling so it can re-check on the next
-    // rAF — otherwise a "waiting" panel would freeze playback even
-    // after it caught up.
-    expect(clock.pendingCount()).toBe(1);
+    // The loop must keep scheduling (both schedulers re-armed) so it
+    // can re-check on the next frame — otherwise a "waiting" panel
+    // would freeze playback even after it caught up.
+    expect(clock.pendingCount()).toBe(2);
     stop();
   });
 
