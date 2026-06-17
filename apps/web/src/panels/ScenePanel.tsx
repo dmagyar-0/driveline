@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "../state/store";
 import type { Channel, ChannelKind, SourceMeta } from "../state/store";
 import { mark, measure } from "../perf";
-import { decodePointCloud } from "./pointCloudFromArrow";
+import { fetchDecodedSpin } from "./pointCloudSpinCache";
 import { decodeBoxes, type BoundingBox } from "./boxesFromArrow";
 import { decodeTrajectories } from "./trajectoriesFromArrow";
 import { decodeMapGeometry } from "./mapGeometryFromArrow";
@@ -205,6 +205,51 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
     const ts = times[idx];
     mark("scene-frame:start");
     try {
+      // Point clouds go through the shared spin cache so this panel and the
+      // video overlay — which project the same channel at the same cursor —
+      // decode each spin once instead of twice. The other scene kinds
+      // (road/traj/boxes) carry no point cloud, so they fetch + decode their
+      // own (small) frame below.
+      const isCloud =
+        !isRoadRef.current && !isTrajRef.current && !isBoxesRef.current;
+      if (isCloud) {
+        const res = await fetchDecodedSpin(id, ts);
+        if (reqId !== reqIdRef.current || rendererRef.current !== renderer)
+          return;
+        if (!res.ok) {
+          setStatus({ kind: "error", message: res.message });
+          publish({ error: res.message });
+          return;
+        }
+        if (res.count === 0) {
+          renderer.clearPoints();
+          setStatus({ kind: "before" });
+          publish({ pointCount: 0, frameTsNs: null });
+          return;
+        }
+        if (!framedRef.current) {
+          renderer.frameToBounds(res.positions);
+          framedRef.current = true;
+        }
+        renderer.setPoints(res.positions, res.intensities, res.count);
+        setStatus({
+          kind: "ready",
+          points: res.count,
+          boxes: 0,
+          paths: 0,
+          roads: 0,
+        });
+        publish({
+          pointCount: res.count,
+          trajectoryPathCount: 0,
+          roadFeatureCount: 0,
+          frameTsNs: (res.tsNs ?? ts).toString(),
+          spinIndex: idx,
+          error: null,
+        });
+        return;
+      }
+
       // Narrow window [ts, ts+1) returns exactly this frame (one row).
       const bytes = await useSession
         .getState()
@@ -325,39 +370,6 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
         });
         return;
       }
-
-      const res = decodePointCloud(bytes);
-      if (!res.ok) {
-        setStatus({ kind: "error", message: res.message });
-        publish({ error: res.message });
-        return;
-      }
-      if (res.count === 0) {
-        renderer.clearPoints();
-        setStatus({ kind: "before" });
-        publish({ pointCount: 0, frameTsNs: null });
-        return;
-      }
-      if (!framedRef.current) {
-        renderer.frameToBounds(res.positions);
-        framedRef.current = true;
-      }
-      renderer.setPoints(res.positions, res.intensities, res.count);
-      setStatus({
-        kind: "ready",
-        points: res.count,
-        boxes: 0,
-        paths: 0,
-        roads: 0,
-      });
-      publish({
-        pointCount: res.count,
-        trajectoryPathCount: 0,
-        roadFeatureCount: 0,
-        frameTsNs: (res.tsNs ?? ts).toString(),
-        spinIndex: idx,
-        error: null,
-      });
     } catch (err) {
       if (reqId !== reqIdRef.current) return;
       const message = err instanceof Error ? err.message : String(err);

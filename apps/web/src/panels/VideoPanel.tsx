@@ -27,7 +27,7 @@ import {
   VIDEO_SEEK_START,
   VIDEO_SEEK_TO_BLIT,
 } from "../perf";
-import { decodePointCloud } from "./pointCloudFromArrow";
+import { fetchDecodedSpin } from "./pointCloudSpinCache";
 import {
   makeProjectionBuffers,
   projectPointsInto,
@@ -632,11 +632,10 @@ export function VideoPanel({
       const ts = times[idx];
       void (async () => {
         try {
-          const bytes = await useSession
-            .getState()
-            .fetchChannelRange(binding.pointcloudChannelId, ts, ts + 1n, false);
+          // Shared with the 3D scene panel: the spin is decoded once per
+          // (channel, ts) and both viewers read the same buffers.
+          const res = await fetchDecodedSpin(binding.pointcloudChannelId, ts);
           if (token !== overlayReqRef.current) return;
-          const res = decodePointCloud(bytes);
           if (!res.ok || res.count === 0) {
             overlayProjCountRef.current = 0;
             overlaySpinIdxRef.current = idx;
