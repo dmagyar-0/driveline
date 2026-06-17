@@ -153,7 +153,7 @@ describe("install gating", () => {
 
   it("install exposes the api; the uninstaller removes it", () => {
     expect(api().version).toBe(AGENT_API_VERSION);
-    expect(AGENT_API_VERSION).toBe(4);
+    expect(AGENT_API_VERSION).toBe(5);
     uninstall?.();
     uninstall = null;
     expect(window.__drivelineAgent).toBeUndefined();
@@ -263,6 +263,45 @@ describe("addDataSource (inline ingestion)", () => {
     expect(typeof tsCol.values[0]).toBe("string");
     expect(tsCol.values[0]).toBe("1700000000000000000");
     expect(typeof valCol.values[0]).toBe("number");
+  });
+
+  it("snapshotAt samples scalars at T and lists channels (no video/cloud here)", async () => {
+    api().addDataSource(sineSpec());
+    const startNs = 1_700_000_000_000_000_000n;
+    const stepNs = 20_000_000n;
+    const T = (startNs + stepNs * 10n).toString();
+    const snap = await api().snapshotAt(T);
+    expect(snap.tsNs).toBe(T);
+    expect(snap.cameras).toEqual([]); // no video channel in an inline session
+    expect(snap.pointClouds).toEqual([]); // no point-cloud channel either
+    const speed = snap.scalars.find((s) => s.name === "/vehicle/speed");
+    expect(speed).toBeTruthy();
+    expect(speed!.sampleNs).toBe(T);
+    expect(speed!.value).toBeCloseTo(Math.sin(10 / 5), 6);
+    // The enum channel is not a scalar, so it's excluded from `scalars` but
+    // still present in the channel inventory.
+    expect(snap.scalars.some((s) => s.name === "/vehicle/gear")).toBe(false);
+    expect(snap.channels.map((c) => c.name).sort()).toEqual([
+      "/vehicle/gear",
+      "/vehicle/speed",
+    ]);
+  });
+
+  it("captureVideoFrameAt / snapshotAt never throw on bad input", async () => {
+    const res = api().addDataSource(sineSpec());
+    const speedId = res!.channels.find((c) => c.name === "/vehicle/speed")!.id;
+    // A scalar channel is not video → null, no worker spun up.
+    expect(
+      await api().captureVideoFrameAt(speedId, "1700000000000000000"),
+    ).toBeNull();
+    // Unknown channel → null.
+    expect(
+      await api().captureVideoFrameAt("nope", "1700000000000000000"),
+    ).toBeNull();
+    // Unparseable ns falls back to the cursor and still resolves a bundle.
+    const snap = await api().snapshotAt("not-a-number");
+    expect(snap).toBeTruthy();
+    expect(Array.isArray(snap.cameras)).toBe(true);
   });
 
   it("returns null on invalid specs (never throws)", () => {

@@ -39,6 +39,17 @@ interface OpenResult {
   codec: string;
 }
 
+// A single decoded frame captured off the playback path (see
+// `captureFrameAtInternal`). `png` is transferred (zero-copy) to the caller.
+export interface CapturedFrame {
+  /** PTS (ns) of the frame actually returned — the newest at/<= the request. */
+  ptsNs: bigint;
+  width: number;
+  height: number;
+  /** PNG-encoded RGBA bytes of the frame. */
+  png: ArrayBuffer;
+}
+
 interface SessionState {
   sourceKind: VideoSourceKind;
   sourceHandle: number;
@@ -518,6 +529,106 @@ async function closeInternal(): Promise<void> {
   }
 }
 
+// --- agent frame capture (off the playback path) ---------------------------
+//
+// Decode the single frame nearest (at or before) `atPtsNs` on a THROWAWAY
+// decoder + stream and return it as PNG bytes. Used by the agent surface's
+// `snapshotAt` so an automation can read the camera at any timestamp without a
+// video panel, without disturbing live playback, and without the cursor having
+// to be there. It never touches the module-level `session`: it owns its own
+// `streamId` and `VideoDecoder`, both torn down before it returns. Runs under
+// `runExclusive` (below) so it never overlaps a playback open/seek teardown.
+async function captureFrameAtInternal(
+  sourceKind: VideoSourceKind,
+  sourceHandle: number,
+  channelId: string,
+  atPtsNs: bigint,
+): Promise<CapturedFrame | null> {
+  const dc = getDataCore();
+  const ops = videoStreamOps(dc, sourceKind, mp4Lazy ?? undefined);
+  const { streamId, description, framing } = await ops.open(
+    sourceHandle,
+    channelId,
+    atPtsNs,
+  );
+  // Newest frame whose PTS is <= the target; a frame strictly after the target
+  // is only kept as a fallback when the target precedes the very first frame.
+  let best: VideoFrame | null = null;
+  let captureError: Error | null = null;
+  const decoder = new VideoDecoder({
+    output: (frame) => {
+      const pts = BigInt(frame.timestamp) * 1000n;
+      if (pts <= atPtsNs) {
+        if (best) best.close();
+        best = frame;
+      } else if (best === null) {
+        best = frame;
+      } else {
+        frame.close();
+      }
+    },
+    error: (e) => {
+      captureError = e as Error;
+    },
+  });
+  try {
+    let batch = (await ops.next(streamId, PRIMING_BATCH)) as EncodedChunkWire[];
+    if (batch.length === 0) return null;
+    await configureFromFirstKeyframe(batch, description, framing, decoder);
+    // Feed forward until we have decoded past the target (so the reorder
+    // window definitely contains the frame at/just before it), then flush.
+    let fedPastTarget = false;
+    while (batch.length > 0) {
+      for (const c of batch) {
+        if (captureError) throw captureError;
+        decoder.decode(
+          new EncodedVideoChunk({
+            type: c.is_keyframe ? "key" : "delta",
+            timestamp: ptsToMicros(c.pts_ns),
+            data: c.data,
+          }),
+        );
+        if (c.pts_ns > atPtsNs) fedPastTarget = true;
+      }
+      if (fedPastTarget) break;
+      batch = (await ops.next(streamId, PULL_BATCH)) as EncodedChunkWire[];
+    }
+    if (decoder.state === "configured") {
+      try {
+        await decoder.flush();
+      } catch {
+        // A flush race shouldn't fail the capture once we already hold a frame.
+      }
+    }
+    if (captureError) throw captureError;
+    const frame = best as VideoFrame | null;
+    if (!frame) return null;
+    const width = frame.displayWidth || frame.codedWidth;
+    const height = frame.displayHeight || frame.codedHeight;
+    const oc = new OffscreenCanvas(width, height);
+    const ctx = oc.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(frame, 0, 0, width, height);
+    const blob = await oc.convertToBlob({ type: "image/png" });
+    const png = await blob.arrayBuffer();
+    return { ptsNs: BigInt(frame.timestamp) * 1000n, width, height, png };
+  } finally {
+    if (best) (best as VideoFrame).close();
+    if (decoder.state !== "closed") {
+      try {
+        decoder.close();
+      } catch {
+        // already closed
+      }
+    }
+    try {
+      await ops.close(streamId);
+    } catch {
+      // stream handle may already be freed on the Rust side
+    }
+  }
+}
+
 // --- open / seek serialisation ---------------------------------------------
 //
 // `open()`, `seek()` and `close()` each tear the current session down and
@@ -641,6 +752,22 @@ export const videoDecodeApi = {
   },
   async close(): Promise<void> {
     await runExclusive(() => closeInternal());
+  },
+  // Agent surface: decode the camera frame nearest `atPtsNs` and return it as
+  // PNG bytes, independent of playback. Serialised behind `runExclusive` so it
+  // never interleaves with a playback open/seek teardown. Returns null when no
+  // frame covers the timestamp (e.g. before the first sample or empty stream).
+  async captureFrameAt(
+    sourceKind: VideoSourceKind,
+    sourceHandle: number,
+    channelId: string,
+    atPtsNs: bigint,
+  ): Promise<CapturedFrame | null> {
+    const captured = await runExclusive(() =>
+      captureFrameAtInternal(sourceKind, sourceHandle, channelId, atPtsNs),
+    );
+    if (!captured) return null;
+    return Comlink.transfer(captured, [captured.png]);
   },
 };
 

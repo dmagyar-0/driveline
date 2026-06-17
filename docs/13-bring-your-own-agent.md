@@ -99,6 +99,21 @@ The skill also documents the map case (`createPanel("map")` +
 `setMapBinding`), reading data back (`listChannels` / `fetchChannelRange`), and
 driving the transport (`setCursor` / `play` / `pause`).
 
+### Reading a moment without playing it (v5)
+
+An agent does not have to drive the transport — or open any panel — to inspect
+a frame. `captureVideoFrameAt(channelId, ns)` decodes the camera frame nearest
+`ns` on a throwaway decoder in a dedicated capture worker and returns it as a
+PNG `data:` URL; `snapshotAt(ns)` bundles a whole instant
+(`{ tsNs, cameras[], pointClouds[], scalars[], channels[] }`) in one call. Both
+run off the live playback path: no cursor move, no panel required, and a human
+watching at 1× is undisturbed. This is the intended path for autonomous,
+headless analysis (e.g. seek-free VLM classification at chosen timestamps) and
+for an agent working alongside a human who is scrubbing the same session. Raw
+LiDAR points stay out of the snapshot bundle — fetch them per spin with
+`fetchChannelRange(channelId, spinTsNs, spinTsNs+1)` using the `spinTsNs` the
+bundle reports.
+
 ### 3D scene geometry, including road maps
 
 The `scene` panel renders 3D geometry channels — `point_cloud` (LiDAR),

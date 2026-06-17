@@ -40,16 +40,20 @@ Every load prints a one-line console banner pointing agents at `getSkill()`
 and noting that `?agent` unlocks the full surface. App unmount uninstalls the
 whole thing (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v4)
+## `window.__drivelineAgent` (v5)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. The `version` field reports `4`; v4 is a
-superset of v3 (itself a superset of v2/v1): v3 adds the always-on discovery
+is the authoritative reference. The `version` field reports `5`; v5 is a
+superset of v4 (itself a superset of v3/v2/v1): v3 adds the always-on discovery
 trio (`getSkill`/`describe`) plus inline data-source ingestion
 (`addDataSource`, the "Bring Your Own Agent" surface — see
 docs/13-bring-your-own-agent.md); v4 adds `setSceneBinding`, completing the
 scene-geometry binding so an agent can _display_ a point cloud / boxes /
-trajectory it loaded, not just create the panel. Summary:
+trajectory it loaded, not just create the panel; v5 adds the
+**playback-independent read** ops `captureVideoFrameAt(channelId, ns)` and
+`snapshotAt(ns)`, which decode/sample at an explicit timestamp off the live
+playback path (no panel required, cursor untouched) so an agent can analyse any
+instant while a human keeps watching. Summary:
 
 | Group              | Methods                                                                                                                                                                          |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -61,6 +65,7 @@ trajectory it loaded, not just create the panel. Summary:
 | Events             | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
 | Events IO          | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
 | Video              | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
+| Read-at-time (v5)  | `captureVideoFrameAt(channelId, ns)`, `snapshotAt(ns)` — decode/sample at a timestamp, off the playback path                                                                      |
 | Layout (write, v2; `setSceneBinding` v4) | `createPanel(kind)`, `bindChannels(panelId, channelIds)`, `setMapBinding(panelId, latId, lonId)`, `setSceneBinding(panelId, channelId)`, `closePanel(panelId)`        |
 
 Behavioural notes:
@@ -81,6 +86,22 @@ Behavioural notes:
   currently blitted to a video panel's canvas (pixels only, no UI
   chrome) — pair with `setCursor` + a readiness wait to grab the frame
   at a moment of interest for VLM classification.
+- `captureVideoFrameAt(channelId, ns)` (v5) is the frame-accurate,
+  **headless** counterpart: it decodes the camera frame nearest (at/before)
+  `ns` on a throwaway decoder in a dedicated capture worker — no video panel,
+  no cursor move, no disturbance to live playback — and returns
+  `{ channelId, cameraName, ptsNs, width, height, dataUrl }`, or `null` for an
+  unknown/non-video channel or a `ns` with no covering frame. Decode happens
+  off the main thread (the same dataCore-slab / `Mp4SampleCache` bridges a
+  video panel uses), so a human can keep watching at 1× while an agent reads a
+  different instant.
+- `snapshotAt(ns)` (v5) bundles a whole instant in one call:
+  `{ tsNs, cameras[], pointClouds[], scalars[], channels[] }` — a decoded frame
+  per camera, the active LiDAR `spinTsNs` per point-cloud channel (raw points
+  stay out of the bundle; fetch them with `fetchChannelRange(channelId,
+  spinTsNs, spinTsNs+1)`), every scalar's value at `ns`, and the channel
+  inventory. It always resolves a bundle (empty arrays when nothing is loaded)
+  and never throws; an unparseable `ns` falls back to the current cursor.
 - The transport methods go through the store's normal actions, so the
   cursor hot-path rules (rAF coalescing, decode-aware gating) apply
   unchanged.
