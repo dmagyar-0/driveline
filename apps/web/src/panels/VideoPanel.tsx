@@ -58,6 +58,7 @@ import type { CameraCalibration } from "./calibrationFromArrow";
 import type { PointCloudOverlayBinding } from "../layout/persist";
 import {
   clearPanelReadiness,
+  computeVideoReady,
   getReadinessSnapshot,
   setPanelReadiness,
   subscribeReadiness,
@@ -87,10 +88,13 @@ import styles from "./VideoPanel.module.css";
 //      whether or not the most-recent blit happens to be within the
 //      tight ε at the moment we polled.
 //
-// Mirrors `READY_EPSILON_NS` in `timeline/playback.ts`; both modules
-// independently consult their own copy so neither has to import across
-// the panels/timeline seam.
-const READY_EPSILON_NS = 100_000_000n;
+// Mirrors `READY_EPSILON_NS` in `timeline/playback.ts` (see the full rationale
+// there): ε must clear the steady-state cursor↔blit lag — ~33 ms coalescing +
+// one inter-frame interval — or the playback gate throttles low-frame-rate
+// streams into slow-motion. 300 ms covers ~12 fps camera content (~85 ms
+// frames) while still flagging a genuine stall. Both modules keep their own
+// copy so neither imports across the panels/timeline seam.
+const READY_EPSILON_NS = 300_000_000n;
 const FRAME_LIVE_WINDOW_MS = 250;
 // Issue #2 — once a panel has been "waiting" continuously for this long
 // AND `frameIndex` has not advanced since the wait began, the panel
@@ -939,37 +943,20 @@ export function VideoPanel({
       // backwards scrub and is also "ready" (frame is on canvas).
       const nowMsRead = performance.now();
       const lastBlitPts = lastBlitPtsRef.current;
-      let isReady = false;
-      if (lastBlitPts !== null) {
-        const behindNs = cursor - lastBlitPts;
-        // Tight arm: visible frame is within ε of cursor. behindNs<0
-        // means cursor is *behind* the visible frame (just-scrubbed-
-        // back), which is also ready.
-        if (behindNs <= READY_EPSILON_NS) {
-          isReady = true;
-        } else {
-          // Loose arm A: decoder is producing frames recently.
-          // Without this, a 4K stream whose decoder is real-time but
-          // per-frame arrival jitters a couple of frames behind cursor
-          // would trip the tight arm constantly, gate would engage,
-          // worker pacing would follow the gated cursor, and playback
-          // would throttle into a feedback loop.
-          if (
-            nowMsRead - lastFrameArrivedLocalMsRef.current <=
-            FRAME_LIVE_WINDOW_MS
-          ) {
-            isReady = true;
-          } else if (blitQueueLenRef.current > 0) {
-            // Loose arm B: the worker's blit queue still holds frames the
-            // panel hasn't reached yet. The worker always blits the newest
-            // frame ≤ cursor immediately, so anything still queued is ahead
-            // of the cursor — the decoder finished its lookahead burst and
-            // went idle by design (worker pacing). The panel catches up as
-            // the cursor advances; this is not a stall.
-            isReady = true;
-          }
-        }
-      }
+      // Predicate extracted to `computeVideoReady` (unit-tested in
+      // videoReadiness.test.ts). Tight arm (within ε of cursor) + loose arms
+      // (decoder producing recently / frames queued ahead). ε must clear the
+      // steady-state lag or the gate throttles low-fps streams — see
+      // READY_EPSILON_NS.
+      const isReady = computeVideoReady({
+        lastBlitPtsNs: lastBlitPts,
+        cursorNs: cursor,
+        nowMs: nowMsRead,
+        lastFrameArrivedLocalMs: lastFrameArrivedLocalMsRef.current,
+        blitQueueLen: blitQueueLenRef.current,
+        epsilonNs: READY_EPSILON_NS,
+        frameLiveWindowMs: FRAME_LIVE_WINDOW_MS,
+      });
 
       // Compute readiness state with stalled escalation.
       let nextState: ReadyState;

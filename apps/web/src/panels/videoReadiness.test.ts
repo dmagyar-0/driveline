@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetReadinessForTests,
   clearPanelReadiness,
+  computeVideoReady,
   getReadinessSnapshot,
   setPanelReadiness,
   subscribeReadiness,
   type PanelReadiness,
+  type VideoReadyInputs,
 } from "./videoReadiness";
 
 function snap(
@@ -172,5 +174,107 @@ describe("videoReadiness registry", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith("videoReadiness: subscriber threw", err);
     warn.mockRestore();
+  });
+});
+
+describe("computeVideoReady", () => {
+  const MS = 1_000_000n; // ns per ms
+  const EPS_300 = 300n * MS; // production READY_EPSILON_NS
+  const EPS_100 = 100n * MS; // the old (too-tight) value
+  const FRAME_LIVE_WINDOW_MS = 250;
+
+  function inputs(over: Partial<VideoReadyInputs> = {}): VideoReadyInputs {
+    return {
+      lastBlitPtsNs: 0n,
+      cursorNs: 0n,
+      nowMs: 10_000,
+      lastFrameArrivedLocalMs: 10_000,
+      blitQueueLen: 0,
+      epsilonNs: EPS_300,
+      frameLiveWindowMs: FRAME_LIVE_WINDOW_MS,
+      ...over,
+    };
+  }
+
+  it("is not ready before any frame has been blitted", () => {
+    expect(computeVideoReady(inputs({ lastBlitPtsNs: null }))).toBe(false);
+  });
+
+  it("tight arm: a frame within epsilon behind the cursor is ready", () => {
+    // Blit 80 ms (≈ one 12 fps frame) behind the cursor.
+    const cursorNs = 5_000n * MS;
+    expect(
+      computeVideoReady(inputs({ cursorNs, lastBlitPtsNs: cursorNs - 80n * MS })),
+    ).toBe(true);
+  });
+
+  it("tight arm: a frame AHEAD of the cursor (just-scrubbed-back) is ready", () => {
+    const cursorNs = 5_000n * MS;
+    expect(
+      computeVideoReady(inputs({ cursorNs, lastBlitPtsNs: cursorNs + 40n * MS })),
+    ).toBe(true);
+  });
+
+  // The regression this guards: a HEALTHY low-frame-rate stream whose blit sits
+  // ~130 ms behind the cursor (setCursor coalescing + one ~12 fps frame), with
+  // the loose arms unavailable at the sampled instant (no fresh arrival, queue
+  // momentarily drained). At ε=100 ms this returned false → the playback gate
+  // held the cursor → 0.38× slow-motion. At ε=300 ms it is correctly ready.
+  it("steady-state low-fps lag is ready at 300ms epsilon but NOT at 100ms (slow-motion regression)", () => {
+    const cursorNs = 5_000n * MS;
+    const lag = inputs({
+      cursorNs,
+      lastBlitPtsNs: cursorNs - 130n * MS, // ~1.5 frames behind at 12 fps
+      lastFrameArrivedLocalMs: 10_000 - 400, // stale (> FRAME_LIVE_WINDOW_MS)
+      nowMs: 10_000,
+      blitQueueLen: 0, // loose arm B also unavailable this instant
+    });
+    expect(computeVideoReady({ ...lag, epsilonNs: EPS_300 })).toBe(true);
+    expect(computeVideoReady({ ...lag, epsilonNs: EPS_100 })).toBe(false);
+  });
+
+  it("loose arm A: beyond epsilon but the decoder produced a frame recently → ready", () => {
+    const cursorNs = 5_000n * MS;
+    expect(
+      computeVideoReady(
+        inputs({
+          cursorNs,
+          lastBlitPtsNs: cursorNs - 500n * MS, // well beyond ε
+          lastFrameArrivedLocalMs: 10_000 - 100, // within 250 ms window
+          nowMs: 10_000,
+          blitQueueLen: 0,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("loose arm B: beyond epsilon, stale arrival, but frames queued ahead → ready", () => {
+    const cursorNs = 5_000n * MS;
+    expect(
+      computeVideoReady(
+        inputs({
+          cursorNs,
+          lastBlitPtsNs: cursorNs - 500n * MS,
+          lastFrameArrivedLocalMs: 10_000 - 5_000, // stale
+          nowMs: 10_000,
+          blitQueueLen: 4,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("genuine stall: far behind, stale arrival, empty queue → NOT ready (gates)", () => {
+    const cursorNs = 5_000n * MS;
+    expect(
+      computeVideoReady(
+        inputs({
+          cursorNs,
+          lastBlitPtsNs: cursorNs - 2_000n * MS, // 2 s behind
+          lastFrameArrivedLocalMs: 10_000 - 5_000, // stale
+          nowMs: 10_000,
+          blitQueueLen: 0,
+        }),
+      ),
+    ).toBe(false);
   });
 });

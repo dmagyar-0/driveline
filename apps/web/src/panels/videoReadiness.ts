@@ -38,6 +38,56 @@ export interface PanelReadiness {
   lastBlitPtsNs: bigint | null;
 }
 
+/** Inputs to the per-tick readiness predicate (Issue #2). All times are the
+ *  panel's own `performance.now()` clock; `*Ns` are absolute timeline ns. */
+export interface VideoReadyInputs {
+  /** PTS of the frame currently on the canvas, or null before any blit. */
+  lastBlitPtsNs: bigint | null;
+  /** The live playback cursor. */
+  cursorNs: bigint;
+  /** `performance.now()` at evaluation time. */
+  nowMs: number;
+  /** `performance.now()` of the most recent fresh-frame arrival from the worker. */
+  lastFrameArrivedLocalMs: number;
+  /** Worker blit-queue depth (frames decoded + queued ahead of the cursor). */
+  blitQueueLen: number;
+  /** Max cursor-ahead-of-frame lag still considered "ready" (`READY_EPSILON_NS`). */
+  epsilonNs: bigint;
+  /** "decoder is alive" window for the loose arm (`FRAME_LIVE_WINDOW_MS`). */
+  frameLiveWindowMs: number;
+}
+
+/**
+ * Pure readiness predicate for a bound video panel. Extracted from
+ * `VideoPanel`'s rAF blit loop so the threshold behaviour is unit-testable
+ * without a real `VideoDecoder`/canvas.
+ *
+ * Ready iff a frame has been blitted AND any of:
+ *  - Tight arm: it is within `epsilonNs` behind the cursor (or anywhere ahead —
+ *    a just-scrubbed-back frame is on canvas).
+ *  - Loose arm A: the decoder produced a frame within `frameLiveWindowMs`
+ *    (real-time but jittery a couple frames behind cursor).
+ *  - Loose arm B: the worker still holds queued frames ahead of the cursor
+ *    (lookahead burst went idle by design — not a stall).
+ *
+ * `epsilonNs` MUST exceed the steady-state cursor↔blit lag (≈ setCursor
+ * coalescing + one inter-frame interval) or the playback gate fires during
+ * healthy playback and throttles the cursor into slow-motion — pronounced on
+ * low-frame-rate camera streams where that lag is ~130 ms. See `READY_EPSILON_NS`.
+ */
+export function computeVideoReady(inp: VideoReadyInputs): boolean {
+  if (inp.lastBlitPtsNs === null) return false;
+  const behindNs = inp.cursorNs - inp.lastBlitPtsNs;
+  // Tight arm (also covers cursor-behind-frame, behindNs < 0, after a scrub).
+  if (behindNs <= inp.epsilonNs) return true;
+  // Loose arm A — decoder producing frames recently.
+  if (inp.nowMs - inp.lastFrameArrivedLocalMs <= inp.frameLiveWindowMs)
+    return true;
+  // Loose arm B — frames still queued ahead of the cursor.
+  if (inp.blitQueueLen > 0) return true;
+  return false;
+}
+
 const registry = new Map<string, PanelReadiness>();
 const listeners = new Set<() => void>();
 
