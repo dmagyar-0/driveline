@@ -122,6 +122,13 @@ export interface VideoHudSnapshot {
   decodeQueue: number;
   blitQueueLen: number;
   dropped: number;
+  /** Frames actually painted to the canvas (monotonic, from the worker). */
+  drawn: number;
+  /** Frames closed undrawn because the cursor jumped past them (monotonic).
+   *  The exact visualisation frame-loss; 0 in smooth playback. */
+  skipped: number;
+  /** Frames dropped as reorder stragglers (monotonic). 0 in steady play. */
+  straggler: number;
   codec: string | null;
   hudOn: boolean;
 }
@@ -238,6 +245,9 @@ export function VideoPanel({
   const lastDecodeQueueRef = useRef<number>(0);
   const blitQueueLenRef = useRef<number>(0);
   const droppedFramesRef = useRef<number>(0);
+  const drawnFramesRef = useRef<number>(0);
+  const skippedFramesRef = useRef<number>(0);
+  const stragglerFramesRef = useRef<number>(0);
   const lastBlitPtsRef = useRef<bigint | null>(null);
   // Main-thread receipt time of the most recent status whose `frameArrivedMs`
   // advanced (i.e. the worker decoded a fresh frame). Drives the "decoder is
@@ -503,6 +513,9 @@ export function VideoPanel({
       lastDecodeQueueRef.current = data.decodeQueue;
       blitQueueLenRef.current = data.blitQueueLen;
       droppedFramesRef.current = data.dropped;
+      drawnFramesRef.current = data.drawn;
+      skippedFramesRef.current = data.skipped;
+      stragglerFramesRef.current = data.straggler;
       lastBlitPtsRef.current = data.blitPtsNs;
       // Issue #2 — track decoder liveness on OUR clock. When the worker's
       // `frameArrivedMs` advances (a fresh frame decoded), stamp the local
@@ -645,6 +658,15 @@ export function VideoPanel({
         // Seed the seek-dedupe ref so the mount cursor effect doesn't
         // issue a seek back to the same target that `open()` already took.
         lastSeekTargetRef.current = openTargetNs;
+        // If the panel mounted while the session is already playing, hand the
+        // worker its playback-clock anchor now (the store subscription only
+        // fires on a *change*, which won't happen for an already-playing mount).
+        const st = useSession.getState();
+        if (st.playing) {
+          void videoDecode
+            .setPlayback(true, st.speed, st.cursorNs)
+            .catch(() => undefined);
+        }
       } catch (e) {
         console.error("VideoPanel: open failed", e);
       }
@@ -881,6 +903,9 @@ export function VideoPanel({
         decodeQueue: lastDecodeQueueRef.current,
         blitQueueLen: blitQueueLenRef.current,
         dropped: droppedFramesRef.current,
+        drawn: drawnFramesRef.current,
+        skipped: skippedFramesRef.current,
+        straggler: stragglerFramesRef.current,
         codec: codecRef.current,
         hudOn: hudOnRef.current,
       };
@@ -1023,6 +1048,9 @@ export function VideoPanel({
       lastDecodeQueueRef.current = 0;
       blitQueueLenRef.current = 0;
       droppedFramesRef.current = 0;
+      drawnFramesRef.current = 0;
+      skippedFramesRef.current = 0;
+      stragglerFramesRef.current = 0;
       lastBlitPtsRef.current = null;
       decodeErrorRef.current = null;
       lastHudTextRef.current = "";
@@ -1277,6 +1305,22 @@ export function VideoPanel({
           if (client)
             void client.setCursor(state.cursorNs).catch(() => undefined);
         }
+      }
+      // Zero-frame-loss blit: drive the worker's own playback clock. On a
+      // play/pause or speed change, hand the worker the authoritative cursor as
+      // its interpolation anchor; while playing it advances + blits on its own
+      // ~5 ms interval, immune to the main-thread/Comlink jitter that otherwise
+      // left decoded frames sitting unshown in the blit queue (measured: 81/224
+      // frames skipped, p50 lag 168 ms before this change).
+      if (state.playing !== prev.playing || state.speed !== prev.speed) {
+        // Re-baseline the setCursor coalescer so the first correction after the
+        // change reflects the new anchor.
+        lastCursorSentRef.current = state.cursorNs;
+        const client = videoDecodeRef.current;
+        if (client)
+          void client
+            .setPlayback(state.playing, state.speed, state.cursorNs)
+            .catch(() => undefined);
       }
       if (state.seekEpoch === prev.seekEpoch) return;
       if (seekTimerRef.current !== null) clearTimeout(seekTimerRef.current);
