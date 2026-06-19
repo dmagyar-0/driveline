@@ -185,7 +185,7 @@ test.describe("BYOA demo", () => {
 
     // 1. DISCOVER — exactly what an external agent does first. The
     //    discovery trio is always on; here we confirm the full surface
-    //    unlocked under ?agent (version 3).
+    //    unlocked under ?agent (version 6).
     const discovery = await page.evaluate(() => {
       const agent = window.__drivelineAgent!;
       return {
@@ -194,7 +194,7 @@ test.describe("BYOA demo", () => {
         capabilities: agent.describe().capabilities.length,
       };
     });
-    expect(discovery.version).toBe(3);
+    expect(discovery.version).toBe(6);
     expect(discovery.skillLen).toBeGreaterThan(500);
     expect(discovery.capabilities).toBeGreaterThan(0);
 
