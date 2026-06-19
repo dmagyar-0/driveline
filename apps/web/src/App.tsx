@@ -89,6 +89,9 @@ declare global {
         decodeQueue: number;
         blitQueueLen: number;
         dropped: number;
+        drawn: number;
+        skipped: number;
+        straggler: number;
         codec: string | null;
         hudOn: boolean;
       } | null;
@@ -536,6 +539,9 @@ export function App() {
             decodeQueue: h.decodeQueue,
             blitQueueLen: h.blitQueueLen,
             dropped: h.dropped,
+            drawn: h.drawn,
+            skipped: h.skipped,
+            straggler: h.straggler,
             codec: h.codec,
             hudOn: h.hudOn,
           };

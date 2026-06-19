@@ -76,6 +76,19 @@ export interface BlitStatus {
   decodeQueue: number;
   /** Total frames dropped by the worker's MAX_QUEUE policy since open. */
   dropped: number;
+  /** Total frames actually painted to the canvas (monotonic since worker
+   *  start). One increment per `ctx.drawImage`. The headless frame-loss
+   *  harness diffs this across a playthrough to prove every frame was shown. */
+  drawn: number;
+  /** Total decoded frames that became due (PTS ≤ cursor) but were closed
+   *  WITHOUT being painted because a later frame in the same blit was also
+   *  ≤ cursor — i.e. the cursor jumped past them between blits. This is the
+   *  true visualisation frame-loss (distinct from queue-full `dropped`):
+   *  in smooth playback it stays 0. */
+  skipped: number;
+  /** Frames dropped as reorder stragglers (a decoded frame that flushed already
+   *  behind the on-screen frame). 0 once the decoder leads its reorder window. */
+  straggler: number;
   /** `performance.now()` (worker clock) of the most recent frame arrival —
    *  the main thread maps this onto its own clock-skew-free "decoder alive"
    *  check via a delta against the status it just received. */
@@ -106,7 +119,20 @@ interface QueueEntry {
 // the canvas stays frozen. Only evict the head once the cursor has passed it;
 // otherwise drop the incoming frame, keeping the queue anchored at/behind the
 // cursor. Mirrors the constant that used to live in `VideoPanel`.
-const MAX_QUEUE = 16;
+// How many DECODED frames the worker keeps alive ahead of the cursor (reorder
+// buffer + blit queue) before the pull loop stops feeding (see `maybeRefill`).
+// This is a small FIXED count, NOT a memory budget: a `VideoDecoder`'s output
+// pool is count-limited (the H.264 DPB, a handful of frames), and the decoder
+// needs free output slots to hold its OWN in-flight B-frames before it can emit
+// them. Holding too many output `VideoFrame`s here (e.g. a memory budget would
+// let us hold ~64 at 1080p) drains that pool and wedges the decoder — it stops
+// emitting, the panel goes "waiting", and the cursor gate freezes. Keeping the
+// worker-side hold small (≈ this) leaves the decoder room to reorder while
+// still buffering enough lead for smooth display.
+const decodedAheadCap = 8;
+// Hard safety cap on the blit/reorder buffer lengths (a drop, not a feed-stop).
+// Above the feed-stop cap; only guards a runaway.
+const maxQueue = 24;
 
 interface SessionState {
   sourceKind: VideoSourceKind;
@@ -144,9 +170,143 @@ interface SessionState {
   pendingPreTargetFrame: VideoFrame | null;
 }
 
-// Cursor watermark from the main thread. Updated via `setCursor`;
-// the pull loop gates on `lastEmittedPtsNs - cursorNs < LOOKAHEAD_NS`.
+// The PACING cursor. During playback it free-runs on the worker's own clock
+// (see below); when paused it holds the last `setCursor` value. The pull loop
+// gates the decoder on `lastEmittedPtsNs - cursorNs < LOOKAHEAD_NS`.
 let cursorNs: bigint = 0n;
+
+// --- worker-side playback clock (zero-frame-loss blit) ----------------------
+//
+// The blit used to fire ONLY when the main thread posted `setCursor`. That path
+// is coalesced (~33 ms) AND subject to Comlink/main-thread scheduling jitter, so
+// under the fusion render load the worker's cursor lagged the real cursor by
+// 80–170 ms and arrived in uneven jumps — every jump that straddled ≥2 frame
+// boundaries closed the in-between frames undrawn (measured: 81/224 frames
+// skipped, p50 lag 168 ms) even though the decoded frames were sitting ready.
+//
+// Fix — TWO cursors driven by a worker-owned ~5 ms (200 Hz) interval:
+//   • the PACING cursor (`cursorNs`) free-runs at real time from a fixed anchor
+//     (`anchorCursorNs` at `anchorWallMs`, worker clock). It tracks the main
+//     cursor at an identical rate WITHOUT inheriting its jitter, and the decoder
+//     paces off it, so the lookahead stays a full second ahead of real time —
+//     enough that every B-frame is decoded (in decode order) and reordered into
+//     presentation order BEFORE the cursor reaches it (no stragglers).
+//   • the DISPLAY cursor (`blitCursorNs()`) is the pacing cursor clamped to a
+//     small margin ahead of the latest authoritative `setCursor`. The blit picks
+//     frames against this, so the on-screen frame never leads the shared
+//     timeline by more than the margin (bounded desync), and a decode-gate hold
+//     can't freeze it (it stays a margin ahead, keeps blitting + heartbeating,
+//     so the panel reports ready and the gate releases).
+// `setCursor` only re-anchors the pacing clock on a genuine scrub or when the
+// clock has fallen behind real time; normal jitter and gate holds are ignored.
+let playbackActive = false;
+let playbackSpeed = 1;
+// Two cursors during play (see the long comment above `playbackActive`):
+//  - `cursorNs` is the PACING cursor. It free-runs at real time from a fixed
+//    anchor (`anchorCursorNs` at `anchorWallMs`, worker clock), so it tracks the
+//    main-thread cursor at an identical rate WITHOUT inheriting its jitter, and
+//    so the decoder's lookahead (paced off it) stays a full second ahead of
+//    real time — which is what keeps every B-frame decoded in presentation
+//    order before the cursor reaches it (no stragglers).
+//  - the DISPLAY cursor (computed in `blitCursorNs()`) is `cursorNs` clamped to
+//    within `AHEAD_MARGIN_NS` of the latest authoritative `setCursor`, so the
+//    on-screen frame never leads the shared timeline by more than a margin
+//    (bounded desync) AND, when the decode-gate briefly holds the main cursor,
+//    the display still sits one margin ahead and keeps blitting + heartbeating
+//    so the panel reports "ready" and the gate releases (no deadlock).
+let anchorCursorNs = 0n;
+let anchorWallMs = 0;
+let lastSetCursorNs = 0n;
+let blitClockId: ReturnType<typeof setInterval> | null = null;
+// How often the worker re-evaluates the cursor + blits during play. 5 ms ≈
+// 200 Hz: far finer than any real video frame rate, so every frame is the
+// newest-≤-cursor for many ticks and is always painted. Each tick is cheap (a
+// small queue walk; drawImage only when a new frame is actually due).
+const BLIT_CLOCK_MS = 5;
+// Max the DISPLAY cursor may lead the authoritative main-thread cursor. Bounds
+// video↔timeline desync to < one frame interval (well inside the lag budget)
+// while staying large enough that a gate hold leaves the display visibly ahead
+// of the held cursor (so the panel's readiness clears and the gate releases).
+const AHEAD_MARGIN_NS = 80_000_000n;
+// Keep the free-running PACING cursor from drifting more than this past the
+// authoritative cursor if the main thread stalls entirely — bounds how far the
+// decoder reads ahead. Generous (a full lookahead), so normal play never hits
+// it; it's just a backstop against a wedged main thread.
+const MAX_PACING_AHEAD_NS = 1_000_000_000n;
+// A `setCursor` this far from the pacing cursor is a real scrub/seek (not
+// jitter or a gate hold): re-anchor the clock to it.
+const SCRUB_THRESHOLD_NS = 500_000_000n;
+// A forward `setCursor` beyond the pacing cursor by this much means the clock
+// fell behind real time (a starved interval): catch the anchor up.
+const RESYNC_THRESHOLD_NS = 50_000_000n;
+// Cap a single interp evaluation so a throttled/backgrounded interval can't
+// leap the cursor across many frames at once when it finally fires.
+const MAX_INTERP_NS = 1_000_000_000n;
+// Max the blit cursor may advance in ONE clock tick. The pacing target is
+// wall-clock-derived, so a starved interval (the worker briefly not getting a
+// turn) would otherwise jump the cursor by the whole gap and skip every frame
+// in between. Capping the per-tick step to under one frame interval makes the
+// cursor catch up smoothly over the next few ticks instead — no jump, no skip.
+// (~25 ms < a 30 fps frame; normal 5 ms ticks never reach it.)
+const MAX_TICK_STEP_NS = 25_000_000n;
+
+function workerNow(): number {
+  return performance.now();
+}
+
+// Free-running real-time advance of the pacing cursor from its anchor.
+function pacingCursorNs(): bigint {
+  const elapsedMs = workerNow() - anchorWallMs;
+  let deltaNs = BigInt(Math.round(elapsedMs * 1e6 * playbackSpeed));
+  if (deltaNs < 0n) deltaNs = 0n;
+  if (deltaNs > MAX_INTERP_NS) deltaNs = MAX_INTERP_NS;
+  let next = anchorCursorNs + deltaNs;
+  // Backstop: don't read arbitrarily far ahead of the authoritative cursor.
+  const ceil = lastSetCursorNs + MAX_PACING_AHEAD_NS;
+  if (next > ceil) next = ceil;
+  return next;
+}
+
+// The DISPLAY cursor the blit compares against. While playing it is the pacing
+// cursor clamped to a margin ahead of the authoritative main-thread cursor (so
+// the frame never leads the timeline). While paused/scrubbing there is no
+// free-running clock to bound: `cursorNs` is itself the authoritative cursor
+// (set directly by `setCursor`/`open`), so use it as-is — clamping against the
+// initial `lastSetCursorNs` (0 before the first `setCursor`) would otherwise
+// pin the blit near t=0 and a high-PTS stream would never show its first frame.
+function blitCursorNs(): bigint {
+  if (!playbackActive) return cursorNs;
+  const cap = lastSetCursorNs + AHEAD_MARGIN_NS;
+  return cursorNs < cap ? cursorNs : cap;
+}
+
+// Advance the pacing cursor on the worker's own clock and blit. No-op when not
+// playing. Also nudges the pull loop so the decoder stays fed against the
+// advancing cursor even after it goes idle at the lookahead ceiling (otherwise
+// refill is only driven by `onFrame`, which a caught-up decoder stops firing).
+function blitClockTick(): void {
+  if (!playbackActive) return;
+  const target = pacingCursorNs();
+  // Advance toward the real-time target, but by at most one capped step so a
+  // late-firing interval catches up smoothly instead of jump-skipping frames.
+  let next = cursorNs + MAX_TICK_STEP_NS;
+  if (next > target) next = target;
+  if (next > cursorNs) cursorNs = next; // monotonic during play
+  blitForCursor();
+  void maybeRefill();
+}
+
+function startBlitClock(): void {
+  if (blitClockId !== null) return;
+  blitClockId = setInterval(blitClockTick, BLIT_CLOCK_MS);
+}
+
+function stopBlitClock(): void {
+  if (blitClockId !== null) {
+    clearInterval(blitClockId);
+    blitClockId = null;
+  }
+}
 
 let dataCore: Comlink.Remote<DataCorePortApi> | null = null;
 let mp4Lazy: Comlink.Remote<Mp4LazyPortApi> | null = null;
@@ -174,6 +334,57 @@ let canvasSized = false;
 // Worker-side blit queue + the metrics the status message carries.
 const blitQueue: QueueEntry[] = [];
 let droppedFrames = 0;
+
+// --- presentation-order reorder buffer --------------------------------------
+//
+// A `VideoDecoder` emits frames in DECODE order, not presentation order: with
+// B-frames a frame can carry a PTS well below one emitted just before it
+// (observed reorder spread on the nuScenes clips: ~250 ms). Feeding those
+// straight to the blit makes the queue non-monotonic, and any low-PTS frame
+// that flushes after the cursor has passed its PTS is lost (stale). That cost
+// ~1/3 of frames during the decoder's lookahead ramp-up.
+//
+// Fix: emitted frames land here first, sorted by PTS, and only the most-recent
+// `REORDER_HOLD_FRAMES` are held back — everything older is RELEASED to
+// `blitQueue` in PTS order. Holding by a fixed FRAME COUNT (not a time window)
+// is deliberate: the B-frame reorder depth is a property of the GOP structure
+// (~a handful of frames) regardless of frame rate, and — crucially — a fixed
+// count caps how many decoded `VideoFrame`s we keep alive at once. A time-based
+// guard holds (guard × fps) frames, which for a SLOW high-res decoder (whose
+// decode frontier crawls) piles up dozens of 4K frames and exhausts the
+// decoder's output-frame pool, wedging it. A small fixed hold can't.
+const reorderBuffer: QueueEntry[] = [];
+// Frames held back for reorder. Must exceed the decoder's B-frame reorder depth
+// (IBBBP ≈ 4–5; observed ≤ ~8 across our clips). Kept small so the live
+// VideoFrame footprint stays bounded.
+const REORDER_HOLD_FRAMES = 4;
+
+// Insert into a PTS-ascending array (queues are small — linear from the tail).
+function insertSorted(arr: QueueEntry[], e: QueueEntry): void {
+  let i = arr.length;
+  while (i > 0 && arr[i - 1].ptsNs > e.ptsNs) i--;
+  arr.splice(i, 0, e);
+}
+
+// Release every reorder-buffer frame except the most-recent `REORDER_HOLD_FRAMES`
+// (or all of them, on `flushAll` at end-of-stream) into the blit queue, in PTS
+// order, then blit. `flushAll` is used by the EOS drain so the final held frames
+// aren't stranded when the decode frontier stops advancing.
+function releaseReordered(flushAll: boolean): void {
+  const keep = flushAll ? 0 : REORDER_HOLD_FRAMES;
+  while (reorderBuffer.length > keep) {
+    blitQueue.push(reorderBuffer.shift()!);
+  }
+  blitForCursor();
+}
+// Exact visualisation metrics (module-level, monotonic since worker start —
+// the harness reads them via the BlitStatus → HUD chain and diffs across a
+// measured playthrough, so they never need resetting). `drawnFrames` counts
+// frames actually painted; `skippedUndrawnFrames` counts frames that became
+// due but were closed without ever being painted (cursor jumped past them).
+let drawnFrames = 0;
+let skippedUndrawnFrames = 0;
+let stragglerDrops = 0;
 let lastBlitPtsNs: bigint | null = null;
 let lastFrameArrivedMs = 0;
 // First-blit / post-seek-blit flags so the main thread can stamp the
@@ -280,6 +491,9 @@ function postBlitStatus(firstBlit: boolean, seekBlit: boolean): void {
     frameIndex: session?.frameIndex ?? 0,
     decodeQueue: session?.decoder?.decodeQueueSize ?? 0,
     dropped: droppedFrames,
+    drawn: drawnFrames,
+    skipped: skippedUndrawnFrames,
+    straggler: stragglerDrops,
     frameArrivedMs: lastFrameArrivedMs,
     blitQueueLen: blitQueue.length,
     firstBlit,
@@ -289,22 +503,76 @@ function postBlitStatus(firstBlit: boolean, seekBlit: boolean): void {
 }
 
 // Blit the newest queued frame whose PTS <= cursor onto the render canvas,
-// then drop every frame up to and including it. No-op when there is no canvas
-// yet or no frame at/<= cursor. Runs from `onFrame` (a fresh frame may now be
-// blittable) and `setCursor` (the cursor advanced past a queued frame) — the
-// worker has no `requestAnimationFrame`, so these two events drive the blit.
+// then drop every queued frame that is now at/behind the cursor. No-op when
+// there is no canvas yet or no frame at/<= cursor. Runs from `onFrame` (a fresh
+// frame may now be blittable), `setCursor`, and the worker's playback clock.
+//
+// IMPORTANT: a `VideoDecoder` emits frames in presentation order *per GOP*, but
+// across the lookahead window the worker's `blitQueue` can hold locally
+// out-of-PTS-order frames (B-frame reorder; also brief straggler arrival). The
+// blit therefore SCANS the whole queue for the true newest frame ≤ cursor — a
+// "stop at the first frame > cursor" walk assumes ascending order and strands
+// the real target behind an out-of-order neighbour, which silently dropped ~36%
+// of frames unshown under the fusion load. Display is kept monotonic: a frame
+// older than what is already on screen is a reorder straggler and is dropped,
+// never presented (no backwards flicker).
 function blitForCursor(): void {
   const ctx = renderCtx;
   if (!ctx || !renderCanvas) return;
-  // Walk forward while the next frame's PTS is also <= cursor: leaves us with
-  // the newest frame in [−∞, cursor], exactly the one we want to blit.
-  let blitIdx = -1;
+  if (blitQueue.length === 0) return;
+  const shownPts = lastBlitPtsNs; // frames with pts <= this are already shown
+  // The DISPLAY cursor (pacing cursor clamped to a margin ahead of the
+  // authoritative main cursor). The blit picks frames against this, not the
+  // free-running pacing cursor, so the on-screen frame never leads the timeline.
+  const bc = blitCursorNs();
+
+  // Newest frame with PTS <= cursor, scanning the entire (possibly unordered)
+  // queue.
+  let bestIdx = -1;
+  let bestPts = -1n;
   for (let i = 0; i < blitQueue.length; i++) {
-    if (blitQueue[i].ptsNs <= cursorNs) blitIdx = i;
-    else break;
+    const p = blitQueue[i].ptsNs;
+    if (p <= bc && (bestIdx < 0 || p > bestPts)) {
+      bestPts = p;
+      bestIdx = i;
+    }
   }
-  if (blitIdx < 0) return;
-  const target = blitQueue[blitIdx];
+  if (bestIdx < 0) return; // nothing due yet
+
+  const target = blitQueue[bestIdx];
+  // Monotonic display guard: if even the newest due frame isn't newer than the
+  // frame on screen, every due frame is a reorder straggler — drop them all and
+  // draw nothing this tick.
+  const advance = shownPts === null || target.ptsNs > shownPts;
+
+  // Partition the queue: everything at/behind the cursor leaves (drawn or
+  // dropped); everything ahead of the cursor stays for a future tick. Rebuild
+  // in place to avoid per-blit allocation on the 200 Hz clock.
+  let skippedThisBlit = 0;
+  let w = 0;
+  for (let i = 0; i < blitQueue.length; i++) {
+    const e = blitQueue[i];
+    if (e.ptsNs > bc) {
+      blitQueue[w++] = e; // keep — still in the future
+      continue;
+    }
+    if (i === bestIdx) continue; // the target is handled after the loop
+    // A due frame newer than the on-screen frame but older than the target was
+    // genuinely skipped (cursor advanced past >1 frame). Frames at/behind the
+    // shown PTS are reorder stragglers, not skips.
+    if (advance && (shownPts === null || e.ptsNs > shownPts)) skippedThisBlit++;
+    e.frame.close();
+  }
+
+  if (!advance) {
+    // Target is a straggler too: drop it, draw nothing, keep only the future.
+    stragglerDrops += 1 + skippedThisBlit;
+    target.frame.close();
+    blitQueue.length = w;
+    return;
+  }
+
+  skippedUndrawnFrames += skippedThisBlit;
   // Size the canvas pixel buffer to the decoded frame once (clears the canvas,
   // so only on first blit / a dimension change). Sizing the *transferred*
   // OffscreenCanvas is the worker's job — the main thread can't touch it.
@@ -315,26 +583,33 @@ function blitForCursor(): void {
     renderCanvas.height = fh;
     canvasSized = true;
   }
-  // Close every frame strictly before the one we blit, plus the one we blit
-  // (the canvas owns its pixels after drawImage).
-  for (let i = 0; i < blitIdx; i++) blitQueue[i].frame.close();
-  blitQueue.splice(0, blitIdx);
   ctx.drawImage(target.frame, 0, 0, renderCanvas.width, renderCanvas.height);
+  drawnFrames += 1;
   const firstBlit = !firstBlitDone;
   firstBlitDone = true;
   const seekBlit = seekBlitPending;
   seekBlitPending = false;
   lastBlitPtsNs = target.ptsNs;
   target.frame.close();
-  blitQueue.shift();
+  blitQueue.length = w; // commit the kept (future) frames as the new queue
   postBlitStatus(firstBlit, seekBlit);
 }
 
-// Drop and close every queued frame. Called on seek/close so the blit loop
-// converges to the new stream instead of drawing stale frames.
+// Drop and close every queued frame (blit queue AND reorder buffer). Called on
+// seek/close so the blit loop converges to the new stream instead of drawing
+// stale frames; also resets the reorder frontier and the monotonic-display
+// reference. Resetting `lastBlitPtsNs` is essential: a seek is a temporal
+// discontinuity, so the frame that WAS on screen must not constrain which frame
+// the new position may show. Without this, seeking forward and then playing
+// from an earlier point freezes the video — every earlier frame looks like a
+// reorder straggler (PTS < the stale on-screen PTS) and is dropped until the
+// cursor climbs back to where the scrub had landed.
 function flushBlitQueue(): void {
   for (const e of blitQueue) e.frame.close();
   blitQueue.length = 0;
+  for (const e of reorderBuffer) e.frame.close();
+  reorderBuffer.length = 0;
+  lastBlitPtsNs = null;
 }
 
 function getDataCore(): Comlink.Remote<DataCorePortApi> {
@@ -411,6 +686,14 @@ async function maybeRefill(): Promise<void> {
   if (!session) return;
   if (session.ended) return;
   if (pullInFlight) return;
+  // Bound the number of DECODED frames kept alive ahead of the cursor by COUNT,
+  // not just by the LOOKAHEAD time window. A time window holds (window × fps)
+  // frames, which for a slow high-resolution decoder is dozens of 4K
+  // `VideoFrame`s — enough to exhaust the decoder's output-frame pool and wedge
+  // it (it stops emitting, the panel goes "waiting", the cursor gate freezes).
+  // A fixed count keeps the live footprint flat regardless of frame rate /
+  // resolution / decode speed.
+  if (reorderBuffer.length + blitQueue.length >= decodedAheadCap) return;
   if (
     !shouldRefill({
       inFlight: session.inFlight,
@@ -581,32 +864,46 @@ function emitFrame(frame: VideoFrame, ptsNs: bigint): void {
   // keeps `frameIndex` a "visible frames since open" counter even when a
   // seek primes the decoder with pre-target frames.
   session.frameIndex += 1;
+  // Pacing watermark: the literal last-emitted PTS (decode order). Using the
+  // running MAX instead makes `shouldRefill` read a decode-order P-frame as
+  // "the decoder is already far ahead" and stop feeding prematurely, starving
+  // the decoder until it wedges.
   session.lastEmittedPtsNs = ptsNs;
   // `decodeQueueSize` is a hint per spec; some backends report 0 even with
   // chunks in flight. Surface it anyway — it's the metric `T5.2` asks for.
   const decodeQueue = session.decoder.decodeQueueSize;
-  // Bounded queue: only evict the head once the cursor has passed it, else
-  // drop the incoming frame so the queue stays anchored at/behind the cursor.
-  if (blitQueue.length >= MAX_QUEUE) {
-    const oldest = blitQueue[0];
-    if (oldest.ptsNs < cursorNs) {
-      blitQueue.shift();
-      oldest.frame.close();
+  // Safety bound against an unbounded buffer if pacing ever fails: drop the
+  // single furthest-FUTURE frame (highest PTS) rather than a low-PTS one we
+  // still owe the display. With the feed-stop pacing this never triggers.
+  if (reorderBuffer.length + blitQueue.length >= maxQueue) {
+    const victim = reorderBuffer.pop();
+    if (victim) {
+      victim.frame.close();
       droppedFrames += 1;
-    } else {
-      frame.close();
-      droppedFrames += 1;
-      return;
     }
   }
-  blitQueue.push({
+  // Land in the reorder buffer (PTS-sorted); release to the blit queue only
+  // once safely past the reorder window so the blit always sees presentation
+  // order and never has to drop a late-flushing B-frame.
+  insertSorted(reorderBuffer, {
     ptsNs,
     frame,
     frameIndex: session.frameIndex,
     decodeQueue,
   });
-  // A fresh frame may now be blittable for the current cursor.
-  blitForCursor();
+  // Hold the reorder window only while PLAYING (smooth in-order display). When
+  // paused/scrubbing the cursor is static, so flush immediately and let the
+  // blit refine to the true newest-≤-cursor as later frames arrive — keeps
+  // seek-to-blit latency inside its budget instead of waiting out the guard.
+  releaseReordered(!playbackActive);
+  // Heartbeat the panel even when this emit produced no draw (cursor held, or
+  // the frame is still ahead of the cursor in the reorder window). The panel's
+  // readiness "decoder alive" / "blit queue non-empty" arms key off this status
+  // — without a heartbeat, a briefly-held cursor stops blits, the panel goes
+  // stale → "waiting", the decode-aware gate holds the cursor, and the two
+  // deadlock (the cursor never resumes, ~1/3 of frames lost to the stall). The
+  // emitted frame proves the decoder is alive, so always surface it.
+  postBlitStatus(false, false);
 }
 
 function onFrame(frame: VideoFrame): void {
@@ -681,6 +978,11 @@ async function drainAtEnd(s: SessionState): Promise<void> {
     s.pendingPreTargetFrame = null;
     emitFrame(pre, BigInt(pre.timestamp) * 1000n);
   }
+  // End of stream: the decode frontier stops advancing, so the final
+  // REORDER_GUARD worth of frames would be stranded in the reorder buffer.
+  // Flush them to the blit queue in presentation order so the clip's tail is
+  // shown in full.
+  releaseReordered(true);
 }
 
 async function closeInternal(): Promise<void> {
@@ -858,15 +1160,73 @@ export const videoDecodeApi = {
     return decodeError ? decodeError.message : null;
   },
   setCursor(ns: bigint): void {
-    cursorNs = ns;
-    // The cursor advanced — a queued frame may now be the newest ≤ cursor, so
-    // blit it. This is one of the two events that drive the off-thread blit
-    // (the other is `onFrame`); the worker has no `requestAnimationFrame`.
-    blitForCursor();
+    if (playbackActive) {
+      // `ns` is the authoritative timeline cursor. It bounds the DISPLAY cursor
+      // (see `blitCursorNs`) and re-anchors the free-running PACING clock only
+      // when the clock has genuinely diverged. Crucially, a SCRUB is detected by
+      // how far `ns` jumped from the PREVIOUS authoritative cursor — NOT from the
+      // free-running pacing cursor. A decode-gate hold keeps sending the same
+      // held `ns` while the pacing clock runs ahead, so measuring against the
+      // pacing cursor would mistake the growing gap for a backward scrub and
+      // snap the clock back, freezing the video and deadlocking the gate.
+      const prevSet = lastSetCursorNs;
+      lastSetCursorNs = ns;
+      const jumped =
+        ns > prevSet + SCRUB_THRESHOLD_NS || ns + SCRUB_THRESHOLD_NS < prevSet;
+      if (jumped) {
+        // Real scrub/seek: snap the clock to the new position.
+        anchorCursorNs = ns;
+        anchorWallMs = workerNow();
+        cursorNs = ns;
+      } else if (ns > pacingCursorNs() + RESYNC_THRESHOLD_NS) {
+        // The clock fell behind real time (a starved interval): RE-ANCHOR so the
+        // pacing target catches up, but DON'T snap `cursorNs` — let the blit
+        // clock advance it the capped step per tick so frames aren't jumped.
+        anchorCursorNs = ns;
+        anchorWallMs = workerNow();
+      }
+      // else: normal advance / jitter / gate hold — keep free-running; the
+      // display clamp handles the small lead and the heartbeat releases the gate.
+      blitForCursor(); // the display-cursor cap may have moved
+    } else {
+      // Paused / scrubbing: this is the sole blit driver.
+      cursorNs = ns;
+      lastSetCursorNs = ns;
+      blitForCursor();
+    }
     // Wake the pull loop in case the pacing gate was the only reason it
     // stopped — `maybeRefill` is otherwise driven by `onFrame`, which a
     // gated decoder no longer fires.
     void maybeRefill();
+  },
+  // Zero-frame-loss playback clock. The main thread calls this whenever the
+  // session's play state or speed changes, passing the authoritative cursor as
+  // the anchor. While `playing`, the worker free-runs a PACING cursor on its own
+  // ~5 ms interval (keeps the decoder a full second ahead → every B-frame is
+  // decoded in presentation order before the cursor reaches it) and blits the
+  // DISPLAY cursor (pacing clamped to a margin ahead of the authoritative
+  // cursor). See the clock comments near `playbackActive`.
+  setPlayback(playing: boolean, speed: number, cursorAnchorNs: bigint): void {
+    playbackSpeed = speed > 0 ? speed : 1;
+    if (playing) {
+      anchorCursorNs = cursorAnchorNs;
+      anchorWallMs = workerNow();
+      cursorNs = cursorAnchorNs;
+      lastSetCursorNs = cursorAnchorNs;
+      playbackActive = true;
+      startBlitClock();
+      blitForCursor();
+      void maybeRefill();
+    } else {
+      playbackActive = false;
+      stopBlitClock();
+      // Settle exactly on the authoritative cursor where play stopped, and
+      // flush the reorder window (no longer playing, so no in-order guard
+      // needed) so a paused frame isn't held back behind it.
+      cursorNs = cursorAnchorNs;
+      lastSetCursorNs = cursorAnchorNs;
+      releaseReordered(true);
+    }
   },
   // v5 off-thread blit: adopt the visible video canvas transferred from the
   // panel (Comlink-transferred OffscreenCanvas). The worker owns its 2D

@@ -492,23 +492,29 @@ export function ptsToMicros(ptsNs: bigint): number {
 // Pull-loop tuning. Kept here (not in the worker) so the pacing predicate
 // `shouldRefill` is testable in a node env without spinning up Comlink or
 // a real `VideoDecoder`.
+//
+// Max chunks fed-but-not-yet-emitted before a refill backs off. Kept SMALL so
+// the decoder is fed continuously in little batches rather than a burst then a
+// stall: a `VideoDecoder` needs a steady trickle of FOLLOWING chunks to flush
+// its internal B-frame reorder window, and it backpressures (stops emitting) if
+// its output pool fills. A large value bursts the feed and wedges B-frame
+// streams. Presentation-order correctness is handled by the worker's reorder
+// buffer downstream (see `videoDecode.worker.ts`), not by over-feeding here.
 export const REFILL_LOW_WATER = 4;
-// Steady-state batch fed to the decoder per refill. Sized so a pull can
-// keep the decoder pipeline busy without overrunning the panel's
-// `MAX_QUEUE = 16` buffer.
+// Steady-state batch fed to the decoder per refill.
 export const PULL_BATCH = 4;
-// Open / seek priming batch. Larger than `PULL_BATCH` so the decoder
-// gets a full GOP's worth of reference frames (4K H.264 High @ L4.2 is
-// typically IBBP/IBBBP) before steady-state pacing engages — keeps
-// seek-to-blit inside the T5.2 budget (P50 < 120ms / P95 < 250ms).
+// Open / seek priming batch. Larger than `PULL_BATCH` so the decoder gets a
+// couple of full GOPs of reference frames before steady-state pacing engages —
+// keeps seek-to-blit inside the T5.2 budget (P50 < 120ms / P95 < 250ms).
 export const PRIMING_BATCH = 8;
-// Decoder pacing watermark — the most recently emitted frame's PTS may
-// not run further than this beyond the main-thread cursor. Sized to fit
-// inside `MAX_QUEUE = 16` frames at 30 fps content (≈ 9 frames of lead),
-// so the worker stops pulling well before a queue-full drop can occur
-// while still letting the HW decoder keep up with cursor advance even
-// on slower test hardware.
-export const LOOKAHEAD_NS: bigint = 300_000_000n;
+// Decoder pacing watermark — the last-emitted frame's PTS may not run further
+// than this beyond the cursor before refills back off. Sized above the
+// worst-case B-frame reorder spread (~250 ms on these clips) plus jitter so the
+// decoder stays comfortably ahead and the worker's reorder buffer can hand the
+// blit frames in presentation order before the cursor reaches them. (The live
+// decoded-frame footprint is separately bounded by `decodedAheadCap` in the
+// worker, so this large window doesn't over-buffer.)
+export const LOOKAHEAD_NS: bigint = 1_000_000_000n;
 
 export interface RefillState {
   inFlight: number;
