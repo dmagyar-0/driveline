@@ -467,7 +467,22 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       12_000,
       Math.round((endFrac - startFrac) * spanMs),
     );
-    await page.waitForTimeout(playWallMs);
+    // TEMP live-compositor probe (SHOT=1): clip-screenshot the dashcam region
+    // during playback (NOT the VP8 video recording) to test back-and-forth on
+    // what's actually composited. Clip-based — no locator, so it can't hang.
+    if (process.env.SHOT === "1") {
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync("/tmp/shot", { recursive: true });
+      for (let i = 0; i < 50; i++) {
+        await page.screenshot({
+          path: `/tmp/shot/p${String(i).padStart(3, "0")}.png`,
+          clip: { x: 8, y: 44, width: 792, height: 446 },
+        });
+        await page.waitForTimeout(90);
+      }
+    } else {
+      await page.waitForTimeout(playWallMs);
+    }
     // Sample the decode worker's own frame-pacing telemetry while the cadence
     // window is still populated — pause does NOT reset it (only play-start /
     // seek do), so read it here, BEFORE the hero seek below clears it. This is
