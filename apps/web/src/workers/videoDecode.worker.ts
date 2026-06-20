@@ -180,15 +180,7 @@ export interface BlitStatus {
 // A decoded frame held in the worker's blit queue (v5). Mirrors the
 // `QueueEntry` that used to live in `VideoPanel`.
 interface QueueEntry {
-  // Real capture PTS (data-sync time): drives overlay/LiDAR alignment and the
-  // value reported to the panel. Used to order the reorder buffer.
   ptsNs: bigint;
-  // Presentation PTS: a smoothed, even-cadence remap of `ptsNs` assigned at
-  // release time (see `assignPresPts`). The blit selects/dwells against THIS so
-  // the on-screen cadence is constant even when the source's capture timestamps
-  // are uneven (nuScenes alternates 50/100 ms). Equals `ptsNs` while paused so a
-  // scrub still lands on the exact frame for the cursor position.
-  presPtsNs: bigint;
   frame: VideoFrame;
   frameIndex: number;
   decodeQueue: number;
@@ -473,85 +465,14 @@ function insertSorted(arr: QueueEntry[], e: QueueEntry): void {
   arr.splice(i, 0, e);
 }
 
-// --- constant-cadence presentation clock ------------------------------------
-//
-// The source's CAPTURE timestamps can be uneven (nuScenes CAM_FRONT alternates
-// ~50/100 ms because keyframes interleave with sweeps). Presenting frames at
-// those raw intervals makes the on-screen DWELL uneven — judder the eye reads
-// even though the player is faithful. We therefore present on a SMOOTH grid: a
-// frame's `presPtsNs` advances by an EMA of the real interval (so the cadence
-// is constant) with a small bounded correction back toward its real capture
-// time (so the presentation grid never drifts away from the data timeline —
-// the LiDAR overlay still aligns to within a sub-frame). Real `ptsNs` is kept
-// untouched for data-sync (overlay, the value reported to the panel). While
-// paused/scrubbing the grid collapses to the real PTS so a scrub lands on the
-// exact frame. Assigned at RELEASE (presentation order = release order).
-let presClockNs = 0n;
-let presAvgIntervalNs = 0;
-let presPrevRealNs: bigint | null = null;
-// A real-interval larger than this between consecutive released frames is a
-// coverage gap / seek, not a frame cadence — re-anchor instead of smoothing it.
-const PRES_REANCHOR_STEP_NS = 500_000_000n;
-
-function resetPresClock(): void {
-  presPrevRealNs = null;
-  presAvgIntervalNs = 0;
-}
-
-function assignPresPts(e: QueueEntry): void {
-  const real = e.ptsNs;
-  if (!playbackActive) {
-    // Paused / scrubbing: present at the real capture time so a scrub lands on
-    // the exact frame. Re-anchor so the next play-start re-bases the grid.
-    e.presPtsNs = real;
-    presPrevRealNs = null;
-    return;
-  }
-  if (presPrevRealNs === null) {
-    // First frame of this playback segment: anchor the grid to real time.
-    presClockNs = real;
-    presPrevRealNs = real;
-    presAvgIntervalNs = 0;
-    e.presPtsNs = real;
-    return;
-  }
-  const realStep = Number(real - presPrevRealNs);
-  presPrevRealNs = real;
-  if (realStep <= 0 || realStep > Number(PRES_REANCHOR_STEP_NS)) {
-    // Backward straggler (can't happen for in-order release, but guard) or a
-    // coverage gap / seek: re-anchor instead of smoothing across it.
-    presClockNs = real > presClockNs ? real : presClockNs + 1n;
-    presAvgIntervalNs = 0;
-    e.presPtsNs = presClockNs;
-    return;
-  }
-  // Learn the smooth interval (EMA over the uneven real intervals).
-  presAvgIntervalNs =
-    presAvgIntervalNs <= 0 ? realStep : presAvgIntervalNs * 0.9 + realStep * 0.1;
-  let next = presClockNs + BigInt(Math.round(presAvgIntervalNs));
-  // Soft re-anchor toward real time: a proportional pull (capped at ¼ interval)
-  // keeps the grid from drifting off the data timeline without perturbing the
-  // even cadence (the per-frame correction is a couple of ms).
-  const driftNs = Number(real - next);
-  const cap = presAvgIntervalNs * 0.25;
-  const corr = Math.max(-cap, Math.min(cap, driftNs * 0.05));
-  next += BigInt(Math.round(corr));
-  if (next <= presClockNs) next = presClockNs + 1n;
-  presClockNs = next;
-  e.presPtsNs = next;
-}
-
 // Release every reorder-buffer frame except the most-recent `REORDER_HOLD_FRAMES`
 // (or all of them, on `flushAll` at end-of-stream) into the blit queue, in PTS
-// order, assigning each its constant-cadence presentation PTS, then blit.
-// `flushAll` is used by the EOS drain so the final held frames aren't stranded
-// when the decode frontier stops advancing.
+// order, then blit. `flushAll` is used by the EOS drain so the final held frames
+// aren't stranded when the decode frontier stops advancing.
 function releaseReordered(flushAll: boolean): void {
   const keep = flushAll ? 0 : REORDER_HOLD_FRAMES;
   while (reorderBuffer.length > keep) {
-    const e = reorderBuffer.shift()!;
-    assignPresPts(e);
-    blitQueue.push(e);
+    blitQueue.push(reorderBuffer.shift()!);
   }
   blitForCursor();
 }
@@ -563,13 +484,7 @@ function releaseReordered(flushAll: boolean): void {
 let drawnFrames = 0;
 let skippedUndrawnFrames = 0;
 let stragglerDrops = 0;
-// Presentation PTS of the on-screen frame: the monotonic-display guard + the
-// cadence record compare against this (the even grid), so the measured cadence
-// reflects the smooth presentation.
 let lastBlitPtsNs: bigint | null = null;
-// Real capture PTS of the on-screen frame: reported to the panel (`blitPtsNs`)
-// for overlay/LiDAR data-sync and readiness, which want the true capture time.
-let lastBlitRealPtsNs: bigint | null = null;
 let lastFrameArrivedMs = 0;
 // First-blit / post-seek-blit flags so the main thread can stamp the
 // VIDEO_FIRST_FRAME and VIDEO_SEEK_TO_BLIT marks on ITS perf timeline (the
@@ -973,7 +888,7 @@ function postBlitStatus(firstBlit: boolean, seekBlit: boolean): void {
   if (!sink) return;
   const status: BlitStatus = {
     type: "status",
-    blitPtsNs: lastBlitRealPtsNs,
+    blitPtsNs: lastBlitPtsNs,
     frameIndex: session?.frameIndex ?? 0,
     decodeQueue: session?.decoder?.decodeQueueSize ?? 0,
     dropped: droppedFrames,
@@ -1007,20 +922,20 @@ function blitForCursor(): void {
   const ctx = renderCtx;
   if (!ctx || !renderCanvas) return;
   if (blitQueue.length === 0) return;
-  const shownPts = lastBlitPtsNs; // frames with presPts <= this already shown
+  const shownPts = lastBlitPtsNs; // frames with pts <= this are already shown
   // The DISPLAY cursor. During play `blitClockTick` sets `cursorNs` to the pure
   // wall-clock position (gate-backstop-clamped); while paused/scrubbing it is
   // the authoritative cursor set directly by `setCursor`/`open`. The blit picks
-  // the newest frame whose PRESENTATION PTS <= this — the even-cadence grid,
-  // not the uneven capture time — so the on-screen dwell is constant.
+  // the newest frame whose real capture PTS <= this — so playback is faithful
+  // to the source's own timestamps.
   const bc = cursorNs;
 
-  // Newest frame with presPts <= cursor, scanning the entire (possibly
-  // unordered) queue.
+  // Newest frame with PTS <= cursor, scanning the entire (possibly unordered)
+  // queue.
   let bestIdx = -1;
   let bestPts = -1n;
   for (let i = 0; i < blitQueue.length; i++) {
-    const p = blitQueue[i].presPtsNs;
+    const p = blitQueue[i].ptsNs;
     if (p <= bc && (bestIdx < 0 || p > bestPts)) {
       bestPts = p;
       bestIdx = i;
@@ -1032,7 +947,7 @@ function blitForCursor(): void {
   // Monotonic display guard: if even the newest due frame isn't newer than the
   // frame on screen, every due frame is a reorder straggler — drop them all and
   // draw nothing this tick.
-  const advance = shownPts === null || target.presPtsNs > shownPts;
+  const advance = shownPts === null || target.ptsNs > shownPts;
 
   // Partition the queue: everything at/behind the cursor leaves (drawn or
   // dropped); everything ahead of the cursor stays for a future tick. Rebuild
@@ -1041,16 +956,15 @@ function blitForCursor(): void {
   let w = 0;
   for (let i = 0; i < blitQueue.length; i++) {
     const e = blitQueue[i];
-    if (e.presPtsNs > bc) {
+    if (e.ptsNs > bc) {
       blitQueue[w++] = e; // keep — still in the future
       continue;
     }
     if (i === bestIdx) continue; // the target is handled after the loop
     // A due frame newer than the on-screen frame but older than the target was
     // genuinely skipped (cursor advanced past >1 frame). Frames at/behind the
-    // shown presPts are reorder stragglers, not skips.
-    if (advance && (shownPts === null || e.presPtsNs > shownPts))
-      skippedThisBlit++;
+    // shown PTS are reorder stragglers, not skips.
+    if (advance && (shownPts === null || e.ptsNs > shownPts)) skippedThisBlit++;
     e.frame.close();
   }
 
@@ -1078,13 +992,12 @@ function blitForCursor(): void {
   // Frame-pacing sample: this is the one seam that paints a distinct frame, so
   // the gap to the previous call is its predecessor's on-screen dwell time.
   // `w` is the number of future frames kept after this paint = the buffer lead.
-  recordPaint(target.presPtsNs, w, blitCursorClamped);
+  recordPaint(target.ptsNs, w, blitCursorClamped);
   const firstBlit = !firstBlitDone;
   firstBlitDone = true;
   const seekBlit = seekBlitPending;
   seekBlitPending = false;
-  lastBlitPtsNs = target.presPtsNs;
-  lastBlitRealPtsNs = target.ptsNs;
+  lastBlitPtsNs = target.ptsNs;
   target.frame.close();
   blitQueue.length = w; // commit the kept (future) frames as the new queue
   postBlitStatus(firstBlit, seekBlit);
@@ -1105,10 +1018,6 @@ function flushBlitQueue(): void {
   for (const e of reorderBuffer) e.frame.close();
   reorderBuffer.length = 0;
   lastBlitPtsNs = null;
-  lastBlitRealPtsNs = null;
-  // A flush is a temporal discontinuity (seek/close/paint-black): re-anchor the
-  // presentation grid to real time on the next released frame.
-  resetPresClock();
   // A flush is a temporal discontinuity (seek/close/paint-black). Drop the
   // pacing window so the gap across it isn't counted as one giant dwell.
   resetCadenceState();
@@ -1421,9 +1330,6 @@ function emitFrame(frame: VideoFrame, ptsNs: bigint): void {
   // order and never has to drop a late-flushing B-frame.
   insertSorted(reorderBuffer, {
     ptsNs,
-    // Real placeholder; the real presentation PTS is assigned at release time
-    // (`assignPresPts`), once the frame's presentation order is settled.
-    presPtsNs: ptsNs,
     frame,
     frameIndex: session.frameIndex,
     decodeQueue,
@@ -1772,9 +1678,6 @@ export const videoDecodeApi = {
       cursorNs = cursorAnchorNs;
       lastSetCursorNs = cursorAnchorNs;
       playbackActive = true;
-      // Re-anchor the constant-cadence presentation grid: the first frame
-      // released under play re-bases it to real time (see `assignPresPts`).
-      resetPresClock();
       // Fresh pacing window per play session (the gap across a pause is not a
       // frame dwell).
       resetCadenceState();
