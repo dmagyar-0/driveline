@@ -443,13 +443,22 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     // revealed frame is heavily painted with LiDAR — fusion "wow" up front, not
     // 5 s of sparse open road — then pass forward through the turn.
     const startFrac = Math.max(0.03, bestFrac - 0.05);
-    // Stop just shy of the LAST video frame. The point cloud + ego signals
-    // extend a hair past the final dashcam frame, so letting the cursor reach
-    // (or run past) the very end drops the camera panel into its "no video at
-    // this time" BLACK state — exactly the cut to black we must not show. 0.97
-    // keeps the frame we end and hold on a live, painted dashcam frame.
-    const endFrac = 0.97;
-    const stopNs = at(endFrac);
+    // Stop ~0.5 s before the video source's ACTUAL coverage end — the channel's
+    // own timeRange, i.e. the exact window VideoPanel uses to decide
+    // "uncovered" (cursor > covEnd → the camera panel goes black with "no video
+    // at this time"). The raw mp4-sidecar span we seek fractions against can run
+    // slightly past that covered window (B-frame composition-order remap), so a
+    // fraction near 1.0 lands in the black tail. Anchoring the stop to covEnd −
+    // 0.5 s (margin absorbs the poll overshoot) guarantees the frame we end and
+    // hold on is always a live, painted dashcam frame — never the black tail.
+    const covEndNs = await page.evaluate((srcId) => {
+      const src = window
+        .__drivelineDevHooks!.listSources()
+        .find((s) => s.id === srcId);
+      return src ? src.timeRange.endNs : null;
+    }, video!.sourceId);
+    if (!covEndNs) throw new Error("video source timeRange not found");
+    const stopNs = BigInt(covEndNs) - 500_000_000n;
     await seekToTs(page, at(startFrac));
     await page.waitForTimeout(700);
 
