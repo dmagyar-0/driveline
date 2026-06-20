@@ -25,7 +25,10 @@ import * as Comlink from "comlink";
 import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
-import type { BlitStatus } from "../workers/videoDecode.worker";
+import type {
+  BlitStatus,
+  CadenceSummary,
+} from "../workers/videoDecode.worker";
 import {
   mark,
   measure,
@@ -129,6 +132,9 @@ export interface VideoHudSnapshot {
   skipped: number;
   /** Frames dropped as reorder stragglers (monotonic). 0 in steady play. */
   straggler: number;
+  /** Frame-pacing / smoothness telemetry over the worker's rolling window.
+   *  Null until the first status arrives (or after a reset). */
+  cadence: CadenceSummary | null;
   codec: string | null;
   hudOn: boolean;
 }
@@ -153,6 +159,21 @@ declare global {
   interface Window {
     __drivelineVideoLastBlitPtsNs?: bigint | null;
     __drivelineVideoHud?: VideoHudSnapshot;
+    /** Frame-pacing / smoothness summary for the most-recently active video
+     *  panel, mirrored each rAF tick so Playwright can poll it directly. Null
+     *  before the first status / after a reset. */
+    __drivelineVideoCadence?: CadenceSummary | null;
+    /** Pull-based raw per-paint cadence trace for the most-recently active
+     *  video panel. Async — proxies the videoDecode worker's `getCadenceTrace`
+     *  over Comlink. Resolves to null when no panel is mounted (no remote) or
+     *  the worker doesn't expose the method (e.g. a unit-test stub). Each array
+     *  is per painted frame: `dwellMs[i]` on-screen ms, `stepMs[i]` source-PTS
+     *  advance ms, `leadDepth[i]` blit-queue frames buffered ahead at paint. */
+    __drivelineVideoCadenceTrace?: () => Promise<{
+      dwellMs: number[];
+      stepMs: number[];
+      leadDepth: number[];
+    } | null>;
     /** Current video zoom factor (1 = fit). Mirrors the most recently
      *  interacted panel so Playwright can assert zoom/reset behaviour. */
     __drivelineVideoZoom?: number;
@@ -248,6 +269,9 @@ export function VideoPanel({
   const drawnFramesRef = useRef<number>(0);
   const skippedFramesRef = useRef<number>(0);
   const stragglerFramesRef = useRef<number>(0);
+  // Latest frame-pacing summary from the worker (always present on a status
+  // message; null before the first status / after a reset).
+  const cadenceRef = useRef<CadenceSummary | null>(null);
   const lastBlitPtsRef = useRef<bigint | null>(null);
   // Main-thread receipt time of the most recent status whose `frameArrivedMs`
   // advanced (i.e. the worker decoded a fresh frame). Drives the "decoder is
@@ -479,6 +503,21 @@ export function VideoPanel({
       makeVideoDecodeClient();
     videoDecodeRef.current = videoDecode;
     videoDecodeWorkerRef.current = videoDecodeWorker;
+
+    // Pull-based cadence trace dev hook. Reads the live remote off the ref
+    // (so it always targets the currently-mounted panel's worker) and proxies
+    // the worker's `getCadenceTrace` over Comlink. Returns null when there is
+    // no remote or the worker doesn't expose the method (a unit-test stub),
+    // so a Playwright/agent caller can probe without try/catch scaffolding.
+    window.__drivelineVideoCadenceTrace = async () => {
+      const remote = videoDecodeRef.current;
+      if (!remote || typeof remote.getCadenceTrace !== "function") return null;
+      try {
+        return await remote.getCadenceTrace();
+      } catch {
+        return null;
+      }
+    };
     const channel = new MessageChannel();
     const port = channel.port1;
 
@@ -516,6 +555,7 @@ export function VideoPanel({
       drawnFramesRef.current = data.drawn;
       skippedFramesRef.current = data.skipped;
       stragglerFramesRef.current = data.straggler;
+      cadenceRef.current = data.cadence;
       lastBlitPtsRef.current = data.blitPtsNs;
       // Issue #2 — track decoder liveness on OUR clock. When the worker's
       // `frameArrivedMs` advances (a fresh frame decoded), stamp the local
@@ -906,17 +946,29 @@ export function VideoPanel({
         drawn: drawnFramesRef.current,
         skipped: skippedFramesRef.current,
         straggler: stragglerFramesRef.current,
+        cadence: cadenceRef.current,
         codec: codecRef.current,
         hudOn: hudOnRef.current,
       };
       window.__drivelineVideoHud = snapshot;
+      window.__drivelineVideoCadence = cadenceRef.current;
       if (hudOnRef.current && hudDomRef.current) {
+        // Frame-pacing / smoothness line. Show an em dash when the worker
+        // hasn't produced a cadence summary yet (pre-first-status / reset).
+        const cad = snapshot.cadence;
+        const pacingLine = cad
+          ? `pacing      jit ${cad.jitterMs.toFixed(1)}ms  ` +
+            `p95 ${cad.p95DwellMs.toFixed(0)}/${cad.idealDwellMs.toFixed(0)}ms  ` +
+            `rep ${cad.repeats}  bwd ${cad.backwardSteps}  ` +
+            `${cad.smooth ? "OK" : "JUDDER"}`
+          : `pacing      —`;
         const hudText =
           `PTS         ${formatPts(snapshot.ptsNs)}\n` +
           `frame #     ${snapshot.frameIndex}\n` +
           `decodeQueue ${snapshot.decodeQueue}\n` +
           `blitQueue   ${snapshot.blitQueueLen} / ${MAX_QUEUE}\n` +
           `dropped     ${snapshot.dropped}\n` +
+          `${pacingLine}\n` +
           `codec       ${snapshot.codec ?? "—"}`;
         // Mirror the className guard below — skip the DOM write when unchanged.
         if (hudText !== lastHudTextRef.current) {
@@ -1051,6 +1103,7 @@ export function VideoPanel({
       drawnFramesRef.current = 0;
       skippedFramesRef.current = 0;
       stragglerFramesRef.current = 0;
+      cadenceRef.current = null;
       lastBlitPtsRef.current = null;
       decodeErrorRef.current = null;
       lastHudTextRef.current = "";
@@ -1064,6 +1117,8 @@ export function VideoPanel({
       lastWorkerFrameArrivedMsRef.current = 0;
       clearPanelReadiness(panelId);
       window.__drivelineVideoHud = undefined;
+      window.__drivelineVideoCadence = null;
+      window.__drivelineVideoCadenceTrace = undefined;
       // Don't leave a ghost blit PTS behind: the next panel to mount (e.g. a
       // track re-pick) must not read a stale frame timestamp from this one.
       window.__drivelineVideoLastBlitPtsNs = null;

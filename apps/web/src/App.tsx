@@ -16,6 +16,7 @@ import type { BasisDraft } from "./state/tabularImport";
 import type { RailTab } from "./state/persist/ui";
 import type { MapBinding } from "./layout/persist";
 import type { VideoHudSnapshot } from "./panels/VideoPanel";
+import type { CadenceSummary } from "./workers/videoDecode.worker";
 import type { PlotSyncSnapshot } from "./panels/PlotPanel";
 import { getReadinessSnapshot } from "./panels/videoReadiness";
 import { getSceneFrameInfo } from "./panels/sceneDevState";
@@ -81,6 +82,11 @@ declare global {
       clearSession: () => Promise<void>;
       removeSource: (sourceId: string) => Promise<void>;
       videoLastBlitPtsNs: () => bigint | null;
+      // Frame-pacing / smoothness telemetry from the most-recently published
+      // video HUD snapshot. All fields are plain numbers/ms (+ a boolean), so
+      // the object survives `page.evaluate` as-is — no BigInt to stringify.
+      // Returns null before the first status arrives (or after a reset).
+      videoCadence: () => CadenceSummary | null;
       // T5.2 — serialised HUD snapshot so Playwright can assert seek
       // settles without pixel compare. BigInt → string for `page.evaluate`.
       videoHudStats: () => {
@@ -530,6 +536,13 @@ export function App() {
           await useSession.getState().removeSource(sourceId);
         },
         videoLastBlitPtsNs: () => window.__drivelineVideoLastBlitPtsNs ?? null,
+        // Frame-pacing telemetry. Prefer the dedicated global (published by the
+        // VideoPanel rAF tick alongside the blit PTS); fall back to the HUD
+        // snapshot's `cadence` field. Plain numbers/boolean → no serialisation.
+        videoCadence: () =>
+          window.__drivelineVideoCadence ??
+          window.__drivelineVideoHud?.cadence ??
+          null,
         videoHudStats: () => {
           const h: VideoHudSnapshot | undefined = window.__drivelineVideoHud;
           if (!h) return null;
