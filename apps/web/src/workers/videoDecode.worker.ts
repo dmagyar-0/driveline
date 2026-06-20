@@ -323,7 +323,6 @@ const SCRUB_THRESHOLD_NS = 500_000_000n;
 
 // --- temporary pacing diagnostics (flag-gated; removed before final) ---------
 const DBG_PACING = true as boolean;
-let dbgTick = 0;
 let dbgAnchor0 = 0n;
 let dbgT0 = 0;
 function dbgLog(kind: string, extra: Record<string, unknown>): void {
@@ -402,19 +401,13 @@ function blitClockTick(): void {
     cursorNs = free;
     blitCursorClamped = false;
   }
-  if (DBG_PACING) {
-    dbgTick++;
-    if (dbgTick % 10 === 0) {
-      dbgLog("tick", {
-        cur: Number(cursorNs - dbgAnchor0) / 1e6,
-        free: Number(free - dbgAnchor0) / 1e6,
-        cap: Number(cap - dbgAnchor0) / 1e6,
-        lastSet: Number(lastSetCursorNs - dbgAnchor0) / 1e6,
-        clamped: blitCursorClamped,
-        bq: blitQueue.length,
-        ended: session?.ended ?? null,
-      });
-    }
+  if (DBG_PACING && blitCursorClamped) {
+    dbgLog("tick-CLAMP", {
+      cur: Math.round(Number(cursorNs - dbgAnchor0) / 1e6),
+      cap: Math.round(Number(cap - dbgAnchor0) / 1e6),
+      lastSet: Math.round(Number(lastSetCursorNs - dbgAnchor0) / 1e6),
+      bq: blitQueue.length,
+    });
   }
   blitForCursor();
   void maybeRefill();
@@ -606,7 +599,21 @@ function resetCadenceState(): void {
 // Record one distinct paint. Called from `blitForCursor` immediately after the
 // `ctx.drawImage` that put `ptsNs` on screen.
 function recordPaint(ptsNs: bigint, lead: number, clamped: boolean): void {
-  paintSamples.push({ wallMs: workerNow(), ptsNs, lead, clamped });
+  const w = workerNow();
+  if (DBG_PACING) {
+    const prev = paintSamples[paintSamples.length - 1];
+    const dwell = prev ? (w - prev.wallMs).toFixed(0) : "0";
+    const stepMs = prev ? Number(ptsNs - prev.ptsNs) / 1e6 : 0;
+    dbgLog("paint", {
+      dwell: Number(dwell),
+      step: Math.round(stepMs),
+      lead,
+      bq: blitQueue.length,
+      reord: reorderBuffer.length,
+      clamped,
+    });
+  }
+  paintSamples.push({ wallMs: w, ptsNs, lead, clamped });
   if (paintSamples.length > CADENCE_WINDOW) paintSamples.shift();
 }
 
@@ -1642,11 +1649,6 @@ export const videoDecodeApi = {
             prev: Number(prevSet - dbgAnchor0) / 1e6,
           });
         }
-      } else if (DBG_PACING && dbgTick % 10 === 0) {
-        dbgLog("setCursor", {
-          ns: Number(ns - dbgAnchor0) / 1e6,
-          prev: Number(prevSet - dbgAnchor0) / 1e6,
-        });
       }
       // else: normal advance / jitter / gate hold — keep free-running on the
       // wall clock; the backstop in `blitClockTick` handles a genuine hold and
@@ -1682,7 +1684,6 @@ export const videoDecodeApi = {
       if (DBG_PACING) {
         dbgAnchor0 = cursorAnchorNs;
         dbgT0 = workerNow();
-        dbgTick = 0;
         dbgLog("play-start", { speed, anchor: 0 });
       }
       // Fresh pacing window per play session (the gap across a pause is not a
