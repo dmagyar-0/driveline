@@ -324,6 +324,17 @@ const SCRUB_THRESHOLD_NS = 500_000_000n;
 // leap the cursor across many frames at once when it finally fires.
 const MAX_INTERP_NS = 1_000_000_000n;
 
+// --- temporary pacing diagnostics (flag-gated; removed before final) ---------
+const DBG_PACING = true as boolean;
+let dbgTick = 0;
+let dbgAnchor0 = 0n;
+let dbgT0 = 0;
+function dbgLog(kind: string, extra: Record<string, unknown>): void {
+  const t = (workerNow() - dbgT0).toFixed(0);
+  // eslint-disable-next-line no-console
+  console.log(`DBGPACE ${t}ms ${kind} ${JSON.stringify(extra)}`);
+}
+
 function workerNow(): number {
   return performance.now();
 }
@@ -382,6 +393,20 @@ function blitClockTick(): void {
   } else {
     cursorNs = free;
     blitCursorClamped = false;
+  }
+  if (DBG_PACING) {
+    dbgTick++;
+    if (dbgTick % 10 === 0) {
+      dbgLog("tick", {
+        cur: Number(cursorNs - dbgAnchor0) / 1e6,
+        free: Number(free - dbgAnchor0) / 1e6,
+        cap: Number(cap - dbgAnchor0) / 1e6,
+        lastSet: Number(lastSetCursorNs - dbgAnchor0) / 1e6,
+        clamped: blitCursorClamped,
+        bq: blitQueue.length,
+        ended: session?.ended ?? null,
+      });
+    }
   }
   blitForCursor();
   void maybeRefill();
@@ -1603,6 +1628,17 @@ export const videoDecodeApi = {
         anchorWallMs = workerNow();
         cursorNs = ns;
         scrubReanchors++;
+        if (DBG_PACING) {
+          dbgLog("setCursor-SCRUB", {
+            ns: Number(ns - dbgAnchor0) / 1e6,
+            prev: Number(prevSet - dbgAnchor0) / 1e6,
+          });
+        }
+      } else if (DBG_PACING && dbgTick % 10 === 0) {
+        dbgLog("setCursor", {
+          ns: Number(ns - dbgAnchor0) / 1e6,
+          prev: Number(prevSet - dbgAnchor0) / 1e6,
+        });
       }
       // else: normal advance / jitter / gate hold — keep free-running on the
       // wall clock; the backstop in `blitClockTick` handles a genuine hold and
@@ -1635,6 +1671,12 @@ export const videoDecodeApi = {
       cursorNs = cursorAnchorNs;
       lastSetCursorNs = cursorAnchorNs;
       playbackActive = true;
+      if (DBG_PACING) {
+        dbgAnchor0 = cursorAnchorNs;
+        dbgT0 = workerNow();
+        dbgTick = 0;
+        dbgLog("play-start", { speed, anchor: 0 });
+      }
       // Fresh pacing window per play session (the gap across a pause is not a
       // frame dwell).
       resetCadenceState();
