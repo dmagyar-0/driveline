@@ -123,8 +123,10 @@ export interface CadenceSummary {
   playerErrStdRegularMs: number;
   /** Sample size for playerErrStdRegularMs (near-median-interval pairs). */
   regularPairs: number;
-  /** Re-anchors of the pacing clock during the window. resyncReanchors (the
-   *  RESYNC_THRESHOLD catch-up path) is the suspect for the periodic slip;
+  /** Re-anchors of the pacing clock during the window. The pure-wall-clock
+   *  display path no longer does per-tick resync, so resyncReanchors is now
+   *  always 0 (retained for the cadence-scorer contract — a non-zero value
+   *  would indicate a regression that reintroduced catch-up resync).
    *  scrubReanchors should be ~0 during steady play. */
   resyncReanchors: number;
   scrubReanchors: number;
@@ -256,54 +258,60 @@ let cursorNs: bigint = 0n;
 // boundaries closed the in-between frames undrawn (measured: 81/224 frames
 // skipped, p50 lag 168 ms) even though the decoded frames were sitting ready.
 //
-// Fix — TWO cursors driven by a worker-owned ~5 ms (200 Hz) interval:
-//   • the PACING cursor (`cursorNs`) free-runs at real time from a fixed anchor
-//     (`anchorCursorNs` at `anchorWallMs`, worker clock). It tracks the main
-//     cursor at an identical rate WITHOUT inheriting its jitter, and the decoder
-//     paces off it, so the lookahead stays a full second ahead of real time —
-//     enough that every B-frame is decoded (in decode order) and reordered into
+// Fix — a SINGLE wall-clock cursor driven by a worker-owned ~5 ms (200 Hz)
+// interval, recomputed fresh each tick (NOT an accumulator):
+//   • `cursorNs` = `anchorCursorNs + (workerNow() − anchorWallMs)·speed`, the
+//     pure wall-clock position from a fixed play-start anchor. It runs at real
+//     time WITHOUT inheriting the forwarded `setCursor`'s coalescing/Comlink
+//     jitter, and is immune to tick starvation — a late tick reads the correct
+//     time and paints the correct frame (no catch-up rush). The decoder paces
+//     off it, so the lookahead stays a full second ahead of real time — enough
+//     that every B-frame is decoded (in decode order) and reordered into
 //     presentation order BEFORE the cursor reaches it (no stragglers).
-//   • the DISPLAY cursor (`blitCursorNs()`) is the pacing cursor clamped to a
-//     small margin ahead of the latest authoritative `setCursor`. The blit picks
-//     frames against this, so the on-screen frame never leads the shared
-//     timeline by more than the margin (bounded desync), and a decode-gate hold
-//     can't freeze it (it stays a margin ahead, keeps blitting + heartbeating,
-//     so the panel reports ready and the gate releases).
-// `setCursor` only re-anchors the pacing clock on a genuine scrub or when the
-// clock has fallen behind real time; normal jitter and gate holds are ignored.
+//   • The blit picks the newest frame ≤ `cursorNs`. Because the main thread's
+//     own cursor shares this exact anchor + rate, the two stay in lockstep with
+//     no per-tick tracking — perfectly synced AND smooth.
+//   • Gate backstop (in `blitClockTick`): if the wall clock runs past
+//     `lastSetCursorNs + AHEAD_MARGIN` the main thread is holding its cursor
+//     (startup priming / decode stall); pin to the cap and re-anchor so the
+//     display stays a margin ahead (keeps blitting + heartbeating → the panel
+//     reports ready, the gate releases) and resumes free-running cleanly.
+// `setCursor` re-anchors only on a genuine scrub; normal jitter and gate holds
+// are absorbed by the wall clock + backstop, never by per-tick resync.
 let playbackActive = false;
 let playbackSpeed = 1;
-// Two cursors during play (see the long comment above `playbackActive`):
-//  - `cursorNs` is the PACING cursor. It free-runs at real time from a fixed
-//    anchor (`anchorCursorNs` at `anchorWallMs`, worker clock), so it tracks the
-//    main-thread cursor at an identical rate WITHOUT inheriting its jitter, and
-//    so the decoder's lookahead (paced off it) stays a full second ahead of
-//    real time — which is what keeps every B-frame decoded in presentation
-//    order before the cursor reaches it (no stragglers).
-//  - the DISPLAY cursor (computed in `blitCursorNs()`) is `cursorNs` clamped to
-//    within `AHEAD_MARGIN_NS` of the latest authoritative `setCursor`, so the
-//    on-screen frame never leads the shared timeline by more than a margin
-//    (bounded desync) AND, when the decode-gate briefly holds the main cursor,
-//    the display still sits one margin ahead and keeps blitting + heartbeating
-//    so the panel reports "ready" and the gate releases (no deadlock).
 let anchorCursorNs = 0n;
 let anchorWallMs = 0;
 let lastSetCursorNs = 0n;
-// Worker time (ms) of the last display-clock advance. Drives the smooth SLEW in
-// `blitClockTick`: the cursor advances by real elapsed time plus a small bounded
-// correction toward the target, rather than snapping (which rushed ~5×).
-let lastAdvanceMs = 0;
 let blitClockId: ReturnType<typeof setInterval> | null = null;
 // How often the worker re-evaluates the cursor + blits during play. 5 ms ≈
 // 200 Hz: far finer than any real video frame rate, so every frame is the
 // newest-≤-cursor for many ticks and is always painted. Each tick is cheap (a
 // small queue walk; drawImage only when a new frame is actually due).
+//
+// CRUCIAL: the displayed cursor is a PURE function of the worker wall clock
+// (`pacingCursorNs()` = anchor + elapsed·speed), recomputed fresh every tick —
+// NOT an accumulator stepped per tick. So a starved/late tick is harmless: it
+// simply reads the correct time once and paints the correct frame. There is
+// nothing to "catch up", hence no catch-up rush (the old slew+resync design
+// rushed ~5× after every starved interval). A late tick can at worst skip a
+// frame if the gap exceeds one source interval — which is the correct outcome
+// (you genuinely lost that wall time); rushing the skipped frame through would
+// be visibly worse.
 const BLIT_CLOCK_MS = 5;
-// Max the DISPLAY cursor may lead the authoritative main-thread cursor. Bounds
-// video↔timeline desync to < one frame interval (well inside the lag budget)
-// while staying large enough that a gate hold leaves the display visibly ahead
-// of the held cursor (so the panel's readiness clears and the gate releases).
-const AHEAD_MARGIN_NS = 80_000_000n;
+// Max the DISPLAY cursor may lead the authoritative main-thread cursor before
+// the gate backstop pins it. In STEADY play this never binds: the worker's
+// wall-clock cursor and the main thread's cursor share the same play-start
+// anchor and advance at the same rate, so they stay in lockstep (modulo a few
+// ms of Comlink/coalescing lag) and the display free-runs smoothly off the
+// worker clock — immune to the jitter in the forwarded `setCursor` stream. It
+// binds only on a genuine HOLD (startup priming or a decode stall), where the
+// main thread freezes its cursor: the display then catches up to this margin
+// and pins (re-anchoring so it resumes cleanly on release). 150 ms ≈ 1.5
+// source frames at 12 fps — generous enough to clear forwarding-jitter spikes
+// so they never clip the smooth clock, tight enough to bound video↔timeline
+// desync during a real hold.
+const AHEAD_MARGIN_NS = 150_000_000n;
 // Keep the free-running PACING cursor from drifting more than this past the
 // authoritative cursor if the main thread stalls entirely — bounds how far the
 // decoder reads ahead. Generous (a full lookahead), so normal play never hits
@@ -312,19 +320,9 @@ const MAX_PACING_AHEAD_NS = 1_000_000_000n;
 // A `setCursor` this far from the pacing cursor is a real scrub/seek (not
 // jitter or a gate hold): re-anchor the clock to it.
 const SCRUB_THRESHOLD_NS = 500_000_000n;
-// A forward `setCursor` beyond the pacing cursor by this much means the clock
-// fell behind real time (a starved interval): catch the anchor up.
-const RESYNC_THRESHOLD_NS = 50_000_000n;
 // Cap a single interp evaluation so a throttled/backgrounded interval can't
 // leap the cursor across many frames at once when it finally fires.
 const MAX_INTERP_NS = 1_000_000_000n;
-// Max the blit cursor may advance in ONE clock tick. The pacing target is
-// wall-clock-derived, so a starved interval (the worker briefly not getting a
-// turn) would otherwise jump the cursor by the whole gap and skip every frame
-// in between. Capping the per-tick step to under one frame interval makes the
-// cursor catch up smoothly over the next few ticks instead — no jump, no skip.
-// (~25 ms < a 30 fps frame; normal 5 ms ticks never reach it.)
-const MAX_TICK_STEP_NS = 25_000_000n;
 
 function workerNow(): number {
   return performance.now();
@@ -343,37 +341,27 @@ function pacingCursorNs(): bigint {
   return next;
 }
 
-// The DISPLAY cursor the blit compares against. While playing it is the pacing
-// cursor clamped to a margin ahead of the authoritative main-thread cursor (so
-// the frame never leads the timeline). While paused/scrubbing there is no
-// free-running clock to bound: `cursorNs` is itself the authoritative cursor
-// (set directly by `setCursor`/`open`), so use it as-is — clamping against the
-// initial `lastSetCursorNs` (0 before the first `setCursor`) would otherwise
-// pin the blit near t=0 and a high-PTS stream would never show its first frame.
-// Diagnostic: set true on the most recent blitCursorNs() call whenever the
-// AHEAD_MARGIN clamp bound (display pinned to the authoritative cursor + margin
-// instead of free-running on the smooth pacing clock). Recorded per paint to
-// test whether the periodic presentation slip coincides with clamp binding.
+// Diagnostic: set true on the tick whenever the gate backstop bound (the
+// display caught up to `lastSetCursorNs + AHEAD_MARGIN` and was pinned —
+// startup priming or a decode stall, NOT steady play). Recorded per paint so
+// the cadence trace can show that smooth playback never clamps.
 let blitCursorClamped = false;
 
-function blitCursorNs(): bigint {
-  if (!playbackActive) {
-    blitCursorClamped = false;
-    return cursorNs;
-  }
-  const cap = lastSetCursorNs + AHEAD_MARGIN_NS;
-  if (cursorNs < cap) {
-    blitCursorClamped = false;
-    return cursorNs;
-  }
-  blitCursorClamped = true;
-  return cap;
-}
-
-// Advance the pacing cursor on the worker's own clock and blit. No-op when not
-// playing. Also nudges the pull loop so the decoder stays fed against the
-// advancing cursor even after it goes idle at the lookahead ceiling (otherwise
-// refill is only driven by `onFrame`, which a caught-up decoder stops firing).
+// Advance the DISPLAY/pacing cursor on the worker's own clock and blit. No-op
+// when not playing. Also nudges the pull loop so the decoder stays fed against
+// the advancing cursor even after it goes idle at the lookahead ceiling
+// (otherwise refill is only driven by `onFrame`, which a caught-up decoder
+// stops firing).
+//
+// The cursor is the PURE wall-clock value (`pacingCursorNs()`), recomputed
+// fresh each tick — never an accumulator. A late/starved tick therefore reads
+// the correct position and paints the correct frame with no catch-up rush. The
+// only adjustment is the gate backstop: if the wall clock has run past
+// `lastSetCursorNs + AHEAD_MARGIN` the main thread is holding its cursor
+// (priming/stall), so pin to the cap AND re-anchor the wall clock to it, so
+// that on release the clock resumes free-running from here instead of carrying
+// the held interval (which would otherwise peg the display to the noisy main
+// cursor forever after the first hold).
 function blitClockTick(): void {
   if (!playbackActive) return;
   // Blit-clock health sample (diagnostics): the gap since the previous tick.
@@ -384,36 +372,17 @@ function blitClockTick(): void {
     if (tickGapCount < CADENCE_WINDOW) tickGapCount++;
   }
   lastTickMs = tickNow;
-  // --- smooth display clock: SLEW, don't snap ------------------------------
-  // The display cursor advances by the REAL time elapsed since the last tick
-  // (so it runs at the playback rate, smoothly), plus a small bounded correction
-  // toward the wall-clock target. The previous `min(cursor + 25 ms, target)`
-  // snapped the cursor to the target, so every target re-anchor (the periodic
-  // resync) became a capped catch-up RUSH of ~5× real-time — the measured ~1 Hz
-  // single-frame "repeat-then-rush" slip. Slewing the drift instead (correction
-  // capped at ±10 % of the step) re-syncs imperceptibly: it never rushes, never
-  // freezes (step ≥ 0), and continuously absorbs a steady clock drift without a
-  // periodic jump. The per-step skip-guard (≤ 25 ms, under one 30 fps frame)
-  // still bounds a genuinely starved interval so it catches up over several
-  // ticks rather than leaping past undrawn frames (preserving zero frame loss).
-  const target = pacingCursorNs();
-  let dtMs = tickNow - lastAdvanceMs;
-  lastAdvanceMs = tickNow;
-  if (dtMs < 0) dtMs = 0;
-  const baseNs = dtMs * 1e6 * playbackSpeed;
-  const errNs = Number(target - cursorNs); // +behind / −ahead of the target
-  let corr = errNs * 0.1;
-  const maxCorr = baseNs * 0.1;
-  if (corr > maxCorr) corr = maxCorr;
-  else if (corr < -maxCorr) corr = -maxCorr;
-  let stepNs = baseNs + corr;
-  if (stepNs < 0) stepNs = 0; // monotonic during play
-  // Starve skip-guard: never advance more than one capped step (< one 30 fps
-  // frame) in a single tick, so a genuinely starved interval catches up over
-  // several ticks instead of leaping past undrawn frames (zero frame loss).
-  const maxStep = Number(MAX_TICK_STEP_NS);
-  if (stepNs > maxStep) stepNs = maxStep;
-  cursorNs += BigInt(Math.round(stepNs));
+  const free = pacingCursorNs();
+  const cap = lastSetCursorNs + AHEAD_MARGIN_NS;
+  if (free > cap) {
+    cursorNs = cap;
+    anchorCursorNs = cap;
+    anchorWallMs = tickNow;
+    blitCursorClamped = true;
+  } else {
+    cursorNs = free;
+    blitCursorClamped = false;
+  }
   blitForCursor();
   void maybeRefill();
 }
@@ -946,10 +915,11 @@ function blitForCursor(): void {
   if (!ctx || !renderCanvas) return;
   if (blitQueue.length === 0) return;
   const shownPts = lastBlitPtsNs; // frames with pts <= this are already shown
-  // The DISPLAY cursor (pacing cursor clamped to a margin ahead of the
-  // authoritative main cursor). The blit picks frames against this, not the
-  // free-running pacing cursor, so the on-screen frame never leads the timeline.
-  const bc = blitCursorNs();
+  // The DISPLAY cursor. During play `blitClockTick` sets `cursorNs` to the pure
+  // wall-clock position (gate-backstop-clamped); while paused/scrubbing it is
+  // the authoritative cursor set directly by `setCursor`/`open`. Either way the
+  // blit picks the newest frame whose PTS <= this.
+  const bc = cursorNs;
 
   // Newest frame with PTS <= cursor, scanning the entire (possibly unordered)
   // queue.
@@ -1611,14 +1581,18 @@ export const videoDecodeApi = {
   },
   setCursor(ns: bigint): void {
     if (playbackActive) {
-      // `ns` is the authoritative timeline cursor. It bounds the DISPLAY cursor
-      // (see `blitCursorNs`) and re-anchors the free-running PACING clock only
-      // when the clock has genuinely diverged. Crucially, a SCRUB is detected by
-      // how far `ns` jumped from the PREVIOUS authoritative cursor — NOT from the
-      // free-running pacing cursor. A decode-gate hold keeps sending the same
-      // held `ns` while the pacing clock runs ahead, so measuring against the
-      // pacing cursor would mistake the growing gap for a backward scrub and
-      // snap the clock back, freezing the video and deadlocking the gate.
+      // `ns` is the authoritative timeline cursor. In steady play the worker
+      // does NOT track it tick-to-tick — the display free-runs on the worker
+      // wall clock (which shares the play-start anchor and rate, so it stays in
+      // lockstep without inheriting the forwarded cursor's coalescing/Comlink
+      // jitter). `ns` is used only as (a) the gate backstop reference
+      // (`lastSetCursorNs + AHEAD_MARGIN`, applied in `blitClockTick`) and
+      // (b) scrub detection. A SCRUB is detected by how far `ns` jumped from the
+      // PREVIOUS authoritative cursor — NOT from the free-running pacing cursor:
+      // a decode-gate hold keeps re-sending the same held `ns` while the clock
+      // runs ahead, and measuring against the pacing cursor would mistake that
+      // growing gap for a backward scrub and snap the clock back, freezing the
+      // video and deadlocking the gate.
       const prevSet = lastSetCursorNs;
       lastSetCursorNs = ns;
       const jumped =
@@ -1629,17 +1603,12 @@ export const videoDecodeApi = {
         anchorWallMs = workerNow();
         cursorNs = ns;
         scrubReanchors++;
-      } else if (ns > pacingCursorNs() + RESYNC_THRESHOLD_NS) {
-        // The clock fell behind real time (a starved interval): RE-ANCHOR so the
-        // pacing target catches up, but DON'T snap `cursorNs` — let the blit
-        // clock advance it the capped step per tick so frames aren't jumped.
-        anchorCursorNs = ns;
-        anchorWallMs = workerNow();
-        resyncReanchors++;
       }
-      // else: normal advance / jitter / gate hold — keep free-running; the
-      // display clamp handles the small lead and the heartbeat releases the gate.
-      blitForCursor(); // the display-cursor cap may have moved
+      // else: normal advance / jitter / gate hold — keep free-running on the
+      // wall clock; the backstop in `blitClockTick` handles a genuine hold and
+      // its heartbeat releases the gate. No per-tick resync (it was the
+      // catch-up-rush source).
+      blitForCursor();
     } else {
       // Paused / scrubbing: this is the sole blit driver.
       cursorNs = ns;
@@ -1663,7 +1632,6 @@ export const videoDecodeApi = {
     if (playing) {
       anchorCursorNs = cursorAnchorNs;
       anchorWallMs = workerNow();
-      lastAdvanceMs = workerNow();
       cursorNs = cursorAnchorNs;
       lastSetCursorNs = cursorAnchorNs;
       playbackActive = true;
