@@ -600,7 +600,9 @@ function cadenceTrace(): {
   const clamped: boolean[] = [];
   for (let i = 1; i < paintSamples.length; i++) {
     dwellMs.push(paintSamples[i].wallMs - paintSamples[i - 1].wallMs);
-    stepMs.push(Number(paintSamples[i].ptsNs - paintSamples[i - 1].ptsNs) / 1e6);
+    stepMs.push(
+      Number(paintSamples[i].ptsNs - paintSamples[i - 1].ptsNs) / 1e6,
+    );
     leadDepth.push(paintSamples[i - 1].lead);
     clamped.push(paintSamples[i - 1].clamped);
   }
@@ -688,7 +690,9 @@ function computeCadence(): CadenceSummary {
   const secondHalfRate = secondMean > 0 ? idealDwellMs / secondMean : 0;
   const gaps = tickGapsArray();
   const sortedGaps = [...gaps].sort((a, b) => a - b);
-  const tickGapMaxMs = sortedGaps.length ? sortedGaps[sortedGaps.length - 1] : 0;
+  const tickGapMaxMs = sortedGaps.length
+    ? sortedGaps[sortedGaps.length - 1]
+    : 0;
   const tickGapP95Ms = sortedGaps.length ? at(sortedGaps, 0.95) : 0;
   let starvedTicks = 0;
   for (const g of gaps) if (g > STARVED_TICK_MS) starvedTicks++;
@@ -1486,15 +1490,27 @@ async function captureFrameAtInternal(
   // Newest frame whose PTS is <= the target; a frame strictly after the target
   // is only kept as a fallback when the target precedes the very first frame.
   let best: VideoFrame | null = null;
+  let bestPts = 0n;
   let captureError: Error | null = null;
   const decoder = new VideoDecoder({
     output: (frame) => {
       const pts = BigInt(frame.timestamp) * 1000n;
+      // Keep the frame with the GREATEST pts <= target. The decoder emits in
+      // DECODE order and, for B-frame streams, `frame.timestamp` is the
+      // (presentation-ordered) capture time mapped onto a decode-order sample —
+      // so it is NON-monotonic across emits. "Last decoded with pts<=target" is
+      // therefore not the nearest frame; compare pts explicitly.
       if (pts <= atPtsNs) {
-        if (best) best.close();
-        best = frame;
+        if (best === null || pts > bestPts) {
+          if (best) best.close();
+          best = frame;
+          bestPts = pts;
+        } else {
+          frame.close();
+        }
       } else if (best === null) {
         best = frame;
+        bestPts = pts;
       } else {
         frame.close();
       }

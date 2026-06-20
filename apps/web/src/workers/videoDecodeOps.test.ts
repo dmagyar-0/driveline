@@ -552,6 +552,31 @@ describe("pickStartCursor", () => {
       }
     }
   });
+
+  it("picks the correct GOP keyframe when ptsNs is non-monotonic (B-frame decode order)", () => {
+    // After the Mp4SidecarReader composition remap, `ptsNs` is in DECODE order
+    // and non-monotonic for B-frame streams. Two reordered GOPs:
+    //   GOP1 (sync @ decode 0): presents 1000,4000,2000,3000 at decode idx 0..3
+    //   GOP2 (sync @ decode 4): presents 5000,8000,6000,7000 at decode idx 4..7
+    // The P-frame (presented last in its GOP) sits early in decode order, so a
+    // binary search would start the decode at the wrong GOP. The linear scan
+    // must rewind to the keyframe of the GOP that actually covers `target`.
+    const idx = index(
+      [1000, 4000, 2000, 3000, 5000, 8000, 6000, 7000],
+      [1, 0, 0, 0, 1, 0, 0, 0],
+    );
+    // Inside GOP2's presentation span → GOP2 keyframe (decode idx 4), even
+    // though decode idx 5 (pts 8000) precedes idx 6 (pts 6000) in decode order.
+    expect(pickStartCursor(idx, 6500n)).toBe(4);
+    expect(pickStartCursor(idx, 7000n)).toBe(4);
+    // Inside GOP1's span → GOP1 keyframe (0). pts 4000 lives at decode idx 1
+    // (a P-frame presented last in GOP1); a binary search on the non-monotonic
+    // array would mishandle the 4000–5000 gap.
+    expect(pickStartCursor(idx, 3500n)).toBe(0);
+    expect(pickStartCursor(idx, 4500n)).toBe(0);
+    // Target before the earliest presentation time → first sync sample.
+    expect(pickStartCursor(idx, 500n)).toBe(0);
+  });
 });
 
 describe("makeOpQueue", () => {

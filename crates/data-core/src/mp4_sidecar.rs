@@ -1,6 +1,11 @@
-//! `Mp4SidecarReader`: implementation of a video-only `Reader` whose timestamps
-//! come from a separate `.mp4.timestamps` sidecar blob rather than the mp4's
-//! own `stts`/`ctts` tables.
+//! `Mp4SidecarReader`: implementation of a video-only `Reader` whose timestamp
+//! VALUES come from a separate `.mp4.timestamps` sidecar blob rather than the
+//! mp4's own `stts`/`ctts` timescale. The mp4's `stts`/`ctts` are still read,
+//! but only to recover the decode→presentation ORDER (B-frame reorder): the
+//! presentation-ordered sidecar times are mapped onto the decode-order sample
+//! table so each decoded frame carries its own picture's capture time (see
+//! `remap_sidecar`). Skipping that mapping tags B-frames with a neighbour's
+//! timestamp and the player shows them out of order.
 //!
 //! Covers T2.3 of `docs/10-task-breakdown.md`. See `docs/05-video-pipeline.md`
 //! §"mp4 + sidecar timestamp path" for the format and rationale, and
@@ -39,8 +44,15 @@ pub struct Mp4SampleIndex {
 #[derive(Debug)]
 pub struct Mp4SidecarReader {
     meta: SourceMeta,
-    /// One entry per mp4 video sample in decode order, absolute ns UTC.
-    /// Parallel to the mp4 track's `stsz` sample table.
+    /// One entry per mp4 video sample in DECODE order (parallel to the `stsz`
+    /// sample table / `index` below), absolute ns UTC. Each value is the
+    /// capture time of THAT sample's own picture: the presentation-ordered
+    /// sidecar timestamps mapped onto decode-order samples through the track's
+    /// composition order (`stts` + `ctts`; see [`remap_sidecar`]). For a stream
+    /// with B-frames decode order ≠ presentation order, so this array is
+    /// NON-monotonic in decode order — the JS player reorders frames by it
+    /// before display, so a wrong mapping here shows pictures out of sequence
+    /// ("back and forth").
     pts_ns: Vec<i64>,
     /// Per-sample byte offsets / sizes / sync flags in the original mp4
     /// file. Replaces the old `Vec<Mp4SampleCache>` so no `mdat` bytes
@@ -83,7 +95,7 @@ impl Mp4SidecarReader {
         // Pick the single video track and pull what we need from it.
         // Drop the borrow before building the index so we can keep the
         // expensive `Mp4Track` fields out of the long-lived reader.
-        let (track_id, mp4_count, sps, pps, index) = {
+        let (track_id, mp4_count, sps, pps, index, comp_times) = {
             let mut video_tracks: Vec<_> = mp4
                 .tracks()
                 .values()
@@ -99,19 +111,47 @@ impl Mp4SidecarReader {
             let pps = track.picture_parameter_set()?.to_vec();
             let count = track.sample_count() as usize;
             let index = build_sample_index(track)?;
-            (track.track_id(), count, sps, pps, index)
+            // Per-sample composition (presentation) time in DECODE order, so we
+            // can place each presentation-ordered sidecar timestamp onto the
+            // decode-order sample that actually carries that picture. Only the
+            // resulting ORDER is used; absolute values are discarded.
+            let comp_times = composition_times(track, count);
+            (track.track_id(), count, sps, pps, index, comp_times)
         };
 
-        let pts_ns = parse_sidecar_text(sidecar_bytes, mp4_count)?;
+        let sidecar = parse_sidecar_text(sidecar_bytes, mp4_count)?;
 
-        let time_range = match (pts_ns.first(), pts_ns.last()) {
-            (Some(&first), Some(&last)) => TimeRange {
-                start_ns: first,
+        // Pair sidecar timestamps with decode-order samples. A sidecar of real
+        // capture times is ASCENDING iff it is in PRESENTATION (display) order —
+        // capture time rises with presentation — which is how producers
+        // naturally emit it (e.g. the nuScenes converter). Map those onto the
+        // decode-order sample shown at each slot via the mp4 composition order,
+        // so each decoded picture carries its OWN capture time. Without this a
+        // B-frame stream (decode order ≠ presentation order) tags each frame
+        // with a neighbour's timestamp and the JS player — which reorders by
+        // these timestamps — presents pictures out of order ("back and forth").
+        //
+        // A NON-ascending sidecar can only already be in DECODE order (entry i =
+        // decode-sample i's own capture time), so it pairs positionally and the
+        // player's reorder-by-pts still sorts it into display order. With no
+        // `ctts` (no B-frames) both paths are the identity, so non-B-frame and
+        // mcap sources are unchanged either way.
+        let pts_ns = if is_ascending(&sidecar) {
+            remap_sidecar(&comp_times, &sidecar)
+        } else {
+            sidecar
+        };
+
+        // `pts_ns` is in decode order and therefore (with B-frames) NON-
+        // monotonic, so the source timespan is its min/max — not first/last.
+        let time_range = match pts_ns_bounds(&pts_ns) {
+            Some((min, max)) => TimeRange {
+                start_ns: min,
                 // Half-open interval: `+1` so a single-sample source has a
                 // non-empty range, matching `docs/03-data-model.md`.
-                end_ns: last.saturating_add(1),
+                end_ns: max.saturating_add(1),
             },
-            _ => TimeRange::empty(),
+            None => TimeRange::empty(),
         };
 
         let channel = Channel {
@@ -396,8 +436,107 @@ fn build_sample_index(track: &mp4::Mp4Track) -> crate::Result<Mp4SampleIndex> {
     })
 }
 
+/// Per-sample composition (presentation) timestamp in DECODE order, derived
+/// from the track's `stts` (decode durations) and `ctts` (composition offsets).
+/// Used only to recover the decode→presentation permutation, so the absolute
+/// baseline is irrelevant — a constant edit-list / `cslg` shift doesn't change
+/// the ordering — and we baseline cumulative DTS at 0 then add the signed
+/// `ctts` offset. A track with no `ctts` box has no B-frame reorder, so
+/// composition time equals decode time and the permutation is the identity.
+fn composition_times(track: &mp4::Mp4Track, count: usize) -> Vec<i64> {
+    let stbl = &track.trak.mdia.minf.stbl;
+    let mut cts: Vec<i64> = Vec::with_capacity(count);
+    // Cumulative DTS from the stts run-lengths (decode order).
+    let mut dts: i64 = 0;
+    for e in &stbl.stts.entries {
+        for _ in 0..e.sample_count {
+            if cts.len() >= count {
+                break;
+            }
+            cts.push(dts);
+            dts = dts.saturating_add(e.sample_delta as i64);
+        }
+    }
+    // A short/empty stts shouldn't occur (build_sample_index validates the
+    // sample tables) but keep lengths consistent so the remap can't panic:
+    // pad with a strictly-increasing value, i.e. fall back to decode order.
+    while cts.len() < count {
+        cts.push(dts);
+        dts = dts.saturating_add(1);
+    }
+    // Add composition offsets from ctts (run-length, decode order).
+    if let Some(ctts) = &stbl.ctts {
+        let mut i = 0usize;
+        for e in &ctts.entries {
+            for _ in 0..e.sample_count {
+                if i >= count {
+                    break;
+                }
+                cts[i] = cts[i].saturating_add(e.sample_offset as i64);
+                i += 1;
+            }
+        }
+    }
+    cts
+}
+
+/// Decode→presentation permutation: `order[k]` is the decode index of the k-th
+/// frame to be presented. Stable on ties (decode order breaks them), so a track
+/// with an all-zero (or absent) `ctts` yields the identity permutation.
+fn presentation_order(cts: &[i64]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..cts.len()).collect();
+    order.sort_by(|&a, &b| cts[a].cmp(&cts[b]).then_with(|| a.cmp(&b)));
+    order
+}
+
+/// Place each presentation-ordered sidecar timestamp onto the decode-order
+/// sample that carries that picture: `out[order[k]] = sidecar[k]`. The result
+/// is parallel to the decode-order sample table, so the JS player can reorder
+/// frames by it into true presentation order. With no composition reorder
+/// (`cts` already ascending) this is the identity. `cts` and `sidecar` must
+/// have equal length.
+fn remap_sidecar(cts: &[i64], sidecar: &[i64]) -> Vec<i64> {
+    debug_assert_eq!(cts.len(), sidecar.len());
+    let n = cts.len().min(sidecar.len());
+    let order = presentation_order(&cts[..n]);
+    let mut out = vec![0i64; n];
+    for (k, &decode_idx) in order.iter().enumerate() {
+        out[decode_idx] = sidecar[k];
+    }
+    out
+}
+
+/// True when `v` is non-decreasing. A `.timestamps` sidecar of real capture
+/// times is ascending iff it is in PRESENTATION (display) order — capture time
+/// rises with presentation. A non-ascending sidecar can only be in DECODE order
+/// (entry i = decode-sample i's own capture time), which already pairs
+/// positionally with the decode-order sample table.
+fn is_ascending(v: &[i64]) -> bool {
+    v.windows(2).all(|w| w[0] <= w[1])
+}
+
+/// Min/max of the (decode-order, possibly non-monotonic) per-sample
+/// timestamps, or `None` when empty. The source timespan can't be read off the
+/// ends of `pts_ns` once B-frame reorder makes it non-monotonic.
+fn pts_ns_bounds(pts_ns: &[i64]) -> Option<(i64, i64)> {
+    let mut it = pts_ns.iter().copied();
+    let first = it.next()?;
+    let (mut min, mut max) = (first, first);
+    for v in it {
+        if v < min {
+            min = v;
+        }
+        if v > max {
+            max = v;
+        }
+    }
+    Some((min, max))
+}
+
 /// Parse the text sidecar payload into a `Vec<i64>` of absolute ns-UTC
-/// timestamps, one per mp4 video sample in decode order.
+/// timestamps, one per mp4 video sample in PRESENTATION (capture) order — i.e.
+/// file/line order, which is the order frames are displayed, NOT mp4 decode
+/// order. [`remap_sidecar`] maps these onto the decode-order sample table.
 ///
 /// Format: UTF-8 text, no header, one line per sample, `<frame>\t<ts_ns>\n`.
 /// `str::lines()` accepts `\n` or `\r\n` and tolerates an optional trailing
@@ -578,6 +717,137 @@ mod tests {
             out.push_str(&format!("{i}\t{t}\n"));
         }
         out.into_bytes()
+    }
+
+    /// Build an mp4 whose samples carry per-sample composition offsets
+    /// (`rendering_offset` → `ctts`), so decode order ≠ presentation order — a
+    /// stand-in for a B-frame GOP. `offsets[i]` is decode-sample i's ctts
+    /// offset; duration is 1, so DTS[i] = i and CTS[i] = i + offsets[i]. Sample
+    /// 0 is the only sync sample.
+    fn synth_mp4_reordered(offsets: &[i32]) -> Vec<u8> {
+        let config = Mp4Config {
+            major_brand: "isom".parse().unwrap(),
+            minor_version: 512,
+            compatible_brands: vec!["isom".parse().unwrap(), "avc1".parse().unwrap()],
+            timescale: 30,
+        };
+        let mut writer = Mp4Writer::write_start(Cursor::new(Vec::<u8>::new()), &config).unwrap();
+        let track = TrackConfig {
+            track_type: TrackType::Video,
+            timescale: 30,
+            language: "und".to_string(),
+            media_conf: MediaConfig::AvcConfig(AvcConfig {
+                width: 16,
+                height: 16,
+                seq_param_set: DUMMY_SPS.to_vec(),
+                pic_param_set: DUMMY_PPS.to_vec(),
+            }),
+        };
+        writer.add_track(&track).unwrap();
+        let payload = Bytes::from_static(&[0x00, 0x00, 0x00, 0x01, 0x09]);
+        for (i, &off) in offsets.iter().enumerate() {
+            let sample = Mp4Sample {
+                start_time: i as u64,
+                duration: 1,
+                rendering_offset: off,
+                is_sync: i == 0,
+                bytes: payload.clone(),
+            };
+            writer.write_sample(1, &sample).unwrap();
+        }
+        writer.write_end().unwrap();
+        writer.into_writer().into_inner()
+    }
+
+    #[test]
+    fn presentation_order_is_identity_without_reorder() {
+        // Composition time already ascending in decode order (no B-frames).
+        assert_eq!(presentation_order(&[0, 10, 20, 30]), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn presentation_order_recovers_bframe_permutation() {
+        // IBBP GOP: decode CTS [1, 4, 2, 3] → present I, B, B, P at slots
+        // 0,1,2,3 = decode indices 0,2,3,1.
+        assert_eq!(presentation_order(&[1, 4, 2, 3]), vec![0, 2, 3, 1]);
+    }
+
+    #[test]
+    fn remap_sidecar_passes_through_without_reorder() {
+        // Ascending CTS ⇒ identity ⇒ sidecar values land in decode order.
+        assert_eq!(
+            remap_sidecar(&[0, 10, 20, 30], &[5, 6, 7, 8]),
+            vec![5, 6, 7, 8]
+        );
+    }
+
+    #[test]
+    fn remap_sidecar_places_capture_times_on_their_pictures() {
+        // Decode CTS [1,4,2,3] (present order 0,2,3,1). The presentation-ordered
+        // sidecar [100,200,300,400] must land so that decode-sample 1 (the P,
+        // displayed LAST) carries 400 and the two B-frames carry 200/300.
+        let cts = [1, 4, 2, 3];
+        let sidecar = [100, 200, 300, 400];
+        assert_eq!(remap_sidecar(&cts, &sidecar), vec![100, 400, 200, 300]);
+        // Sorting the result by value reproduces presentation order (the JS
+        // player reorders frames exactly this way before display).
+        let mut decode: Vec<(i64, usize)> =
+            remap_sidecar(&cts, &sidecar).into_iter().zip(0..).collect();
+        decode.sort();
+        let present: Vec<usize> = decode.into_iter().map(|(_, i)| i).collect();
+        assert_eq!(present, vec![0, 2, 3, 1]);
+    }
+
+    #[test]
+    fn open_pair_maps_sidecar_through_bframe_composition_order() {
+        // The end-to-end regression guard for the nuScenes "back and forth"
+        // bug: a reordered (B-frame) mp4 whose sidecar is in presentation order
+        // must yield per-decode-sample timestamps that, when reordered by the
+        // player, present pictures in capture order.
+        //
+        // Decode CTS = i + offset: offsets [1,3,0,0] → CTS [1,4,2,3] → present
+        // order [0,2,3,1]. Sidecar (presentation order) [1000,2000,3000,4000].
+        let mp4 = synth_mp4_reordered(&[1, 3, 0, 0]);
+        let sidecar = synth_sidecar(1000, 1000, 4);
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+        // decode 0 (present 1st)→1000, decode 1 (P, present 4th)→4000,
+        // decode 2 (B, present 2nd)→2000, decode 3 (B, present 3rd)→3000.
+        assert_eq!(r.pts_ns(), &[1000i64, 4000, 2000, 3000]);
+        // Coverage spans min..=max (NOT first/last, now that decode order is
+        // non-monotonic).
+        assert_eq!(r.meta().time_range.start_ns, 1000);
+        assert_eq!(r.meta().time_range.end_ns, 4001);
+    }
+
+    #[test]
+    fn open_pair_without_bframes_keeps_decode_order_timestamps() {
+        // No ctts → identity remap → behaviour identical to the pre-fix reader.
+        let mp4 = synth_mp4_reordered(&[0, 0, 0, 0]);
+        let sidecar = synth_sidecar(100, 50, 4);
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+        assert_eq!(r.pts_ns(), &[100i64, 150, 200, 250]);
+        assert_eq!(r.meta().time_range.start_ns, 100);
+        assert_eq!(r.meta().time_range.end_ns, 251);
+    }
+
+    #[test]
+    fn open_pair_passes_through_a_decode_order_sidecar_unchanged() {
+        // A NON-ascending sidecar is already per decode-order sample
+        // (decode-sample i's own capture time). The reader must pair it
+        // positionally — NOT re-permute it through the composition order.
+        let mp4 = synth_mp4_reordered(&[1, 3, 0, 0]); // CTS [1,4,2,3], present [0,2,3,1]
+                                                      // decode-order capture times = [T0, T3, T1, T2] (non-ascending).
+        let sidecar = b"0\t1000\n1\t4000\n2\t2000\n3\t3000\n".to_vec();
+        let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).expect("open_pair");
+        assert_eq!(r.pts_ns(), &[1000i64, 4000, 2000, 3000]);
+        // Equivalent to remapping the matching presentation-order sidecar: both
+        // conventions converge on the same per-decode-sample timestamps.
+        let rb = Mp4SidecarReader::open_pair(
+            &synth_mp4_reordered(&[1, 3, 0, 0]),
+            &synth_sidecar(1000, 1000, 4),
+        )
+        .expect("open_pair");
+        assert_eq!(r.pts_ns(), rb.pts_ns());
     }
 
     #[test]

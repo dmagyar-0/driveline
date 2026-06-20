@@ -366,13 +366,20 @@ export class Mp4SampleCache {
     endIdx: number,
     pts: BigInt64Array,
   ): BufferedRange {
-    const startNs = pts[startIdx];
-    // End is exclusive: extend by half the frame interval to the next
-    // sample's pts when available, otherwise +1 ns to keep the range
-    // non-empty for a single-sample run.
-    const lastPts = pts[endIdx];
-    const nextPts = endIdx + 1 < pts.length ? pts[endIdx + 1] : lastPts + 1n;
-    return { startNs, endNs: nextPts };
+    // `pts` is in DECODE order and — for B-frame streams — non-monotonic (the
+    // Mp4SidecarReader maps presentation-ordered sidecar times onto decode-order
+    // samples). So a contiguous decode-index run [startIdx..endIdx] covers the
+    // presentation span [min, max] of its samples, NOT pts[startIdx]..pts[endIdx]
+    // (which could start on a P-frame whose presentation time is the run's max).
+    let min = pts[startIdx];
+    let max = pts[startIdx];
+    for (let i = startIdx + 1; i <= endIdx; i++) {
+      const p = pts[i];
+      if (p < min) min = p;
+      if (p > max) max = p;
+    }
+    // End is exclusive: +1 ns keeps a single-sample run non-empty.
+    return { startNs: min, endNs: max + 1n };
   }
 }
 
