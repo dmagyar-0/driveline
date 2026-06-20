@@ -40,7 +40,7 @@
 // (see sample-data/realworld/README.md, "nuScenes" section).
 
 import { test, expect, type Page } from "@playwright/test";
-import { existsSync } from "node:fs";
+import { existsSync, promises as fsp } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -458,7 +458,17 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       12_000,
       Math.round((endFrac - startFrac) * spanMs),
     );
-    await page.waitForTimeout(playWallMs);
+    // TEMP back-and-forth probe: capture the LIVE compositor (page.screenshot,
+    // not the VP8 video recording) of the video panel at ~110ms intervals.
+    {
+      const vp = page.getByTestId(VIDEO_OVERLAY_PANEL);
+      await fsp.mkdir("/tmp/shot", { recursive: true });
+      for (let i = 0; i < 40; i++) {
+        await vp.screenshot({ path: `/tmp/shot/p${String(i).padStart(3, "0")}.png` });
+        await page.waitForTimeout(110);
+      }
+    }
+    await page.waitForTimeout(Math.max(0, playWallMs - 40 * 130));
     // Sample the decode worker's own frame-pacing telemetry while the cadence
     // window is still populated — pause does NOT reset it (only play-start /
     // seek do), so read it here, BEFORE the hero seek below clears it. This is
