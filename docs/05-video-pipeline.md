@@ -192,11 +192,19 @@ encoded into the mp4's (wall-clock-agnostic) track timeline.
 - A file with the same basename as the mp4 and extension `.timestamps`
   (if `foo.mp4`, then `foo.mp4.timestamps`).
 - Contents: plain UTF-8 text. No header, no magic, no padding.
-- One line per video sample (access unit) in the track's **decode order**
-  (matching the order of entries in the mp4 `stsz` table).
-- Each line is `<frame_index>\t<timestamp_ns>\n`, where `frame_index` is
-  the 0-based row number and `timestamp_ns` is absolute nanoseconds UTC
-  at the capture instant for that frame.
+- One line per video sample, in **presentation (capture / display) order**:
+  `<frame_index>\t<timestamp_ns>\n`, where `frame_index` is the 0-based row
+  number and `timestamp_ns` is the absolute capture instant (ns UTC) of the
+  k-th *displayed* frame. Producers naturally emit capture order = display
+  order (the nuScenes converter does). The reader also accepts a sidecar
+  already in **decode order** and tells the two apart by monotonicity —
+  capture times rise with presentation, so a presentation-order sidecar is
+  ascending while a decode-order one is not. A presentation-order sidecar is
+  mapped onto the mp4's decode-order samples via the `ctts` composition
+  offsets so each decoded frame is tagged with its OWN picture's capture time.
+  This is what stops a **B-frame** stream (decode order ≠ presentation order)
+  from showing pictures out of order: the player reorders frames by these
+  timestamps, so a wrong mapping presents them "back and forth".
 - The reader accepts `\n` or `\r\n` line endings and an optional trailing
   newline. Surrounding ASCII whitespace inside each column is trimmed
   before parsing, so producers that pad numeric fields (e.g.
@@ -226,12 +234,14 @@ encoded into the mp4's (wall-clock-agnostic) track timeline.
    `stco`/`co64` are recorded in the index but **not dereferenced** at
    open time — they refer back into the source `File`, which the JS
    `Mp4SampleCache` will read lazily.
-4. The sidecar array becomes the source of truth for `pts_ns` / `dts_ns`.
-   The mp4's own `stts` / `ctts` offsets are ignored for synchronisation
-   purposes — they are only used to compute `duration_ns` when the
-   sidecar does not provide an end time for the last frame (we use
-   `sidecar[i+1] - sidecar[i]` in the middle, and repeat the last delta
-   at the end).
+4. The sidecar provides the timestamp VALUES; the mp4's `stts` / `ctts` give
+   the decode→presentation ORDER. The reader combines them so each decode-order
+   sample carries its own picture's capture time (`remap_sidecar` in
+   `mp4_sidecar.rs`) — only the composition *order* is taken from the mp4,
+   never its (wall-clock-agnostic) timestamp values. The resulting `pts_ns` is
+   therefore in decode order but, for a B-frame stream, NON-monotonic; the
+   `[start, end)` source range is its min/max. With no `ctts` (no B-frames) the
+   mapping is the identity and `pts_ns` is just the sidecar in file order.
 5. The wasm binding `mp4_sidecar_index` (in `wasm-bindings`) returns
    parallel typed arrays — `BigInt64Array ptsNs`, `BigUint64Array offsets`,
    `Uint32Array sizes`, `Uint8Array isSync`, plus `sps` and `pps` byte

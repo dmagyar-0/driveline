@@ -360,21 +360,27 @@ export function pickStartCursor(idx: Mp4LazyIndex, target: bigint): number {
     }
   }
   if (firstSync < 0) firstSync = 0;
-  // Largest sample with pts <= target via binary search.
-  let lo = 0;
-  let hi = n - 1;
+  // Decode-sample whose PRESENTATION pts is the largest <= target. `ptsNs` is
+  // in DECODE order and — for B-frame streams — NON-monotonic (the
+  // `Mp4SidecarReader` maps presentation-ordered sidecar times onto decode-order
+  // samples via the mp4 composition order; see its `remap_sidecar`), so this is
+  // a linear scan, NOT a binary search. Clip sample counts are modest and seeks
+  // are debounced, so O(n) here is negligible — and a binary search on a
+  // non-monotonic array would silently start the decode at the wrong GOP.
   let cand = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
-    if (idx.ptsNs[mid] <= target) {
-      cand = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
+  let candPts = 0n;
+  for (let i = 0; i < n; i++) {
+    const p = idx.ptsNs[i];
+    if (p <= target && (cand < 0 || p > candPts)) {
+      cand = i;
+      candPts = p;
     }
   }
   if (cand < 0) return firstSync;
-  // Walk back to the nearest preceding sync sample.
+  // Walk back to the nearest preceding sync sample IN DECODE ORDER — that is
+  // `cand`'s GOP keyframe, from which the decoder can reach `cand`. The worker
+  // discards decoded frames whose pts < target, so over-reaching the GOP start
+  // is harmless; starting mid-GOP would emit corrupt frames.
   for (let i = cand; i >= 0; i--) {
     if (idx.isSync[i] === 1) return i;
   }
