@@ -196,11 +196,15 @@ extrinsic quaternion (xyzw): [0.70050, 0.00364, 0.00113, 0.71364]
 #### Recording the fusion demo video
 
 `apps/e2e/tests/_demo-nuscenes-fusion.spec.ts` records a shareable demo video
-of the full camera + LiDAR capability set this data unlocks, in one continuous
-replay with a persistent attribution/licence banner. There is **no** opening
-title card — the finished video opens straight on the live dashboard playing
-(the point-cloud load + panel wiring that happen before playback are trimmed
-off in post-processing using the play-start marker the spec logs):
+of the full camera + LiDAR capability set this data unlocks, as **one
+continuous forward play** with a persistent attribution/licence banner. There
+is **no** opening title card — the finished video opens straight on the live
+dashboard playing (the point-cloud load + panel wiring that happen before
+playback are trimmed off in post-processing using the play-start marker the
+spec logs) — and **no cut to black** at the end: the spec does *not* seek
+backward to a "hero" frame (a backward seek flushes the decoder and flashes
+black), it simply holds on the live frame playback stopped on, so the take is a
+single uninterrupted shot from first play to last frame:
 
 - **left** — CAM_FRONT dashcam with the LiDAR point cloud projected onto it
   (point-cloud-on-camera overlay),
@@ -236,7 +240,7 @@ pnpm --filter e2e exec playwright test _demo-nuscenes-fusion.spec.ts --timeout=2
 #    Those offsets are measured from `recordStart` (just before the file open),
 #    while the .webm clock starts at page creation, so add the small lead-in
 #    offset = webm_duration - hold_end_ms. Trim the .webm from that play-start
-#    to the end (the final hero hold) — no load, no setup, no card:
+#    to the end (the final live-frame hold) — no load, no setup, no card:
 WEBM=$(find apps/e2e/test-results -name '*.webm' | head -1)
 WEBM_DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$WEBM")
 HOLD_END_MS=27386     # from the TRIM_WINDOW log line above
@@ -246,7 +250,9 @@ START=$(python3 -c "print((${PLAY_START_MS} + ${WEBM_DUR}*1000 - ${HOLD_END_MS})
 ffmpeg -y -ss "$START" -i "$WEBM" -an \
   -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \
   driveline-nuscenes-fusion.mp4
-# sanity: first/last frame should be the live dashboard + the hero fusion frame
+# sanity: first frame is the live dashboard playing, last frame is the live
+# frame the continuous take ended on — neither should be black, and there is no
+# mid-video jump cut (the spec never re-seeks):
 #   ffmpeg -i driveline-nuscenes-fusion.mp4 -frames:v 1 /tmp/first.png -y
 #   ffmpeg -sseof -0.3 -i driveline-nuscenes-fusion.mp4 -frames:v 1 /tmp/last.png -y
 ```

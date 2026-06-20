@@ -17,9 +17,12 @@
 // dashboard-record spec's hflipped second mp4); here the second right-hand slot
 // is better spent on the signal plot anyway.
 //
-// It presses Play and lets the scene replay as one continuous take while
-// Playwright records the page to a .webm, then pauses before the end and holds
-// a hero frame.
+// It presses Play and lets the scene replay as ONE continuous take while
+// Playwright records the page to a .webm, then pauses and holds on the frame
+// playback stopped on. There is deliberately no backward "hero" re-seek at the
+// end: seeking backward flushes the video decoder and flashes black until the
+// next keyframe, which would cut the take in two. The take is a single
+// uninterrupted forward play with no cut to black.
 //
 // LICENCE: nuScenes is CC BY-NC-SA 4.0 (NonCommercial, ShareAlike). This
 // recording is a derivative of that data, so a persistent on-screen credit
@@ -473,15 +476,19 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     console.log("[demo] PACING " + JSON.stringify(pacing));
     await setPlaying(page, false);
     const playEndMs = Date.now() - recordStart;
-    await page.waitForTimeout(400);
 
-    // Finish on the densest fusion frame — the hero.
-    await seekToTs(page, at(bestFrac));
-    await page.waitForTimeout(1200);
+    // Hold a beat on the frame playback STOPPED on — do NOT seek anywhere. A
+    // backward seek to a "hero" frame would flush the video decoder and flash
+    // black until the next keyframe, cutting the take in two; the whole point
+    // here is ONE continuous forward play that ends on a live, already-painted
+    // fusion frame. The forward pass runs straight through the turn (which only
+    // gets denser), so the frame it lands on is itself a strong hero shot.
+    await page.waitForTimeout(1500);
 
     // Emit the trim window for post-processing (see README). The mp4 is built
-    // from [PLAY_START_MS, HOLD_END_MS] so the shareable video shows only the
-    // scene playing and the final hero hold.
+    // from [PLAY_START_MS, HOLD_END_MS] as a single continuous take: the scene
+    // playing, then a short hold on that same final live frame. No re-seek, no
+    // cut to black.
     console.log(
       `[demo] TRIM_WINDOW play_start_ms=${playStartMs} ` +
         `play_end_ms=${playEndMs} hold_end_ms=${Date.now() - recordStart}`,
