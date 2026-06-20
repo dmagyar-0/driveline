@@ -45,48 +45,53 @@ player (`playerErrStdRegular ~4 ms ≪ sourceJitter ~27 ms`). This is intentiona
 > reference implementation to resurrect (it remaps presPtsNs; just source the
 > even grid from the container instead of an EMA).
 
-## 3. OPEN ISSUE — "video going back and forth"
+## 3. "Video going back and forth" — RESOLVED: it's the VP8 recording, not the app
 
-User reports the playback visibly jumps **back and forth**. Investigated with a
-new model-free **frame-order** test (now in the skill, see §5). Findings:
+User reported the playback visibly jumps **back and forth**. Investigated with a
+new model-free **frame-order** test (now in the skill, see §5) and run to ground.
+**Conclusion: it is a Playwright VP8 screen-recording artifact in high-motion
+regions, NOT a real playback bug.** Evidence chain:
 
-- Built a "does frame N resemble a frame ≥2 steps back more than its immediate
-  predecessor" detector. **Validated**: the raw source mp4 scores **0%**.
-- Recorded playback `.webm`: **~38–41%** back-and-forth — REAL, confirmed.
-- **Localised:** upper frame (sky/buildings, **no overlay**) = **0%**; road
-  region (**heavy LiDAR overlay**) = **~25%**.
-- **The video is monotonic.** The worker draws the whole frame in one
-  `drawImage` with one PTS, so if the buildings region is forward-ordered the
-  road is too. ⇒ the back-and-forth is the **LiDAR overlay drawn on top**, OR a
-  VP8 screen-recording artifact in high-motion regions.
+- The detector ("does distinct frame N resemble a frame ≥2 steps back more than
+  its immediate predecessor") is **validated**: the raw source mp4 scores **0%**.
+- Recorded playback `.webm`: **~38–41%** back-and-forth — real *in the recording*.
+- **Overlay ruled out:** a `NO_OVERLAY=1` run (overlay binding skipped,
+  `projectedVisibleCount=0`) still scored **41%**. The earlier "upper region 0%
+  vs road 25%" split was a false lead — the upper region was just too static
+  (≈5 distinct frames) to register; the road region back-and-forths with or
+  without the overlay.
+- **The worker paints monotonically.** A per-blit `PAINTROW` trace showed the
+  real-capture-PTS of each painted frame **strictly increasing** (0, 50, 150,
+  250, 300, 400 … ms). The blit's monotonic guard (`target.ptsNs > shownPts`)
+  enforces this, and frame content is tied to PTS — the decoded canvas cannot
+  revert.
+- **Live compositor is clean.** `page.screenshot` clips of the dashcam during
+  playback (bypassing the VP8 encoder) scored ~0% (1/14 distinct = noise),
+  nowhere near the recording's 41%.
 
-### Where I stopped
-Running two confirmations (results not yet folded in here):
-1. **Live-compositor screenshots** via `page.screenshot` during playback
-   (bypasses the VP8 encoder) — temporary probe added to the demo spec
-   (`37f2c55`, **must be reverted**). If live screenshots are clean → it was a
-   recording artifact and the app is fine. If they show back-and-forth → real
-   overlay bug.
-2. **No-overlay run**: skip `setVideoOverlayBinding` (spec lines ~302–310) +
-   its `projectedVisibleCount>0` gate, then re-score frame-order and capture the
-   video. Back-and-forth vanishing = definitive proof it's the overlay.
+So: worker/decode/blit forward-ordered ✔, live compositor clean ✔, the 41% lives
+only in the **VP8-encoded `.webm`** (high-motion road region; static sky stays
+clean). Any clip exported via Playwright's video recording will show it; the app
+itself does not. **No code fix needed for this.** If a *visibly* perfect demo
+clip is required, record via a lossless/CFR path (e.g. higher-quality VP9 / a
+PNG-frame export at the true cadence) instead of Playwright's default VP8
+screencast.
 
-### Next steps for the overlay (if confirmed)
-The overlay is drawn on the **main thread** in `apps/web/src/panels/VideoPanel.tsx`
-(`setVideoOverlayBinding` → projects the LIDAR_TOP point cloud via the
-calibration). Suspect: the overlay redraw picks a LiDAR sweep / uses a cursor or
-`blitPtsNs` that isn't monotonic with the video blit, so the projected points
-flicker between sweeps. Check the overlay's rAF redraw vs the blit `blitPtsNs`
-(now the real capture PTS again after `1cbda6d`) and make the overlay's chosen
-sweep monotonic with the displayed frame.
+> NOTE: this is independent of the §2 cadence question. Even a recording-only
+> artifact aside, real-timestamp playback is still NOT SMOOTH on the cadence bar
+> because the source timestamps are uneven (§2) — that part is a data property,
+> by design.
 
 ## 4. Cleanup owed before merge
 
-- **Revert the screenshot probe** (`37f2c55`) — temporary, do not ship.
-- Branch history has WIP debug commits (`b15c475`, `b404fc1` — already removed
-  by `04bd1c0`; `ad2f129` — reverted by `6f183cf`). **Squash** the branch before
-  the PR so only the four player fixes + the real-timestamp state + the skill
-  changes land.
+- All temporary probes are **reverted** — the demo spec
+  (`_demo-nuscenes-fusion.spec.ts`) is byte-identical to its clean pre-investigation
+  state (verified `git diff 1cbda6d` is empty). No `NO_OVERLAY` / `SHOT` /
+  `PAINTROW` / DBG code remains in the tree.
+- Branch history still has WIP debug commits (`b15c475`, `b404fc1`, `ad2f129`,
+  `37f2c55`, `872944c` — each later reverted/removed). **Squash** the branch
+  before the PR so only the net change lands: the four player fixes, the
+  real-timestamp presentation state, the handoff doc, and the skill additions.
 - `sample-data/realworld/` fixtures are gitignored (correct) — not in the diff.
 
 ## 5. New tooling (in the measure-smoothness skill)
