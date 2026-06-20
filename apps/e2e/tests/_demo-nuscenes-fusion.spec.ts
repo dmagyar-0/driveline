@@ -437,16 +437,19 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     );
 
     // Reveal a beat BEFORE the densest moment, then make ONE smooth forward
-    // pass straight through the dense + turning section (no rewind): the
-    // opening is already well-painted and only gets denser, and we stop before
-    // the scene's no-video tail. At 1x (GPU) the wall time below ≈ the scene
-    // span it covers.
-    const spanMs = Number(end - start) / 1e6;
+    // pass straight through the dense + turning section to the end of the video
+    // (no rewind): the opening is already well-painted and only gets denser.
     // Open ON the densest frame (minus ~1 frame of lead) so the very first
     // revealed frame is heavily painted with LiDAR — fusion "wow" up front, not
     // 5 s of sparse open road — then pass forward through the turn.
     const startFrac = Math.max(0.03, bestFrac - 0.05);
-    const endFrac = Math.min(0.85, startFrac + 0.4);
+    // Stop just shy of the LAST video frame. The point cloud + ego signals
+    // extend a hair past the final dashcam frame, so letting the cursor reach
+    // (or run past) the very end drops the camera panel into its "no video at
+    // this time" BLACK state — exactly the cut to black we must not show. 0.97
+    // keeps the frame we end and hold on a live, painted dashcam frame.
+    const endFrac = 0.97;
+    const stopNs = at(endFrac);
     await seekToTs(page, at(startFrac));
     await page.waitForTimeout(700);
 
@@ -454,18 +457,28 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     // post-processing keeps only the playback — no load, no setup, no card.
     const playStartMs = Date.now() - recordStart;
     await setPlaying(page, true);
-    // On a GPU-less / software-decode box playback gates below 1x, so give it
-    // generous wall time to make a clearly visible forward pass through the
-    // dense + turning section (bounded well under the 240s test timeout).
-    const playWallMs = Math.max(
-      12_000,
-      Math.round((endFrac - startFrac) * spanMs),
-    );
-    await page.waitForTimeout(playWallMs);
+    // Drive the cursor forward and STOP it the instant it reaches the last
+    // in-video frame — never run past the video's data window into the no-video
+    // tail. A fixed wall-time wait can't do this safely: above 1x it overshoots
+    // into that black tail, below 1x it stops short. Poll the REAL cursor
+    // instead, with a generous wall-time cap as a safety net (well under the
+    // 240s test timeout). If the cap trips on a heavily gated software-decode
+    // box, we pause wherever the cursor got to — still inside the video window,
+    // so the held frame is live, never black.
+    await page
+      .waitForFunction(
+        (tgt) =>
+          BigInt(window.__drivelineDevHooks!.getSessionSnapshot().cursorNs) >=
+          BigInt(tgt),
+        String(stopNs),
+        { timeout: 90_000, polling: 100 },
+      )
+      .catch(() => {});
     // Sample the decode worker's own frame-pacing telemetry while the cadence
     // window is still populated — pause does NOT reset it (only play-start /
-    // seek do), so read it here, BEFORE the hero seek below clears it. This is
-    // the hard smoothness number for this run: jitter, repeats/rushed,
+    // seek do), and the hold below never seeks, so read it here while it is
+    // fresh. This is the hard smoothness number for this run: jitter,
+    // repeats/rushed,
     // playback-rate, blit-clock tick-gap health, and — critically —
     // playerErrStdRegularMs, which cancels out the ~12 fps source's own
     // irregularity so it isolates PLAYER judder from the data being steppy.
