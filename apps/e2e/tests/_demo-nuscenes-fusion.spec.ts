@@ -40,7 +40,12 @@
 // (see sample-data/realworld/README.md, "nuScenes" section).
 
 import { test, expect, type Page } from "@playwright/test";
-import { existsSync, promises as fsp } from "node:fs";
+import { existsSync } from "node:fs";
+
+// TEMP diagnostic: set NO_OVERLAY=1 to skip the LiDAR overlay binding + its
+// content gate, to isolate whether the "back-and-forth" is the overlay vs the
+// video. Reverted after diagnosis.
+const NO_OVERLAY = process.env.NO_OVERLAY === "1";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -299,15 +304,17 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
         window.__drivelineDevHooks!.setVideoChannelBinding(pid, id),
       [VIDEO_OVERLAY_PANEL, video!.id] as const,
     );
-    await page.evaluate(
-      ([pid, calibId, pcId, cam]) =>
-        window.__drivelineDevHooks!.setVideoOverlayBinding(pid, {
-          calibrationChannelId: calibId,
-          cameraName: cam,
-          pointcloudChannelId: pcId,
-        }),
-      [VIDEO_OVERLAY_PANEL, calibration!.id, pointcloud!.id, CAMERA_NAME] as const,
-    );
+    if (!NO_OVERLAY) {
+      await page.evaluate(
+        ([pid, calibId, pcId, cam]) =>
+          window.__drivelineDevHooks!.setVideoOverlayBinding(pid, {
+            calibrationChannelId: calibId,
+            cameraName: cam,
+            pointcloudChannelId: pcId,
+          }),
+        [VIDEO_OVERLAY_PANEL, calibration!.id, pointcloud!.id, CAMERA_NAME] as const,
+      );
+    }
 
     // The 3D scene panel: the raw LiDAR spin.
     await page.evaluate(
@@ -341,18 +348,20 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     const at = (f: number): bigint =>
       start + BigInt(Math.round(Number(end - start) * f));
     await seekToTs(page, at(0.04));
-    await expect
-      .poll(
-        async () =>
-          page.evaluate(
-            (id) =>
-              window.__drivelineDevHooks!.getVideoOverlaySync(id)
-                .projectedVisibleCount,
-            VIDEO_OVERLAY_PANEL,
-          ),
-        { timeout: 30_000, intervals: [300, 600, 1000] },
-      )
-      .toBeGreaterThan(0);
+    if (!NO_OVERLAY) {
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(
+              (id) =>
+                window.__drivelineDevHooks!.getVideoOverlaySync(id)
+                  .projectedVisibleCount,
+              VIDEO_OVERLAY_PANEL,
+            ),
+          { timeout: 30_000, intervals: [300, 600, 1000] },
+        )
+        .toBeGreaterThan(0);
+    }
     await expect
       .poll(
         async () =>
@@ -458,17 +467,7 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       12_000,
       Math.round((endFrac - startFrac) * spanMs),
     );
-    // TEMP back-and-forth probe: capture the LIVE compositor (page.screenshot,
-    // not the VP8 video recording) of the video panel at ~110ms intervals.
-    {
-      const vp = page.getByTestId(VIDEO_OVERLAY_PANEL);
-      await fsp.mkdir("/tmp/shot", { recursive: true });
-      for (let i = 0; i < 40; i++) {
-        await vp.screenshot({ path: `/tmp/shot/p${String(i).padStart(3, "0")}.png` });
-        await page.waitForTimeout(110);
-      }
-    }
-    await page.waitForTimeout(Math.max(0, playWallMs - 40 * 130));
+    await page.waitForTimeout(playWallMs);
     // Sample the decode worker's own frame-pacing telemetry while the cadence
     // window is still populated — pause does NOT reset it (only play-start /
     // seek do), so read it here, BEFORE the hero seek below clears it. This is

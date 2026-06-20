@@ -1,6 +1,6 @@
 ---
 description: Measure how SMOOTH video playback actually is on the decode-worker path, with all the frame-pacing metrics (jitter, p95/max dwell, repeats/rushed, playback-rate, blit-clock tick-gap health, re-anchors, player-vs-source judder, and frame loss). Delegates the run+score to a subagent. Use when the user asks to "measure the smoothness", "is playback smooth", "check frame pacing/judder/cadence", "get the smoothness numbers", or wants a hard pass/fail on the video hot path after a decode/blit/playback change. Spec-agnostic: scores any Playwright run that logs a `PACING {json}` line from the video dev hooks.
-allowed-tools: Agent AskUserQuestion SendUserFile Read Bash(node *) Bash(ls *) Bash(cat *)
+allowed-tools: Agent AskUserQuestion SendUserFile Read Bash(node *) Bash(python3 *) Bash(ffmpeg *) Bash(ffprobe *) Bash(ls *) Bash(cat *)
 ---
 
 # measure-smoothness
@@ -210,12 +210,55 @@ console.log("PACING " + JSON.stringify(pacing));
 the monotonic frame-loss counters. Both are defined in
 `apps/web/src/App.tsx` and published by `VideoPanel.tsx`.
 
+## Visual frame-order check (back-and-forth) — a SEPARATE axis
+
+Cadence measures *timing*; it cannot see a frame **ORDER** fault. Critically,
+`backwardSteps` in the CadenceSummary is computed AFTER the blit's own monotonic
+guard, so it is **0 by construction** and is NOT evidence that the screen never
+jumps backward. If a user reports the video "jumping around" / "going back and
+forth", the PACING verdict can say SMOOTH and still be missing it — use this
+check too.
+
+`scripts/score-frame-order.py` scores it model-free from a recorded clip (or
+live screenshots): for each DISTINCT displayed frame it finds the EARLIER frame
+it most resembles. Forward playback → always the immediate predecessor.
+Back-and-forth → frame N resembles a frame several steps back (the content
+returned). Needs only `ffmpeg` + `numpy`.
+
+```
+# ALWAYS pass --control with a clip you KNOW is forward-only (e.g. the raw
+# source the playback was built from). The control MUST score ~0%, else the
+# crop/scale is too lossy and the number is noise.
+python3 .../scripts/score-frame-order.py CLIP.webm \
+  --crop 792:446:8:44 --ss 4 --t 6 --control sample-data/realworld/<source>.mp4
+```
+
+Exit 0 forward-ordered / 1 back-and-forth / 2 could-not-measure.
+
+**Localise the cause by re-running on sub-regions** (this is how the nuScenes
+"back-and-forth" was pinned down):
+
+1. A region with **no overlay** (sky/buildings) scoring ~0% while the
+   **overlay/road** region scores high ⇒ the decoded VIDEO is monotonic (the
+   worker draws the whole frame atomically with one PTS) and the fault is the
+   **separately-drawn overlay**, not the decode/blit path.
+2. **VP8 recording artifact vs the live app:** the recorded `.webm` is VP8 and
+   can judder in high-motion regions on its own. Confirm against the **live
+   compositor** by capturing `page.screenshot` of the panel during playback
+   (bypasses the video encoder) and scoring those PNGs. Clean live screenshots +
+   dirty `.webm` ⇒ recording artifact, app is fine.
+3. Disable the overlay binding entirely (skip `setVideoOverlayBinding` in the
+   spec) and re-measure — back-and-forth vanishing confirms the overlay.
+
 ## Where things live
 
-- `scripts/score-cadence.mjs` — the scorer (thresholds mirror the worker).
+- `scripts/score-cadence.mjs` — the cadence scorer (thresholds mirror the worker).
+- `scripts/score-frame-order.py` — the back-and-forth / frame-order scorer
+  (visual, model-free; pair with `--control`).
 - `apps/web/src/workers/videoDecode.worker.ts` — `CadenceSummary` +
   `SMOOTH_*` thresholds (source of truth — keep the scorer in lockstep).
 - `apps/web/src/panels/VideoPanel.tsx` — publishes `__drivelineVideoCadence` /
-  `__drivelineVideoHud` each rAF tick.
+  `__drivelineVideoHud` each rAF tick; also draws the LiDAR overlay (the
+  prime suspect when frame-order fails but cadence passes).
 - `apps/web/src/App.tsx` — `videoCadence()` / `videoHudStats()` dev hooks.
 - `apps/e2e/tests/_demo-nuscenes-fusion.spec.ts` — logs the `PACING` line.
