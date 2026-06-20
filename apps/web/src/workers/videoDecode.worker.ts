@@ -1202,12 +1202,19 @@ async function pumpEncoded(): Promise<void> {
     if (session !== pulling || session.ended) return; // superseded by a seek
     if (batch.length === 0) {
       encodedEnded = true;
-      return;
+    } else {
+      for (const c of batch) localEncoded.push(c);
     }
-    for (const c of batch) localEncoded.push(c);
   } finally {
     pumpInFlight = false;
   }
+  // Resume feeding now that the ring is refilled. CRUCIAL when PAUSED: feeding
+  // is otherwise driven only by `onFrame`/`setCursor`, so if the decoder drained
+  // the ring and went idle (e.g. seeking to a target beyond the priming batch,
+  // before any frame at/after the target has been emitted), nothing would
+  // re-drive the feed once this async refill lands → the stream stalls. During
+  // play the 200 Hz blit clock re-drives it every tick; pause has no such clock.
+  feedFromRing();
 }
 
 // Synchronously top the decoder up from the local ring, bounded by the same
