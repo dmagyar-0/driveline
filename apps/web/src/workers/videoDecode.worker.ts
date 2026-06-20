@@ -320,9 +320,6 @@ const MAX_PACING_AHEAD_NS = 1_000_000_000n;
 // A `setCursor` this far from the pacing cursor is a real scrub/seek (not
 // jitter or a gate hold): re-anchor the clock to it.
 const SCRUB_THRESHOLD_NS = 500_000_000n;
-// Cap a single interp evaluation so a throttled/backgrounded interval can't
-// leap the cursor across many frames at once when it finally fires.
-const MAX_INTERP_NS = 1_000_000_000n;
 
 // --- temporary pacing diagnostics (flag-gated; removed before final) ---------
 const DBG_PACING = true as boolean;
@@ -340,11 +337,22 @@ function workerNow(): number {
 }
 
 // Free-running real-time advance of the pacing cursor from its anchor.
+//
+// This is the pure wall clock: anchor + the FULL elapsed real time since the
+// anchor was set. The elapsed term must NOT be capped — the anchor is fixed
+// across a whole play session (only re-set at play-start, scrub, and the gate
+// backstop), so a 1-second delta cap would freeze the cursor at anchor+1s after
+// the first second of playback (the anchor's wall time is seconds in the past).
+// A long single gap (a backgrounded tab whose interval was throttled) advances
+// the cursor by the real time that passed — which is correct: the main-thread
+// cursor advances by the same real time, so the two stay in lockstep, and the
+// blit simply shows the newest frame for the new position. The only bound is
+// MAX_PACING_AHEAD against the authoritative cursor, so a wedged main thread
+// can't make the decoder read arbitrarily far ahead.
 function pacingCursorNs(): bigint {
   const elapsedMs = workerNow() - anchorWallMs;
   let deltaNs = BigInt(Math.round(elapsedMs * 1e6 * playbackSpeed));
   if (deltaNs < 0n) deltaNs = 0n;
-  if (deltaNs > MAX_INTERP_NS) deltaNs = MAX_INTERP_NS;
   let next = anchorCursorNs + deltaNs;
   // Backstop: don't read arbitrarily far ahead of the authoritative cursor.
   const ceil = lastSetCursorNs + MAX_PACING_AHEAD_NS;
