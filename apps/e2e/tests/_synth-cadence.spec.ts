@@ -200,11 +200,18 @@ test.describe("synthetic uneven-cadence pacing fidelity", () => {
     const summary = await page.evaluate(
       () => window.__drivelineVideoCadence ?? null,
     );
+    const hud = await page.evaluate(
+      () => window.__drivelineDevHooks!.videoHudStats(),
+    );
 
     mkdirSync(OUT_DIR, { recursive: true });
     writeFileSync(
       OUT_FILE,
-      JSON.stringify({ wallMs, canvasRect, summary, trace, samples }, null, 2),
+      JSON.stringify(
+        { wallMs, canvasRect, summary, hud, trace, samples },
+        null,
+        2,
+      ),
     );
     console.log(
       "SYNTH_RESULT " +
@@ -218,6 +225,7 @@ test.describe("synthetic uneven-cadence pacing fidelity", () => {
           rushed: summary?.rushed ?? null,
           smooth: summary?.smooth ?? null,
           denseSamples: samples.length,
+          hud,
         }),
     );
 
