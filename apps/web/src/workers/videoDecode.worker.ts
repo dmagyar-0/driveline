@@ -1064,42 +1064,81 @@ function getDataCore(): Comlink.Remote<DataCorePortApi> {
   return dataCore;
 }
 
-async function pullAndFeed(): Promise<void> {
-  if (!session) return;
-  if (session.ended) return;
-  // Capture the session at start: if `seek()` replaces the module-level
-  // `session` while we're awaiting `ops.next`, the pull belongs to the
-  // PRIOR stream. Resuming and mutating `session.*` would poison the
-  // new session — most catastrophically, the empty batch we get back
-  // for a closed stream would set the *new* session's `ended = true`,
-  // wedging the decoder permanently (symptom: a big seek leaves the
-  // canvas frozen on the prior frame; `frameIndex` stops advancing).
+// --- encoded-chunk prefetch ring --------------------------------------------
+//
+// The decoder is fed from a worker-LOCAL ring of encoded chunks, NOT directly
+// from the reader RPC. Reading samples goes over Comlink to the mp4/mcap port,
+// so under the fusion render load that round-trip stretches — and when the feed
+// path awaits it, the decoder runs dry between batches (measured: blit queue
+// drained to empty, decodeQueue 0, the cursor pinned with nothing to paint →
+// the held-then-rushed judder that fails the smoothness bar). Decoupling fixes
+// it: `feedFromRing` tops the decoder up SYNCHRONOUSLY from the local ring (no
+// RPC on the hot path) and `pumpEncoded` refills the ring in big batches in the
+// background, far ahead. Encoded chunks are just bytes — they cost no decoder
+// DPB slot, so the ring can be deep without the over-feed wedge that bounds the
+// live DECODED footprint (`decodedAheadCap`).
+let localEncoded: EncodedChunkWire[] = [];
+let encodedEnded = false;
+let pumpInFlight = false;
+// Keep the ring at least this deep; the background pump refills when it drops
+// below. Several seconds of lookahead at these frame rates — comfortably more
+// than the worst-case reader-RPC stall under main-thread contention.
+const ENCODED_RING_TARGET = 48;
+// Chunks read per background RPC. Large, to amortise the Comlink round-trip so
+// a handful of reads keep the ring full.
+const ENCODED_RING_BATCH = 24;
+
+function resetEncodedRing(): void {
+  localEncoded = [];
+  encodedEnded = false;
+}
+
+// Background refill of the encoded ring. Fire-and-forget; serialised by
+// `pumpInFlight`. The `session`/`streamId` capture guards a seek swapping the
+// stream out mid-await: a stale batch must neither feed the new stream nor mark
+// it ended (the empty batch for a closed stream would otherwise wedge it).
+async function pumpEncoded(): Promise<void> {
+  if (!session || session.ended || encodedEnded || pumpInFlight) return;
+  if (localEncoded.length >= ENCODED_RING_TARGET) return;
+  pumpInFlight = true;
   const pulling = session;
-  const batch = (await pulling.ops.next(
-    pulling.streamId,
-    PULL_BATCH,
-  )) as EncodedChunkWire[];
-  // Bail if seek/open swapped the active session while we awaited.
-  // The new session does its own priming inside `openInternal`, so
-  // discarding `batch` here doesn't leave it under-fed.
-  if (session !== pulling) return;
-  if (session.ended) return;
-  if (batch.length === 0) {
-    session.ended = true;
-    await drainAtEnd(pulling);
-    return;
+  try {
+    const batch = (await pulling.ops.next(
+      pulling.streamId,
+      ENCODED_RING_BATCH,
+    )) as EncodedChunkWire[];
+    if (session !== pulling || session.ended) return; // superseded by a seek
+    if (batch.length === 0) {
+      encodedEnded = true;
+      return;
+    }
+    for (const c of batch) localEncoded.push(c);
+  } finally {
+    pumpInFlight = false;
   }
-  for (const c of batch) {
-    if (!session) return;
-    // `openInternal` awaits `ops.next` before calling
-    // `configureFromFirstKeyframe`, which leaves a window where the
-    // session is live but the decoder is still `unconfigured`. A
-    // frame callback firing during that window (from a prior decode
-    // cycle) would queue another pull here and hit WebCodecs'
-    // `Cannot call 'decode' on an unconfigured codec`. Treat that as
-    // benign — the post-configure initial-batch decode below will
-    // pick up again.
+}
+
+// Synchronously top the decoder up from the local ring, bounded by the same
+// pacing gates as before: the in-flight cap (`shouldRefill`) and the live
+// decoded-frame footprint (`decodedAheadCap`, which keeps the decoder's output
+// pool from exhausting and wedging). No RPC here — that is the whole point.
+function feedFromRing(): void {
+  if (!session || session.ended) return;
+  while (
+    localEncoded.length > 0 &&
+    reorderBuffer.length + blitQueue.length < decodedAheadCap &&
+    shouldRefill({
+      inFlight: session.inFlight,
+      lastEmittedPtsNs: session.lastEmittedPtsNs,
+      cursorNs,
+    })
+  ) {
+    // `openInternal` configures the decoder after its own priming feed; a frame
+    // callback firing in that unconfigured window would hit WebCodecs' "Cannot
+    // call 'decode' on an unconfigured codec". Treat as benign — priming picks
+    // it up.
     if (session.decoder.state !== "configured") return;
+    const c = localEncoded.shift()!;
     const chunk = new EncodedVideoChunk({
       type: c.is_keyframe ? "key" : "delta",
       timestamp: ptsToMicros(c.pts_ns),
@@ -1108,49 +1147,31 @@ async function pullAndFeed(): Promise<void> {
     try {
       session.decoder.decode(chunk);
     } catch (e) {
-      // Synchronous decode throw (e.g. unconfigured/closed codec, malformed
-      // chunk). Latch + notify the same way the async error callback does so
-      // the panel reacts immediately instead of waiting on the stall timer.
+      // Synchronous decode throw (unconfigured/closed codec, malformed chunk):
+      // latch + notify like the async error callback so the panel reacts at
+      // once instead of waiting on the stall timer.
       onDecoderError(e as Error);
       return;
     }
     session.inFlight += 1;
   }
+  // End of stream: the ring is drained AND the reader signalled no more. Mark
+  // ended and flush the decode tail (the stranded reorder frames).
+  if (localEncoded.length === 0 && encodedEnded && !session.ended) {
+    session.ended = true;
+    void drainAtEnd(session);
+  }
 }
 
-// `pullInFlight` serialises refills. Both `setCursor` and `onFrame` call
-// `maybeRefill`; without a mutex they can start concurrent `pullAndFeed`s
-// while the previous `await ops.next` is still pending, double-counting
-// against `inFlight` and racing the reader stream.
-let pullInFlight = false;
-
-async function maybeRefill(): Promise<void> {
-  if (!session) return;
-  if (session.ended) return;
-  if (pullInFlight) return;
-  // Bound the number of DECODED frames kept alive ahead of the cursor by COUNT,
-  // not just by the LOOKAHEAD time window. A time window holds (window × fps)
-  // frames, which for a slow high-resolution decoder is dozens of 4K
-  // `VideoFrame`s — enough to exhaust the decoder's output-frame pool and wedge
-  // it (it stops emitting, the panel goes "waiting", the cursor gate freezes).
-  // A fixed count keeps the live footprint flat regardless of frame rate /
-  // resolution / decode speed.
-  if (reorderBuffer.length + blitQueue.length >= decodedAheadCap) return;
-  if (
-    !shouldRefill({
-      inFlight: session.inFlight,
-      lastEmittedPtsNs: session.lastEmittedPtsNs,
-      cursorNs,
-    })
-  ) {
-    return;
-  }
-  pullInFlight = true;
-  try {
-    await pullAndFeed();
-  } finally {
-    pullInFlight = false;
-  }
+// Top the decoder up from the local encoded ring (synchronous, no RPC) and kick
+// a background ring refill. Called from the blit clock, `onFrame`, `setCursor`
+// and `setPlayback` — every point where the cursor advanced or a frame was
+// consumed — so the decoder is continuously refed without ever blocking on the
+// reader.
+function maybeRefill(): void {
+  if (!session || session.ended) return;
+  feedFromRing();
+  void pumpEncoded();
 }
 
 async function configureFromFirstKeyframe(
@@ -1257,6 +1278,10 @@ async function openInternal(
     lastEmittedPtsNs: null,
     pendingPreTargetFrame: null,
   };
+  // Fresh encoded-chunk ring per stream: the previous stream's buffered chunks
+  // are at the wrong PTS for the new position. The pump below refills it from
+  // the new stream's cursor (which `ops.next` advances past the priming batch).
+  resetEncodedRing();
 
   const initial = (await ops.next(
     streamId,
@@ -1436,6 +1461,8 @@ async function closeInternal(): Promise<void> {
   // (last frame stays visible until the new stream produces one) — the panel
   // owns when to clear via coverage logic on the main thread.
   flushBlitQueue();
+  // Drop the encoded-chunk ring too — its chunks belong to the dead stream.
+  resetEncodedRing();
   if (s.pendingPreTargetFrame) {
     s.pendingPreTargetFrame.close();
     s.pendingPreTargetFrame = null;
