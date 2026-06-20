@@ -459,6 +459,18 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       Math.round((endFrac - startFrac) * spanMs),
     );
     await page.waitForTimeout(playWallMs);
+    // Sample the decode worker's own frame-pacing telemetry while the cadence
+    // window is still populated — pause does NOT reset it (only play-start /
+    // seek do), so read it here, BEFORE the hero seek below clears it. This is
+    // the hard smoothness number for this run: jitter, repeats/rushed,
+    // playback-rate, blit-clock tick-gap health, and — critically —
+    // playerErrStdRegularMs, which cancels out the ~12 fps source's own
+    // irregularity so it isolates PLAYER judder from the data being steppy.
+    const pacing = await page.evaluate(() => {
+      const h = window.__drivelineDevHooks!;
+      return { cadence: h.videoCadence(), hud: h.videoHudStats() };
+    });
+    console.log("[demo] PACING " + JSON.stringify(pacing));
     await setPlaying(page, false);
     const playEndMs = Date.now() - recordStart;
     await page.waitForTimeout(400);
