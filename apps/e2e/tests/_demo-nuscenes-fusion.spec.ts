@@ -177,6 +177,7 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     page.on("pageerror", (e) => console.error("pageerror:", e.message));
     page.on("console", (m) => {
       if (m.type() === "error") console.error("console:", m.text());
+      if (m.text().startsWith("PAINTROW")) console.log(m.text());
     });
 
     await page.goto("/");

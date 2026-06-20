@@ -1074,6 +1074,12 @@ function blitForCursor(): void {
     canvasSized = true;
   }
   ctx.drawImage(target.frame, 0, 0, renderCanvas.width, renderCanvas.height);
+  // TEMP frame-table capture (reverted after): wall time the frame goes on
+  // screen, its REAL capture PTS, and its assigned PRESENTATION PTS.
+  // eslint-disable-next-line no-console
+  console.log(
+    `PAINTROW ${workerNow().toFixed(1)} ${target.ptsNs} ${target.presPtsNs} ${target.frameIndex}`,
+  );
   drawnFrames += 1;
   // Frame-pacing sample: this is the one seam that paints a distinct frame, so
   // the gap to the previous call is its predecessor's on-screen dwell time.
@@ -1775,6 +1781,8 @@ export const videoDecodeApi = {
       // Re-anchor the constant-cadence presentation grid: the first frame
       // released under play re-bases it to real time (see `assignPresPts`).
       resetPresClock();
+      // eslint-disable-next-line no-console
+      console.log("PAINTROW PLAYSTART");
       // Fresh pacing window per play session (the gap across a pause is not a
       // frame dwell).
       resetCadenceState();
