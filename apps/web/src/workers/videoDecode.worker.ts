@@ -61,6 +61,75 @@ export interface CapturedFrame {
   png: ArrayBuffer;
 }
 
+// Frame-pacing / smoothness summary over a rolling window of recent paints.
+// The frame-*loss* counters (`drawn`/`skipped`) prove every frame was shown;
+// these prove every frame was shown at the RIGHT TIME — the metric for
+// judder-free ("smooth") playback. See the instrumentation block lower in this
+// file for how each field is derived. Times are milliseconds (wall clock)
+// unless the name ends in `Ns`.
+export interface CadenceSummary {
+  /** Distinct frames painted in the measured window. */
+  paints: number;
+  /** Median source-PTS step between consecutive paints (ns) ≈ one source frame
+   *  interval; self-calibrating, so the clip fps need not be known up front. */
+  sourceIntervalNs: number;
+  /** Wall-clock dwell each frame *should* get = sourceInterval / speed. */
+  idealDwellMs: number;
+  /** Dwell-time distribution — how long each frame actually stayed on screen. */
+  p50DwellMs: number;
+  p95DwellMs: number;
+  maxDwellMs: number;
+  minDwellMs: number;
+  meanDwellMs: number;
+  /** Stdev of dwell — the headline smoothness number (lower = smoother). */
+  jitterMs: number;
+  /** Frames held ≥ 1.5× ideal (a visible stutter / "the same frame twice"). */
+  repeats: number;
+  /** Frames shown ≤ 0.5× ideal (a rushed double-step paint). */
+  rushed: number;
+  /** Paints whose PTS went backwards (must be 0 — a monotonic-guard breach). */
+  backwardSteps: number;
+  /** Actual ÷ ideal playback rate (1 = correct, 0.5 = running at half speed). */
+  playbackRateRatio: number;
+  /** Verdict against the smoothness thresholds. */
+  smooth: boolean;
+  // --- diagnostics (localise the cause; NOT part of the verdict) -----------
+  /** Playback-rate ratio over the first / second half of the window — separates
+   *  a startup catch-up burst from steady-state judder. */
+  firstHalfRate: number;
+  secondHalfRate: number;
+  /** Blit-clock (200 Hz) tick-gap health. A starved interval (worker briefly
+   *  unscheduled) → a capped catch-up burst of rushed frames. */
+  tickGapMaxMs: number;
+  tickGapP95Ms: number;
+  starvedTicks: number;
+  ticks: number;
+  /** Dwell histogram in units of idealDwell — buckets
+   *  [<0.25, 0.25–0.5, 0.5–0.75, 0.75–1.25, 1.25–1.75, 1.75–2.5, ≥2.5]. */
+  histDwell: number[];
+  /** Source irregularity: stdev of each painted frame's INTENDED dwell (its own
+   *  PTS step / speed) — i.e. how uneven the captured data itself is (ms). */
+  sourceJitterMs: number;
+  /** PLAYER judder — the true smoothness metric: spread of (actual dwell −
+   *  intended dwell), which cancels out source irregularity. Lower = the player
+   *  reproduces the source timing faithfully (ms). */
+  playerErrStdMs: number;
+  playerErrP95Ms: number;
+  playerErrMaxMs: number;
+  /** Player error restricted to frames whose SOURCE interval is near the median
+   *  (a "regular" interval). If this is small while playerErrStdMs is large, the
+   *  residual judder is the player faithfully tracking an IRREGULAR source — not
+   *  a player defect. If it's also large, the player itself is the cause. */
+  playerErrStdRegularMs: number;
+  /** Sample size for playerErrStdRegularMs (near-median-interval pairs). */
+  regularPairs: number;
+  /** Re-anchors of the pacing clock during the window. resyncReanchors (the
+   *  RESYNC_THRESHOLD catch-up path) is the suspect for the periodic slip;
+   *  scrubReanchors should be ~0 during steady play. */
+  resyncReanchors: number;
+  scrubReanchors: number;
+}
+
 // Lightweight per-blit status posted to the main thread over the sink port
 // (v5 off-thread blit). Replaces the per-frame `VideoFrame` transfer: the main
 // thread reads the latest status to drive the LiDAR overlay, readiness, the
@@ -101,6 +170,9 @@ export interface BlitStatus {
   /** True on the first blit after a seek was armed via `armSeekBlit`, so the
    *  main thread can close the `VIDEO_SEEK_TO_BLIT` bracket. */
   seekBlit: boolean;
+  /** Frame-pacing / smoothness summary over a rolling window (see
+   *  `CadenceSummary`). Recomputed at most every `CADENCE_RECOMPUTE_MS`. */
+  cadence: CadenceSummary;
 }
 
 // A decoded frame held in the worker's blit queue (v5). Mirrors the
@@ -217,6 +289,10 @@ let playbackSpeed = 1;
 let anchorCursorNs = 0n;
 let anchorWallMs = 0;
 let lastSetCursorNs = 0n;
+// Worker time (ms) of the last display-clock advance. Drives the smooth SLEW in
+// `blitClockTick`: the cursor advances by real elapsed time plus a small bounded
+// correction toward the target, rather than snapping (which rushed ~5×).
+let lastAdvanceMs = 0;
 let blitClockId: ReturnType<typeof setInterval> | null = null;
 // How often the worker re-evaluates the cursor + blits during play. 5 ms ≈
 // 200 Hz: far finer than any real video frame rate, so every frame is the
@@ -274,10 +350,24 @@ function pacingCursorNs(): bigint {
 // (set directly by `setCursor`/`open`), so use it as-is — clamping against the
 // initial `lastSetCursorNs` (0 before the first `setCursor`) would otherwise
 // pin the blit near t=0 and a high-PTS stream would never show its first frame.
+// Diagnostic: set true on the most recent blitCursorNs() call whenever the
+// AHEAD_MARGIN clamp bound (display pinned to the authoritative cursor + margin
+// instead of free-running on the smooth pacing clock). Recorded per paint to
+// test whether the periodic presentation slip coincides with clamp binding.
+let blitCursorClamped = false;
+
 function blitCursorNs(): bigint {
-  if (!playbackActive) return cursorNs;
+  if (!playbackActive) {
+    blitCursorClamped = false;
+    return cursorNs;
+  }
   const cap = lastSetCursorNs + AHEAD_MARGIN_NS;
-  return cursorNs < cap ? cursorNs : cap;
+  if (cursorNs < cap) {
+    blitCursorClamped = false;
+    return cursorNs;
+  }
+  blitCursorClamped = true;
+  return cap;
 }
 
 // Advance the pacing cursor on the worker's own clock and blit. No-op when not
@@ -286,12 +376,44 @@ function blitCursorNs(): bigint {
 // refill is only driven by `onFrame`, which a caught-up decoder stops firing).
 function blitClockTick(): void {
   if (!playbackActive) return;
+  // Blit-clock health sample (diagnostics): the gap since the previous tick.
+  const tickNow = workerNow();
+  if (lastTickMs > 0) {
+    tickGaps[tickGapIdx] = tickNow - lastTickMs;
+    tickGapIdx = (tickGapIdx + 1) % CADENCE_WINDOW;
+    if (tickGapCount < CADENCE_WINDOW) tickGapCount++;
+  }
+  lastTickMs = tickNow;
+  // --- smooth display clock: SLEW, don't snap ------------------------------
+  // The display cursor advances by the REAL time elapsed since the last tick
+  // (so it runs at the playback rate, smoothly), plus a small bounded correction
+  // toward the wall-clock target. The previous `min(cursor + 25 ms, target)`
+  // snapped the cursor to the target, so every target re-anchor (the periodic
+  // resync) became a capped catch-up RUSH of ~5× real-time — the measured ~1 Hz
+  // single-frame "repeat-then-rush" slip. Slewing the drift instead (correction
+  // capped at ±10 % of the step) re-syncs imperceptibly: it never rushes, never
+  // freezes (step ≥ 0), and continuously absorbs a steady clock drift without a
+  // periodic jump. The per-step skip-guard (≤ 25 ms, under one 30 fps frame)
+  // still bounds a genuinely starved interval so it catches up over several
+  // ticks rather than leaping past undrawn frames (preserving zero frame loss).
   const target = pacingCursorNs();
-  // Advance toward the real-time target, but by at most one capped step so a
-  // late-firing interval catches up smoothly instead of jump-skipping frames.
-  let next = cursorNs + MAX_TICK_STEP_NS;
-  if (next > target) next = target;
-  if (next > cursorNs) cursorNs = next; // monotonic during play
+  let dtMs = tickNow - lastAdvanceMs;
+  lastAdvanceMs = tickNow;
+  if (dtMs < 0) dtMs = 0;
+  const baseNs = dtMs * 1e6 * playbackSpeed;
+  const errNs = Number(target - cursorNs); // +behind / −ahead of the target
+  let corr = errNs * 0.1;
+  const maxCorr = baseNs * 0.1;
+  if (corr > maxCorr) corr = maxCorr;
+  else if (corr < -maxCorr) corr = -maxCorr;
+  let stepNs = baseNs + corr;
+  if (stepNs < 0) stepNs = 0; // monotonic during play
+  // Starve skip-guard: never advance more than one capped step (< one 30 fps
+  // frame) in a single tick, so a genuinely starved interval catches up over
+  // several ticks instead of leaping past undrawn frames (zero frame loss).
+  const maxStep = Number(MAX_TICK_STEP_NS);
+  if (stepNs > maxStep) stepNs = maxStep;
+  cursorNs += BigInt(Math.round(stepNs));
   blitForCursor();
   void maybeRefill();
 }
@@ -392,6 +514,308 @@ let lastFrameArrivedMs = 0;
 // budget measure must land on the main thread; the worker only signals when).
 let firstBlitDone = false;
 let seekBlitPending = false;
+
+// --- frame-pacing / smoothness instrumentation ------------------------------
+//
+// Frame *loss* is proven by `drawnFrames`/`skippedUndrawnFrames`; smoothness is
+// a separate axis. Even when every frame is painted, the on-screen CADENCE can
+// be uneven — one frame held two intervals, the next rushed — which the eye
+// reads as judder / "the same frame shown twice, then a jump". We capture it at
+// the only seam that paints: each `ctx.drawImage` in `blitForCursor` is exactly
+// ONE distinct frame (the drawn frame is closed + removed and the monotonic
+// guard prevents a repaint), so the wall-clock gap between consecutive paints is
+// the DWELL TIME of the frame just replaced, and the PTS gap is how many source
+// frames that step advanced. A rolling window of recent paints feeds the
+// percentiles / jitter, computed on demand. NB this measures when the WORKER
+// updates the canvas (the cadence we control); the compositor then samples it at
+// vsync — there is no per-presentation feedback for a worker OffscreenCanvas, so
+// an even worker cadence is the necessary-and-sufficient lever we have.
+interface PaintSample {
+  wallMs: number;
+  ptsNs: bigint;
+  /** Blit-queue depth kept AHEAD of the cursor right after this paint — the
+   *  display buffer lead. A dip toward 0 means the decoder/reorder pipeline is
+   *  delivering just-in-time; correlating it with dwell error localises judder
+   *  caused by bursty frame availability (e.g. a slow keyframe decode). */
+  lead: number;
+  /** Whether the AHEAD_MARGIN clamp bound when this frame was chosen (display
+   *  pinned to the authoritative cursor + margin vs. the smooth pacing clock). */
+  clamped: boolean;
+}
+// Rolling window length. ~600 paints ≈ 20 s at 30 fps / 50 s at 12 fps — a few
+// seconds of recent playback so the summary always reflects "now".
+const CADENCE_WINDOW = 600;
+const paintSamples: PaintSample[] = [];
+
+// Blit-clock health: gaps between consecutive 200 Hz ticks. A starved interval
+// (the worker briefly not scheduled — decode / GC / contention) shows up as a
+// large gap and, via the per-tick step cap, a catch-up burst of rushed frames.
+// Fixed ring buffer — NOT a growable array. This is sampled at 200 Hz, so an
+// O(n) `Array.shift()` here would itself load the worker thread and inflate the
+// very tick-starvation it measures (observer effect). Order within the ring is
+// irrelevant: the gap stats (max / p95 / starved-count) don't depend on it.
+const tickGaps = new Float64Array(CADENCE_WINDOW);
+let tickGapIdx = 0;
+let tickGapCount = 0;
+let lastTickMs = 0;
+const STARVED_TICK_MS = 12; // > ~2× the 5 ms tick target = a starved interval
+
+function tickGapsArray(): number[] {
+  return tickGapCount < CADENCE_WINDOW
+    ? Array.from(tickGaps.subarray(0, tickGapCount))
+    : Array.from(tickGaps);
+}
+
+// Smoothness verdict thresholds (tunable). Jitter is the dominant signal.
+const SMOOTH_JITTER_RATIO = 0.25; // dwell stdev under a quarter-interval
+const SMOOTH_P95_RATIO = 1.5; // no frame held > 50 % over ideal
+const SMOOTH_REPEAT_RATIO = 0.05; // < 5 % of frames stuttered
+const SMOOTH_RATE_LO = 0.9;
+const SMOOTH_RATE_HI = 1.1;
+
+// Snapshot recompute throttle for the per-status path; the pull `getCadence()`
+// always recomputes fresh.
+let cachedCadence: CadenceSummary | null = null;
+let cadenceComputedMs = 0;
+const CADENCE_RECOMPUTE_MS = 100;
+
+// Clear the window. Called on any temporal discontinuity (seek/close/paint-black
+// via `flushBlitQueue`, and play-start) so a pause gap or a scrub can't pollute
+// the dwell distribution with one giant interval.
+// Diagnostic: how many times the playback clock RE-ANCHORED during the window.
+// With the per-tick step cap, a re-anchor forward (worker clock judged "behind"
+// the authoritative cursor) triggers a capped catch-up rush — the prime suspect
+// for the periodic single-frame slip. `scrubReanchors` counts genuine scrub/seek
+// snaps (expected ~0 during steady play); `resyncReanchors` counts the
+// RESYNC_THRESHOLD path (the suspect).
+let resyncReanchors = 0;
+let scrubReanchors = 0;
+
+function resetCadenceState(): void {
+  paintSamples.length = 0;
+  tickGapIdx = 0;
+  tickGapCount = 0;
+  lastTickMs = 0;
+  resyncReanchors = 0;
+  scrubReanchors = 0;
+  cachedCadence = null;
+}
+
+// Record one distinct paint. Called from `blitForCursor` immediately after the
+// `ctx.drawImage` that put `ptsNs` on screen.
+function recordPaint(ptsNs: bigint, lead: number, clamped: boolean): void {
+  paintSamples.push({ wallMs: workerNow(), ptsNs, lead, clamped });
+  if (paintSamples.length > CADENCE_WINDOW) paintSamples.shift();
+}
+
+// Raw per-paint trace for offline analysis (pull-only via `getCadenceTrace`).
+// dwellMs[i]/stepMs[i] describe the on-screen time + PTS advance of the frame
+// painted at index i; leadDepth[i] is the buffer lead when it was painted.
+function cadenceTrace(): {
+  dwellMs: number[];
+  stepMs: number[];
+  leadDepth: number[];
+  clamped: boolean[];
+} {
+  const dwellMs: number[] = [];
+  const stepMs: number[] = [];
+  const leadDepth: number[] = [];
+  const clamped: boolean[] = [];
+  for (let i = 1; i < paintSamples.length; i++) {
+    dwellMs.push(paintSamples[i].wallMs - paintSamples[i - 1].wallMs);
+    stepMs.push(Number(paintSamples[i].ptsNs - paintSamples[i - 1].ptsNs) / 1e6);
+    leadDepth.push(paintSamples[i - 1].lead);
+    clamped.push(paintSamples[i - 1].clamped);
+  }
+  return { dwellMs, stepMs, leadDepth, clamped };
+}
+
+function emptyCadence(): CadenceSummary {
+  return {
+    paints: paintSamples.length,
+    sourceIntervalNs: 0,
+    idealDwellMs: 0,
+    p50DwellMs: 0,
+    p95DwellMs: 0,
+    maxDwellMs: 0,
+    minDwellMs: 0,
+    meanDwellMs: 0,
+    jitterMs: 0,
+    repeats: 0,
+    rushed: 0,
+    backwardSteps: 0,
+    playbackRateRatio: 0,
+    smooth: false,
+    firstHalfRate: 0,
+    secondHalfRate: 0,
+    tickGapMaxMs: 0,
+    tickGapP95Ms: 0,
+    starvedTicks: 0,
+    ticks: tickGapCount,
+    histDwell: [0, 0, 0, 0, 0, 0, 0],
+    sourceJitterMs: 0,
+    playerErrStdMs: 0,
+    playerErrP95Ms: 0,
+    playerErrMaxMs: 0,
+    playerErrStdRegularMs: 0,
+    regularPairs: 0,
+    resyncReanchors,
+    scrubReanchors,
+  };
+}
+
+function computeCadence(): CadenceSummary {
+  const n = paintSamples.length;
+  if (n < 3) return emptyCadence();
+  const dwell: number[] = [];
+  const step: number[] = [];
+  let backwardSteps = 0;
+  for (let i = 1; i < n; i++) {
+    dwell.push(paintSamples[i].wallMs - paintSamples[i - 1].wallMs);
+    const d = Number(paintSamples[i].ptsNs - paintSamples[i - 1].ptsNs);
+    step.push(d);
+    if (d < 0) backwardSteps++;
+  }
+  const sortedDwell = [...dwell].sort((a, b) => a - b);
+  const sortedStep = [...step].sort((a, b) => a - b);
+  const at = (arr: number[], p: number): number =>
+    arr[Math.min(arr.length - 1, Math.max(0, Math.floor(arr.length * p)))];
+  // Median PTS step = the true source frame interval (robust to skips / the odd
+  // backward straggler that a mean would smear).
+  const sourceIntervalNs = Math.abs(at(sortedStep, 0.5));
+  const speed = playbackSpeed > 0 ? playbackSpeed : 1;
+  const idealDwellMs = sourceIntervalNs / speed / 1e6;
+  const mean = dwell.reduce((a, b) => a + b, 0) / dwell.length;
+  const variance =
+    dwell.reduce((a, b) => a + (b - mean) * (b - mean), 0) / dwell.length;
+  const jitterMs = Math.sqrt(variance);
+  let repeats = 0;
+  let rushed = 0;
+  if (idealDwellMs > 0) {
+    for (const d of dwell) {
+      if (d >= 1.5 * idealDwellMs) repeats++;
+      else if (d <= 0.5 * idealDwellMs) rushed++;
+    }
+  }
+  const p95 = at(sortedDwell, 0.95);
+  // ideal / mean: 1 = correct speed, 0.5 = playing at half speed even if the
+  // jitter is low (a "smooth but wrong-rate" failure jitter alone would miss).
+  const playbackRateRatio = mean > 0 ? idealDwellMs / mean : 0;
+  // --- diagnostics ---------------------------------------------------------
+  const meanOf = (arr: number[]): number =>
+    arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  const half = Math.floor(dwell.length / 2);
+  const firstMean = meanOf(dwell.slice(0, half));
+  const secondMean = meanOf(dwell.slice(half));
+  const firstHalfRate = firstMean > 0 ? idealDwellMs / firstMean : 0;
+  const secondHalfRate = secondMean > 0 ? idealDwellMs / secondMean : 0;
+  const gaps = tickGapsArray();
+  const sortedGaps = [...gaps].sort((a, b) => a - b);
+  const tickGapMaxMs = sortedGaps.length ? sortedGaps[sortedGaps.length - 1] : 0;
+  const tickGapP95Ms = sortedGaps.length ? at(sortedGaps, 0.95) : 0;
+  let starvedTicks = 0;
+  for (const g of gaps) if (g > STARVED_TICK_MS) starvedTicks++;
+  const histDwell = [0, 0, 0, 0, 0, 0, 0];
+  if (idealDwellMs > 0) {
+    const edges = [0.25, 0.5, 0.75, 1.25, 1.75, 2.5];
+    for (const d of dwell) {
+      const r = d / idealDwellMs;
+      let b = edges.length;
+      for (let k = 0; k < edges.length; k++) {
+        if (r < edges[k]) {
+          b = k;
+          break;
+        }
+      }
+      histDwell[b]++;
+    }
+  }
+  // Per-frame timing faithfulness: compare each frame's ACTUAL on-screen dwell
+  // to its OWN intended duration (its source PTS step / speed). This isolates
+  // PLAYER judder from SOURCE irregularity — a variable-rate real-world capture
+  // has uneven intended dwells, and faithfully reproducing them is not judder.
+  const stdOf = (arr: number[]): number => {
+    if (!arr.length) return 0;
+    const m = arr.reduce((a, b) => a + b, 0) / arr.length;
+    return Math.sqrt(
+      arr.reduce((a, b) => a + (b - m) * (b - m), 0) / arr.length,
+    );
+  };
+  const intendedDwells = step.map((s) => s / 1e6 / speed);
+  const errs = dwell.map((d, i) => d - intendedDwells[i]);
+  const absErrs = errs.map((e) => Math.abs(e)).sort((a, b) => a - b);
+  const sourceJitterMs = stdOf(intendedDwells);
+  const playerErrStdMs = stdOf(errs);
+  const playerErrP95Ms = absErrs.length ? at(absErrs, 0.95) : 0;
+  const playerErrMaxMs = absErrs.length ? absErrs[absErrs.length - 1] : 0;
+  // Decompose: restrict the player error to frames whose SOURCE interval is
+  // near the median. Small-here-but-large-overall ⇒ the residual is the player
+  // tracking an irregular source (inherent), not a player defect.
+  let regErrSum = 0;
+  let regErrSumSq = 0;
+  let regularPairs = 0;
+  for (let i = 0; i < errs.length; i++) {
+    const intended = intendedDwells[i];
+    if (intended >= 0.75 * idealDwellMs && intended <= 1.25 * idealDwellMs) {
+      regErrSum += errs[i];
+      regErrSumSq += errs[i] * errs[i];
+      regularPairs++;
+    }
+  }
+  const regMean = regularPairs ? regErrSum / regularPairs : 0;
+  const playerErrStdRegularMs = regularPairs
+    ? Math.sqrt(Math.max(0, regErrSumSq / regularPairs - regMean * regMean))
+    : 0;
+  const smooth =
+    idealDwellMs > 0 &&
+    backwardSteps === 0 &&
+    jitterMs <= SMOOTH_JITTER_RATIO * idealDwellMs &&
+    p95 <= SMOOTH_P95_RATIO * idealDwellMs &&
+    repeats <= SMOOTH_REPEAT_RATIO * dwell.length &&
+    playbackRateRatio >= SMOOTH_RATE_LO &&
+    playbackRateRatio <= SMOOTH_RATE_HI;
+  return {
+    paints: n,
+    sourceIntervalNs,
+    idealDwellMs,
+    p50DwellMs: at(sortedDwell, 0.5),
+    p95DwellMs: p95,
+    maxDwellMs: sortedDwell[sortedDwell.length - 1],
+    minDwellMs: sortedDwell[0],
+    meanDwellMs: mean,
+    jitterMs,
+    repeats,
+    rushed,
+    backwardSteps,
+    playbackRateRatio,
+    smooth,
+    firstHalfRate,
+    secondHalfRate,
+    tickGapMaxMs,
+    tickGapP95Ms,
+    starvedTicks,
+    ticks: tickGapCount,
+    histDwell,
+    sourceJitterMs,
+    playerErrStdMs,
+    playerErrP95Ms,
+    playerErrMaxMs,
+    playerErrStdRegularMs,
+    regularPairs,
+    resyncReanchors,
+    scrubReanchors,
+  };
+}
+
+// Throttled snapshot for the high-rate per-blit status message.
+function currentCadence(): CadenceSummary {
+  const t = workerNow();
+  if (!cachedCadence || t - cadenceComputedMs >= CADENCE_RECOMPUTE_MS) {
+    cachedCadence = computeCadence();
+    cadenceComputedMs = t;
+  }
+  return cachedCadence;
+}
 
 // ---------------------------------------------------------------------------
 // isConfigSupported cache
@@ -498,6 +922,7 @@ function postBlitStatus(firstBlit: boolean, seekBlit: boolean): void {
     blitQueueLen: blitQueue.length,
     firstBlit,
     seekBlit,
+    cadence: currentCadence(),
   };
   sink.postMessage(status);
 }
@@ -585,6 +1010,10 @@ function blitForCursor(): void {
   }
   ctx.drawImage(target.frame, 0, 0, renderCanvas.width, renderCanvas.height);
   drawnFrames += 1;
+  // Frame-pacing sample: this is the one seam that paints a distinct frame, so
+  // the gap to the previous call is its predecessor's on-screen dwell time.
+  // `w` is the number of future frames kept after this paint = the buffer lead.
+  recordPaint(target.ptsNs, w, blitCursorClamped);
   const firstBlit = !firstBlitDone;
   firstBlitDone = true;
   const seekBlit = seekBlitPending;
@@ -610,6 +1039,9 @@ function flushBlitQueue(): void {
   for (const e of reorderBuffer) e.frame.close();
   reorderBuffer.length = 0;
   lastBlitPtsNs = null;
+  // A flush is a temporal discontinuity (seek/close/paint-black). Drop the
+  // pacing window so the gap across it isn't counted as one giant dwell.
+  resetCadenceState();
 }
 
 function getDataCore(): Comlink.Remote<DataCorePortApi> {
@@ -1159,6 +1591,24 @@ export const videoDecodeApi = {
   lastError(): string | null {
     return decodeError ? decodeError.message : null;
   },
+  // Frame-pacing / smoothness metrics (see `CadenceSummary`). `getCadence`
+  // recomputes fresh over the current rolling window; `resetCadence` clears the
+  // window so a measurement run can scope to a clean playback span. Both are
+  // additive — existing Comlink consumers are unaffected.
+  getCadence(): CadenceSummary {
+    return computeCadence();
+  },
+  getCadenceTrace(): {
+    dwellMs: number[];
+    stepMs: number[];
+    leadDepth: number[];
+    clamped: boolean[];
+  } {
+    return cadenceTrace();
+  },
+  resetCadence(): void {
+    resetCadenceState();
+  },
   setCursor(ns: bigint): void {
     if (playbackActive) {
       // `ns` is the authoritative timeline cursor. It bounds the DISPLAY cursor
@@ -1178,12 +1628,14 @@ export const videoDecodeApi = {
         anchorCursorNs = ns;
         anchorWallMs = workerNow();
         cursorNs = ns;
+        scrubReanchors++;
       } else if (ns > pacingCursorNs() + RESYNC_THRESHOLD_NS) {
         // The clock fell behind real time (a starved interval): RE-ANCHOR so the
         // pacing target catches up, but DON'T snap `cursorNs` — let the blit
         // clock advance it the capped step per tick so frames aren't jumped.
         anchorCursorNs = ns;
         anchorWallMs = workerNow();
+        resyncReanchors++;
       }
       // else: normal advance / jitter / gate hold — keep free-running; the
       // display clamp handles the small lead and the heartbeat releases the gate.
@@ -1211,9 +1663,13 @@ export const videoDecodeApi = {
     if (playing) {
       anchorCursorNs = cursorAnchorNs;
       anchorWallMs = workerNow();
+      lastAdvanceMs = workerNow();
       cursorNs = cursorAnchorNs;
       lastSetCursorNs = cursorAnchorNs;
       playbackActive = true;
+      // Fresh pacing window per play session (the gap across a pause is not a
+      // frame dwell).
+      resetCadenceState();
       startBlitClock();
       blitForCursor();
       void maybeRefill();
