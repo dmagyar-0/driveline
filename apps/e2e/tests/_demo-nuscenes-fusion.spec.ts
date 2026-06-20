@@ -483,21 +483,26 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
         { timeout: 90_000, polling: 100 },
       )
       .catch(() => {});
-    // Sample the decode worker's own frame-pacing telemetry while the cadence
-    // window is still populated — pause does NOT reset it (only play-start /
-    // seek do), and the hold below never seeks, so read it here while it is
-    // fresh. This is the hard smoothness number for this run: jitter,
-    // repeats/rushed,
-    // playback-rate, blit-clock tick-gap health, and — critically —
-    // playerErrStdRegularMs, which cancels out the ~12 fps source's own
-    // irregularity so it isolates PLAYER judder from the data being steppy.
+    // PAUSE IMMEDIATELY, before doing anything else. The cursor is driven by the
+    // playback rAF loop and keeps advancing at the live rate until the pause
+    // actually lands — so any work between the stop-detect and the pause (e.g. a
+    // telemetry round-trip) lets the cursor sail the remaining 0.5s margin past
+    // covEnd, fire VideoPanel's uncovered paintBlack(), and freeze the held
+    // frame on black. Pausing first pins the cursor safely inside coverage.
+    await setPlaying(page, false);
+    const playEndMs = Date.now() - recordStart;
+    // Now sample the decode worker's frame-pacing telemetry. Safe to read after
+    // the pause: pause does NOT reset the cadence window (only play-start / seek
+    // do) and the hold below never seeks, so it is still fresh. This is the hard
+    // smoothness number for this run: jitter, repeats/rushed, playback-rate,
+    // blit-clock tick-gap health, and — critically — playerErrStdRegularMs,
+    // which cancels out the ~12 fps source's own irregularity so it isolates
+    // PLAYER judder from the data being steppy.
     const pacing = await page.evaluate(() => {
       const h = window.__drivelineDevHooks!;
       return { cadence: h.videoCadence(), hud: h.videoHudStats() };
     });
     console.log("[demo] PACING " + JSON.stringify(pacing));
-    await setPlaying(page, false);
-    const playEndMs = Date.now() - recordStart;
 
     // Hold a beat on the frame playback STOPPED on — do NOT seek anywhere. A
     // backward seek to a "hero" frame would flush the video decoder and flash
