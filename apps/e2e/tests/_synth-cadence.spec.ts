@@ -21,12 +21,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURE = path.resolve(
-  __dirname,
-  "../../../sample-data/synth/uneven.mp4",
-);
+// Which mp4+sidecar pair to drive (relative to sample-data/). Defaults to the
+// synthetic clip; set MP4_REL=realworld/nuscenes_cam_front.mp4 for real data.
+const MP4_REL = process.env.MP4_REL ?? "synth/uneven.mp4";
+const TS_REL = `${MP4_REL}.timestamps`;
+const FIXTURE = path.resolve(__dirname, "../../../sample-data", MP4_REL);
+const PLAY_DEADLINE_MS = Number(process.env.PLAY_DEADLINE_MS ?? 16_000);
+const PAINT_TARGET = Number(process.env.PAINT_TARGET ?? 76);
 const OUT_DIR = path.resolve(__dirname, "../test-results");
-const OUT_FILE = path.join(OUT_DIR, "synth-cadence.json");
+const OUT_FILE = path.join(
+  OUT_DIR,
+  `synth-cadence${process.env.OUT_TAG ? "-" + process.env.OUT_TAG : ""}.json`,
+);
 
 const VIDEO_PANEL_ID = "video-1";
 
@@ -76,8 +82,8 @@ test.describe("synthetic uneven-cadence pacing fidelity", () => {
       await window.__drivelineDevHooks!.clearSession();
     });
 
-    const open = await page.evaluate(async () => {
-      const names = ["synth/uneven.mp4", "synth/uneven.mp4.timestamps"];
+    const open = await page.evaluate(async (rels: string[]) => {
+      const names = rels;
       const descs = await Promise.all(
         names.map(async (n) => {
           const r = await fetch(`/sample-data/${n}`);
@@ -89,7 +95,7 @@ test.describe("synthetic uneven-cadence pacing fidelity", () => {
         }),
       );
       return await window.__drivelineDevHooks!.openFiles(descs);
-    });
+    }, [MP4_REL, TS_REL]);
     expect(open.errors).toEqual([]);
 
     const channels = await page.evaluate(() =>
@@ -136,7 +142,7 @@ test.describe("synthetic uneven-cadence pacing fidelity", () => {
     // Play one continuous pass at 1x.
     const playStart = Date.now();
     await page.getByTestId("play-pause").click();
-    const deadline = Date.now() + 16_000;
+    const deadline = Date.now() + PLAY_DEADLINE_MS;
     while (Date.now() < deadline) {
       await page.waitForTimeout(400);
       const playing = await page.evaluate(
@@ -147,9 +153,9 @@ test.describe("synthetic uneven-cadence pacing fidelity", () => {
           () => window.__drivelineVideoCadence?.paints ?? 0,
         )) ?? 0;
       // Auto-pauses at end-of-session; stop once it ends (one full pass) or we
-      // have most of the 79 inter-frame paints.
+      // have the target number of inter-frame paints.
       if (!playing && Date.now() - playStart > 2000) break;
-      if (paints >= 76) break;
+      if (paints >= PAINT_TARGET) break;
     }
     const wallMs = Date.now() - playStart;
 
