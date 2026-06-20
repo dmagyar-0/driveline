@@ -133,10 +133,11 @@ async function setPlaying(page: Page, want: boolean): Promise<void> {
 }
 
 // A persistent, non-interactive attribution + licence banner so the recording
-// itself carries the CC BY-NC-SA 4.0 credit, plus a full-screen title card that
-// covers the (multi-second) point-cloud load so the capture never shows the
-// empty "no session" splash. The card is removed explicitly once content is
-// ready (not on a timer), so the load is always hidden behind it.
+// itself carries the CC BY-NC-SA 4.0 credit. (There is deliberately no
+// full-screen title card: the demo opens straight into the live dashboard and
+// the produced video shows only the scene playing — the multi-second
+// point-cloud load that happens before playback is trimmed off in
+// post-processing using the play-start marker the spec logs, see the README.)
 async function installCreditBanner(page: Page): Promise<void> {
   await page.evaluate(() => {
     const banner = document.createElement("div");
@@ -161,45 +162,6 @@ async function installCreditBanner(page: Page): Promise<void> {
       "licensed CC BY-NC-SA 4.0  ·  non-commercial demo";
     document.body.appendChild(banner);
   });
-}
-
-async function showTitleCard(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const card = document.createElement("div");
-    card.id = "nuscenes-title";
-    Object.assign(card.style, {
-      position: "fixed",
-      inset: "0",
-      zIndex: "2147483646",
-      pointerEvents: "none",
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      gap: "14px",
-      background: "#0a0c10",
-      color: "#fff",
-      font: "600 40px/1.2 system-ui, sans-serif",
-      textAlign: "center",
-      transition: "opacity 0.8s ease",
-    } as CSSStyleDeclaration);
-    card.innerHTML =
-      "<div>Driveline · Camera + LiDAR fusion</div>" +
-      "<div style='font:400 20px/1.4 system-ui,sans-serif;opacity:0.85'>" +
-      "nuScenes dashcam · 3D point cloud · point-cloud-on-camera overlay" +
-      "</div>";
-    document.body.appendChild(card);
-  });
-}
-
-async function hideTitleCard(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    const card = document.getElementById("nuscenes-title");
-    if (!card) return;
-    card.style.opacity = "0";
-    setTimeout(() => card.remove(), 900);
-  });
-  await page.waitForTimeout(1000);
 }
 
 test.describe("nuScenes camera + LiDAR fusion demo", () => {
@@ -287,8 +249,8 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
       LAYOUT,
     );
 
-    // Title card up *before* the load so the multi-second point-cloud open is
-    // hidden behind it (no empty splash in the capture).
+    // Persistent licence/attribution banner (no title card — the finished
+    // video opens straight on the live dashboard playing).
     await installCreditBanner(page);
     // Hide the dev-only video stats strip + perf HUD so they never leak into
     // the capture (advisory overlays, not part of the product story).
@@ -298,8 +260,11 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
         '[data-testid="video-stats"],[data-testid="video-hud"]{display:none !important}';
       document.head.appendChild(s);
     });
-    await showTitleCard(page);
-    await page.waitForTimeout(1200);
+    // Wall-clock origin of the recording. The point-cloud load + panel wiring +
+    // density sweep below all happen before playback; we log the elapsed ms at
+    // the moment Play is pressed so post-processing can trim everything before
+    // it and keep only the scene playing.
+    const recordStart = Date.now();
 
     // Open the four converter outputs as one drop (mp4 + sidecar pair = one
     // source, so this is 3 sources: video, point cloud, calibration).
@@ -481,15 +446,45 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     const endFrac = Math.min(0.85, startFrac + 0.4);
     await seekToTs(page, at(startFrac));
     await page.waitForTimeout(700);
-    await hideTitleCard(page);
-    await page.waitForTimeout(400);
+
+    // Mark the play-start offset (ms from the recording origin) so the trim in
+    // post-processing keeps only the playback — no load, no setup, no card.
+    const playStartMs = Date.now() - recordStart;
     await setPlaying(page, true);
-    await page.waitForTimeout(Math.round((endFrac - startFrac) * spanMs));
+    // On a GPU-less / software-decode box playback gates below 1x, so give it
+    // generous wall time to make a clearly visible forward pass through the
+    // dense + turning section (bounded well under the 240s test timeout).
+    const playWallMs = Math.max(
+      12_000,
+      Math.round((endFrac - startFrac) * spanMs),
+    );
+    await page.waitForTimeout(playWallMs);
+    // Sample the decode worker's own frame-pacing telemetry while the cadence
+    // window is still populated — pause does NOT reset it (only play-start /
+    // seek do), so read it here, BEFORE the hero seek below clears it. This is
+    // the hard smoothness number for this run: jitter, repeats/rushed,
+    // playback-rate, blit-clock tick-gap health, and — critically —
+    // playerErrStdRegularMs, which cancels out the ~12 fps source's own
+    // irregularity so it isolates PLAYER judder from the data being steppy.
+    const pacing = await page.evaluate(() => {
+      const h = window.__drivelineDevHooks!;
+      return { cadence: h.videoCadence(), hud: h.videoHudStats() };
+    });
+    console.log("[demo] PACING " + JSON.stringify(pacing));
     await setPlaying(page, false);
+    const playEndMs = Date.now() - recordStart;
     await page.waitForTimeout(400);
 
     // Finish on the densest fusion frame — the hero.
     await seekToTs(page, at(bestFrac));
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(1200);
+
+    // Emit the trim window for post-processing (see README). The mp4 is built
+    // from [PLAY_START_MS, HOLD_END_MS] so the shareable video shows only the
+    // scene playing and the final hero hold.
+    console.log(
+      `[demo] TRIM_WINDOW play_start_ms=${playStartMs} ` +
+        `play_end_ms=${playEndMs} hold_end_ms=${Date.now() - recordStart}`,
+    );
   });
 });
