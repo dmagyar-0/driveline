@@ -77,9 +77,23 @@ ffmpeg -hide_banner -v error -y -i "$TERM" -i "$APP" -filter_complex "
   -map "[v]" -t "$MAX" \
   -c:v libvpx-vp9 -b:v 2.5M -pix_fmt yuv420p -an "$ROOT/demo/byoa-odd.webm"
 
+# --- README-ready GIF -------------------------------------------------------
+# A README hero embeds best as a GIF served from a GitHub attachment URL
+# (drag the file into a PR/issue to mint one) rather than a committed binary.
+# Two-pass palette keeps the terminal text legible; 10 fps @ 900px lands the
+# ~44 s clip under GitHub's 10 MB image-attachment limit (~8 MB).
+echo "[odd] rendering README GIF (palette pass)..."
+ffmpeg -hide_banner -v error -y -i "$ROOT/demo/byoa-odd.webm" \
+  -vf "fps=10,scale=900:-1:flags=lanczos,palettegen=stats_mode=diff" \
+  "$REC/odd-palette.png"
+ffmpeg -hide_banner -v error -y -i "$ROOT/demo/byoa-odd.webm" -i "$REC/odd-palette.png" \
+  -lavfi "fps=10,scale=900:-1:flags=lanczos[x];[x][1:v]paletteuse=dither=bayer:bayer_scale=4" \
+  "$ROOT/demo/byoa-odd.gif"
+
 # --- cleanup ----------------------------------------------------------------
 [[ "$STARTED_SERVER" != 0 ]] && kill "$STARTED_SERVER" 2>/dev/null || true
 
 echo "[odd] done:"
 echo "  demo/byoa-odd.webm ($(dur "$ROOT/demo/byoa-odd.webm")s)"
+echo "  demo/byoa-odd.gif ($(ls -lh "$ROOT/demo/byoa-odd.gif" | awk '{print $5}'))"
 echo "  demo/byoa-odd-app.webm · demo/byoa-odd-term.webm"
