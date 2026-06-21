@@ -3,6 +3,21 @@
 Browser-first multimodal log viewer for synchronised 4K video and
 high-rate signal data. See [`docs/`](./docs) for the full design.
 
+## Demo — Bring Your Own Agent
+
+An agent drives Driveline headlessly through `window.__drivelineAgent`: it
+loads a real comma2k19 dashcam + CAN log, samples frames across the drive, and
+tags the **ODD** (Operational Design Domain) — weather / road type /
+illumination / other road user — backed by a Claude vision pass over the
+captured frames. **Left:** the agent's terminal. **Right:** the live app.
+
+<!-- Replace the URL below with the github user-attachments URL minted by
+     dragging demo/byoa-odd.gif into this PR's description. -->
+
+![Driveline Bring-Your-Own-Agent ODD-tagging demo — agent terminal beside the live app](REPLACE_WITH_ATTACHMENT_URL)
+
+<sub>Reproduce with [`scripts/record-byoa-odd.sh`](./scripts/record-byoa-odd.sh); details in [docs/13](./docs/13-bring-your-own-agent.md).</sub>
+
 ## Prerequisites
 
 - Rust (stable) with the `wasm32-unknown-unknown` target installed
@@ -87,4 +102,3 @@ or other non-OSI terms) fails the build:
 If you add a dependency under a new license, add its SPDX id to the allow
 list in **both** gates. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the
 per-file header convention.
-
