@@ -97,5 +97,7 @@ function useDecoderCodec(bindingId: string | null): string | null {
   return usePolledSnapshot<string | null>(
     () => (bindingId === null ? null : (window.__drivelineVideoHud?.codec ?? null)),
     [bindingId],
+    undefined,
+    bindingId !== null,
   );
 }

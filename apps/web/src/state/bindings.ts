@@ -9,11 +9,11 @@
 // named-layout snapshot drifted out of sync with the live-layout shard,
 // silently dropping `videoHudOn` / `pointCloudOverlays` / `unitOverrides`.
 //
-// `BindingMaps` is the canonical shape; `EMPTY_BINDINGS` is the reset value
-// (used by `clear()`); `cloneBindings` deep-copies the maps for a snapshot
-// (`saveCurrentLayoutAs`); `pickBindings` extracts them from a larger state
-// object (used when applying a restore / demo snapshot). Adding a panel
-// binding map is now a one-line change here plus its store field.
+// `BindingMaps` is the canonical shape; `emptyBindings()` is the reset value
+// (used by `clear()`); `cloneBindings` shallow-copies the maps for a snapshot
+// (`saveCurrentLayoutAs` / `restoreNamedLayout` / `applyDemoWorkspace`).
+// Adding a panel binding map is now a one-line change here plus its store
+// field.
 
 import type { MapBinding, PointCloudOverlayBinding } from "../layout/persist";
 import type { PlotPanelSettings } from "./store";
@@ -51,23 +51,6 @@ export function emptyBindings(): BindingMaps {
     plotPanelSettings: {},
     pointCloudOverlays: {},
     unitOverrides: {},
-  };
-}
-
-/** Extract just the binding maps from any state object that carries them. */
-export function pickBindings(s: BindingMaps): BindingMaps {
-  return {
-    videoBindings: s.videoBindings,
-    plotBindings: s.plotBindings,
-    videoHudOn: s.videoHudOn,
-    sceneBindings: s.sceneBindings,
-    mapBindings: s.mapBindings,
-    tableBindings: s.tableBindings,
-    valueBindings: s.valueBindings,
-    enumBindings: s.enumBindings,
-    plotPanelSettings: s.plotPanelSettings,
-    pointCloudOverlays: s.pointCloudOverlays,
-    unitOverrides: s.unitOverrides,
   };
 }
 

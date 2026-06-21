@@ -24,12 +24,14 @@ export const SNAPSHOT_POLL_MS = 250;
  * read result's identity changes. `read` is called immediately on mount and
  * whenever a dependency in `deps` changes (so a cursor scrub can refresh the
  * "current" column without waiting for the next tick), then every
- * `intervalMs`.
+ * `intervalMs`. Pass `enabled: false` when there's nothing to poll (e.g. an
+ * unbound panel) to read once but leave no idle interval ticking.
  */
 export function usePolledSnapshot<T>(
   read: () => T,
   deps: readonly unknown[],
   intervalMs: number = SNAPSHOT_POLL_MS,
+  enabled: boolean = true,
 ): T {
   const readRef = useRef(read);
   readRef.current = read;
@@ -40,13 +42,14 @@ export function usePolledSnapshot<T>(
       setSnap((prev) => (prev === next ? prev : next));
     };
     tick();
+    if (!enabled) return;
     const id = window.setInterval(tick, intervalMs);
     return () => window.clearInterval(id);
     // `read` is held in a ref so callers can pass an inline closure without
     // resetting the interval every render; `deps` lets the caller force a
     // re-read (e.g. on cursor change). intervalMs is effectively constant.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [intervalMs, ...deps]);
+  }, [intervalMs, enabled, ...deps]);
   return snap;
 }
 
