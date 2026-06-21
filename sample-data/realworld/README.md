@@ -196,11 +196,16 @@ extrinsic quaternion (xyzw): [0.70050, 0.00364, 0.00113, 0.71364]
 #### Recording the fusion demo video
 
 `apps/e2e/tests/_demo-nuscenes-fusion.spec.ts` records a shareable demo video
-of the full camera + LiDAR capability set this data unlocks, in one continuous
-replay with a persistent attribution/licence banner. There is **no** opening
-title card — the finished video opens straight on the live dashboard playing
-(the point-cloud load + panel wiring that happen before playback are trimmed
-off in post-processing using the play-start marker the spec logs):
+of the full camera + LiDAR capability set this data unlocks, as **one
+continuous forward play** with a persistent attribution/licence banner. There
+is **no** opening title card — the finished video opens straight on the live
+dashboard playing (the point-cloud load + panel wiring that happen before
+playback are trimmed off in post-processing using the play-start marker the
+spec logs) — and **no cut to black or jump** at the end: the spec does *not*
+seek backward to a "hero" frame (a backward seek flushes the decoder and flashes
+black), and the clip is trimmed to the continuous playback span only (no paused
+hold), so it ends mid-motion on a live, painted fusion frame — a single
+uninterrupted shot from first play to last frame:
 
 - **left** — CAM_FRONT dashcam with the LiDAR point cloud projected onto it
   (point-cloud-on-camera overlay),
@@ -230,25 +235,47 @@ cp /tmp/datasets/nuscenes_demo/nuscenes.lidar.parquet \
 pnpm wasm:build
 pnpm --filter e2e exec playwright test _demo-nuscenes-fusion.spec.ts --timeout=240000
 
-# 3. Post-process the .webm into a shareable .mp4 that shows ONLY the scene
-#    playing. The spec logs a trim window line, e.g.:
+# 3. Post-process the .webm into a shareable .mp4 that shows ONLY the continuous
+#    playing section. The spec logs a trim window line, e.g.:
 #      [demo] TRIM_WINDOW play_start_ms=13101 play_end_ms=25760 hold_end_ms=27386
 #    Those offsets are measured from `recordStart` (just before the file open),
-#    while the .webm clock starts at page creation, so add the small lead-in
-#    offset = webm_duration - hold_end_ms. Trim the .webm from that play-start
-#    to the end (the final hero hold) — no load, no setup, no card:
+#    while the .webm clock starts at page creation, so the lead-in offset is
+#    webm_duration - hold_end_ms (hold_end_ms is logged only to recover it; the
+#    .webm keeps running a moment past the pause). Trim from play-start to
+#    play-end (minus a small margin so it stops mid-motion, before the pause) —
+#    no load, no setup, no card, no paused hold, no end jump:
 WEBM=$(find apps/e2e/test-results -name '*.webm' | head -1)
 WEBM_DUR=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$WEBM")
-HOLD_END_MS=27386     # from the TRIM_WINDOW log line above
 PLAY_START_MS=13101   # from the TRIM_WINDOW log line above
+PLAY_END_MS=25760     # from the TRIM_WINDOW log line above
+HOLD_END_MS=27386     # from the TRIM_WINDOW log line above (lead-in only)
 # webm time of play-start = play_start + (webm_duration*1000 - hold_end_ms)
 START=$(python3 -c "print((${PLAY_START_MS} + ${WEBM_DUR}*1000 - ${HOLD_END_MS})/1000)")
-ffmpeg -y -ss "$START" -i "$WEBM" -an \
+# duration = the continuous playback span, minus 0.25s so it ends mid-motion
+DUR=$(python3 -c "print((${PLAY_END_MS} - ${PLAY_START_MS})/1000 - 0.25)")
+ffmpeg -y -ss "$START" -i "$WEBM" -t "$DUR" -an \
   -c:v libx264 -preset slow -crf 20 -pix_fmt yuv420p -movflags +faststart \
   driveline-nuscenes-fusion.mp4
-# sanity: first/last frame should be the live dashboard + the hero fusion frame
+# sanity: first frame is the live dashboard playing, last frame is a live frame
+# still mid-motion — neither should be black, there is no mid-video jump cut
+# (the spec never re-seeks), and the clip is pure playback (no frozen tail):
 #   ffmpeg -i driveline-nuscenes-fusion.mp4 -frames:v 1 /tmp/first.png -y
 #   ffmpeg -sseof -0.3 -i driveline-nuscenes-fusion.mp4 -frames:v 1 /tmp/last.png -y
+
+# 4. (optional) SEAMLESS-LOOP variant. Auto-looping viewers (phone galleries,
+#    social embeds) jump from the last frame back to the opening shot — visible
+#    because the drive's end and start are different scenes. Dissolve the tail
+#    back into the clip's own first frame so the final frame == the first frame
+#    and the wrap-around is invisible (no black, no hard cut). The drive plays
+#    forward, then eases back to the opening shot over the last ~1.2 s:
+D=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 driveline-nuscenes-fusion.mp4)
+T=1.2; OFF=$(python3 -c "print(round(${D}-${T},3))")
+ffmpeg -y -i driveline-nuscenes-fusion.mp4 -filter_complex \
+"[0:v]trim=0:${D},setpts=PTS-STARTPTS[main];\
+[0:v]trim=0:0.05,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${T}[head];\
+[main][head]xfade=transition=fade:duration=${T}:offset=${OFF},format=yuv420p[out]" \
+  -map "[out]" -c:v libx264 -preset slow -crf 20 -movflags +faststart \
+  driveline-nuscenes-fusion-loop.mp4
 ```
 
 > **GPU vs. headless.** Playback is decode-aware: it holds the cursor while the

@@ -17,9 +17,12 @@
 // dashboard-record spec's hflipped second mp4); here the second right-hand slot
 // is better spent on the signal plot anyway.
 //
-// It presses Play and lets the scene replay as one continuous take while
-// Playwright records the page to a .webm, then pauses before the end and holds
-// a hero frame.
+// It presses Play and lets the scene replay as ONE continuous take while
+// Playwright records the page to a .webm, then pauses and holds on the frame
+// playback stopped on. There is deliberately no backward "hero" re-seek at the
+// end: seeking backward flushes the video decoder and flashes black until the
+// next keyframe, which would cut the take in two. The take is a single
+// uninterrupted forward play with no cut to black.
 //
 // LICENCE: nuScenes is CC BY-NC-SA 4.0 (NonCommercial, ShareAlike). This
 // recording is a derivative of that data, so a persistent on-screen credit
@@ -434,16 +437,28 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     );
 
     // Reveal a beat BEFORE the densest moment, then make ONE smooth forward
-    // pass straight through the dense + turning section (no rewind): the
-    // opening is already well-painted and only gets denser, and we stop before
-    // the scene's no-video tail. At 1x (GPU) the wall time below ≈ the scene
-    // span it covers.
-    const spanMs = Number(end - start) / 1e6;
+    // pass straight through the dense + turning section to the end of the video
+    // (no rewind): the opening is already well-painted and only gets denser.
     // Open ON the densest frame (minus ~1 frame of lead) so the very first
     // revealed frame is heavily painted with LiDAR — fusion "wow" up front, not
     // 5 s of sparse open road — then pass forward through the turn.
     const startFrac = Math.max(0.03, bestFrac - 0.05);
-    const endFrac = Math.min(0.85, startFrac + 0.4);
+    // Stop ~0.5 s before the video source's ACTUAL coverage end — the channel's
+    // own timeRange, i.e. the exact window VideoPanel uses to decide
+    // "uncovered" (cursor > covEnd → the camera panel goes black with "no video
+    // at this time"). The raw mp4-sidecar span we seek fractions against can run
+    // slightly past that covered window (B-frame composition-order remap), so a
+    // fraction near 1.0 lands in the black tail. Anchoring the stop to covEnd −
+    // 0.5 s (margin absorbs the poll overshoot) guarantees the frame we end and
+    // hold on is always a live, painted dashcam frame — never the black tail.
+    const covEndNs = await page.evaluate((srcId) => {
+      const src = window
+        .__drivelineDevHooks!.listSources()
+        .find((s) => s.id === srcId);
+      return src ? src.timeRange.endNs : null;
+    }, video!.sourceId);
+    if (!covEndNs) throw new Error("video source timeRange not found");
+    const stopNs = BigInt(covEndNs) - 500_000_000n;
     await seekToTs(page, at(startFrac));
     await page.waitForTimeout(700);
 
@@ -451,37 +466,64 @@ test.describe("nuScenes camera + LiDAR fusion demo", () => {
     // post-processing keeps only the playback — no load, no setup, no card.
     const playStartMs = Date.now() - recordStart;
     await setPlaying(page, true);
-    // On a GPU-less / software-decode box playback gates below 1x, so give it
-    // generous wall time to make a clearly visible forward pass through the
-    // dense + turning section (bounded well under the 240s test timeout).
-    const playWallMs = Math.max(
-      12_000,
-      Math.round((endFrac - startFrac) * spanMs),
-    );
-    await page.waitForTimeout(playWallMs);
-    // Sample the decode worker's own frame-pacing telemetry while the cadence
-    // window is still populated — pause does NOT reset it (only play-start /
-    // seek do), so read it here, BEFORE the hero seek below clears it. This is
-    // the hard smoothness number for this run: jitter, repeats/rushed,
-    // playback-rate, blit-clock tick-gap health, and — critically —
-    // playerErrStdRegularMs, which cancels out the ~12 fps source's own
-    // irregularity so it isolates PLAYER judder from the data being steppy.
+    // Drive the cursor forward and STOP it the instant it reaches the last
+    // in-video frame — never run past the video's data window into the no-video
+    // tail. A fixed wall-time wait can't do this safely: above 1x it overshoots
+    // into that black tail, below 1x it stops short. Poll the REAL cursor
+    // instead, with a generous wall-time cap as a safety net (well under the
+    // 240s test timeout). If the cap trips on a heavily gated software-decode
+    // box, we pause wherever the cursor got to — still inside the video window,
+    // so the held frame is live, never black.
+    await page
+      .waitForFunction(
+        (tgt) =>
+          BigInt(window.__drivelineDevHooks!.getSessionSnapshot().cursorNs) >=
+          BigInt(tgt),
+        String(stopNs),
+        { timeout: 90_000, polling: 100 },
+      )
+      .catch(() => {});
+    // PAUSE IMMEDIATELY, before doing anything else. The cursor is driven by the
+    // playback rAF loop and keeps advancing at the live rate until the pause
+    // actually lands — so any work between the stop-detect and the pause (e.g. a
+    // telemetry round-trip) lets the cursor sail the remaining 0.5s margin past
+    // covEnd, fire VideoPanel's uncovered paintBlack(), and freeze the held
+    // frame on black. Pausing first pins the cursor safely inside coverage.
+    await setPlaying(page, false);
+    const playEndMs = Date.now() - recordStart;
+    // Now sample the decode worker's frame-pacing telemetry. Safe to read after
+    // the pause: pause does NOT reset the cadence window (only play-start / seek
+    // do) and the hold below never seeks, so it is still fresh. This is the hard
+    // smoothness number for this run: jitter, repeats/rushed, playback-rate,
+    // blit-clock tick-gap health, and — critically — playerErrStdRegularMs,
+    // which cancels out the ~12 fps source's own irregularity so it isolates
+    // PLAYER judder from the data being steppy.
     const pacing = await page.evaluate(() => {
       const h = window.__drivelineDevHooks!;
       return { cadence: h.videoCadence(), hud: h.videoHudStats() };
     });
     console.log("[demo] PACING " + JSON.stringify(pacing));
-    await setPlaying(page, false);
-    const playEndMs = Date.now() - recordStart;
-    await page.waitForTimeout(400);
 
-    // Finish on the densest fusion frame — the hero.
-    await seekToTs(page, at(bestFrac));
-    await page.waitForTimeout(1200);
+    // Hold a beat on the frame playback STOPPED on — do NOT seek anywhere. A
+    // backward seek to a "hero" frame would flush the video decoder and flash
+    // black until the next keyframe, cutting the take in two; the whole point
+    // here is ONE continuous forward play that ends on a live, already-painted
+    // fusion frame. The forward pass runs straight through the turn (which only
+    // gets denser), so the frame it lands on is itself a strong hero shot.
+    // Brief settle wait after the pause so the recorder flushes the final
+    // played frames — this is NOT shown in the shareable clip. We do NOT seek
+    // anywhere (a backward "hero" seek would flush the decoder and flash black,
+    // cutting the take in two). The clip is trimmed to [PLAY_START_MS,
+    // PLAY_END_MS] — the continuous playing section only — so the held/paused
+    // tail never appears: the video ends mid-motion on a live, painted fusion
+    // frame with no freeze and no jump.
+    await page.waitForTimeout(1500);
 
-    // Emit the trim window for post-processing (see README). The mp4 is built
-    // from [PLAY_START_MS, HOLD_END_MS] so the shareable video shows only the
-    // scene playing and the final hero hold.
+    // Emit the trim window for post-processing (see README). The shareable mp4
+    // is built from [PLAY_START_MS, PLAY_END_MS] (continuous playback only, no
+    // paused hold). hold_end_ms is logged only to recover the recorder's
+    // lead-in offset (webm_duration - hold_end_ms), since the .webm keeps
+    // running a moment past the pause.
     console.log(
       `[demo] TRIM_WINDOW play_start_ms=${playStartMs} ` +
         `play_end_ms=${playEndMs} hold_end_ms=${Date.now() - recordStart}`,
