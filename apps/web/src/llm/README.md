@@ -18,10 +18,11 @@ The rule that guarantees it:
 > inside the dialog's CTA handler. That dynamic import is the chunk boundary.
 
 `@anthropic-ai/sdk` is itself reached **only** through a nested dynamic
-`import("@anthropic-ai/sdk")` inside `engine.ts`'s `defaultCreateClient`, so even
-loading the `llm/` chunk doesn't pull the SDK until a real run starts. Tests
-inject a fake client via `createClient`, so they never touch the SDK or the
-network.
+`import("@anthropic-ai/sdk")` inside `anthropicClient.ts`'s
+`buildAnthropicClient` (which both `engine.ts` and `layoutProposal.ts` call from
+their `defaultCreateClient`), so even loading the `llm/` chunk doesn't pull the
+SDK until a real run starts. Tests inject a fake client via `createClient`, so
+they never touch the SDK or the network.
 
 If you add a new module here, keep it import-clean: a static
 `import { … } from "../llm/…"` from any always-loaded module (App, store,
@@ -34,6 +35,8 @@ budget. CI/build verification greps the dist chunk graph for this.
 | --------------- | ----------------------------------------------------------------------------------- |
 | `types.ts`      | `SampleBundle`, `AgentProgress`, `FormatAgentEngine`, typed errors.                 |
 | `keyManager.ts` | BYOK key (memory by default, opt-in persistence) + base-URL guard.                  |
+| `modelConfig.ts`    | The default Anthropic model id + its list-price table (one source of truth).   |
+| `anthropicClient.ts`| Shared SDK adapter: content-block/message types, `mapApiError`, the lazy SDK build. |
 | `sampler.ts`    | `buildSampleBundle(file)` — head/tail/stratified slices via `File.slice()`, sha256. |
 | `prompts.ts`    | Fixture-tested system prompt + kickoff builder.                                     |
 | `engine.ts`     | `ClientOrchestratedEngine` — the tool-use loop, acceptance gate, cost tally.        |
@@ -46,7 +49,8 @@ relaxMonotonicity?, createClient? }`. The injectable `createClient` factory
 defaults to building the real SDK (`dangerouslyAllowBrowser: true`, base URL
 guarded). The engine drives the loop against the small `AnthropicLike` adapter
 interface, so the exact beta tool / Files-API / structured-output shapes live in
-exactly one clearly-commented place (`defaultCreateClient`).
+exactly one clearly-commented place (`defaultCreateClient`, which builds the SDK
+via the shared `anthropicClient.buildAnthropicClient`).
 
 `engine.run({ sample, hint?, validateLocally, onProgress, signal })`:
 
