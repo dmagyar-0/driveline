@@ -153,7 +153,7 @@ describe("install gating", () => {
 
   it("install exposes the api; the uninstaller removes it", () => {
     expect(api().version).toBe(AGENT_API_VERSION);
-    expect(AGENT_API_VERSION).toBe(6);
+    expect(AGENT_API_VERSION).toBe(7);
     uninstall?.();
     uninstall = null;
     expect(window.__drivelineAgent).toBeUndefined();
@@ -203,8 +203,33 @@ describe("discovery (getSkill / describe)", () => {
     expect(byName.get("fetchChannelRange")?.mutating).toBe(false);
     expect(byName.get("listChannels")?.mutating).toBe(false);
     expect(byName.get("createPanel")?.mutating).toBe(true);
+    // v7: the off-the-playback-path capture/read ops decode without touching
+    // session state, so they report `mutating: false` (dry-run-safe), the same
+    // posture as the gated read `fetchChannelRange`.
+    expect(byName.get("captureVideoFrame")?.mutating).toBe(false);
+    expect(byName.get("captureVideoFrameAt")?.mutating).toBe(false);
+    expect(byName.get("snapshotAt")?.mutating).toBe(false);
     // The full surface is the gated set + the discovery trio.
     expect(m.capabilities.length).toBeGreaterThan(10);
+  });
+
+  it("describe()'s manifest matches the installed method set (no drift)", () => {
+    // Lock the hand-maintained AGENT_CAPABILITIES list to the actual surface:
+    // every callable method on makeAgentApi() (minus discovery-only `version`,
+    // which is a value field, not a method) must appear in the manifest exactly
+    // once, and vice-versa. This fails CI if a future method is added without a
+    // manifest entry (or an entry lingers after a method is removed).
+    const a = api() as unknown as Record<string, unknown>;
+    const installedMethods = Object.keys(a).filter(
+      (k) => typeof a[k] === "function",
+    );
+    const manifestNames = api()
+      .describe()
+      .capabilities.map((c) => c.name);
+    expect([...installedMethods].sort()).toEqual([...manifestNames].sort());
+    // `version` is a field, not a method, and is intentionally not in the
+    // manifest (it's the discovery value, not a capability).
+    expect(manifestNames).not.toContain("version");
   });
 });
 
@@ -382,19 +407,35 @@ describe("events", () => {
   it("setEventTag / setEventRange / renameEvent / removeEvent round-trip", () => {
     const id = api().addEvent({ ns: "10", label: "x" });
     if (id === null) throw new Error("addEvent failed");
-    api().setEventTag(id, "weather", "Fog");
-    api().setEventRange(id, "3", "4");
-    api().renameEvent(id, "renamed");
+    // v7: the mutators return boolean (changed/existed), honouring the surface
+    // contract — true on a real change.
+    expect(api().setEventTag(id, "weather", "Fog")).toBe(true);
+    expect(api().setEventRange(id, "3", "4")).toBe(true);
+    expect(api().renameEvent(id, "renamed")).toBe(true);
     let e = api().listEvents()[0];
     expect(e.tags.weather).toBe("Fog");
     expect(e.beforeNs).toBe("3");
     expect(e.afterNs).toBe("4");
     expect(e.label).toBe("renamed");
-    api().setEventTag(id, "weather", "");
+    expect(api().setEventTag(id, "weather", "")).toBe(true);
     e = api().listEvents()[0];
     expect("weather" in e.tags).toBe(false);
-    api().removeEvent(id);
+    expect(api().removeEvent(id)).toBe(true);
     expect(api().listEvents()).toHaveLength(0);
+  });
+
+  it("event mutators return false (never throw) for unknown id / bad input", () => {
+    // No event with this id → every mutator reports false, no exception.
+    expect(api().setEventTag("ghost", "weather", "Fog")).toBe(false);
+    expect(api().setEventRange("ghost", "1", "2")).toBe(false);
+    expect(api().renameEvent("ghost", "x")).toBe(false);
+    expect(api().removeEvent("ghost")).toBe(false);
+    // Unparseable ns on a real event also reports false (and stays a no-op).
+    const id = api().addEvent({ ns: "10", label: "x" });
+    if (id === null) throw new Error("addEvent failed");
+    expect(api().setEventRange(id, "nope", "2")).toBe(false);
+    // An empty/whitespace label is rejected by the store → false.
+    expect(api().renameEvent(id, "   ")).toBe(false);
   });
 
   it("exportEvents → importEvents(replace) round-trips losslessly", () => {

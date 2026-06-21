@@ -15,7 +15,7 @@
 // initialises. `agentSkill.test.ts` asserts this literal matches
 // `AGENT_API_VERSION`, so a version bump that forgets to update it fails CI.
 
-export const AGENT_SKILL = `# Driveline — Bring Your Own Agent (BYOA) skill (v6)
+export const AGENT_SKILL = `# Driveline — Bring Your Own Agent (BYOA) skill (v7)
 
 Driveline is a browser-first, server-less viewer for synchronised video and
 high-rate signal data. Everything runs in the page: the data you push stays in
@@ -173,7 +173,11 @@ it renders without scrubbing the cursor.
   \`startNs\`/\`endNs\` to park the cursor or size a fetch window).
 - \`setCursor(ns)\` / \`play()\` / \`pause()\` / \`setSpeed(x)\` drive the transport.
 - Events: \`addEvent({ ns?, label?, tags?, confidence? })\`, \`listEvents()\`,
-  \`exportEvents()\`, \`importEvents(json, mode?)\` record machine findings.
+  \`exportEvents()\`, \`importEvents(json, mode?)\` record machine findings. The
+  mutators \`setEventTag(id, attrId, value)\`, \`setEventRange(id, beforeNs,
+  afterNs)\`, \`renameEvent(id, label)\`, and \`removeEvent(id)\` each return a
+  \`boolean\` (v7+) — \`true\` on a real change, \`false\` for an unknown id, bad
+  input, or a no-op, so you can probe without try/catch.
 
 ## Read a moment without playing it (v5+)
 
