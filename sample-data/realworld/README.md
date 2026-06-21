@@ -261,6 +261,21 @@ ffmpeg -y -ss "$START" -i "$WEBM" -t "$DUR" -an \
 # (the spec never re-seeks), and the clip is pure playback (no frozen tail):
 #   ffmpeg -i driveline-nuscenes-fusion.mp4 -frames:v 1 /tmp/first.png -y
 #   ffmpeg -sseof -0.3 -i driveline-nuscenes-fusion.mp4 -frames:v 1 /tmp/last.png -y
+
+# 4. (optional) SEAMLESS-LOOP variant. Auto-looping viewers (phone galleries,
+#    social embeds) jump from the last frame back to the opening shot — visible
+#    because the drive's end and start are different scenes. Dissolve the tail
+#    back into the clip's own first frame so the final frame == the first frame
+#    and the wrap-around is invisible (no black, no hard cut). The drive plays
+#    forward, then eases back to the opening shot over the last ~1.2 s:
+D=$(ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 driveline-nuscenes-fusion.mp4)
+T=1.2; OFF=$(python3 -c "print(round(${D}-${T},3))")
+ffmpeg -y -i driveline-nuscenes-fusion.mp4 -filter_complex \
+"[0:v]trim=0:${D},setpts=PTS-STARTPTS[main];\
+[0:v]trim=0:0.05,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=${T}[head];\
+[main][head]xfade=transition=fade:duration=${T}:offset=${OFF},format=yuv420p[out]" \
+  -map "[out]" -c:v libx264 -preset slow -crf 20 -movflags +faststart \
+  driveline-nuscenes-fusion-loop.mp4
 ```
 
 > **GPU vs. headless.** Playback is decode-aware: it holds the cursor while the

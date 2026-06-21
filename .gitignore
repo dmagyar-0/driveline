@@ -86,5 +86,6 @@ sample-data/realworld/*
 # README ffmpeg trim — NC-licensed (CC BY-NC-SA 4.0) and multi-MB, never
 # committed; regenerate locally (see sample-data/realworld/README.md).
 /driveline-nuscenes-fusion.mp4
+/driveline-nuscenes-fusion-loop.mp4
 
 .claude/worktrees/
