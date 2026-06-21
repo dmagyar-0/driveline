@@ -3,6 +3,29 @@
 Browser-first multimodal log viewer for synchronised 4K video and
 high-rate signal data. See [`docs/`](./docs) for the full design.
 
+## Demo
+
+<!-- TO ENABLE PLAYBACK: drag driveline-nuscenes-fusion-loop.mp4 into any
+     GitHub comment/PR box to upload it, copy the resulting
+     https://github.com/user-attachments/assets/<uuid> URL, and paste it in
+     place of PASTE_GITHUB_ATTACHMENT_URL below. The autoplay/loop/muted
+     attributes are what make GitHub play it continuously and automatically
+     (muted is required by browser autoplay policy; the clip has no audio).
+     The clip is CC BY-NC-SA 4.0 (nuScenes) so it is hosted as a GitHub
+     attachment, NEVER committed — see sample-data/realworld/README.md. -->
+
+<video src="PASTE_GITHUB_ATTACHMENT_URL" autoplay loop muted playsinline width="100%"></video>
+
+Camera + LiDAR **fusion** on nuScenes v1.0-mini scene-0061: the CAM_FRONT
+dashcam with the LiDAR point cloud projected onto it, the same spin in the 3D
+scene panel, and the ego speed / yaw-rate plot — all on one synchronised
+timeline. Produced by
+[`apps/e2e/tests/_demo-nuscenes-fusion.spec.ts`](./apps/e2e/tests/_demo-nuscenes-fusion.spec.ts)
+(see [`sample-data/realworld/README.md`](./sample-data/realworld/README.md) to
+reproduce it).
+
+<sub>Data: nuScenes v1.0-mini scene-0061 © Motional, licensed CC BY-NC-SA 4.0 — non-commercial demo.</sub>
+
 ## Prerequisites
 
 - Rust (stable) with the `wasm32-unknown-unknown` target installed
