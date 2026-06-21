@@ -263,3 +263,44 @@ between-turn thinking shows up as dead air. Trim that case with ffmpeg's
 ffmpeg -i raw.webm -vf "mpdecimate=hi=64*16:lo=64*6:frac=0.30,setpts=N/FRAME_RATE/TB" \
   -c:v libvpx-vp9 -b:v 2M -an tight.webm
 ```
+
+### ODD tagging — terminal beside the UI
+
+`scripts/record-byoa-odd.sh` records a focused **Operational Design Domain**
+story: the user asks the agent to "analyse and tag the ODD" on the comma2k19
+drive, and the agent loads the dashcam + CAN, _watches_ the drive by sampling
+frames across the segment, then writes **one event tagged with the four ODD
+scene elements** — weather / road type / illumination / other road user —
+plus the maneuver, and explains the scene.
+
+Unlike the HUD clips above, this one shows the agent's **terminal next to the
+app**. `scripts/agent-drive/odd-driver.mjs` records two browser contexts in a
+single run — a Claude-Code-style terminal (`odd-terminal.html`: prompt,
+thinking, tool calls, results, inspected-frame thumbnails, the final answer and
+a follow-up user question) and the real Driveline UI driven through
+`window.__drivelineAgent` — then the script stitches them horizontally with
+ffmpeg (`hstack`). Driving both pages from one process keeps them on a shared
+wall clock, so the reasoning on the left stays in step with the actions on the
+right. Each sampled frame both moves the app cursor (the dashcam + plot cursor
+track it) and is pulled into the terminal via `captureVideoFrameAt`, so a
+viewer can see exactly which frames the agent checked.
+
+```bash
+scripts/record-byoa-odd.sh   # -> demo/byoa-odd.webm  (terminal | app)
+                             #    demo/byoa-odd-app.webm · demo/byoa-odd-term.webm
+```
+
+The ODD scene elements are the default event-tag taxonomy
+(`DEFAULT_EVENT_TAG_CONFIG`): `weather`, `road_type`, `lighting` (surfaced as
+**Illumination**), `other_road_user`, and `maneuver`. An agent reads them with
+`getEventTagConfig()` and sets them via `addEvent({ tags })` / `setEventTag()`.
+
+**Provenance of the tag values.** The CAN figures in the clip (speed range,
+steering, deceleration) are computed live from the data via `fetchChannelRange`.
+The four scene-element tag _values_ + confidences are transcribed from a real
+Claude vision pass over exactly the five captured frames — a subagent drove this
+same dev-server surface, looked at the frames, and classified them (which is how
+the segment was correctly tagged **Night**, not "Day"). The driver replays that
+verdict so the recording is reproducible; it is not a live model call inside the
+page. To re-derive it, capture the frames with `captureVideoFrameAt` and hand
+them to any vision model.

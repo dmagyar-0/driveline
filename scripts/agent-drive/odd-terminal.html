@@ -1,0 +1,280 @@
+<!doctype html>
+<!--
+  Terminal pane for the ODD-tagging BYOA demo (scripts/agent-drive/odd-driver.mjs).
+
+  This is a *rendered* terminal — a Claude-Code-style transcript that the
+  driver fills in lockstep with the real window.__drivelineAgent actions it
+  runs against Driveline in a second browser context. The two recordings are
+  composited side-by-side with ffmpeg by scripts/record-byoa-odd.sh, so a
+  viewer sees the agent's reasoning (left) next to what it does in the app
+  (right). Nothing here talks to Driveline; the driver pushes every line via
+  the window.__term.* helpers below and awaits their typewriter promises so
+  the pacing matches the app side.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Claude Code — Driveline ODD agent</title>
+    <style>
+      :root {
+        --bg: #0b0e14;
+        --panel: #0e131c;
+        --fg: #c9d4e5;
+        --dim: #6b7a93;
+        --pmt: #7fd6a0;
+        --think: #b58cff;
+        --call: #7fb0ff;
+        --result: #93a4bf;
+        --asst: #e6edf7;
+        --accent: #ffcf5b;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        color: var(--fg);
+        font:
+          14px/1.55 ui-monospace,
+          "SF Mono",
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+      }
+      #t-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 14px;
+        background: var(--panel);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        color: var(--dim);
+        font-size: 12.5px;
+        letter-spacing: 0.2px;
+      }
+      #t-bar .dots {
+        display: flex;
+        gap: 6px;
+      }
+      #t-bar .dots i {
+        width: 11px;
+        height: 11px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+      .d1 {
+        background: #ff5f57;
+      }
+      .d2 {
+        background: #febc2e;
+      }
+      .d3 {
+        background: #28c840;
+      }
+      #t-bar b {
+        color: #aab8d0;
+        font-weight: 600;
+      }
+      #t-bar .spark {
+        color: var(--think);
+      }
+      #t-log {
+        flex: 1;
+        overflow: hidden;
+        padding: 14px 16px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .ln {
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .ln.user {
+        color: var(--asst);
+        margin-top: 6px;
+      }
+      .ln.user .pmt {
+        color: var(--pmt);
+        font-weight: 700;
+      }
+      .ln.think {
+        color: var(--think);
+        opacity: 0.92;
+      }
+      .ln.think .tk {
+        color: var(--think);
+      }
+      .ln.call {
+        color: var(--call);
+      }
+      .ln.result {
+        color: var(--result);
+      }
+      .ln.asst {
+        color: var(--asst);
+        margin: 4px 0;
+      }
+      .ln.tag {
+        color: var(--accent);
+      }
+      .ln.gap {
+        line-height: 0.5;
+      }
+      .ln.frames {
+        display: flex;
+        gap: 8px;
+        margin: 6px 0 4px;
+        flex-wrap: wrap;
+      }
+      .ln.frames figure {
+        margin: 0;
+        width: 150px;
+      }
+      .ln.frames img {
+        width: 150px;
+        height: 84px;
+        object-fit: cover;
+        border-radius: 4px;
+        border: 1px solid rgba(127, 176, 255, 0.4);
+        display: block;
+      }
+      .ln.frames figcaption {
+        color: var(--dim);
+        font-size: 11px;
+        margin-top: 3px;
+        text-align: center;
+      }
+      #t-foot {
+        padding: 6px 16px 12px;
+        color: var(--dim);
+        font-size: 12.5px;
+      }
+      #t-cur {
+        display: inline-block;
+        width: 8px;
+        height: 15px;
+        background: var(--pmt);
+        vertical-align: -2px;
+        animation: blink 1.05s steps(1) infinite;
+      }
+      @keyframes blink {
+        50% {
+          opacity: 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="t-bar">
+      <span class="dots"
+        ><i class="d1"></i><i class="d2"></i><i class="d3"></i
+      ></span>
+      <span class="spark">✻</span>
+      <span
+        ><b>Claude Code</b> — Driveline ODD agent ·
+        window.__drivelineAgent</span
+      >
+    </div>
+    <div id="t-log"></div>
+    <div id="t-foot">
+      <span class="pmt" style="color: var(--pmt)">&gt;</span>
+      <span id="t-cur"></span>
+    </div>
+    <script>
+      window.__term = (() => {
+        const log = document.getElementById("t-log");
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+        const scroll = () => {
+          log.scrollTop = log.scrollHeight;
+        };
+        function line(cls) {
+          const d = document.createElement("div");
+          d.className = "ln " + (cls || "");
+          log.appendChild(d);
+          scroll();
+          return d;
+        }
+        async function type(el, text, cps) {
+          const delay = 1000 / (cps || 60);
+          for (const ch of text) {
+            el.textContent += ch;
+            scroll();
+            await sleep(delay);
+          }
+        }
+        return {
+          async user(text) {
+            const d = line("user");
+            const p = document.createElement("span");
+            p.className = "pmt";
+            p.textContent = "> ";
+            const s = document.createElement("span");
+            d.appendChild(p);
+            d.appendChild(s);
+            await type(s, text, 42);
+            await sleep(220);
+          },
+          async think(text) {
+            const d = line("think");
+            const tk = document.createElement("span");
+            tk.className = "tk";
+            tk.textContent = "✻ ";
+            const s = document.createElement("span");
+            d.appendChild(tk);
+            d.appendChild(s);
+            await type(s, text, 95);
+            await sleep(120);
+          },
+          async call(text) {
+            line("call").textContent = "⏺ " + text;
+            await sleep(160);
+          },
+          async result(text) {
+            line("result").textContent = "  ⎿  " + text;
+            await sleep(180);
+          },
+          async assistant(text) {
+            const d = line("asst");
+            const s = document.createElement("span");
+            d.appendChild(s);
+            await type(s, text, 78);
+            await sleep(150);
+          },
+          async tag(text) {
+            line("tag").textContent = "   • " + text;
+            await sleep(160);
+          },
+          async gap() {
+            line("gap").innerHTML = "&nbsp;";
+          },
+          // Render a strip of inspected dashcam frames (data URLs from
+          // captureVideoFrameAt) with their timestamps.
+          async frames(items) {
+            const d = line("frames");
+            for (const it of items) {
+              const f = document.createElement("figure");
+              const img = document.createElement("img");
+              img.src = it.dataUrl;
+              const cap = document.createElement("figcaption");
+              cap.textContent = it.t;
+              f.appendChild(img);
+              f.appendChild(cap);
+              d.appendChild(f);
+              scroll();
+              await sleep(240);
+            }
+          },
+        };
+      })();
+    </script>
+  </body>
+</html>

@@ -24,6 +24,18 @@ reproduce it).
 
 <sub>Data: nuScenes v1.0-mini scene-0061 © Motional, licensed CC BY-NC-SA 4.0 — non-commercial demo.</sub>
 
+## Demo — Bring Your Own Agent
+
+An agent drives Driveline headlessly through `window.__drivelineAgent`: it
+loads a real comma2k19 dashcam + CAN log, samples frames across the drive, and
+tags the **ODD** (Operational Design Domain) — weather / road type /
+illumination / other road user — backed by a Claude vision pass over the
+captured frames. **Left:** the agent's terminal. **Right:** the live app.
+
+<img width="900" alt="Driveline Bring-Your-Own-Agent ODD-tagging demo — agent terminal beside the live app" src="https://github.com/user-attachments/assets/6e90dd7c-bd1e-4de0-9e5c-f05dd93f1726" />
+
+<sub>Reproduce with [`scripts/record-byoa-odd.sh`](./scripts/record-byoa-odd.sh); details in [docs/13](./docs/13-bring-your-own-agent.md).</sub>
+
 ## Prerequisites
 
 - Rust (stable) with the `wasm32-unknown-unknown` target installed
@@ -108,4 +120,3 @@ or other non-OSI terms) fails the build:
 If you add a dependency under a new license, add its SPDX id to the allow
 list in **both** gates. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the
 per-file header convention.
-
