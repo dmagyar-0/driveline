@@ -42,10 +42,12 @@ export interface PersistedEventTagConfig {
 }
 
 // Starter taxonomy. The option lists follow common autonomous-driving
-// scenario-element conventions (weather / road type / lighting /
-// maneuver) so the feature ships useful and the user can prune or
-// extend it. Ids are stable slugs so persisted tag values survive a
-// rename of the display `name`.
+// scenario-element conventions — the four ODD (Operational Design
+// Domain) scene elements (weather / road type / illumination / other
+// road user) plus maneuver — so the feature ships useful and the user
+// can prune or extend it. Ids are stable slugs so persisted tag values
+// survive a rename of the display `name` (e.g. the illumination
+// attribute keeps the historical `lighting` id).
 export const DEFAULT_EVENT_TAG_CONFIG: EventTagConfig = {
   attributes: [
     {
@@ -78,10 +80,28 @@ export const DEFAULT_EVENT_TAG_CONFIG: EventTagConfig = {
       ],
     },
     {
+      // `lighting` id retained for backward-compatibility with persisted
+      // tags and existing demos; surfaced to users as "Illumination".
       id: "lighting",
-      name: "Lighting",
+      name: "Illumination",
       type: "select",
       options: ["Day", "Dusk/Dawn", "Night", "Low light", "Glare"],
+    },
+    {
+      id: "other_road_user",
+      name: "Other road user",
+      type: "select",
+      options: [
+        "None",
+        "Lead vehicle",
+        "Oncoming vehicle",
+        "Cross traffic",
+        "Cyclist",
+        "Pedestrian",
+        "Motorcyclist",
+        "Truck/Bus",
+        "Animal",
+      ],
     },
     {
       id: "maneuver",

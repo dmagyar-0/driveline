@@ -125,6 +125,19 @@ describe("eventTagConfig persist", () => {
       "weather",
     );
   });
+
+  it("ships the four ODD scene-element attributes", () => {
+    const byId = new Map(
+      DEFAULT_EVENT_TAG_CONFIG.attributes.map((a) => [a.id, a]),
+    );
+    // The ODD (Operational Design Domain) scene elements an agent tags.
+    expect(byId.has("weather")).toBe(true);
+    expect(byId.has("road_type")).toBe(true);
+    expect(byId.has("other_road_user")).toBe(true);
+    // Illumination keeps the historical `lighting` id but surfaces a
+    // human-readable display name.
+    expect(byId.get("lighting")?.name).toBe("Illumination");
+  });
 });
 
 describe("parseEventTagConfig (import)", () => {

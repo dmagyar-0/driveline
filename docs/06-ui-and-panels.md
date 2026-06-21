@@ -63,12 +63,12 @@ drawer lives at `shell/drawers/<Name>Drawer.tsx`, exposes
 `shell/drawers/_row.module.css` for the row primitive (swatch + label
 grid):
 
-| Drawer | Responsibility |
-|---|---|
-| **SourcesDrawer** | List loaded sources, swatch + kind badge, `+ drop / load file…` row, global-range readout. |
-| **ChannelsDrawer** | Search + collapsible per-source groups. Click-to-bind: with no panel selected, mints a plot panel; with a plot panel selected, calls `addPlotChannel`; with a video panel selected, calls `setVideoBinding`. |
-| **LayoutDrawer** | Saved layouts (`saveCurrentLayoutAs` / `restoreNamedLayout`) with `live` / `active` markers. `Add panel` section adds video / plot / 3D scene / map / table / enum. `Reset layout` row at the bottom. |
-| **PanelDrawer** | Configures the selected panel (settings rail flip from the tab chrome). Body switches on `panelKindOf(selectedPanelId)`. Plot bodies list bound channels with × remove + `+ add channel…`, plus a **Gap threshold** toggle+input (on: inter-sample gaps longer than N s render as breaks; off: all gaps render as step-holds). Video body shows decoder label, HUD toggle, and the bound channel. |
+| Drawer                             | Responsibility                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **SourcesDrawer**                  | List loaded sources, swatch + kind badge, `+ drop / load file…` row, global-range readout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| **ChannelsDrawer**                 | Search + collapsible per-source groups. Click-to-bind: with no panel selected, mints a plot panel; with a plot panel selected, calls `addPlotChannel`; with a video panel selected, calls `setVideoBinding`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| **LayoutDrawer**                   | Saved layouts (`saveCurrentLayoutAs` / `restoreNamedLayout`) with `live` / `active` markers. `Add panel` section adds video / plot / 3D scene / map / table / enum. `Reset layout` row at the bottom.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **PanelDrawer**                    | Configures the selected panel (settings rail flip from the tab chrome). Body switches on `panelKindOf(selectedPanelId)`. Plot bodies list bound channels with × remove + `+ add channel…`, plus a **Gap threshold** toggle+input (on: inter-sample gaps longer than N s render as breaks; off: all gaps render as step-holds). Video body shows decoder label, HUD toggle, and the bound channel.                                                                                                                                                                                                                                                                                                                                                     |
 | **EventsDrawer** ("Event Tagging") | Event list with double-click rename, ×, and `+ event at cursor` (one-click + "…" custom-label variant). Each row expands (caret) to an editor for an optional **before/after** time range (seconds → the event becomes a `[ns-before, ns+after]` band) and one control per configured **tag attribute** (a `<select>` for `select`, an `<input>` for `text`). Collapsed rows show set tag values as chips and a dot when ranged. A collapsible **Tag attributes** config editor (`EventTagConfigEditor`) at the foot adds/edits/removes attributes and imports/exports the whole taxonomy as JSON. Out-of-range rows render at 50 % opacity with a `title="Outside the current session's range"` tooltip and `aria-label` prefixed `Out of range — `. |
 
 Drawer state (active tab + collapsed flag) persists via
@@ -128,16 +128,16 @@ interface SessionState {
   cursorNs: bigint;
   playing: boolean;
   speed: number;
-  cursorMode: 'absolute' | 'relative';
+  cursorMode: "absolute" | "relative";
 
   // panel bindings (one map per panel kind)
-  videoBindings:     Record<PanelId, ChannelId | null>;
-  plotBindings:      Record<PanelId, ChannelId[]>;
-  sceneBindings:     Record<PanelId, ChannelId | null>;
-  mapBindings:       Record<PanelId, MapBinding | null>;
-  tableBindings:     Record<PanelId, ChannelId[]>;
-  enumBindings:      Record<PanelId, ChannelId[]>;  // one state strip per channel
-  videoHudOn:        Record<PanelId, boolean>;
+  videoBindings: Record<PanelId, ChannelId | null>;
+  plotBindings: Record<PanelId, ChannelId[]>;
+  sceneBindings: Record<PanelId, ChannelId | null>;
+  mapBindings: Record<PanelId, MapBinding | null>;
+  tableBindings: Record<PanelId, ChannelId[]>;
+  enumBindings: Record<PanelId, ChannelId[]>; // one state strip per channel
+  videoHudOn: Record<PanelId, boolean>;
   plotPanelSettings: Record<PanelId, PlotPanelSettings>; // gap threshold per panel
 
   // layout
@@ -244,7 +244,7 @@ FlexLayout component string to a React component:
   assignment is deterministic via `panels/palette.ts:colorFor(channelId)`
   (FNV-1a over 8 palette slots).
 - Panel controls live in the PanelDrawer: channel × remove, `+ add
-  channel…` opens `panels/ChannelPicker.tsx`; a **Gap threshold**
+channel…` opens `panels/ChannelPicker.tsx`; a **Gap threshold**
   toggle switches between span-gaps (default) and step-hold-with-breaks
   mode, stored per-panel in `plotPanelSettings` via `persist.ts`.
 
@@ -258,7 +258,7 @@ one `gl.POINTS` draw call). Points are coloured by **intensity** via a
 turbo colormap LUT; orbit / pan / zoom with the mouse, over a ground grid.
 
 Data path: the Rust core's `PointCloudReader` (`SourceKind::Lidar`,
-`ChannelKind::PointCloud`) reads a *Driveline point-cloud Parquet*
+`ChannelKind::PointCloud`) reads a _Driveline point-cloud Parquet_
 (`*.lidar.parquet`, one row per spin) and `fetch_range` emits
 `{ ts, positions: List<Float32>, intensities: List<Float32> }` per spin.
 `pointCloudFromArrow.ts` decodes it. Time-sync is waste-free: the panel
@@ -348,7 +348,7 @@ the value is drawn inside any segment wide enough to fit it.
 
 ## Event tagging
 
-An *event* (the slice is still named `bookmarks` for compatibility) is
+An _event_ (the slice is still named `bookmarks` for compatibility) is
 `{ id, ns: bigint, beforeNs: bigint, afterNs: bigint, label, color,
 createdAt, tags: Record<attributeId, value> }`. `beforeNs`/`afterNs`
 default to `0n` (a point event); when either is set, the event covers
@@ -371,8 +371,9 @@ each `{ id, name, type: "select" | "text", options }`) is mutated through
 `setEventTagConfig` (whole-config replace, e.g. JSON import — prunes
 orphan tag values from every event), `addTagAttribute(name, type)`,
 `removeTagAttribute(id)` (also prunes), and `updateTagAttribute(id,
-patch)`. It hydrates to `DEFAULT_EVENT_TAG_CONFIG` (weather / road type /
-lighting / maneuver) on a fresh store.
+patch)`. It hydrates to `DEFAULT_EVENT_TAG_CONFIG` — the four ODD scene
+elements (weather / road type / illumination / other road user) plus
+maneuver — on a fresh store.
 
 The transport scrubber renders `BookmarkMarkers.tsx` as a child of
 `.trackStrip` between `.trackFill` and `.thumb`. Markers are
