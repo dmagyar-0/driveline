@@ -11,10 +11,7 @@ tags the **ODD** (Operational Design Domain) — weather / road type /
 illumination / other road user — backed by a Claude vision pass over the
 captured frames. **Left:** the agent's terminal. **Right:** the live app.
 
-<!-- Replace the URL below with the github user-attachments URL minted by
-     dragging demo/byoa-odd.gif into this PR's description. -->
-
-![Driveline Bring-Your-Own-Agent ODD-tagging demo — agent terminal beside the live app](REPLACE_WITH_ATTACHMENT_URL)
+<img width="900" alt="Driveline Bring-Your-Own-Agent ODD-tagging demo — agent terminal beside the live app" src="https://github.com/user-attachments/assets/6e90dd7c-bd1e-4de0-9e5c-f05dd93f1726" />
 
 <sub>Reproduce with [`scripts/record-byoa-odd.sh`](./scripts/record-byoa-odd.sh); details in [docs/13](./docs/13-bring-your-own-agent.md).</sub>
 
