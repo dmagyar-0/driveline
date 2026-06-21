@@ -335,7 +335,7 @@ async function main() {
     `speed ${prof.spd.min}–${prof.spd.max} m/s · hardest decel ${prof.spd.worstDecel} m/s² · steering ${prof.steer.min}–${prof.steer.max}°`,
   );
   await tThink(
-    "Steady ~30 m/s with tiny steering — a highway cruise, no hard braking. Now I'll look at the road itself.",
+    "Steady ~31 m/s with tiny steering — a highway cruise, no hard braking. Now I'll look at the road itself.",
   );
   await sleep(500);
 
@@ -377,8 +377,19 @@ async function main() {
     await sleep(250);
   }
   await app.evaluate(() => window.__oddInspect(null));
+  // The ODD scene-element verdict below comes from a real Claude vision pass
+  // over exactly these five captured frames (run via a subagent against the
+  // dev server); the values + confidences are transcribed from that analysis,
+  // not assumed. CAN figures above are computed live from the data.
+  await tThink("Now I'll actually look at the five frames I captured.");
+  await tCall(
+    "Claude vision pass · classify weather / road / illumination / road users",
+  );
+  await tResult(
+    "verdict: Night highway · Clear (low light) · Lead vehicle · steady cruise",
+  );
   await tThink(
-    "Across all five frames: bright daylight with hard shadows, dry multi-lane divided road with a guardrail, a lead vehicle ahead in-lane. Clear sky.",
+    "All five frames are dark — headlight-lit pavement, other cars visible only as tail/head-lights. Traffic builds from an open road to several lead and adjacent cars. Dry, no rain or fog → Clear, but the darkness caps weather confidence.",
   );
   await sleep(500);
 
@@ -399,25 +410,27 @@ async function main() {
     const a = window.__drivelineAgent;
     const id = a.addEvent({
       ns: startNs,
-      label: "ODD · daytime highway cruise · clear · lead vehicle",
+      label: "ODD · night highway cruise · clear · lead vehicle",
       tags: {
         weather: "Clear",
         road_type: "Highway",
-        lighting: "Day",
+        lighting: "Night",
         other_road_user: "Lead vehicle",
         maneuver: "Go straight",
       },
-      confidence: 0.82,
+      confidence: 0.8,
     });
     a.setEventRange(id, "0", String(BigInt(endNs) - BigInt(startNs)));
     return { id, count: a.listEvents().length };
   }, bind);
-  await tCall(`addEvent() → ${ev.id}  (origin:"agent", confidence 0.82)`);
-  await tTag("weather = Clear        — blue sky, hard shadows");
-  await tTag("road type = Highway    — divided, multi-lane, guardrail");
-  await tTag("illumination = Day     — bright daylight throughout");
-  await tTag("other road user = Lead vehicle — ahead, in-lane");
-  await tTag("maneuver = Go straight — ~30 m/s, steering near 0°");
+  await tCall(`addEvent() → ${ev.id}  (origin:"agent", confidence 0.80)`);
+  await tTag(
+    "illumination = Night (0.98) — dark; cars only as tail/head-lights",
+  );
+  await tTag("road type = Highway (0.95)  — divided, multi-lane, gantry signs");
+  await tTag("other road user = Lead vehicle (0.90) — cars ahead from t≈18 s");
+  await tTag("maneuver = Go straight (0.92) — 30–33 m/s, steering ≈ −0.9°");
+  await tTag("weather = Clear (0.60) — dry, no rain/fog; night caps certainty");
   await sleep(400);
 
   // Drive the cursor across the event so the viewer sees the tagged span.
@@ -431,7 +444,7 @@ async function main() {
   // ===========================================================================
   await tGap();
   await tAsst(
-    "Summary: a calm ~60 s daytime highway cruise. The ego holds 30–33 m/s (≈113 km/h) with near-zero steering and no hard braking — a steady straight-ahead drive on a dry, multi-lane divided highway under clear skies, following a lead vehicle. Tagged one ODD event over the full segment.",
+    "Summary: a calm ~60 s night-time highway cruise. The ego holds 30–33 m/s (≈110 km/h, mean 31.4) with near-zero steering (≈ −0.9°) and no hard braking (smoothed extremes ≤0.6 m/s²) — a steady straight-ahead drive on a dry, multi-lane divided highway, following a lead vehicle. Traffic builds from an open road to several cars ahead over the minute. Tagged one ODD event over the full segment.",
   );
   await sleep(400);
 
@@ -442,7 +455,7 @@ async function main() {
   await tUser("any vulnerable road users — pedestrians or cyclists?");
   await tThink("Re-checking the five sampled frames for VRUs.");
   await tAsst(
-    "No. Across the sampled frames I only see a lead vehicle ahead in-lane; no pedestrians, cyclists or motorcyclists. That's why other_road_user is tagged 'Lead vehicle', not a VRU.",
+    "None observed. Across all five frames I see only motor vehicles — passenger cars showing tail/head-lights — on a high-speed divided highway, where pedestrians and cyclists wouldn't normally be present. So other_road_user is 'Lead vehicle', not a VRU. Confidence is moderate-high given the low light.",
   );
   await sleep(1800);
 

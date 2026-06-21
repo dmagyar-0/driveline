@@ -294,3 +294,13 @@ The ODD scene elements are the default event-tag taxonomy
 (`DEFAULT_EVENT_TAG_CONFIG`): `weather`, `road_type`, `lighting` (surfaced as
 **Illumination**), `other_road_user`, and `maneuver`. An agent reads them with
 `getEventTagConfig()` and sets them via `addEvent({ tags })` / `setEventTag()`.
+
+**Provenance of the tag values.** The CAN figures in the clip (speed range,
+steering, deceleration) are computed live from the data via `fetchChannelRange`.
+The four scene-element tag _values_ + confidences are transcribed from a real
+Claude vision pass over exactly the five captured frames — a subagent drove this
+same dev-server surface, looked at the frames, and classified them (which is how
+the segment was correctly tagged **Night**, not "Day"). The driver replays that
+verdict so the recording is reproducible; it is not a live model call inside the
+page. To re-derive it, capture the frames with `captureVideoFrameAt` and hand
+them to any vision model.
