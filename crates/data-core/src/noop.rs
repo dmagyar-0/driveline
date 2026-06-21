@@ -2,7 +2,7 @@
 //! check that the trait compiles end-to-end.
 
 use crate::reader::{ArrowIpc, Reader};
-use crate::types::{ChannelId, FetchOpts, SourceMeta, TimeRange};
+use crate::types::{FetchOpts, SourceMeta, TimeRange};
 
 pub struct NoopReader {
     meta: SourceMeta,
@@ -21,7 +21,7 @@ impl Reader for NoopReader {
 
     fn fetch_range(
         &self,
-        _channel_id: &ChannelId,
+        _channel_id: &str,
         _range: TimeRange,
         _opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
@@ -46,7 +46,7 @@ mod tests {
     fn noop_fetch_range_returns_empty() {
         let r = NoopReader::open(&[]).unwrap();
         let out = r
-            .fetch_range(&"any".to_string(), TimeRange::empty(), FetchOpts::default())
+            .fetch_range("any", TimeRange::empty(), FetchOpts::default())
             .unwrap();
         assert!(out.is_empty());
     }

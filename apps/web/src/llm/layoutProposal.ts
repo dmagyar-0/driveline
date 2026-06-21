@@ -20,8 +20,14 @@
  * applier. A refusal / API error surfaces as a typed `AgentError`.
  */
 
+import type Anthropic from "@anthropic-ai/sdk";
 import Ajv2020, { type ValidateFunction } from "ajv/dist/2020";
 import { ANTHROPIC_BASE_URL, assertAnthropicBaseUrl } from "./keyManager";
+import { DEFAULT_MODEL } from "./modelConfig";
+import {
+  buildAnthropicClient,
+  mapApiError as mapAnthropicError,
+} from "./anthropicClient";
 import { AgentError } from "./types";
 import { MAX_PLOT_SERIES } from "../panels/palette";
 import layoutProposalSchema from "./layoutProposal.v1.schema.json";
@@ -32,7 +38,9 @@ import type {
   ProposalChannelStat,
 } from "./layoutProposal.types";
 
-export const DEFAULT_LAYOUT_MODEL = "claude-opus-4-8";
+/** The default model for the layout-proposal call — shared with the engine via
+ *  `modelConfig.ts` so the two cannot drift (finding #11). */
+export const DEFAULT_LAYOUT_MODEL = DEFAULT_MODEL;
 
 /** The committed Layout Proposal v1 JSON Schema (byte-identical to the docs
  * copy; held in lock-step by the contract test). Exported so callers can feed
@@ -68,11 +76,14 @@ export function validateProposalAgainstSchema(
 }
 
 // --- The minimal Anthropic surface this call needs (the adapter) ------------
+//
+// This call only reads `text` blocks off the response, so the block type is a
+// tight subset (finding #4 — no `[k: string]: unknown` index signature; the
+// shared, richer block type lives in `anthropicClient.ts`).
 
 export interface LayoutContentBlock {
   type: string;
   text?: string;
-  [k: string]: unknown;
 }
 
 export interface LayoutMessage {
@@ -294,68 +305,43 @@ export function sanitizeProposal(
   return { panels, rationale: proposal.rationale };
 }
 
-// --- Error mapping (mirrors engine.ts) --------------------------------------
+// --- Error mapping (shared with engine.ts via anthropicClient.mapApiError) ---
 
+// Wording preserved verbatim from when this lived here; only the abort / 401 /
+// 429 copy differs from the engine's, so it is injected.
 function mapApiError(err: unknown): AgentError {
-  if (err instanceof AgentError) return err;
-  const status = (err as { status?: number })?.status;
-  const name = (err as { name?: string })?.name;
-  if (name === "AbortError") {
-    return new AgentError("aborted", "The proposal request was cancelled.", {
-      cause: err,
-    });
-  }
-  if (status === 401) {
-    return new AgentError(
-      "key-rejected",
-      "Anthropic rejected the API key (401).",
-      { cause: err },
-    );
-  }
-  if (status === 429) {
-    return new AgentError(
-      "rate-limited",
-      "Anthropic rate-limited the request (429).",
-      { cause: err },
-    );
-  }
-  const msg = (err as { message?: string })?.message ?? String(err);
-  return new AgentError("api", `Anthropic API error: ${msg}`, { cause: err });
+  return mapAnthropicError(err, {
+    aborted: "The proposal request was cancelled.",
+    keyRejected: "Anthropic rejected the API key (401).",
+    rateLimited: "Anthropic rate-limited the request (429).",
+  });
 }
 
 // --- The ONE real SDK call site (lazy import; isolated by design) -----------
+//
+// The SDK client is built by the shared `buildAnthropicClient`; the layout call
+// only needs a single structured-output `messages.create`.
 
 async function defaultCreateClient(cfg: {
   apiKey: string;
   model: string;
   baseUrl: string;
 }): Promise<MessagesClient> {
-  assertAnthropicBaseUrl(cfg.baseUrl);
-  // Dynamic import keeps `@anthropic-ai/sdk` out of the first-load bundle: the
-  // whole `llm/` directory is a lazy chunk and this is the only path to the SDK
-  // for the layout call (docs/07 size budget; CLAUDE.md lazy-chunk contract).
-  const { default: Anthropic } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({
-    apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl,
-    dangerouslyAllowBrowser: true,
-  });
+  const { client } = await buildAnthropicClient(cfg);
   return {
     async createMessage(params, opts) {
-      const message = (await client.beta.messages.create(
-        {
-          model: params.model,
-          max_tokens: params.max_tokens,
-          system: params.system,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          messages: params.messages as any,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          output_config: params.output_config as any,
-        },
-        { signal: opts.signal },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      )) as any;
-      return message as LayoutMessage;
+      const body: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming = {
+        model: params.model,
+        max_tokens: params.max_tokens,
+        system: params.system,
+        messages:
+          params.messages as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming["messages"],
+        output_config: params.output_config as Anthropic.Beta.BetaOutputConfig,
+      };
+      const message = await client.beta.messages.create(body, {
+        signal: opts.signal,
+      });
+      return message as unknown as LayoutMessage;
     },
   };
 }

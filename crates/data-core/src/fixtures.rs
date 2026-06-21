@@ -6,8 +6,7 @@
 //! Using a shared generator prevents Rust ↔ JS schema drift.
 
 use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder, StringBuilder};
-use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
+use arrow_array::{RecordBatch, TimestampNanosecondArray};
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use base64::Engine as _;
 use mf4_rs::blocks::common::DataType as Mf4DataType;
@@ -19,28 +18,10 @@ use std::sync::{Arc, Mutex};
 /// Schema: `{ ts: Timestamp(ns, UTC), value: Float64 }` — 3 rows.
 /// See `docs/03-data-model.md` for the Scalar channel wire format.
 pub fn arrow_scalar_ipc() -> crate::Result<Vec<u8>> {
-    let schema = Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            false,
-        ),
-        Field::new("value", DataType::Float64, false),
-    ]));
-
-    let ts = TimestampNanosecondArray::from(vec![1_000_000_000, 1_010_000_000, 1_020_000_000])
-        .with_timezone("UTC");
-    let value = Float64Array::from(vec![1.0, 2.0, 3.0]);
-
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts), Arc::new(value)])?;
-
-    let mut buf = Vec::new();
-    {
-        let mut w = FileWriter::try_new(&mut buf, &schema)?;
-        w.write(&batch)?;
-        w.finish()?;
-    }
-    Ok(buf)
+    crate::arrow::build_scalar_ipc(
+        vec![1_000_000_000, 1_010_000_000, 1_020_000_000],
+        vec![1.0, 2.0, 3.0],
+    )
 }
 
 /// Schema: `{ ts: Timestamp(ns, UTC), centers: List<Float32>, sizes:
@@ -109,13 +90,7 @@ pub fn arrow_bounding_box_ipc() -> crate::Result<Vec<u8>> {
         ],
     )?;
 
-    let mut buf = Vec::new();
-    {
-        let mut w = FileWriter::try_new(&mut buf, &schema)?;
-        w.write(&batch)?;
-        w.finish()?;
-    }
-    Ok(buf)
+    crate::arrow::write_ipc(schema, batch)
 }
 
 /// Schema: `{ name: Utf8, model: Utf8, intrinsics: List<Float32>, resolution:
@@ -200,13 +175,7 @@ pub fn arrow_calibration_ipc() -> crate::Result<Vec<u8>> {
         ],
     )?;
 
-    let mut buf = Vec::new();
-    {
-        let mut w = FileWriter::try_new(&mut buf, &schema)?;
-        w.write(&batch)?;
-        w.finish()?;
-    }
-    Ok(buf)
+    crate::arrow::write_ipc(schema, batch)
 }
 
 /// Schema: `{ ts: Timestamp(ns, UTC), points: List<Float32>, path_lengths:
@@ -264,13 +233,7 @@ pub fn arrow_trajectory_ipc() -> crate::Result<Vec<u8>> {
         ],
     )?;
 
-    let mut buf = Vec::new();
-    {
-        let mut w = FileWriter::try_new(&mut buf, &schema)?;
-        w.write(&batch)?;
-        w.finish()?;
-    }
-    Ok(buf)
+    crate::arrow::write_ipc(schema, batch)
 }
 
 /// Synthesises a small MF4 file in memory via `mf4-rs`'s own writer. Used

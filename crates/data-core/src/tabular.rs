@@ -26,17 +26,14 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, Float64Array, RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
+use arrow_array::{Array, RecordBatch};
+use arrow_schema::{DataType, Schema};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ProjectionMask;
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{ArrowIpc, Reader};
-use crate::types::{
-    Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
-};
+use crate::types::{Channel, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange};
 
 /// Which container format the bytes are in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -985,17 +982,6 @@ impl TabularReader {
             skipped,
         })
     }
-
-    fn scalar_schema() -> Arc<Schema> {
-        Arc::new(Schema::new(vec![
-            Field::new(
-                "ts",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-                false,
-            ),
-            Field::new("value", DataType::Float64, false),
-        ]))
-    }
 }
 
 impl Reader for TabularReader {
@@ -1042,7 +1028,7 @@ impl Reader for TabularReader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
@@ -1050,7 +1036,7 @@ impl Reader for TabularReader {
             .table
             .columns
             .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
 
         let ts = &self.table.ts_ns;
         let start_idx = ts.partition_point(|&t| t < range.start_ns);
@@ -1074,21 +1060,7 @@ impl Reader for TabularReader {
                 (t, v)
             };
 
-        let schema = Self::scalar_schema();
-        let ts_array = TimestampNanosecondArray::from(ts_final).with_timezone("UTC");
-        let value_array = Float64Array::from(vals_final);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(ts_array), Arc::new(value_array)],
-        )?;
-
-        let mut buf = Vec::new();
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::build_scalar_ipc(ts_final, vals_final)
     }
 }
 
@@ -1101,8 +1073,9 @@ pub fn format_from_str(s: &str) -> crate::Result<TabularFormat> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Array;
+    use arrow_array::{Array, Float64Array, RecordBatch, TimestampNanosecondArray};
     use arrow_ipc::reader::FileReader;
+    use arrow_schema::Field;
 
     fn parse_ipc(bytes: &[u8]) -> RecordBatch {
         let reader = FileReader::try_new(Cursor::new(bytes), None).unwrap();
@@ -1160,11 +1133,7 @@ mod tests {
         assert_eq!(r.meta().channels.len(), 2); // speed + rpm
 
         let ipc = r
-            .fetch_range(
-                &"speed".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("speed", r.meta().time_range, FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         // 1704067200000000 us = 1704067200000000000 ns exactly (beyond f64
@@ -1191,11 +1160,7 @@ mod tests {
         };
         let r = TabularReader::open_with_basis(csv.as_bytes(), TabularFormat::Csv, basis).unwrap();
         let ipc = r
-            .fetch_range(
-                &"val".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("val", r.meta().time_range, FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(
@@ -1239,17 +1204,11 @@ mod tests {
             start_ns: 1_704_067_200_001_000_000,
             end_ns: 1_704_067_200_002_000_000,
         };
-        let ipc = r
-            .fetch_range(&"speed".to_string(), range, FetchOpts::default())
-            .unwrap();
+        let ipc = r.fetch_range("speed", range, FetchOpts::default()).unwrap();
         assert_eq!(col_f64(&parse_ipc(&ipc)), vec![11.0]);
 
         let ipc_prev = r
-            .fetch_range(
-                &"speed".to_string(),
-                range,
-                FetchOpts { include_prev: true },
-            )
+            .fetch_range("speed", range, FetchOpts { include_prev: true })
             .unwrap();
         assert_eq!(col_f64(&parse_ipc(&ipc_prev)), vec![10.0, 11.0]);
     }
@@ -1265,11 +1224,7 @@ mod tests {
         let r =
             TabularReader::open_with_basis(CSV_US.as_bytes(), TabularFormat::Csv, basis).unwrap();
         let err = r
-            .fetch_range(
-                &"nope".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("nope", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }
@@ -1287,11 +1242,7 @@ mod tests {
         let r =
             TabularReader::open_with_basis(CSV_US.as_bytes(), TabularFormat::Csv, basis).unwrap();
         let ipc = r
-            .fetch_range(
-                &"speed".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("speed", r.meta().time_range, FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
 
@@ -1315,11 +1266,7 @@ mod tests {
         };
         let r = TabularReader::open_with_basis(csv.as_bytes(), TabularFormat::Csv, basis).unwrap();
         let ipc = r
-            .fetch_range(
-                &"val".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("val", r.meta().time_range, FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(col_ts(&batch), vec![0, 1_000_000_000, 2_000_000_000]);
@@ -1391,11 +1338,7 @@ mod tests {
         assert_eq!(r.skipped_columns(), &["label".to_string()]);
 
         let ipc = r
-            .fetch_range(
-                &"speed".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("speed", r.meta().time_range, FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(

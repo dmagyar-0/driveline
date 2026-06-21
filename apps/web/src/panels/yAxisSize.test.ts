@@ -27,7 +27,7 @@ vi.hoisted(() => {
     }) as unknown as MediaQueryList;
 });
 
-import { Y_AXIS_MIN_SIZE, yAxisSize } from "./PlotPanel";
+import { Y_AXIS_MIN_SIZE, yAxisSize } from "./plotAxes";
 import type uPlot from "uplot";
 
 // A stand-in for the uPlot instance: a canvas-2d-ish ctx whose

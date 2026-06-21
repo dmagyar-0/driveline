@@ -47,18 +47,13 @@ use std::io::SeekFrom;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use arrow_array::{
-    FixedSizeListArray, Float64Array, Int32Array, RecordBatch, TimestampNanosecondArray,
-};
-use arrow_ipc::writer::FileWriter;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use base64::Engine as _;
 use mcap::sans_io::summary_reader::{SummaryReadEvent, SummaryReader, SummaryReaderOptions};
 use mcap::McapError;
 use mf4_rs::index::{ByteRangeReader, SliceRangeReader};
 
 use crate::mf4::BoxedRangeReader;
-use crate::reader::{ArrowIpc, EncodedChunkIter};
+use crate::reader::{ArrowIpc, EncodedChunkIter, Reader};
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, EncodedChunk, FetchOpts, SourceKind, SourceMeta,
     TimeRange,
@@ -636,7 +631,7 @@ impl McapReader {
 
     pub fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
@@ -649,7 +644,7 @@ impl McapReader {
         let cm = self
             .channels
             .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
 
         if matches!(
             cm.kind,
@@ -763,7 +758,7 @@ impl McapReader {
     /// at most once per leaf rather than once per fetch.
     fn fetch_range_ros2(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
@@ -837,13 +832,13 @@ impl McapReader {
     /// [`Self::video_pull`].
     pub fn open_video_cursor(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         from_pts_ns: i64,
     ) -> crate::Result<McapVideoCursor> {
         let cm = self
             .channels
             .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
         if cm.kind != ChannelKind::Video {
             return Err(crate::Error::UnsupportedKind);
         }
@@ -944,7 +939,7 @@ impl McapReader {
     /// bounded cursor (`open_video_cursor` + `video_pull`) instead.
     pub fn video_stream(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         from_pts_ns: i64,
     ) -> crate::Result<EncodedChunkIter> {
         let mut cursor = self.open_video_cursor(channel_id, from_pts_ns)?;
@@ -1007,6 +1002,34 @@ impl McapReader {
     }
 }
 
+/// Bring `McapReader` under the shared [`Reader`] trait so generic callers
+/// (e.g. the `data-cli` `LogReader`) treat it like every other format. The
+/// ranged/video-cursor entry points (`open_ranged`, `open_video_cursor`,
+/// `video_pull`) stay inherent — they're MCAP-specific and not part of the
+/// trait surface.
+impl Reader for McapReader {
+    fn open(bytes: &[u8]) -> crate::Result<Self> {
+        McapReader::open(bytes)
+    }
+
+    fn meta(&self) -> &SourceMeta {
+        McapReader::meta(self)
+    }
+
+    fn fetch_range(
+        &self,
+        channel_id: &str,
+        range: TimeRange,
+        opts: FetchOpts,
+    ) -> crate::Result<ArrowIpc> {
+        McapReader::fetch_range(self, channel_id, range, opts)
+    }
+
+    fn video_stream(&self, channel_id: &str, from_pts_ns: i64) -> crate::Result<EncodedChunkIter> {
+        McapReader::video_stream(self, channel_id, from_pts_ns)
+    }
+}
+
 /// Drive the sans-IO [`SummaryReader`] over `reader` to pull the summary
 /// section. `file_size` is supplied so the reader seeks directly to the footer
 /// rather than relying on a seek-to-end probe.
@@ -1041,6 +1064,15 @@ fn read_summary(reader: &mut BoxedRangeReader, file_size: u64) -> crate::Result<
     sr.finish().ok_or(crate::Error::McapMissingSummary)
 }
 
+/// Little-endian `u64` from `buf[at..at+8]`, or `None` if the slice is too
+/// short. Replaces `buf[a..b].try_into().expect("8-byte slice")` so a malformed
+/// record yields a clean skip rather than a panic.
+fn read_u64_le(buf: &[u8], at: usize) -> Option<u64> {
+    buf.get(at..at + 8)
+        .and_then(|s| <[u8; 8]>::try_from(s).ok())
+        .map(u64::from_le_bytes)
+}
+
 /// Read the footer at the tail of the file and return its `summary_start`
 /// offset. Only used for unchunked files (to bound the data section).
 fn read_footer_summary_start(reader: &mut BoxedRangeReader, file_size: u64) -> crate::Result<u64> {
@@ -1049,8 +1081,7 @@ fn read_footer_summary_start(reader: &mut BoxedRangeReader, file_size: u64) -> c
     }
     let buf = reader.read_range(file_size - FOOTER_AND_END_MAGIC, FOOTER_AND_END_MAGIC)?;
     // [op:1][len:8][summary_start:8][summary_offset_start:8][crc:4][magic:8]
-    let summary_start = u64::from_le_bytes(buf[9..17].try_into().expect("8-byte slice"));
-    Ok(summary_start)
+    read_u64_le(&buf, 9).ok_or(crate::Error::McapMissingSummary)
 }
 
 /// Read a segment's bytes through `reader` and decompress them.
@@ -1098,8 +1129,9 @@ fn for_each_message(buf: &[u8], mut f: impl FnMut(u16, i64, &[u8])) {
     let mut off = 0usize;
     while off + 9 <= buf.len() {
         let opcode = buf[off];
-        let len =
-            u64::from_le_bytes(buf[off + 1..off + 9].try_into().expect("8-byte slice")) as usize;
+        let Some(len) = read_u64_le(buf, off + 1).map(|v| v as usize) else {
+            break;
+        };
         let body_start = off + 9;
         let Some(body_end) = body_start.checked_add(len) else {
             break;
@@ -1114,8 +1146,9 @@ fn for_each_message(buf: &[u8], mut f: impl FnMut(u16, i64, &[u8])) {
             let body = &buf[body_start..body_end];
             if body.len() >= MESSAGE_HEADER_LEN {
                 let channel_id = u16::from_le_bytes([body[0], body[1]]);
-                let log_time =
-                    u64::from_le_bytes(body[6..14].try_into().expect("8-byte slice")) as i64;
+                // `body` is >= MESSAGE_HEADER_LEN (>= 14), so the 8-byte read at
+                // offset 6 is always in bounds; default to 0 defensively.
+                let log_time = read_u64_le(body, 6).unwrap_or(0) as i64;
                 f(channel_id, log_time, &body[MESSAGE_HEADER_LEN..]);
             }
         }
@@ -1316,50 +1349,6 @@ fn find_start_code(data: &[u8], from: usize) -> Option<usize> {
     None
 }
 
-fn scalar_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            false,
-        ),
-        Field::new("value", DataType::Float64, false),
-    ]))
-}
-
-fn vector_schema(n: usize) -> Arc<Schema> {
-    let inner = Arc::new(Field::new("item", DataType::Float64, false));
-    Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            false,
-        ),
-        Field::new("value", DataType::FixedSizeList(inner, n as i32), false),
-    ]))
-}
-
-fn enum_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            false,
-        ),
-        Field::new("code", DataType::Int32, false),
-    ]))
-}
-
-fn write_ipc(schema: Arc<Schema>, batch: RecordBatch) -> crate::Result<ArrowIpc> {
-    let mut buf = Vec::new();
-    {
-        let mut w = FileWriter::try_new(&mut buf, &schema)?;
-        w.write(&batch)?;
-        w.finish()?;
-    }
-    Ok(buf)
-}
-
 fn parsed_scalar_as_f64(v: &ParsedValue) -> f64 {
     match v {
         ParsedValue::Scalar(f) => *f,
@@ -1371,11 +1360,7 @@ fn parsed_scalar_as_f64(v: &ParsedValue) -> f64 {
 /// Takes ownership so the vecs can be moved directly into Arrow arrays without
 /// an extra `to_vec()` copy at the call site.
 fn build_scalar_ipc_raw(timestamps: Vec<i64>, values: Vec<f64>) -> crate::Result<ArrowIpc> {
-    let schema = scalar_schema();
-    let ts = TimestampNanosecondArray::from(timestamps).with_timezone("UTC");
-    let val = Float64Array::from(values);
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts), Arc::new(val)])?;
-    write_ipc(schema, batch)
+    crate::arrow::build_scalar_ipc(timestamps, values)
 }
 
 fn build_vector_ipc(
@@ -1383,9 +1368,6 @@ fn build_vector_ipc(
     values: &[&ParsedValue],
     n: usize,
 ) -> crate::Result<ArrowIpc> {
-    let schema = vector_schema(n);
-    let ts = TimestampNanosecondArray::from(timestamps.to_vec()).with_timezone("UTC");
-
     let mut flat = Vec::with_capacity(values.len() * n);
     for v in values {
         match v {
@@ -1393,17 +1375,10 @@ fn build_vector_ipc(
             _ => flat.extend(std::iter::repeat_n(f64::NAN, n)),
         }
     }
-    let child = Arc::new(Float64Array::from(flat));
-    let inner_field = Arc::new(Field::new("item", DataType::Float64, false));
-    let list = FixedSizeListArray::new(inner_field, n as i32, child, None);
-
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts), Arc::new(list)])?;
-    write_ipc(schema, batch)
+    crate::arrow::build_vector_ipc(timestamps.to_vec(), flat, n)
 }
 
 fn build_enum_ipc(timestamps: &[i64], values: &[&ParsedValue]) -> crate::Result<ArrowIpc> {
-    let schema = enum_schema();
-    let ts = TimestampNanosecondArray::from(timestamps.to_vec()).with_timezone("UTC");
     let codes: Vec<i32> = values
         .iter()
         .map(|v| match v {
@@ -1411,16 +1386,17 @@ fn build_enum_ipc(timestamps: &[i64], values: &[&ParsedValue]) -> crate::Result<
             _ => 0,
         })
         .collect();
-    let code = Int32Array::from(codes);
-    let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(ts), Arc::new(code)])?;
-    write_ipc(schema, batch)
+    crate::arrow::build_enum_ipc(timestamps.to_vec(), codes)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Array;
+    use arrow_array::{
+        Array, FixedSizeListArray, Float64Array, Int32Array, RecordBatch, TimestampNanosecondArray,
+    };
     use arrow_ipc::reader::FileReader;
+    use arrow_schema::{DataType, TimeUnit};
     use std::io::Cursor;
 
     /// 2024-01-01T00:00:00Z, matching `docs/spike-T0.3-sample-corpus.md:47`.
@@ -1440,7 +1416,7 @@ mod tests {
 
         // Fixture writes 3 video access units, each SPS+IDR (all keyframes).
         let chunks: Vec<_> = r
-            .video_stream(&"/camera/front".to_string(), T0 - 1)
+            .video_stream("/camera/front", T0 - 1)
             .expect("video_stream")
             .collect();
         assert_eq!(chunks.len(), 3, "expected 3 access units");
@@ -1637,11 +1613,7 @@ mod tests {
         let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
         let r = McapReader::open(&bytes).expect("open");
         let err = r
-            .fetch_range(
-                &"/camera/front".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("/camera/front", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::UnsupportedKind));
     }
@@ -1652,7 +1624,7 @@ mod tests {
         let r = McapReader::open(&bytes).expect("open");
         let err = r
             .fetch_range(
-                &"/no/such/channel".to_string(),
+                "/no/such/channel",
                 r.meta().time_range,
                 FetchOpts::default(),
             )
@@ -1685,7 +1657,7 @@ mod tests {
 
         // Target between keyframes 1 and 2: must snap to T0+30ms.
         let chunks: Vec<_> = r
-            .video_stream(&"/camera/front".to_string(), T0 + 45_000_000)
+            .video_stream("/camera/front", T0 + 45_000_000)
             .expect("video_stream")
             .collect();
         assert_eq!(chunks.len(), 2, "expect snap to k2, then k3");
@@ -1695,7 +1667,7 @@ mod tests {
 
         // Target before everything snaps to the first keyframe.
         let chunks: Vec<_> = r
-            .video_stream(&"/camera/front".to_string(), T0 - 1)
+            .video_stream("/camera/front", T0 - 1)
             .expect("video_stream")
             .collect();
         assert_eq!(chunks.len(), 3);
@@ -1708,7 +1680,7 @@ mod tests {
         let r = McapReader::open(&bytes).expect("open");
 
         let chunks: Vec<_> = r
-            .video_stream(&"/camera/front".to_string(), T0)
+            .video_stream("/camera/front", T0)
             .expect("video_stream")
             .collect();
         assert_eq!(chunks.len(), 3);
@@ -1731,7 +1703,7 @@ mod tests {
         let r = McapReader::open(&bytes).expect("open");
 
         let mut cursor = r
-            .open_video_cursor(&"/camera/front".to_string(), T0 - 1)
+            .open_video_cursor("/camera/front", T0 - 1)
             .expect("cursor");
         let first = r.video_pull(&mut cursor, 1).expect("pull");
         assert_eq!(first.len(), 1, "max_n caps the batch");
@@ -1755,7 +1727,7 @@ mod tests {
     fn video_stream_returns_unsupported_on_signal_channel() {
         let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
         let r = McapReader::open(&bytes).expect("open");
-        match r.video_stream(&"/vehicle/speed".to_string(), T0) {
+        match r.video_stream("/vehicle/speed", T0) {
             Err(crate::Error::UnsupportedKind) => {}
             Err(other) => panic!("expected UnsupportedKind, got {other:?}"),
             Ok(_) => panic!("expected error on signal channel"),
@@ -1766,7 +1738,7 @@ mod tests {
     fn video_stream_unknown_channel_returns_channel_not_found() {
         let bytes = crate::fixtures::short_mcap_bytes().expect("generate mcap");
         let r = McapReader::open(&bytes).expect("open");
-        match r.video_stream(&"/nope".to_string(), T0) {
+        match r.video_stream("/nope", T0) {
             Err(crate::Error::ChannelNotFound(_)) => {}
             Err(other) => panic!("expected ChannelNotFound, got {other:?}"),
             Ok(_) => panic!("expected error on unknown channel"),
@@ -1858,18 +1830,14 @@ mod tests {
 
         // Lazy ranged fetch over a zstd-chunked file must decode the right rows.
         let ipc = r
-            .fetch_range(
-                &"/vehicle/speed".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("/vehicle/speed", r.meta().time_range, FetchOpts::default())
             .expect("fetch");
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 10);
 
         // And video streams from a zstd chunk too.
         let chunks: Vec<_> = r
-            .video_stream(&"/camera/front".to_string(), i64::MIN)
+            .video_stream("/camera/front", i64::MIN)
             .expect("video_stream")
             .collect();
         assert_eq!(chunks.len(), 3);

@@ -48,7 +48,6 @@ use std::sync::Arc;
 
 use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder};
 use arrow_array::{RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use serde_json::Value;
 
@@ -225,12 +224,12 @@ impl Reader for TrajectoryReader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        if channel_id != &self.channel_id {
-            return Err(crate::Error::ChannelNotFound(channel_id.clone()));
+        if channel_id != self.channel_id {
+            return Err(crate::Error::ChannelNotFound(channel_id.to_string()));
         }
 
         // Frames overlapping [start, end). With `include_prev` we also emit the
@@ -291,14 +290,7 @@ impl Reader for TrajectoryReader {
             ],
         )?;
 
-        // Each point is 3 f32 (12 bytes); each path adds an i32 + an f32. Slack.
-        let mut buf = Vec::with_capacity(total_points * 12 + total_paths * 8 + 2048);
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::write_ipc(schema, batch)
     }
 }
 
@@ -452,7 +444,7 @@ mod tests {
         let t = r.frame_times()[1];
         let ipc = r
             .fetch_range(
-                &"ego".to_string(),
+                "ego",
                 TimeRange {
                     start_ns: t,
                     end_ns: t + 1,
@@ -496,7 +488,7 @@ mod tests {
         let t = r.frame_times()[0];
         let ipc = r
             .fetch_range(
-                &"ego".to_string(),
+                "ego",
                 TimeRange {
                     start_ns: t,
                     end_ns: t + 1,
@@ -531,7 +523,7 @@ mod tests {
         let t = r.frame_times()[0];
         let ipc = r
             .fetch_range(
-                &"trajectory".to_string(),
+                "trajectory",
                 TimeRange {
                     start_ns: t,
                     end_ns: t + 1,
@@ -562,11 +554,7 @@ mod tests {
     fn unknown_channel_errors() {
         let r = TrajectoryReader::open(SAMPLE.as_bytes()).unwrap();
         let err = r
-            .fetch_range(
-                &"nope".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("nope", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

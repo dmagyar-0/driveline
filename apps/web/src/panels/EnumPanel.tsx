@@ -23,17 +23,17 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
-import type { Channel, SourceMeta, TimeRange } from "../state/store";
+import type { Channel, TimeRange } from "../state/store";
 import { decodeSeries, type PlotSeries } from "./seriesFromArrow";
 import { cursorStrokeColor, cursorXPx } from "./cursorOverlay";
 import { colorFor, MAX_PLOT_SERIES } from "./palette";
+import { lastIndexAtOrBefore } from "./shared/cursorLookup";
+import { usePanelChannels } from "./shared/usePanelChannels";
 import styles from "./EnumPanel.module.css";
 
 interface EnumPanelProps {
   panelId: string;
 }
-
-const EMPTY: readonly string[] = Object.freeze([]);
 
 // Concrete font for in-strip value labels. Canvas `ctx.font` can't resolve
 // CSS custom properties, so the mono stack is inlined; it mirrors
@@ -44,14 +44,6 @@ const LABEL_FONT =
 // Horizontal slack (CSS px) a segment needs beyond its label width before
 // we paint the value inside it — avoids labels crowding segment edges.
 const LABEL_PAD = 8;
-
-function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
-  for (const s of sources) {
-    const hit = s.channels.find((c) => c.id === channelId);
-    if (hit) return hit;
-  }
-  return null;
-}
 
 // Pick black or white for a value label so it stays legible on its
 // segment fill. Perceived (sRGB-weighted) luminance; light fills get dark
@@ -136,10 +128,23 @@ function EnumLane({ channel, range }: EnumLaneProps) {
   const stripRef = useRef<HTMLCanvasElement | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
   const segmentsRef = useRef<Segment[]>([]);
+  // Parallel array of segment start timestamps, rebuilt alongside `segmentsRef`
+  // on each fetch so the per-cursor-tick lookup can binary-search with the
+  // shared `lastIndexAtOrBefore` without allocating a view every tick.
+  const segStartsRef = useRef<BigInt64Array>(new BigInt64Array());
   const [renderTick, setRenderTick] = useState(0);
   // Lane-level status so a schema/dtype mismatch surfaces as a visible error
   // instead of a silently blank strip. `null` = healthy.
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Store the segments and their parallel start-timestamp index together so
+  // the cursor lookup never falls out of sync with the drawn segments.
+  const setSegments = (segs: Segment[]): void => {
+    segmentsRef.current = segs;
+    const starts = new BigInt64Array(segs.length);
+    for (let i = 0; i < segs.length; i++) starts[i] = segs[i].startNs;
+    segStartsRef.current = starts;
+  };
 
   // Keep both canvases sized to the strip wrapper.
   useEffect(() => {
@@ -163,32 +168,36 @@ function EnumLane({ channel, range }: EnumLaneProps) {
     return () => ro.disconnect();
   }, []);
 
-  // Fetch + decode + segment on channel / range change.
+  // Fetch + decode + segment on channel / range change. Keyed on the range's
+  // bigint `startNs`/`endNs` values (not the `range` object identity) so a new
+  // `globalRange` object with the same window won't trigger a redundant
+  // refetch.
+  const { startNs: rangeStartNs, endNs: rangeEndNs } = range;
   useEffect(() => {
     let aborted = false;
     void (async () => {
       try {
         const bytes = await useSession
           .getState()
-          .fetchChannelRange(channel.id, range.startNs, range.endNs, false);
+          .fetchChannelRange(channel.id, rangeStartNs, rangeEndNs, false);
         if (aborted) return;
         const decoded = decodeSeries(bytes);
         if (!decoded.ok) {
           // A genuine schema/dtype mismatch (e.g. a vector channel bound
           // here, or a corrupt batch): clear the strip and show the reason
           // rather than rendering blank or garbage.
-          segmentsRef.current = [];
+          setSegments([]);
           setErrorMsg(decoded.message);
           setRenderTick((n) => n + 1);
           return;
         }
-        segmentsRef.current = segmentsFor(decoded, range.endNs);
+        setSegments(segmentsFor(decoded, rangeEndNs));
         setErrorMsg(null);
         setRenderTick((n) => n + 1);
       } catch (err) {
         if (!aborted) {
           console.error("EnumPanel fetch failed", err);
-          segmentsRef.current = [];
+          setSegments([]);
           setErrorMsg(
             err instanceof Error ? err.message : "Failed to load channel.",
           );
@@ -199,7 +208,7 @@ function EnumLane({ channel, range }: EnumLaneProps) {
     return () => {
       aborted = true;
     };
-  }, [channel.id, range]);
+  }, [channel.id, rangeStartNs, rangeEndNs]);
 
   // Redraw the strip whenever segments or canvas size change.
   useEffect(() => {
@@ -273,23 +282,14 @@ function EnumLane({ channel, range }: EnumLaneProps) {
   const currentSeg = useMemo(() => {
     const segs = segmentsRef.current;
     if (segs.length === 0) return null;
-    // Find the last segment with startNs ≤ cursorNs.
-    let lo = 0;
-    let hi = segs.length - 1;
-    let found = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >>> 1;
-      if (segs[mid].startNs <= cursorNs) {
-        found = mid;
-        lo = mid + 1;
-      } else {
-        hi = mid - 1;
-      }
-    }
+    // Last segment with startNs ≤ cursorNs (segments are built in time order
+    // by segmentsFor; their starts are mirrored into segStartsRef).
+    const found = lastIndexAtOrBefore(segStartsRef.current, cursorNs);
     if (found === -1) return null;
     const seg = segs[found];
     // Confirm cursorNs falls within the segment's closed interval.
     return cursorNs <= seg.endNs ? seg : null;
+    // `renderTick` threads the segments ref-update through to this memo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cursorNs, renderTick]);
 
@@ -339,35 +339,19 @@ function EnumLane({ channel, range }: EnumLaneProps) {
   );
 }
 
+const isScalarOrEnum = (c: Channel) => c.kind === "scalar" || c.kind === "enum";
+
 export function EnumPanel({ panelId }: EnumPanelProps) {
-  const sources = useSession((s) => s.sources);
   const globalRange = useSession((s) => s.globalRange);
   const storedBindings = useSession((s) => s.enumBindings[panelId]);
   const setEnumBinding = useSession((s) => s.setEnumBinding);
 
-  const boundIds = useMemo(() => storedBindings ?? EMPTY, [storedBindings]);
-
-  const boundChannels = useMemo(
-    () =>
-      boundIds
-        .map((id) => findChannel(sources, id))
-        .filter((c): c is Channel => c !== null),
-    [boundIds, sources],
-  );
-
-  // Drop bindings that no longer map to a live scalar/enum channel. Gate on
-  // `sources.length > 0` so a fresh hydrate (channels list empty) doesn't
-  // wipe a persisted binding before the user has dropped a file.
-  useEffect(() => {
-    if (sources.length === 0) return;
-    const filtered = boundIds.filter((id) => {
-      const c = findChannel(sources, id);
-      return c !== null && (c.kind === "scalar" || c.kind === "enum");
-    });
-    if (filtered.length !== boundIds.length) {
-      setEnumBinding(panelId, filtered);
-    }
-  }, [boundIds, sources, panelId, setEnumBinding]);
+  const { boundChannels } = usePanelChannels({
+    panelId,
+    bindings: storedBindings,
+    isValid: isScalarOrEnum,
+    setBindings: setEnumBinding,
+  });
 
   const isEmpty = boundChannels.length === 0 || globalRange === null;
 

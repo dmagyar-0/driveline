@@ -40,7 +40,6 @@ use std::sync::Arc;
 
 use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
 use arrow_array::{RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use serde_json::Value;
 
@@ -265,12 +264,12 @@ impl Reader for OpenLabelReader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        if channel_id != &self.channel_id {
-            return Err(crate::Error::ChannelNotFound(channel_id.clone()));
+        if channel_id != self.channel_id {
+            return Err(crate::Error::ChannelNotFound(channel_id.to_string()));
         }
 
         // Frames overlapping [start, end). With `include_prev` we also emit the
@@ -337,14 +336,7 @@ impl Reader for OpenLabelReader {
             ],
         )?;
 
-        // Each box contributes 3+3+4 f32 (40 bytes) + a short label; add slack.
-        let mut buf = Vec::with_capacity(total_boxes * 64 + 2048);
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::write_ipc(schema, batch)
     }
 }
 
@@ -681,11 +673,7 @@ mod tests {
             end_ns: 1_500_000_001,
         };
         let ipc = r
-            .fetch_range(
-                &"boxes".to_string(),
-                range,
-                FetchOpts { include_prev: true },
-            )
+            .fetch_range("boxes", range, FetchOpts { include_prev: true })
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 1);
@@ -721,7 +709,7 @@ mod tests {
         let t = r.frame_times()[1];
         let ipc = r
             .fetch_range(
-                &"boxes".to_string(),
+                "boxes",
                 TimeRange {
                     start_ns: t,
                     end_ns: t + 1,
@@ -793,7 +781,7 @@ mod tests {
 
         let ipc = r
             .fetch_range(
-                &"objects".to_string(),
+                "objects",
                 TimeRange {
                     start_ns: 0,
                     end_ns: 1,
@@ -843,7 +831,7 @@ mod tests {
         let r = OpenLabelReader::open(json.as_bytes()).unwrap();
         let ipc = r
             .fetch_range(
-                &"objects".to_string(),
+                "objects",
                 TimeRange {
                     start_ns: 0,
                     end_ns: 1,
@@ -897,11 +885,7 @@ mod tests {
     fn unknown_channel_errors() {
         let r = OpenLabelReader::open(SAMPLE.as_bytes()).unwrap();
         let err = r
-            .fetch_range(
-                &"nope".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("nope", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

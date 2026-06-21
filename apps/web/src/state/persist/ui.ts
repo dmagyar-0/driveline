@@ -8,6 +8,7 @@
 // decision).
 
 import type { useSession } from "../store";
+import { isPlainObject } from "./validators";
 
 export const UI_STORAGE_KEY = "driveline.ui.v1";
 export const UI_SCHEMA_VERSION = 1 as const;
@@ -53,10 +54,6 @@ export interface PersistedUi {
 
 function defaultStorage(): Storage | undefined {
   return typeof localStorage !== "undefined" ? localStorage : undefined;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function isRailTab(v: unknown): v is RailTab {

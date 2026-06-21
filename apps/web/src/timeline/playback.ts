@@ -20,24 +20,12 @@ import {
   type PanelReadiness,
 } from "../panels/videoReadiness";
 
-// Issue #2 — cursor gating signal. Mirrors the constant in
-// `panels/VideoPanel.tsx`; both modules independently consult their
-// own copy so neither has to import across the panels/timeline seam
-// just to compare two bigints.
-//
-// Rationale: ε must exceed the STEADY-STATE lag between the cursor and the
-// newest blitted frame, or the gate fires during healthy playback and throttles
-// the cursor into slow-motion (measured: at ε=100 ms on ~12 fps nuScenes the
-// cursor was gated ~62 % of ticks → 0.38× playback, even with the decoder 763 ms
-// ahead and 9 frames queued). That steady-state lag = setCursor coalescing
-// (~33 ms) + frame quantisation (≈ one inter-frame interval). At 30/60 fps that
-// interval is ~17–33 ms so 100 ms covered it, but low-rate camera streams
-// (nuScenes CAM_FRONT ≈ 12 fps → ~85 ms frames) push the lag to ~130 ms, above
-// the old ε. 300 ms comfortably clears the low-rate case while still catching a
-// genuine stall (whose lag grows without bound). Mirrors the constant in
-// `panels/VideoPanel.tsx`; both modules keep their own copy so neither imports
-// across the panels/timeline seam just to compare two bigints.
-export const READY_EPSILON_NS = 300_000_000n;
+// Issue #2 — cursor gating signal. The epsilon (and its rationale) now
+// lives in the leaf `readinessConstants` module so the panel and the
+// playback loop share one definition instead of hand-copied literals.
+// Re-exported here to preserve the previously-public
+// `playback.READY_EPSILON_NS` symbol for any external consumer.
+export { READY_EPSILON_NS } from "./readinessConstants";
 
 /** Issue #2 — flag readable by Playwright via the `getCursorGated`
  *  dev hook. Module-scope so the rAF loop can write it without

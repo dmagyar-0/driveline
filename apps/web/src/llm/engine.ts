@@ -16,13 +16,25 @@
  * clearly commented; if a beta tool/Files shape drifts, it changes there only.
  */
 
+import type Anthropic from "@anthropic-ai/sdk";
 import {
   RECIPE_V1_SCHEMA,
   validateRecipeAgainstSchema,
   type RawRecipeDryRunReport,
   type Recipe,
 } from "../state/recipe";
-import { assertAnthropicBaseUrl, ANTHROPIC_BASE_URL } from "./keyManager";
+import { ANTHROPIC_BASE_URL, assertAnthropicBaseUrl } from "./keyManager";
+import { DEFAULT_MODEL, PRICE_PER_MTOK } from "./modelConfig";
+import {
+  buildAnthropicClient,
+  mapApiError as mapAnthropicError,
+  type AnthropicContentBlock,
+  type AnthropicCreateParams,
+  type AnthropicMessage,
+  type AnthropicRequestMessage,
+  type AnthropicUploadedFile,
+  type AnthropicUsage,
+} from "./anthropicClient";
 import { buildKickoffText, FORMAT_AGENT_SYSTEM_PROMPT } from "./prompts";
 import {
   AcceptanceGateError,
@@ -34,7 +46,7 @@ import {
   type FormatAgentEngine,
 } from "./types";
 
-export const DEFAULT_MODEL = "claude-opus-4-8";
+export { DEFAULT_MODEL } from "./modelConfig";
 
 /** Max tool-use iterations before we give up (docs/12 §4.4). */
 const MAX_ITERATIONS = 12;
@@ -42,72 +54,15 @@ const MAX_ITERATIONS = 12;
 /** Acceptance-gate thresholds (docs/12 §4.4). */
 const MIN_COVERAGE = 0.99;
 
-// Anthropic list price for claude-opus-4-8, USD per million tokens.
-// Used only for the live cost estimate shown to the user; not load-bearing.
-const PRICE_PER_MTOK = { input: 5, output: 25, cacheRead: 0.5 } as const;
-
-// --- The minimal Anthropic surface the engine needs (the adapter) ----------
-//
-// This is intentionally a SMALL structural subset of `@anthropic-ai/sdk`. The
-// real factory wires the SDK to it; the fake factory in tests implements the
-// same three methods. Keeping the engine coded against this interface (not the
-// SDK types directly) is what makes the loop testable without a network.
-
-/** A content block in a model turn (text / tool_use / thinking / etc.). */
-export interface LlmContentBlock {
-  type: string;
-  // text blocks
-  text?: string;
-  // thinking blocks
-  thinking?: string;
-  // tool_use blocks
-  id?: string;
-  name?: string;
-  input?: unknown;
-  // server-side tool blocks (code_execution) carry their own payloads we only
-  // surface as narration; we don't need their fields typed.
-  [k: string]: unknown;
-}
-
-export interface LlmUsage {
-  input_tokens?: number;
-  output_tokens?: number;
-  cache_read_input_tokens?: number;
-  cache_creation_input_tokens?: number;
-}
-
-export interface LlmMessage {
-  role: "assistant";
-  content: LlmContentBlock[];
-  stop_reason?: string | null;
-  stop_details?: { category?: string | null; explanation?: string } | null;
-  usage?: LlmUsage;
-  container?: { id?: string } | null;
-}
-
-/** A message we send back (user turn carrying tool results, or the kickoff). */
-export interface LlmRequestMessage {
-  role: "user" | "assistant";
-  content: unknown;
-}
-
-export interface LlmCreateParams {
-  model: string;
-  max_tokens: number;
-  system: string;
-  messages: LlmRequestMessage[];
-  tools: unknown[];
-  /** Container to reuse across iterations (code-execution sandbox). */
-  container?: string;
-  /** Structured-output constraint for the final recipe turn. */
-  output_config?: unknown;
-  thinking?: unknown;
-}
-
-/** Uploaded Files-API object handle. */
-export interface LlmUploadedFile {
-  id: string;
-}
+// The engine codes against the shared Anthropic adapter types (see
+// `anthropicClient.ts`); these aliases keep the rest of the file readable and
+// preserve the public type names other modules import.
+export type LlmContentBlock = AnthropicContentBlock;
+export type LlmUsage = AnthropicUsage;
+export type LlmMessage = AnthropicMessage;
+export type LlmCreateParams = AnthropicCreateParams;
+export type LlmRequestMessage = AnthropicRequestMessage;
+export type LlmUploadedFile = AnthropicUploadedFile;
 
 /**
  * The structural client the engine drives. `createMessage` honours an
@@ -252,30 +207,16 @@ function emptyTally(): CostTally {
   };
 }
 
-/** Map a thrown SDK/transport error to a typed, human AgentError. */
+/** Map a thrown SDK/transport error to a typed, human AgentError. The wording
+ *  is preserved verbatim from when this lived here (shared via
+ *  `anthropicClient.mapApiError`). */
 function mapApiError(err: unknown): AgentError {
-  if (err instanceof AgentError) return err;
-  const status = (err as { status?: number })?.status;
-  const name = (err as { name?: string })?.name;
-  if (name === "AbortError") {
-    return new AgentError("aborted", "The run was cancelled.", { cause: err });
-  }
-  if (status === 401) {
-    return new AgentError(
-      "key-rejected",
+  return mapAnthropicError(err, {
+    aborted: "The run was cancelled.",
+    keyRejected:
       "Anthropic rejected the API key (401). Check the key and try again.",
-      { cause: err },
-    );
-  }
-  if (status === 429) {
-    return new AgentError(
-      "rate-limited",
-      "Anthropic rate-limited the request (429). Wait and retry.",
-      { cause: err },
-    );
-  }
-  const msg = (err as { message?: string })?.message ?? String(err);
-  return new AgentError("api", `Anthropic API error: ${msg}`, { cause: err });
+    rateLimited: "Anthropic rate-limited the request (429). Wait and retry.",
+  });
 }
 
 // --- Acceptance gate (client-enforced; do NOT trust the model) -------------
@@ -592,51 +533,54 @@ function throwIfAborted(signal: AbortSignal): void {
 
 // --- The ONE real SDK call site (lazy import; isolated by design) -----------
 //
-// Everything Anthropic-SDK-specific lives here. The beta tool shapes
-// (code_execution / container_upload), the Files API, and structured outputs
-// are exercised only through this factory; the unit tests inject a fake and
-// never reach this code. If a beta shape drifts, fix it here.
+// The SDK client itself is built by `buildAnthropicClient` (the shared lazy
+// import). Everything Anthropic-SDK-specific the ENGINE needs lives here: the
+// beta tool shapes (code_execution / container_upload), the Files API, and
+// structured outputs are exercised only through this factory; the unit tests
+// inject a fake and never reach this code. If a beta shape drifts, fix it here.
 
 async function defaultCreateClient(cfg: {
   apiKey: string;
   model: string;
   baseUrl: string;
 }): Promise<AnthropicLike> {
-  assertAnthropicBaseUrl(cfg.baseUrl);
-  // Dynamic import keeps `@anthropic-ai/sdk` out of the first-load bundle: the
-  // whole `llm/` directory is a lazy chunk and this import is the only path to
-  // the SDK (docs/07 size budget; CLAUDE.md lazy-chunk contract).
-  const { default: Anthropic, toFile } = await import("@anthropic-ai/sdk");
-  const client = new Anthropic({
-    apiKey: cfg.apiKey,
-    baseURL: cfg.baseUrl,
-    dangerouslyAllowBrowser: true,
-  });
+  const { client, toFile } = await buildAnthropicClient(cfg);
 
   const FILES_BETA = "files-api-2025-04-14";
 
   return {
     async createMessage(params, opts) {
-      const message = (await client.beta.messages.create(
-        {
-          model: params.model,
-          max_tokens: params.max_tokens,
-          system: params.system,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          messages: params.messages as any,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          tools: params.tools as any,
-          ...(params.container ? { container: params.container } : {}),
-          ...(params.thinking ? { thinking: params.thinking as any } : {}),
-          ...(params.output_config
-            ? { output_config: params.output_config as any }
-            : {}),
-          betas: [FILES_BETA],
-        },
-        { signal: opts.signal },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      )) as any;
-      return message as LlmMessage;
+      // Build the SDK param object typed against the SDK's own param type, so
+      // most fields are checked. `messages`/`tools` are our structural
+      // `unknown[]` (the beta tool shapes — code_execution/container_upload —
+      // aren't worth re-typing here), so cast just those into the SDK members.
+      const body: Anthropic.Beta.Messages.MessageCreateParamsNonStreaming = {
+        model: params.model,
+        max_tokens: params.max_tokens,
+        system: params.system,
+        messages:
+          params.messages as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming["messages"],
+        tools:
+          params.tools as Anthropic.Beta.Messages.MessageCreateParamsNonStreaming["tools"],
+        ...(params.container ? { container: params.container } : {}),
+        ...(params.thinking
+          ? {
+              thinking:
+                params.thinking as Anthropic.Beta.BetaThinkingConfigParam,
+            }
+          : {}),
+        ...(params.output_config
+          ? {
+              output_config:
+                params.output_config as Anthropic.Beta.BetaOutputConfig,
+            }
+          : {}),
+        betas: [FILES_BETA],
+      };
+      const message = await client.beta.messages.create(body, {
+        signal: opts.signal,
+      });
+      return message as unknown as LlmMessage;
     },
     async uploadSample(blob, filename) {
       const file = await client.beta.files.upload({

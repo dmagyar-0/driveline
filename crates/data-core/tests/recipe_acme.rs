@@ -91,11 +91,7 @@ fn agent_recipe_decodes_sample_acme() {
     assert_eq!(reader.meta().kind, SourceKind::Recipe);
     assert_eq!(reader.meta().channels.len(), 8);
     let ipc = reader
-        .fetch_range(
-            &"speed".to_string(),
-            reader.meta().time_range,
-            FetchOpts::default(),
-        )
+        .fetch_range("speed", reader.meta().time_range, FetchOpts::default())
         .unwrap();
     assert!(!ipc.is_empty(), "produces Arrow IPC bytes");
 }

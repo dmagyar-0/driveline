@@ -40,11 +40,11 @@ Every load prints a one-line console banner pointing agents at `getSkill()`
 and noting that `?agent` unlocks the full surface. App unmount uninstalls the
 whole thing (mirrors the dev hooks).
 
-## `window.__drivelineAgent` (v6)
+## `window.__drivelineAgent` (v7)
 
 Defined in `apps/web/src/agent/agentApi.ts` — the `AgentApi` interface
-is the authoritative reference. The `version` field reports `6`; v6 is a
-superset of v5 (itself a superset of v4/v3/v2/v1): v3 adds the always-on
+is the authoritative reference. The `version` field reports `7`; v7 is a
+superset of v6 (itself a superset of v5/v4/v3/v2/v1): v3 adds the always-on
 discovery trio (`getSkill`/`describe`) plus inline data-source ingestion
 (`addDataSource`, the "Bring Your Own Agent" surface — see
 docs/13-bring-your-own-agent.md); v4 adds `setSceneBinding`, completing the
@@ -58,7 +58,14 @@ into an **async, off-thread** read (breaking: sync→async) — the off-thread b
 refactor transfers each video panel's canvas to its decode worker, so the live
 canvas can no longer be read back, and `captureVideoFrame` now decodes the
 panel's bound channel at the current cursor via the same path as
-`captureVideoFrameAt`. Summary:
+`captureVideoFrameAt`; v7 makes the four event mutators
+(`setEventTag`/`setEventRange`/`renameEvent`/`removeEvent`) **return `boolean`**
+instead of `void` (breaking) — they forward the underlying store actions'
+changed/existed result, honouring the surface's "return `null`/`false` so an
+agent can probe" contract. (v7 also fixes the `describe()` manifest: the
+off-the-playback-path reads `captureVideoFrame[At]` / `snapshotAt` are now
+`mutating: false`, since they never alter session state — a manifest correction,
+not a signature change.) Summary:
 
 | Group                                    | Methods                                                                                                                                                                          |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -67,7 +74,7 @@ panel's bound channel at the current cursor via the same path as
 | Session (read)                           | `getSessionSnapshot()`, `listSources()`, `listChannels()`                                                                                                                        |
 | Data (read)                              | `fetchChannelRange(channelId, startNs, endNs, includePrev?)`                                                                                                                     |
 | Transport                                | `setCursor(ns)`, `play()`, `pause()`, `setSpeed(x)`                                                                                                                              |
-| Events                                   | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value)`, `setEventRange(id, beforeNs, afterNs)`, `renameEvent(id, label)`, `removeEvent(id)` |
+| Events                                   | `getEventTagConfig()`, `listEvents()`, `addEvent(input?)`, `setEventTag(id, attrId, value) → boolean`, `setEventRange(id, beforeNs, afterNs) → boolean`, `renameEvent(id, label) → boolean`, `removeEvent(id) → boolean` (v7: the four mutators return `boolean`) |
 | Events IO                                | `exportEvents()`, `importEvents(json, mode?)`                                                                                                                                    |
 | Video                                    | `listVideoPanels()`, `captureVideoFrame(panelId?)`                                                                                                                               |
 | Read-at-time (v5)                        | `captureVideoFrameAt(channelId, ns)`, `snapshotAt(ns)` — decode/sample at a timestamp, off the playback path                                                                     |
@@ -87,6 +94,12 @@ Behavioural notes:
   stored on the event and surfaced in the Events drawer as an
   `agent NN%` badge, so reviewers can tell machine findings from human
   ones.
+- The event mutators `setEventTag` / `setEventRange` / `renameEvent` /
+  `removeEvent` return `boolean` (v7) — `true` when the call changed state,
+  `false` for an unknown id, unparseable ns, an empty/whitespace label, or a
+  no-op (e.g. setting a tag to the value it already holds). They never throw,
+  so an agent can probe without try/catch, consistent with the rest of the
+  surface. (They forward the store actions' changed/existed result.)
 - `captureVideoFrame(panelId?)` (v6, async) resolves a live video panel's
   bound camera channel and decodes the frame nearest the **current cursor**
   off the playback path, returning the same
@@ -321,6 +334,10 @@ contract — they are what the agent API does _not_ cover (file drop, and
 layout operations beyond the v2 create/bind/close ops, e.g. drag-rearrange
 and saved layouts). Treat renaming them as a breaking change to automation,
 same as a method change on `AgentApi`. Bump `AGENT_API_VERSION` on any
-breaking change to the `window.__drivelineAgent` surface (it was raised to
-`2` when the layout write ops landed, and to `3` for the always-on
-discovery trio + inline `addDataSource` ingestion — see docs/13).
+breaking change to the `window.__drivelineAgent` surface. The current value is
+`7`; the version history: `2` added the layout write ops, `3` the always-on
+discovery trio + inline `addDataSource` ingestion (see docs/13), `4`
+`setSceneBinding` (scene-geometry binding), `5` the playback-independent reads
+`captureVideoFrameAt` / `snapshotAt`, `6` reworked `captureVideoFrame` to async
+off-thread (sync→async), and `7` made the four event mutators return `boolean`
+instead of `void`.

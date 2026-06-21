@@ -37,6 +37,17 @@
 // exact payload we just loaded.
 
 import type { useSession } from "../state/store";
+import {
+  isPlainObject,
+  isStringArray,
+  isStringMap,
+  isNullableStringMap,
+  isStringArrayMap,
+  isBooleanMap,
+  isMapBindingMap,
+  isPointCloudOverlayMap,
+  isPlotPanelSettingsMap,
+} from "../state/persist/validators";
 
 export const LAYOUT_STORAGE_KEY = "driveline.layout.v3";
 export const LAYOUT_SCHEMA_VERSION = 3 as const;
@@ -70,7 +81,7 @@ export interface PlotPanelSettingsLite {
 
 export interface PersistedLayout {
   version: typeof LAYOUT_SCHEMA_VERSION;
-  layoutJson: unknown | null;
+  layoutJson: unknown;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
   videoHudOn: Record<string, boolean>;
@@ -89,31 +100,6 @@ export interface PersistedLayout {
 
 function defaultStorage(): Storage | undefined {
   return typeof localStorage !== "undefined" ? localStorage : undefined;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === "string");
-}
-
-function isNullableStringMap(v: unknown): v is Record<string, string | null> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (x !== null && typeof x !== "string") return false;
-  }
-  return true;
-}
-
-function isStringArrayMap(v: unknown): v is Record<string, string[]> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    if (!isStringArray(v[k])) return false;
-  }
-  return true;
 }
 
 // Migrate `enumBindings` on read. The field used to hold one channel id
@@ -138,90 +124,12 @@ export function coerceEnumBindings(
   return out;
 }
 
-function isMapBindingMap(v: unknown): v is Record<string, MapBinding | null> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (x === null) continue;
-    if (!isPlainObject(x)) return false;
-    if (typeof x.latChannelId !== "string") return false;
-    if (typeof x.lonChannelId !== "string") return false;
-  }
-  return true;
-}
-
-function isPointCloudOverlayMap(
-  v: unknown,
-): v is Record<string, PointCloudOverlayBinding | null> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (x === null) continue;
-    if (!isPlainObject(x)) return false;
-    if (typeof x.calibrationChannelId !== "string") return false;
-    if (typeof x.cameraName !== "string") return false;
-    if (typeof x.pointcloudChannelId !== "string") return false;
-  }
-  return true;
-}
-
-function isStringMap(v: unknown): v is Record<string, string> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    if (typeof v[k] !== "string") return false;
-  }
-  return true;
-}
-
-function isAxisAssignmentMap(v: unknown): v is Record<string, number> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (typeof x !== "number" || !Number.isInteger(x) || x < 0) return false;
-  }
-  return true;
-}
-
-function isPlotPanelSettingsMap(
-  v: unknown,
-): v is Record<string, PlotPanelSettingsLite> {
-  if (!isPlainObject(v)) return false;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (!isPlainObject(x)) return false;
-    const t = x.gapThresholdSec;
-    // Reject NaN / Infinity so we don't restore a junk value that the
-    // store would just normalise away anyway. The store's setter
-    // already guards on write; this guards on read.
-    if (t !== null && (typeof t !== "number" || !Number.isFinite(t))) {
-      return false;
-    }
-    // Optional, additive field — only validate when present.
-    if (
-      x.axisAssignments !== undefined &&
-      !isAxisAssignmentMap(x.axisAssignments)
-    ) {
-      return false;
-    }
-    if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {
-      return false;
-    }
-    if (x.syncTimeAxis !== undefined && typeof x.syncTimeAxis !== "boolean") {
-      return false;
-    }
-  }
-  return true;
-}
-
 function validate(raw: unknown): PersistedLayout | null {
   if (!isPlainObject(raw)) return null;
   if (raw.version !== LAYOUT_SCHEMA_VERSION) return null;
   if (!isNullableStringMap(raw.videoBindings)) return null;
   if (!isStringArrayMap(raw.plotBindings)) return null;
-  if (!isPlainObject(raw.videoHudOn)) return null;
-  for (const k of Object.keys(raw.videoHudOn)) {
-    if (typeof raw.videoHudOn[k] !== "boolean") return null;
-  }
+  if (!isBooleanMap(raw.videoHudOn)) return null;
   if (!isNullableStringMap(raw.sceneBindings)) return null;
   if (!isMapBindingMap(raw.mapBindings)) return null;
   if (!isStringArrayMap(raw.tableBindings)) return null;
@@ -291,7 +199,7 @@ export function saveLayoutToStorage(
 // The minimal slice the adapter cares about. Keeps the persist module
 // decoupled from the full `SessionState` surface for tests.
 export interface LayoutSlice {
-  layoutJson: unknown | null;
+  layoutJson: unknown;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
   videoHudOn: Record<string, boolean>;

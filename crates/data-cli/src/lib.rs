@@ -15,49 +15,17 @@ use arrow_array::Array;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_ipc::reader::FileReader;
 use arrow_schema::DataType;
-use data_core::reader::{ArrowIpc, Reader};
-use data_core::types::{ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange};
+use data_core::reader::Reader;
+use data_core::types::{DType, FetchOpts, TimeRange};
 use data_core::{MapGeometryReader, McapReader, Mf4Reader, Ros1BagReader, Ros2Db3Reader};
 use serde_json::{json, Value};
 
-/// Enum dispatcher over the format readers. `McapReader`/`Mf4Reader`
-/// expose `meta`/`fetch_range` as inherent methods (not via the `Reader`
-/// trait), so a `Box<dyn Reader>` cannot cover all four formats.
-pub enum LogReader {
-    Mcap(McapReader),
-    Mf4(Mf4Reader),
-    Ros1(Ros1BagReader),
-    Ros2(Ros2Db3Reader),
-    MapGeometry(MapGeometryReader),
-}
-
-impl LogReader {
-    pub fn meta(&self) -> &SourceMeta {
-        match self {
-            LogReader::Mcap(r) => r.meta(),
-            LogReader::Mf4(r) => r.meta(),
-            LogReader::Ros1(r) => r.meta(),
-            LogReader::Ros2(r) => r.meta(),
-            LogReader::MapGeometry(r) => r.meta(),
-        }
-    }
-
-    pub fn fetch_range(
-        &self,
-        channel_id: &str,
-        range: TimeRange,
-        opts: FetchOpts,
-    ) -> data_core::Result<ArrowIpc> {
-        let id = channel_id.to_string();
-        match self {
-            LogReader::Mcap(r) => r.fetch_range(&id, range, opts),
-            LogReader::Mf4(r) => r.fetch_range(&id, range, opts),
-            LogReader::Ros1(r) => r.fetch_range(&id, range, opts),
-            LogReader::Ros2(r) => r.fetch_range(&id, range, opts),
-            LogReader::MapGeometry(r) => r.fetch_range(&id, range, opts),
-        }
-    }
-}
+/// A boxed, format-erased reader. Every format the CLI handles implements the
+/// shared [`Reader`] trait (`meta` / `fetch_range`), so a single trait object
+/// covers them all — no per-format enum dispatch. The CLI only needs the
+/// metadata + signal-fetch surface; the video-cursor entry points are
+/// MCAP-specific and stay off this path.
+pub type LogReader = Box<dyn Reader>;
 
 /// Open `path` with the reader matching its extension.
 /// Supported: `.mcap`, `.mf4`, `.bag` (ROS1), `.db3` (ROS2), `.xodr` (OpenDRIVE
@@ -69,69 +37,22 @@ pub fn open_reader(path: &Path) -> Result<LogReader, String> {
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_default();
-    match ext.as_str() {
-        "mcap" => Ok(LogReader::Mcap(
-            McapReader::open(&bytes).map_err(|e| e.to_string())?,
-        )),
-        "mf4" => Ok(LogReader::Mf4(
-            Mf4Reader::open_slice(&bytes).map_err(|e| e.to_string())?,
-        )),
-        "bag" => Ok(LogReader::Ros1(
-            Ros1BagReader::open(&bytes).map_err(|e| e.to_string())?,
-        )),
-        "db3" => Ok(LogReader::Ros2(
-            Ros2Db3Reader::open(&bytes).map_err(|e| e.to_string())?,
-        )),
-        "xodr" => Ok(LogReader::MapGeometry(
-            MapGeometryReader::open(&bytes).map_err(|e| e.to_string())?,
-        )),
-        other => Err(format!(
-            "unsupported extension {other:?} (expected .mcap, .mf4, .bag, .db3 or .xodr)"
-        )),
-    }
-}
-
-fn kind_str(kind: ChannelKind) -> &'static str {
-    match kind {
-        ChannelKind::Scalar => "scalar",
-        ChannelKind::Vector => "vector",
-        ChannelKind::Video => "video",
-        ChannelKind::Enum => "enum",
-        ChannelKind::Bytes => "bytes",
-        ChannelKind::PointCloud => "pointcloud",
-        ChannelKind::BoundingBox => "bounding_box",
-        ChannelKind::CameraCalibration => "camera_calibration",
-        ChannelKind::Trajectory => "trajectory",
-        ChannelKind::MapGeometry => "map_geometry",
-    }
-}
-
-fn source_kind_str(kind: SourceKind) -> &'static str {
-    match kind {
-        SourceKind::Noop => "noop",
-        SourceKind::Mcap => "mcap",
-        SourceKind::Mf4 => "mf4",
-        SourceKind::Mp4Sidecar => "mp4-sidecar",
-        SourceKind::Tabular => "tabular",
-        SourceKind::Recipe => "recipe",
-        SourceKind::Ros1 => "ros1",
-        SourceKind::Lidar => "lidar",
-        SourceKind::OpenLabel => "openlabel",
-        SourceKind::Calibration => "calibration",
-        SourceKind::Trajectory => "trajectory",
-        SourceKind::MapGeometry => "map_geometry",
-    }
-}
-
-fn dtype_str(dtype: Option<DType>) -> Option<&'static str> {
-    dtype.map(|d| match d {
-        DType::F32 => "f32",
-        DType::F64 => "f64",
-        DType::I32 => "i32",
-        DType::I64 => "i64",
-        DType::U32 => "u32",
-        DType::U64 => "u64",
-    })
+    let to_err = |e: data_core::Error| e.to_string();
+    let reader: LogReader = match ext.as_str() {
+        "mcap" => Box::new(McapReader::open(&bytes).map_err(to_err)?),
+        // MF4's byte-slice constructor is `open_slice`, not the trait `open`
+        // (which would also work, but `open_slice` is the documented name).
+        "mf4" => Box::new(Mf4Reader::open_slice(&bytes).map_err(to_err)?),
+        "bag" => Box::new(Ros1BagReader::open(&bytes).map_err(to_err)?),
+        "db3" => Box::new(Ros2Db3Reader::open(&bytes).map_err(to_err)?),
+        "xodr" => Box::new(MapGeometryReader::open(&bytes).map_err(to_err)?),
+        other => {
+            return Err(format!(
+                "unsupported extension {other:?} (expected .mcap, .mf4, .bag, .db3 or .xodr)"
+            ))
+        }
+    };
+    Ok(reader)
 }
 
 /// `info` — source metadata + channel list as JSON. Nanosecond ranges
@@ -140,7 +61,7 @@ pub fn source_info_json(reader: &LogReader) -> Value {
     let meta = reader.meta();
     json!({
         "id": meta.id,
-        "kind": source_kind_str(meta.kind),
+        "kind": meta.kind.as_str(),
         "timeRange": {
             "startNs": meta.time_range.start_ns.to_string(),
             "endNs": meta.time_range.end_ns.to_string(),
@@ -148,8 +69,8 @@ pub fn source_info_json(reader: &LogReader) -> Value {
         "channels": meta.channels.iter().map(|c| json!({
             "id": c.id,
             "name": c.name,
-            "kind": kind_str(c.kind),
-            "dtype": dtype_str(c.dtype),
+            "kind": c.kind.as_str(),
+            "dtype": c.dtype.map(DType::as_str),
             "unit": c.unit,
             "sampleCount": c.sample_count,
             "timeRange": {

@@ -13,11 +13,32 @@
 // (future) bookmarks adapter no string-encoding round-trip is needed.
 
 import type { useSession } from "../store";
-import type { MapBinding, PlotPanelSettingsLite } from "../../layout/persist";
+import type {
+  MapBinding,
+  PlotPanelSettingsLite,
+  PointCloudOverlayBinding,
+} from "../../layout/persist";
 import { coerceEnumBindings } from "../../layout/persist";
+import {
+  isPlainObject,
+  isStringMap,
+  isNullableStringMap,
+  isStringArrayMap,
+  isBooleanMap,
+  isMapBindingMap,
+  isPointCloudOverlayMap,
+  isPlotPanelSettingsMap,
+} from "./validators";
 
-export const NAMED_LAYOUTS_STORAGE_KEY = "driveline.layouts.named.v2";
-export const NAMED_LAYOUTS_SCHEMA_VERSION = 2 as const;
+// v3 (forward-migrated from v2) carries the same field set the live-layout
+// shard persists — adding `videoHudOn`, `pointCloudOverlays`, and
+// `unitOverrides` so saving + restoring a named layout no longer loses the
+// per-panel HUD bit, point-cloud overlays, or unit overrides. A v2 payload
+// is migrated forward on read (those three default to `{}`) rather than
+// dropped, so existing saved layouts survive the upgrade.
+export const NAMED_LAYOUTS_STORAGE_KEY = "driveline.layouts.named.v3";
+const NAMED_LAYOUTS_STORAGE_KEY_V2 = "driveline.layouts.named.v2";
+export const NAMED_LAYOUTS_SCHEMA_VERSION = 3 as const;
 
 export interface NamedLayout {
   id: string;
@@ -36,6 +57,12 @@ export interface NamedLayout {
   // an empty map on read. New writes always include them.
   valueBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettingsLite>;
+  // v3 additions — match the live-layout shard so a restore brings back the
+  // per-panel HUD bit, point-cloud overlays, and unit overrides. Optional on
+  // read (default `{}`) so a v2 entry migrates forward cleanly.
+  videoHudOn: Record<string, boolean>;
+  pointCloudOverlays: Record<string, PointCloudOverlayBinding | null>;
+  unitOverrides: Record<string, string>;
   createdAt: number;
 }
 
@@ -49,68 +76,9 @@ function defaultStorage(): Storage | undefined {
   return typeof localStorage !== "undefined" ? localStorage : undefined;
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === "string");
-}
-
-function validateNullableStringMap(
-  v: unknown,
-): Record<string, string | null> | null {
-  if (!isPlainObject(v)) return null;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (x !== null && typeof x !== "string") return null;
-  }
-  return v as Record<string, string | null>;
-}
-
-function validateStringArrayMap(v: unknown): Record<string, string[]> | null {
-  if (!isPlainObject(v)) return null;
-  for (const k of Object.keys(v)) {
-    if (!isStringArray(v[k])) return null;
-  }
-  return v as Record<string, string[]>;
-}
-
-function validateMapBindingMap(
-  v: unknown,
-): Record<string, MapBinding | null> | null {
-  if (!isPlainObject(v)) return null;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (x === null) continue;
-    if (!isPlainObject(x)) return null;
-    if (typeof x.latChannelId !== "string") return null;
-    if (typeof x.lonChannelId !== "string") return null;
-  }
-  return v as Record<string, MapBinding | null>;
-}
-
-function validatePlotPanelSettingsMap(
-  v: unknown,
-): Record<string, PlotPanelSettingsLite> | null {
-  if (!isPlainObject(v)) return null;
-  for (const k of Object.keys(v)) {
-    const x = v[k];
-    if (!isPlainObject(x)) return null;
-    const t = x.gapThresholdSec;
-    if (t !== null && (typeof t !== "number" || !Number.isFinite(t))) {
-      return null;
-    }
-    if (x.stackAxes !== undefined && typeof x.stackAxes !== "boolean") {
-      return null;
-    }
-    if (x.syncTimeAxis !== undefined && typeof x.syncTimeAxis !== "boolean") {
-      return null;
-    }
-  }
-  return v as Record<string, PlotPanelSettingsLite>;
-}
-
+/** Validate a single saved layout entry. The three v3 maps (`videoHudOn`,
+ *  `pointCloudOverlays`, `unitOverrides`) are optional on read and default to
+ *  `{}` — that same path forward-migrates a v2 entry, where they're absent. */
 function validateLayout(raw: unknown): NamedLayout | null {
   if (!isPlainObject(raw)) return null;
   if (typeof raw.id !== "string" || raw.id.length === 0) return null;
@@ -118,47 +86,54 @@ function validateLayout(raw: unknown): NamedLayout | null {
   if (typeof raw.createdAt !== "number" || !Number.isFinite(raw.createdAt)) {
     return null;
   }
-  const videoBindings = validateNullableStringMap(raw.videoBindings);
-  if (!videoBindings) return null;
-  const plotBindings = validateStringArrayMap(raw.plotBindings);
-  if (!plotBindings) return null;
-  const sceneBindings = validateNullableStringMap(raw.sceneBindings);
-  if (!sceneBindings) return null;
-  const mapBindings = validateMapBindingMap(raw.mapBindings);
-  if (!mapBindings) return null;
-  const tableBindings = validateStringArrayMap(raw.tableBindings);
-  if (!tableBindings) return null;
+  if (!isNullableStringMap(raw.videoBindings)) return null;
+  if (!isStringArrayMap(raw.plotBindings)) return null;
+  if (!isNullableStringMap(raw.sceneBindings)) return null;
+  if (!isMapBindingMap(raw.mapBindings)) return null;
+  if (!isStringArrayMap(raw.tableBindings)) return null;
   // Migrated single→multi on read (see `coerceEnumBindings`) so layouts
   // saved before the enum panel went multi-channel still restore.
   const enumBindings = coerceEnumBindings(raw.enumBindings);
   if (!enumBindings) return null;
   // Optional fields — entries saved before they existed default to an
   // empty map.
-  const plotPanelSettings = validatePlotPanelSettingsMap(
-    raw.plotPanelSettings ?? {},
-  );
-  if (!plotPanelSettings) return null;
-  const valueBindings = validateStringArrayMap(raw.valueBindings ?? {});
-  if (!valueBindings) return null;
+  const settings = raw.plotPanelSettings ?? {};
+  if (!isPlotPanelSettingsMap(settings)) return null;
+  const valueBindings = raw.valueBindings ?? {};
+  if (!isStringArrayMap(valueBindings)) return null;
+  // v3 fields. Present ⇒ validate; absent ⇒ `{}` (the v2→v3 migration also
+  // hits this path with `expectVersion === 2`, where they're always absent).
+  const videoHudOn = raw.videoHudOn ?? {};
+  if (!isBooleanMap(videoHudOn)) return null;
+  const pointCloudOverlays = raw.pointCloudOverlays ?? {};
+  if (!isPointCloudOverlayMap(pointCloudOverlays)) return null;
+  const unitOverrides = raw.unitOverrides ?? {};
+  if (!isStringMap(unitOverrides)) return null;
   return {
     id: raw.id,
     name: raw.name,
     layoutJson: raw.layoutJson ?? null,
-    videoBindings,
-    plotBindings,
-    sceneBindings,
-    mapBindings,
-    tableBindings,
+    videoBindings: raw.videoBindings,
+    plotBindings: raw.plotBindings,
+    sceneBindings: raw.sceneBindings,
+    mapBindings: raw.mapBindings,
+    tableBindings: raw.tableBindings,
     enumBindings,
     valueBindings,
-    plotPanelSettings,
+    plotPanelSettings: settings,
+    videoHudOn,
+    pointCloudOverlays,
+    unitOverrides,
     createdAt: raw.createdAt,
   };
 }
 
-function validate(raw: unknown): PersistedNamedLayouts | null {
+function validateWith(
+  raw: unknown,
+  onDiskVersion: 2 | 3,
+): PersistedNamedLayouts | null {
   if (!isPlainObject(raw)) return null;
-  if (raw.version !== NAMED_LAYOUTS_SCHEMA_VERSION) return null;
+  if (raw.version !== onDiskVersion) return null;
   if (!Array.isArray(raw.layouts)) return null;
   const layouts: NamedLayout[] = [];
   for (const l of raw.layouts) {
@@ -180,24 +155,53 @@ function validate(raw: unknown): PersistedNamedLayouts | null {
   };
 }
 
+function validate(raw: unknown): PersistedNamedLayouts | null {
+  return validateWith(raw, NAMED_LAYOUTS_SCHEMA_VERSION);
+}
+
+/** Migrate a legacy v2 payload forward: same field set minus the three v3
+ *  maps, which default to `{}`. */
+function migrateV2(raw: unknown): PersistedNamedLayouts | null {
+  return validateWith(raw, 2);
+}
+
 export function loadNamedLayoutsFromStorage(
   storage: Storage | undefined = defaultStorage(),
 ): PersistedNamedLayouts | null {
   if (!storage) return null;
-  let text: string | null;
+  // Prefer the current v3 payload (present → trust it, fail closed on a
+  // malformed body without falling through to the legacy key).
+  let v3Text: string | null;
   try {
-    text = storage.getItem(NAMED_LAYOUTS_STORAGE_KEY);
+    v3Text = storage.getItem(NAMED_LAYOUTS_STORAGE_KEY);
   } catch {
     return null;
   }
-  if (!text) return null;
+  if (v3Text !== null) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(v3Text);
+    } catch {
+      return null;
+    }
+    return validate(parsed);
+  }
+  // No v3 yet — migrate a legacy v2 payload forward so saved layouts survive
+  // the upgrade (the three new maps default to `{}`).
+  let v2Text: string | null;
+  try {
+    v2Text = storage.getItem(NAMED_LAYOUTS_STORAGE_KEY_V2);
+  } catch {
+    return null;
+  }
+  if (v2Text === null) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
+    parsed = JSON.parse(v2Text);
   } catch {
     return null;
   }
-  return validate(parsed);
+  return migrateV2(parsed);
 }
 
 export function saveNamedLayoutsToStorage(

@@ -87,6 +87,22 @@ function seed(): void {
         sampleCount: 3,
         timeRange: { startNs: 0n, endNs: 1_000_000_000n },
       },
+      // Production keeps `st.channels` as the flat union of every source's
+      // channels (store.ts: `allSources.flatMap(s => s.channels)`), so the
+      // video channel belongs here too — the drawer bodies now resolve via
+      // the `selectChannelsById` selector over `st.channels` rather than a
+      // per-body `findChannel(sources, …)` scan.
+      {
+        id: "video-stream",
+        nativeId: "video-stream",
+        sourceId: "src-a",
+        name: "front cam",
+        kind: "video",
+        dtype: null,
+        unit: null,
+        sampleCount: 30,
+        timeRange: { startNs: 0n, endNs: 1_000_000_000n },
+      },
     ],
     layoutJson: {
       layout: {

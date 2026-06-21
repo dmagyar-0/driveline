@@ -26,17 +26,11 @@
 //! fields are always materialised as f64, which is fine for signals.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use serde::{Deserialize, Serialize};
 
 use crate::reader::{ArrowIpc, Reader};
-use crate::types::{
-    Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
-};
+use crate::types::{Channel, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange};
 
 // --- Safety clamps -----------------------------------------------------------
 
@@ -512,17 +506,6 @@ impl RecipeReader {
     pub fn rejected_records(&self) -> u64 {
         self.rejected
     }
-
-    fn scalar_schema() -> Arc<Schema> {
-        Arc::new(Schema::new(vec![
-            Field::new(
-                "ts",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-                false,
-            ),
-            Field::new("value", DataType::Float64, false),
-        ]))
-    }
 }
 
 /// A validated, clamped decode plan derived once from a [`Recipe`].
@@ -767,7 +750,7 @@ impl Reader for RecipeReader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
@@ -775,7 +758,7 @@ impl Reader for RecipeReader {
             .table
             .columns
             .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
 
         let ts = &self.table.ts_ns;
         let start_idx = ts.partition_point(|&t| t < range.start_ns);
@@ -799,28 +782,14 @@ impl Reader for RecipeReader {
                 (t, v)
             };
 
-        let schema = Self::scalar_schema();
-        let ts_array = TimestampNanosecondArray::from(ts_final).with_timezone("UTC");
-        let value_array = Float64Array::from(vals_final);
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(ts_array), Arc::new(value_array)],
-        )?;
-
-        let mut buf = Vec::new();
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::build_scalar_ipc(ts_final, vals_final)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Array;
+    use arrow_array::{Array, Float64Array, RecordBatch, TimestampNanosecondArray};
     use arrow_ipc::reader::FileReader;
     use std::io::Cursor;
 
@@ -890,11 +859,7 @@ mod tests {
         assert_eq!(names, vec!["wheel/speed", "trans/gear"]);
 
         let ipc = r
-            .fetch_range(
-                &"speed".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("speed", r.meta().time_range, FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         // micros → ns in the integer domain (beyond f64 exact range).
@@ -909,12 +874,8 @@ mod tests {
         assert_eq!(col_f64(&batch), vec![10.0, 11.0, 12.5]);
 
         let gears = parse_ipc(
-            &r.fetch_range(
-                &"gear".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
-            .unwrap(),
+            &r.fetch_range("gear", r.meta().time_range, FetchOpts::default())
+                .unwrap(),
         );
         assert_eq!(col_f64(&gears), vec![3.0, 3.0, 4.0]);
     }

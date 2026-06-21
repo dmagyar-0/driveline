@@ -28,7 +28,7 @@ vi.hoisted(() => {
     }) as unknown as MediaQueryList;
 });
 
-import { tooltipPositionStyle } from "./PlotPanel";
+import { tooltipPositionStyle } from "./plotGeometry";
 
 describe("tooltipPositionStyle", () => {
   const AREA = { areaW: 800, areaH: 600 };

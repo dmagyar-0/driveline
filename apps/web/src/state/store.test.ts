@@ -22,6 +22,7 @@ import {
   effectivePlotZoomX,
   isPlotTimeAxisSynced,
   mergeGlobalRange,
+  selectChannelsById,
   useSession,
 } from "./store";
 import type { SourceKind, SourceMeta, TimeRange } from "./store";
@@ -2358,5 +2359,70 @@ describe("setPointCloudOverlay (point-cloud-on-video overlay binding)", () => {
     await useSession.getState().clear();
     expect(useSession.getState().pointCloudOverlays).toEqual({});
     expect(useSession.getState().calibrationCache).toEqual({});
+  });
+});
+
+describe("selectChannelsById", () => {
+  it("indexes the flat channel list by id", async () => {
+    const worker = makeFakeWorker(defaultSummaries());
+    useSession.getState().setWorker(worker);
+    await useSession.getState().openFiles([file("short.mcap")]);
+    const m = selectChannelsById(useSession.getState());
+    const channels = useSession.getState().channels;
+    expect(m.size).toBe(channels.length);
+    for (const c of channels) {
+      expect(m.get(c.id)).toBe(c);
+    }
+  });
+
+  it("is empty for an empty session", () => {
+    expect(selectChannelsById({ channels: [] }).size).toBe(0);
+  });
+});
+
+describe("event-mutator boolean returns", () => {
+  function seedBookmark(): string {
+    useSession.setState({
+      globalRange: { startNs: 0n, endNs: 10_000n },
+      cursorNs: 1_000n,
+    });
+    const id = useSession.getState().addBookmarkAtCursor("e");
+    if (id === null) throw new Error("expected a bookmark id");
+    return id;
+  }
+
+  it("removeBookmark returns true on removal, false on unknown id", () => {
+    const id = seedBookmark();
+    expect(useSession.getState().removeBookmark("ghost")).toBe(false);
+    expect(useSession.getState().removeBookmark(id)).toBe(true);
+  });
+
+  it("renameBookmark returns true on change, false on no-op", () => {
+    const id = seedBookmark();
+    expect(useSession.getState().renameBookmark(id, "renamed")).toBe(true);
+    expect(useSession.getState().renameBookmark(id, "renamed")).toBe(false);
+    expect(useSession.getState().renameBookmark(id, "   ")).toBe(false);
+    expect(useSession.getState().renameBookmark("ghost", "x")).toBe(false);
+  });
+
+  it("setBookmarkRange returns true on change, false on no-op", () => {
+    const id = seedBookmark();
+    expect(useSession.getState().setBookmarkRange(id, 5n, 5n)).toBe(true);
+    expect(useSession.getState().setBookmarkRange(id, 5n, 5n)).toBe(false);
+    expect(useSession.getState().setBookmarkRange("ghost", 1n, 1n)).toBe(false);
+  });
+
+  it("setBookmarkTag returns true on set/clear, false on no-op", () => {
+    const id = seedBookmark();
+    expect(useSession.getState().setBookmarkTag(id, "weather", "Rain")).toBe(
+      true,
+    );
+    expect(useSession.getState().setBookmarkTag(id, "weather", "Rain")).toBe(
+      false,
+    );
+    expect(useSession.getState().setBookmarkTag(id, "weather", "")).toBe(true);
+    expect(useSession.getState().setBookmarkTag("ghost", "weather", "x")).toBe(
+      false,
+    );
   });
 });

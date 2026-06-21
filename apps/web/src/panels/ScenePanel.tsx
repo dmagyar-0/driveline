@@ -19,8 +19,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSession } from "../state/store";
-import type { Channel, ChannelKind, SourceMeta } from "../state/store";
+import type { ChannelKind } from "../state/store";
 import { mark, measure } from "../perf";
+import { findChannel } from "./shared/channels";
+import { lastIndexAtOrBefore } from "./shared/cursorLookup";
 import { fetchDecodedSpin } from "./pointCloudSpinCache";
 import { decodeBoxes, type BoundingBox } from "./boxesFromArrow";
 import { decodeTrajectories } from "./trajectoriesFromArrow";
@@ -39,28 +41,6 @@ interface LabelPlacement {
   text: string;
   x: number;
   y: number;
-}
-
-function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
-  for (const s of sources) {
-    const hit = s.channels.find((c) => c.id === channelId);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-// Largest index `i` with `times[i] <= cursor`, or -1 if cursor precedes the
-// first frame. `times` is ascending (frame start timestamps).
-function activeFrameIndex(times: BigInt64Array, cursorNs: bigint): number {
-  if (times.length === 0 || cursorNs < times[0]) return -1;
-  let lo = 0;
-  let hi = times.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (times[mid] <= cursorNs) lo = mid;
-    else hi = mid - 1;
-  }
-  return lo;
 }
 
 type Status =
@@ -178,7 +158,7 @@ export function ScenePanel({ panelId }: ScenePanelProps) {
     if (!renderer || !times || id === null) return;
 
     const cursorNs = useSession.getState().cursorNs;
-    const idx = activeFrameIndex(times, cursorNs);
+    const idx = lastIndexAtOrBefore(times, cursorNs);
     if (idx === lastFrameRef.current) return; // same frame — nothing to do
     lastFrameRef.current = idx;
 

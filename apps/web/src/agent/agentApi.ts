@@ -53,8 +53,14 @@ import type { EventTagConfig } from "../state/persist/eventTagConfig";
 import { listVideoCanvasPanelIds } from "../panels/videoCanvasRegistry";
 import { getWorkspaceBridge } from "../layout/workspaceBridge";
 import { panelKindOf, panelNameFor, type PanelKind } from "../layout/panelId";
+// NB: despite the "PLOT" in the name, this cap is applied to EVERY list-binding
+// panel kind in `bindChannels` (plot/enum/table/value), not just plots — the
+// export lives in `panels/palette.ts` (out of this module's edit scope).
 import { MAX_PLOT_SERIES } from "../panels/palette";
-import { captureVideoFrameAt as captureFrameOffThread } from "./videoCapture";
+import {
+  captureVideoFrameAt as captureFrameOffThread,
+  type CapturedVideoFrame,
+} from "./videoCapture";
 import { decodeSeries } from "../panels/seriesFromArrow";
 
 // v6: `captureVideoFrame` went sync → async (breaking). After the off-thread
@@ -63,7 +69,15 @@ import { decodeSeries } from "../panels/seriesFromArrow";
 // canvas). `captureVideoFrame` now resolves the panel's bound channel and
 // decodes the frame at the current cursor off the playback path — the same
 // path as `captureVideoFrameAt`, returning an `AgentCapturedFrame`.
-export const AGENT_API_VERSION = 6 as const;
+//
+// v7: the event mutators (`setEventTag`/`setEventRange`/`renameEvent`/
+// `removeEvent`) now RETURN `boolean` instead of `void` (breaking), honouring
+// the surface's own "return null/false so an agent can probe" contract — they
+// forward the underlying store actions' changed/existed result. (Also: the
+// off-the-playback-path capture/read ops `captureVideoFrame[At]`/`snapshotAt`
+// are now marked `mutating: false` in `describe()` — a manifest fix, not a
+// signature change, since they never alter session state.)
+export const AGENT_API_VERSION = 7 as const;
 
 /**
  * Spec for `addDataSource` — the agent's own inline (columnar) dataset.
@@ -242,10 +256,18 @@ export interface AgentApi {
   /** Create an event (origin `"agent"`). Returns its id, or `null`
    *  when no session is loaded and no explicit `ns` was given. */
   addEvent(input?: AddAgentEventInput): string | null;
-  setEventTag(id: string, attributeId: string, value: string): void;
-  setEventRange(id: string, beforeNs: string, afterNs: string): void;
-  renameEvent(id: string, label: string): void;
-  removeEvent(id: string): void;
+  /** Set/clear an event tag. Returns `true` if the value changed, `false` for
+   *  an unknown id or a no-op (the value already equals what was passed). */
+  setEventTag(id: string, attributeId: string, value: string): boolean;
+  /** Set an event's before/after range. Returns `true` if it changed, `false`
+   *  for an unknown id, unparseable ns, or a no-op. */
+  setEventRange(id: string, beforeNs: string, afterNs: string): boolean;
+  /** Rename an event. Returns `true` if the label changed, `false` for an
+   *  unknown id, an empty/whitespace label, or a no-op. */
+  renameEvent(id: string, label: string): boolean;
+  /** Delete an event. Returns `true` if it existed and was removed, else
+   *  `false`. */
+  removeEvent(id: string): boolean;
   /** The full event list as portable JSON (same format Import accepts). */
   exportEvents(): string;
   /** Bulk-import events; `mode` defaults to `"merge"` (by id). Returns
@@ -306,9 +328,10 @@ export interface AgentApi {
   /**
    * Bind scalar channels to a plot/enum/table/value panel via the matching
    * store action. Validates that the panel exists, is a bindable kind, and
-   * that every channel id is known; for plot panels it also enforces the
-   * `MAX_PLOT_SERIES` cap against the panel's current bindings. Returns
-   * `false` (binding nothing) if any precondition fails.
+   * that every channel id is known; it also enforces the `MAX_PLOT_SERIES` cap
+   * (which despite its name applies to all four list kinds) against the panel's
+   * current bindings. Returns `false` (binding nothing) if any precondition
+   * fails.
    */
   bindChannels(panelId: string, channelIds: string[]): boolean;
   /**
@@ -410,6 +433,21 @@ function toAgentEvent(b: Bookmark): AgentEvent {
   };
 }
 
+/** Project a worker-decoded frame to the JSON-safe `AgentCapturedFrame` shape
+ *  (ns → decimal string). Used by `captureVideoFrame`, `captureVideoFrameAt`,
+ *  and `snapshotAt` so the ns-stringification lives in one spot (mirrors
+ *  `toAgentEvent`). */
+function toAgentCapturedFrame(cap: CapturedVideoFrame): AgentCapturedFrame {
+  return {
+    channelId: cap.channelId,
+    cameraName: cap.cameraName,
+    ptsNs: cap.ptsNs.toString(),
+    width: cap.width,
+    height: cap.height,
+    dataUrl: cap.dataUrl,
+  };
+}
+
 // Capability manifest — the authoritative list `describe()` returns. `mutating`
 // is the *semantic* flag (does the call change session state), so an agent can
 // reason about dry-run safety; it is NOT the gating signal. Gating is conveyed
@@ -462,22 +500,26 @@ const AGENT_CAPABILITIES: readonly AgentCapability[] = [
     summary: "Live video panel ids.",
     mutating: false,
   },
+  // The three capture/read ops decode OFF the playback path and never alter
+  // session state (cursor untouched, no panel created), so they are
+  // `mutating: false` — the same dry-run-safe posture as the gated read
+  // `fetchChannelRange`. They stay `?agent`-gated via `agentParamRequired`.
   {
     name: "captureVideoFrameAt",
     summary: "Decode a camera frame at a timestamp, off the playback path.",
-    mutating: true,
+    mutating: false,
   },
   {
     name: "snapshotAt",
     summary:
       "Playback-independent bundle (frames + spins + scalars) at a time.",
-    mutating: true,
+    mutating: false,
   },
   {
     name: "captureVideoFrame",
     summary:
       "PNG of a panel's camera frame at the current cursor (off-thread, async).",
-    mutating: true,
+    mutating: false,
   },
   { name: "createPanel", summary: "Mint a panel of a kind.", mutating: true },
   {
@@ -647,19 +689,19 @@ function makeAgentApi(): AgentApi {
     },
 
     setEventTag(id, attributeId, value) {
-      useSession.getState().setBookmarkTag(id, attributeId, value);
+      return useSession.getState().setBookmarkTag(id, attributeId, value);
     },
     setEventRange(id, beforeNs, afterNs) {
       const before = tryBigInt(beforeNs);
       const after = tryBigInt(afterNs);
-      if (before === null || after === null) return;
-      useSession.getState().setBookmarkRange(id, before, after);
+      if (before === null || after === null) return false;
+      return useSession.getState().setBookmarkRange(id, before, after);
     },
     renameEvent(id, label) {
-      useSession.getState().renameBookmark(id, label);
+      return useSession.getState().renameBookmark(id, label);
     },
     removeEvent(id) {
-      useSession.getState().removeBookmark(id);
+      return useSession.getState().removeBookmark(id);
     },
 
     exportEvents() {
@@ -687,30 +729,14 @@ function makeAgentApi(): AgentApi {
       const channelId = st.videoBindings[id] ?? null;
       if (channelId === null) return null;
       const cap = await captureFrameOffThread(channelId, st.cursorNs);
-      if (!cap) return null;
-      return {
-        channelId: cap.channelId,
-        cameraName: cap.cameraName,
-        ptsNs: cap.ptsNs.toString(),
-        width: cap.width,
-        height: cap.height,
-        dataUrl: cap.dataUrl,
-      };
+      return cap ? toAgentCapturedFrame(cap) : null;
     },
 
     async captureVideoFrameAt(channelId, ns) {
       const t = tryBigInt(ns);
       if (t === null) return null;
       const cap = await captureFrameOffThread(channelId, t);
-      if (!cap) return null;
-      return {
-        channelId: cap.channelId,
-        cameraName: cap.cameraName,
-        ptsNs: cap.ptsNs.toString(),
-        width: cap.width,
-        height: cap.height,
-        dataUrl: cap.dataUrl,
-      };
+      return cap ? toAgentCapturedFrame(cap) : null;
     },
 
     async snapshotAt(ns) {
@@ -727,14 +753,7 @@ function makeAgentApi(): AgentApi {
         )
       )
         .filter((cap): cap is NonNullable<typeof cap> => cap !== null)
-        .map((cap) => ({
-          channelId: cap.channelId,
-          cameraName: cap.cameraName,
-          ptsNs: cap.ptsNs.toString(),
-          width: cap.width,
-          height: cap.height,
-          dataUrl: cap.dataUrl,
-        }));
+        .map(toAgentCapturedFrame);
 
       // Point clouds: reference the spin active at T (raw points stay fetchable
       // via fetchChannelRange — a spin is too large to inline).

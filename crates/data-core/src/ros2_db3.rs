@@ -29,18 +29,11 @@
 //! change). See the task brief for the rationale.
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use arrow_array::{FixedSizeListArray, Float64Array, RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
 
 use crate::reader::{ArrowIpc, Reader};
 use crate::ros::{extract, lookup_typedef, numeric_leaves, Extracted, MessageRegistry, Wire};
 use crate::sqlite::{column_index, SqliteDb, Value};
-use crate::types::{
-    Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
-};
+use crate::types::{Channel, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange};
 
 /// Image-like message types we skip (no scalar channels); mirrors the ROS1 bag
 /// reader so a later phase can add video for these.
@@ -295,43 +288,6 @@ impl Ros2Db3Reader {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Arrow batch construction (identical schema to `ros1_bag.rs`)
-// ---------------------------------------------------------------------------
-
-fn scalar_schema() -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            false,
-        ),
-        Field::new("value", DataType::Float64, false),
-    ]))
-}
-
-fn vector_schema(n: usize) -> Arc<Schema> {
-    let inner = Arc::new(Field::new("item", DataType::Float64, false));
-    Arc::new(Schema::new(vec![
-        Field::new(
-            "ts",
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-            false,
-        ),
-        Field::new("value", DataType::FixedSizeList(inner, n as i32), false),
-    ]))
-}
-
-fn write_ipc(schema: Arc<Schema>, batch: RecordBatch) -> crate::Result<ArrowIpc> {
-    let mut buf = Vec::new();
-    {
-        let mut w = FileWriter::try_new(&mut buf, &schema)?;
-        w.write(&batch)?;
-        w.finish()?;
-    }
-    Ok(buf)
-}
-
 /// Extract the `open_rows` arguments from a parsed rosbag2 SQLite database.
 ///
 /// Maps tables to rows as follows:
@@ -499,13 +455,13 @@ impl Reader for Ros2Db3Reader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
         let (topic, path) = self
             .resolve(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
 
         let msgs = &topic.messages;
         let start_idx = msgs.partition_point(|(t, _)| *t < range.start_ns);
@@ -574,28 +530,14 @@ impl Reader for Ros2Db3Reader {
         match is_vector {
             Some(true) => {
                 let n = vec_width.unwrap_or(0);
-                let schema = vector_schema(n);
-                let ts_arr = TimestampNanosecondArray::from(ts).with_timezone("UTC");
                 let mut flat = Vec::with_capacity(vectors.len() * n);
                 for v in &vectors {
                     flat.extend_from_slice(v);
                 }
-                let child = Arc::new(Float64Array::from(flat));
-                let inner_field = Arc::new(Field::new("item", DataType::Float64, false));
-                let list = FixedSizeListArray::new(inner_field, n as i32, child, None);
-                let batch =
-                    RecordBatch::try_new(schema.clone(), vec![Arc::new(ts_arr), Arc::new(list)])?;
-                write_ipc(schema, batch)
+                crate::arrow::build_vector_ipc(ts, flat, n)
             }
             // Scalars, or an empty range (default to scalar schema).
-            _ => {
-                let schema = scalar_schema();
-                let ts_arr = TimestampNanosecondArray::from(ts).with_timezone("UTC");
-                let val = Float64Array::from(scalars);
-                let batch =
-                    RecordBatch::try_new(schema.clone(), vec![Arc::new(ts_arr), Arc::new(val)])?;
-                write_ipc(schema, batch)
-            }
+            _ => crate::arrow::build_scalar_ipc(ts, scalars),
         }
     }
 }
@@ -655,11 +597,7 @@ mod tests {
         let r = Ros2Db3Reader::open_rows(&topics, &[0], &[1], &[0, 0, 0, 0], &[0, 4], &[]).unwrap();
         assert!(r.meta().channels.is_empty());
         let err = r
-            .fetch_range(
-                &"/weird.data".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("/weird.data", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

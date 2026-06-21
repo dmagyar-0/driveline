@@ -177,6 +177,20 @@ export interface BlitStatus {
   cadence: CadenceSummary;
 }
 
+/** Proactive control message posted over the frame sink when a mid-stream
+ *  decode fault is latched, so the panel can flip to its stalled/retry UI
+ *  without waiting for the stall timeout. */
+export interface SinkDecodeError {
+  type: "decode-error";
+  reason: string;
+}
+
+/** Everything the worker posts over the raw `MessagePort` frame sink. The
+ *  panel's `port.onmessage` discriminates on `type`. Exported so the send
+ *  site (`postBlitStatus`/`postSinkControl`) and the receive site
+ *  (`VideoPanel`) share one definition and can't drift. */
+export type SinkMessage = BlitStatus | SinkDecodeError;
+
 // A decoded frame held in the worker's blit queue (v5). Mirrors the
 // `QueueEntry` that used to live in `VideoPanel`.
 interface QueueEntry {
@@ -858,10 +872,7 @@ let decodeError: Error | null = null;
 // is the same `MessagePort` the worker already uses to hand `VideoFrame`s
 // to the panel; the panel's `onmessage` discriminates frame vs control
 // payloads. No-op when no sink is connected yet.
-function postSinkControl(message: {
-  type: "decode-error";
-  reason: string;
-}): void {
+function postSinkControl(message: SinkDecodeError): void {
   const sink = session?.sink ?? pendingSink;
   if (sink) sink.postMessage(message);
 }

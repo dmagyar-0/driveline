@@ -76,7 +76,6 @@ use std::sync::Arc;
 
 use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::RecordBatch;
-use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema};
 use serde_json::Value;
 
@@ -238,12 +237,12 @@ impl Reader for CalibrationReader {
     /// ignored — every camera is always returned, one row each.
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         _range: TimeRange,
         _opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        if channel_id != &self.channel_id {
-            return Err(crate::Error::ChannelNotFound(channel_id.clone()));
+        if channel_id != self.channel_id {
+            return Err(crate::Error::ChannelNotFound(channel_id.to_string()));
         }
 
         let schema = Self::fetch_schema();
@@ -296,14 +295,7 @@ impl Reader for CalibrationReader {
             ],
         )?;
 
-        // Each camera contributes a short name + ~18 numbers; slack for header.
-        let mut buf = Vec::with_capacity(n * 128 + 2048);
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::write_ipc(schema, batch)
     }
 }
 
@@ -387,7 +379,7 @@ fn parse_camera(cam: &Value, index: usize) -> crate::Result<Camera> {
         }
         CameraModel::Pinhole if !forward_poly.is_empty() => {
             return Err(err(
-                "`forward_poly` is only valid with `model: \"ftheta\"`".into(),
+                "`forward_poly` is only valid with `model: \"ftheta\"`".into()
             ))
         }
         _ => {}
@@ -483,11 +475,7 @@ mod tests {
     fn fetch_emits_camera_row() {
         let r = CalibrationReader::open(SAMPLE.as_bytes()).unwrap();
         let ipc = r
-            .fetch_range(
-                &"calibration".to_string(),
-                TimeRange::empty(),
-                FetchOpts::default(),
-            )
+            .fetch_range("calibration", TimeRange::empty(), FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 1);
@@ -543,11 +531,7 @@ mod tests {
         "#;
         let r = CalibrationReader::open(json.as_bytes()).unwrap();
         let ipc = r
-            .fetch_range(
-                &"calibration".to_string(),
-                TimeRange::empty(),
-                FetchOpts::default(),
-            )
+            .fetch_range("calibration", TimeRange::empty(), FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         let dist = batch.column(4).as_list::<i32>().value(0);
@@ -570,11 +554,7 @@ mod tests {
         let r = CalibrationReader::open(json.as_bytes()).unwrap();
         assert_eq!(r.meta().channels[0].sample_count, 2);
         let ipc = r
-            .fetch_range(
-                &"calibration".to_string(),
-                TimeRange::empty(),
-                FetchOpts::default(),
-            )
+            .fetch_range("calibration", TimeRange::empty(), FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 2);
@@ -604,11 +584,7 @@ mod tests {
         "#;
         let r = CalibrationReader::open(json.as_bytes()).unwrap();
         let ipc = r
-            .fetch_range(
-                &"calibration".to_string(),
-                TimeRange::empty(),
-                FetchOpts::default(),
-            )
+            .fetch_range("calibration", TimeRange::empty(), FetchOpts::default())
             .unwrap();
         let batch = parse_ipc(&ipc);
         let model = batch
@@ -691,11 +667,7 @@ mod tests {
     fn unknown_channel_errors() {
         let r = CalibrationReader::open(SAMPLE.as_bytes()).unwrap();
         let err = r
-            .fetch_range(
-                &"nope".to_string(),
-                TimeRange::empty(),
-                FetchOpts::default(),
-            )
+            .fetch_range("nope", TimeRange::empty(), FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

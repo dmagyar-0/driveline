@@ -294,6 +294,10 @@ The ODD scene elements are the default event-tag taxonomy
 (`DEFAULT_EVENT_TAG_CONFIG`): `weather`, `road_type`, `lighting` (surfaced as
 **Illumination**), `other_road_user`, and `maneuver`. An agent reads them with
 `getEventTagConfig()` and sets them via `addEvent({ tags })` / `setEventTag()`.
+As of v7 the event mutators (`setEventTag` / `setEventRange` / `renameEvent` /
+`removeEvent`) return `boolean` (`true` on a real change, `false` for an unknown
+id / bad input / no-op), so a tagging agent can confirm each write landed
+without try/catch.
 
 **Provenance of the tag values.** The CAN figures in the clip (speed range,
 steering, deceleration) are computed live from the data via `fetchChannelRange`.

@@ -575,14 +575,16 @@ export function App() {
         },
         getLayoutJson: () => JSON.stringify(useSession.getState().layoutJson),
         setLayoutJson: (json) => useSession.getState().setLayoutJson(json),
+        // The dev-hook names are the Playwright contract; internally each
+        // routes through the single `createPanel(kind)` seam.
         addVideoPanel: (channelId) =>
-          workspaceRef.current?.addVideoPanel(channelId),
-        addPlotPanel: () => workspaceRef.current?.addPlotPanel(),
-        addScenePanel: () => workspaceRef.current?.addScenePanel(),
-        addMapPanel: () => workspaceRef.current?.addMapPanel(),
-        addTablePanel: () => workspaceRef.current?.addTablePanel(),
-        addValuePanel: () => workspaceRef.current?.addValuePanel(),
-        addEnumPanel: () => workspaceRef.current?.addEnumPanel(),
+          workspaceRef.current?.createPanel("video", channelId),
+        addPlotPanel: () => workspaceRef.current?.createPanel("plot"),
+        addScenePanel: () => workspaceRef.current?.createPanel("scene"),
+        addMapPanel: () => workspaceRef.current?.createPanel("map"),
+        addTablePanel: () => workspaceRef.current?.createPanel("table"),
+        addValuePanel: () => workspaceRef.current?.createPanel("value"),
+        addEnumPanel: () => workspaceRef.current?.createPanel("enum"),
         resetLayout: () => workspaceRef.current?.resetLayout(),
         setVideoChannelBinding: (panelId, channelId) =>
           useSession.getState().setVideoBinding(panelId, channelId),
@@ -986,40 +988,12 @@ export function App() {
   // Phase 3 — the Channels drawer auto-adds a plot panel when the user
   // clicks a channel with no panel selected. The drawer can't reach
   // FlexLayout directly; App owns `workspaceRef`, so it forwards a
-  // narrow callback. `addPlotPanel` is synchronous (it mutates the
+  // narrow callback. `createPanel("plot")` is synchronous (it mutates the
   // FlexLayout model and returns the new tab id), so reading the id
-  // here is safe.
+  // here is safe. The Layout/Add-panel drawer rows reach FlexLayout
+  // through `workspaceBridge` directly, so no add-panel props are threaded.
   const ensurePlotPanel = (): string | null =>
-    workspaceRef.current?.addPlotPanel() ?? null;
-
-  // Phase 4 — the Layout drawer's add-panel and reset rows. Same
-  // indirection as `ensurePlotPanel`: App owns the WorkspaceHandle and
-  // exposes narrow callbacks so Shell/Drawer/LayoutDrawer don't have
-  // to know about the FlexLayout ref.
-  const addVideoPanel = (): void => {
-    workspaceRef.current?.addVideoPanel();
-  };
-  const addPlotPanel = (): void => {
-    workspaceRef.current?.addPlotPanel();
-  };
-  const addScenePanel = (): void => {
-    workspaceRef.current?.addScenePanel();
-  };
-  const addMapPanel = (): void => {
-    workspaceRef.current?.addMapPanel();
-  };
-  const addTablePanel = (): void => {
-    workspaceRef.current?.addTablePanel();
-  };
-  const addValuePanel = (): void => {
-    workspaceRef.current?.addValuePanel();
-  };
-  const addEnumPanel = (): void => {
-    workspaceRef.current?.addEnumPanel();
-  };
-  const resetLayout = (): void => {
-    workspaceRef.current?.resetLayout();
-  };
+    workspaceRef.current?.createPanel("plot") ?? null;
 
   return (
     <>
@@ -1031,14 +1005,6 @@ export function App() {
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
         ensurePlotPanel={ensurePlotPanel}
-        addVideoPanel={addVideoPanel}
-        addPlotPanel={addPlotPanel}
-        addScenePanel={addScenePanel}
-        addMapPanel={addMapPanel}
-        addTablePanel={addTablePanel}
-        addValuePanel={addValuePanel}
-        addEnumPanel={addEnumPanel}
-        resetLayout={resetLayout}
         transport={<Transport />}
       >
         <Workspace ref={workspaceRef} />

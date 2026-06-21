@@ -997,35 +997,9 @@ export const dataCoreApi = {
     await ready;
     close_map_geometry(handle);
   },
-  async openMcapVideoStream(
-    handle: number,
-    channelId: string,
-    fromPtsNs: bigint,
-  ): Promise<number> {
-    await ready;
-    return mcap_video_open(handle, channelId, fromPtsNs);
-  },
-  async mcapVideoNextBatch(
-    streamId: number,
-    maxN: number,
-  ): Promise<EncodedChunkWire[]> {
-    await ready;
-    const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
-    const chunks = raw.map(normaliseEncodedChunk);
-    // Collect unique underlying ArrayBuffers (wasm may theoretically back
-    // multiple chunks from a single allocation; deduplicate via Set so each
-    // buffer appears in the transfer list at most once).
-    // Cast to ArrayBuffer: wasm-allocated Uint8Array buffers are never
-    // SharedArrayBuffers; the cast satisfies the Comlink.transfer overload.
-    const buffers = new Set<ArrayBuffer>(
-      chunks.map((c) => c.data.buffer as ArrayBuffer),
-    );
-    return Comlink.transfer(chunks, [...buffers]);
-  },
-  async closeMcapVideoStream(streamId: number): Promise<void> {
-    await ready;
-    mcap_video_close(streamId);
-  },
+  openMcapVideoStream: mcapVideoOpen,
+  mcapVideoNextBatch: mcapVideoNextBatch,
+  closeMcapVideoStream: mcapVideoClose,
   /**
    * Worker-to-worker MCAP video bridge. Exposes a minimal
    * `{ openMcapVideoStream, mcapVideoNextBatch, closeMcapVideoStream }` API
@@ -1045,32 +1019,55 @@ export const dataCoreApi = {
    * at the caller.
    */
   connectMcapVideoBridge(port: MessagePort): void {
-    // Re-expose the MCAP video stream methods on the provided port.
-    // mcapVideoNextBatch wraps the chunk buffers in Comlink.transfer so the
+    // Re-expose the SAME MCAP video stream functions on the provided port so
+    // the worker-to-worker hop and the main-thread API can't drift.
+    // `mcapVideoNextBatch` wraps the chunk buffers in Comlink.transfer so the
     // worker-to-worker hop is also zero-copy.
     Comlink.expose(
       {
-        openMcapVideoStream: (h: number, c: string, p: bigint) =>
-          mcap_video_open(h, c, p),
-        mcapVideoNextBatch: async (streamId: number, maxN: number) => {
-          await ready;
-          const raw = mcap_video_next_batch(
-            streamId,
-            maxN,
-          ) as RawEncodedChunk[];
-          const chunks = raw.map(normaliseEncodedChunk);
-          // Cast to ArrayBuffer: wasm buffers are never SharedArrayBuffers.
-          const buffers = new Set<ArrayBuffer>(
-            chunks.map((ch) => ch.data.buffer as ArrayBuffer),
-          );
-          return Comlink.transfer(chunks, [...buffers]);
-        },
-        closeMcapVideoStream: (streamId: number) => mcap_video_close(streamId),
+        openMcapVideoStream: mcapVideoOpen,
+        mcapVideoNextBatch: mcapVideoNextBatch,
+        closeMcapVideoStream: mcapVideoClose,
       },
       port,
     );
   },
 };
+
+// Shared MCAP video stream bodies — referenced by both the main-thread
+// `dataCoreApi` and the worker-to-worker bridge in `connectMcapVideoBridge`
+// so the wasm-call + normalise + `Comlink.transfer` logic lives in one place.
+async function mcapVideoOpen(
+  handle: number,
+  channelId: string,
+  fromPtsNs: bigint,
+): Promise<number> {
+  await ready;
+  return mcap_video_open(handle, channelId, fromPtsNs);
+}
+
+async function mcapVideoNextBatch(
+  streamId: number,
+  maxN: number,
+): Promise<EncodedChunkWire[]> {
+  await ready;
+  const raw = mcap_video_next_batch(streamId, maxN) as RawEncodedChunk[];
+  const chunks = raw.map(normaliseEncodedChunk);
+  // Collect unique underlying ArrayBuffers (wasm may theoretically back
+  // multiple chunks from a single allocation; deduplicate via Set so each
+  // buffer appears in the transfer list at most once).
+  // Cast to ArrayBuffer: wasm-allocated Uint8Array buffers are never
+  // SharedArrayBuffers; the cast satisfies the Comlink.transfer overload.
+  const buffers = new Set<ArrayBuffer>(
+    chunks.map((c) => c.data.buffer as ArrayBuffer),
+  );
+  return Comlink.transfer(chunks, [...buffers]);
+}
+
+async function mcapVideoClose(streamId: number): Promise<void> {
+  await ready;
+  mcap_video_close(streamId);
+}
 
 export type DataCoreApi = typeof dataCoreApi;
 

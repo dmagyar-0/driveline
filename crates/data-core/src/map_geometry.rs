@@ -34,7 +34,6 @@ use std::sync::Arc;
 
 use arrow_array::builder::{Float32Builder, Int32Builder, ListBuilder, StringBuilder};
 use arrow_array::{RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use serde_json::Value;
 
@@ -275,12 +274,12 @@ impl Reader for MapGeometryReader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        if channel_id != &self.channel_id {
-            return Err(crate::Error::ChannelNotFound(channel_id.clone()));
+        if channel_id != self.channel_id {
+            return Err(crate::Error::ChannelNotFound(channel_id.to_string()));
         }
 
         // Single frame at t = 0. With `include_prev` semantics identical to
@@ -344,15 +343,7 @@ impl Reader for MapGeometryReader {
             ],
         )?;
 
-        // Each point is 3 f32 (12 bytes); each feature adds an i32 + a short
-        // type string. Slack.
-        let mut buf = Vec::with_capacity(total_points * 12 + total_features * 24 + 2048);
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::write_ipc(schema, batch)
     }
 }
 
@@ -1141,11 +1132,7 @@ mod tests {
     fn unknown_channel_errors() {
         let r = MapGeometryReader::open(SIMPLE_JSON.as_bytes()).unwrap();
         let err = r
-            .fetch_range(
-                &"nope".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("nope", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

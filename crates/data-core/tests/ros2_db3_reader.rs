@@ -286,11 +286,7 @@ fn include_prev_adds_leading_sample() {
 fn unknown_channel_errors() {
     let r = open();
     let err = r
-        .fetch_range(
-            &"/nope/missing.x".to_string(),
-            r.meta().time_range,
-            FetchOpts::default(),
-        )
+        .fetch_range("/nope/missing.x", r.meta().time_range, FetchOpts::default())
         .unwrap_err();
     assert!(matches!(err, data_core::Error::ChannelNotFound(_)));
 }
@@ -344,7 +340,7 @@ fn open_real_db3_expands_channels_and_decodes() {
     // Decode linear_acceleration.z ~ gravity, full count.
     let zbatch = parse_ipc(
         &r.fetch_range(
-            &"/imu/data.linear_acceleration.z".to_string(),
+            "/imu/data.linear_acceleration.z",
             r.meta().time_range,
             FetchOpts::default(),
         )
@@ -363,7 +359,7 @@ fn open_real_db3_expands_channels_and_decodes() {
     // Temperature in a sane range, full count.
     let tbatch = parse_ipc(
         &r.fetch_range(
-            &"/temperature.data".to_string(),
+            "/temperature.data",
             r.meta().time_range,
             FetchOpts::default(),
         )
@@ -466,12 +462,8 @@ fn embedded_def_resolves_topic_typestore_does_not_know() {
     );
 
     let batch = parse_ipc(
-        &r.fetch_range(
-            &"/custom.value".to_string(),
-            r.meta().time_range,
-            FetchOpts::default(),
-        )
-        .unwrap(),
+        &r.fetch_range("/custom.value", r.meta().time_range, FetchOpts::default())
+            .unwrap(),
     );
     let vals = scalar_values(&batch);
     assert_eq!(vals, vec![42.5]);

@@ -13,127 +13,80 @@
 // the body is hand-rolled virtualised (no component library, per the
 // frontend skill): only the rows in (and just around) the viewport are in
 // the DOM. The expensive merge happens once per fetch/binding change and
-// lives in a ref; the cursor hot path only does a binary search and,
-// when the active row leaves the viewport, one `scrollTop` write.
+// lives in component state; the cursor hot path only does a binary search
+// and, when the active row leaves the viewport, one `scrollTop` write.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../state/store";
-import type { Channel, SourceMeta } from "../state/store";
+import type { Channel } from "../state/store";
 import { effectiveUnit } from "../state/units";
-import { seriesFromArrow } from "./seriesFromArrow";
+import { decodeSeries } from "./seriesFromArrow";
 import { colorFor, MAX_PLOT_SERIES } from "./palette";
 import { formatRelative } from "../timeline/formatTime";
-import {
-  buildTableModel,
-  lastRowAtOrBefore,
-  type TableModel,
-} from "./tableModel";
+import { buildTableModel, type TableModel } from "./tableModel";
+import { formatValue } from "./shared/formatValue";
+import { lastIndexAtOrBefore } from "./shared/cursorLookup";
+import { usePanelChannels } from "./shared/usePanelChannels";
+import { useChannelRanges } from "./shared/useChannelRanges";
 import styles from "./TablePanel.module.css";
 
 interface TablePanelProps {
   panelId: string;
 }
 
-const EMPTY: readonly string[] = Object.freeze([]);
 const ROW_H = 28; // px — fixed row height keeps virtualisation math trivial.
 const OVERSCAN = 6; // rows rendered beyond the viewport on each edge.
 
 const EMPTY_MODEL: TableModel = { rowTsNs: [], columns: [], truncated: false };
 
-function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
-  for (const s of sources) {
-    const hit = s.channels.find((c) => c.id === channelId);
-    if (hit) return hit;
-  }
-  return null;
-}
-
-function formatValue(v: number): string {
-  if (!Number.isFinite(v)) return String(v);
-  const abs = Math.abs(v);
-  if (abs >= 1000 || (abs > 0 && abs < 0.01)) return v.toExponential(3);
-  return v.toFixed(3);
-}
+const isScalar = (c: Channel) => c.kind === "scalar";
 
 export function TablePanel({ panelId }: TablePanelProps) {
-  const sources = useSession((s) => s.sources);
   const unitOverrides = useSession((s) => s.unitOverrides);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
   const storedBindings = useSession((s) => s.tableBindings[panelId]);
   const setTableBinding = useSession((s) => s.setTableBinding);
 
-  const boundIds = useMemo(() => storedBindings ?? EMPTY, [storedBindings]);
+  const { boundChannels } = usePanelChannels({
+    panelId,
+    bindings: storedBindings,
+    isValid: isScalar,
+    setBindings: setTableBinding,
+  });
 
-  const boundChannels = useMemo(
-    () =>
-      boundIds
-        .map((id) => findChannel(sources, id))
-        .filter((c): c is Channel => c !== null),
-    [boundIds, sources],
-  );
+  // Abortable fetch — one batch per bound channel per range change. The merge
+  // + decode below run only when the fetch settles, never on the cursor path.
+  const load = useChannelRanges(boundChannels, globalRange, "TablePanel");
 
-  // Drop stale / non-scalar bindings once a source exists (same guard as
-  // the other panels: don't wipe persisted bindings before first load).
-  useEffect(() => {
-    if (sources.length === 0) return;
-    const filtered = boundIds.filter((id) => {
-      const c = findChannel(sources, id);
-      return c !== null && c.kind === "scalar";
-    });
-    if (filtered.length !== boundIds.length) {
-      setTableBinding(panelId, filtered);
+  // Decode + k-way merge into the row model (or a first decode error). Lives in
+  // a memo keyed on the fetch result, so it rebuilds once per fetch/binding
+  // change. A dtype mismatch surfaces as a visible error instead of a blank
+  // table.
+  const { model, error } = useMemo<{
+    model: TableModel;
+    error: string | null;
+  }>(() => {
+    if (load.status === "error")
+      return { model: EMPTY_MODEL, error: load.error };
+    if (load.status !== "ready") return { model: EMPTY_MODEL, error: null };
+    const inputs = [];
+    for (let i = 0; i < boundChannels.length; i++) {
+      const res = decodeSeries(load.data[i]);
+      if (!res.ok) return { model: EMPTY_MODEL, error: res.message };
+      const c = boundChannels[i];
+      inputs.push({
+        channelId: c.id,
+        name: c.name,
+        unit: c.unit,
+        series: res,
+      });
     }
-  }, [boundIds, sources, panelId, setTableBinding]);
-
-  // The merged row model lives in a ref so cursor ticks don't rebuild it;
-  // `renderTick` threads completion of the async fetch into render.
-  const modelRef = useRef<TableModel>(EMPTY_MODEL);
-  const [renderTick, setRenderTick] = useState(0);
-
-  const fetchKey = boundIds.join("|");
-  useEffect(() => {
-    if (!globalRange || boundChannels.length === 0) {
-      modelRef.current = EMPTY_MODEL;
-      setRenderTick((n) => n + 1);
-      return;
-    }
-    let aborted = false;
-    void (async () => {
-      try {
-        const store = useSession.getState();
-        const batches = await Promise.all(
-          boundChannels.map((c) =>
-            store.fetchChannelRange(
-              c.id,
-              globalRange.startNs,
-              globalRange.endNs,
-              false,
-            ),
-          ),
-        );
-        if (aborted) return;
-        modelRef.current = buildTableModel(
-          boundChannels.map((c, i) => ({
-            channelId: c.id,
-            name: c.name,
-            unit: c.unit,
-            series: seriesFromArrow(batches[i]),
-          })),
-        );
-        setRenderTick((n) => n + 1);
-      } catch (err) {
-        if (!aborted) console.error("TablePanel fetch failed", err);
-      }
-    })();
-    return () => {
-      aborted = true;
-    };
+    return { model: buildTableModel(inputs), error: null };
+    // boundChannels identity tracks the same fetch generation as `load`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchKey, globalRange]);
+  }, [load]);
 
-  void renderTick;
-  const model = modelRef.current;
   const rowCount = model.rowTsNs.length;
   // Column layout is driven by the bound channels (always known), while
   // values come from the merged model looked up by channel id. Deriving
@@ -143,8 +96,7 @@ export function TablePanel({ panelId }: TablePanelProps) {
     const m = new Map<string, (typeof model.columns)[number]>();
     for (const col of model.columns) m.set(col.channelId, col);
     return m;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderTick]);
+  }, [model]);
 
   // --- virtualisation state -------------------------------------------
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -169,7 +121,7 @@ export function TablePanel({ panelId }: TablePanelProps) {
     const ro = new ResizeObserver(sync);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [renderTick]);
+  }, [model]);
 
   const onScroll = () => {
     const el = scrollRef.current;
@@ -188,7 +140,7 @@ export function TablePanel({ panelId }: TablePanelProps) {
   }, []);
 
   const activeRow =
-    rowCount > 0 ? lastRowAtOrBefore(model.rowTsNs, cursorNs) : -1;
+    rowCount > 0 ? lastIndexAtOrBefore(model.rowTsNs, cursorNs) : -1;
 
   // Keep the cursor row on screen. Only scrolls when the active row has
   // actually left the visible area, so manual scrolling near the cursor
@@ -207,7 +159,7 @@ export function TablePanel({ panelId }: TablePanelProps) {
       el.scrollTop = Math.max(0, Math.min(target, maxScroll));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursorNs, activeRow, renderTick, viewportH]);
+  }, [cursorNs, activeRow, model, viewportH]);
 
   const isEmpty = boundChannels.length === 0;
 
@@ -282,7 +234,11 @@ export function TablePanel({ panelId }: TablePanelProps) {
             ))}
           </div>
 
-          {rowCount === 0 ? (
+          {error !== null ? (
+            <p className={styles.noRows} role="alert" data-testid="table-error">
+              {error}
+            </p>
+          ) : rowCount === 0 ? (
             <p className={styles.noRows} data-testid="table-no-rows">
               No samples in range.
             </p>

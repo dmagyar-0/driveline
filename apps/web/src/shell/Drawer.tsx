@@ -27,38 +27,13 @@ export const DRAWER_REGION_ID = "shell-drawer-region";
 export interface DrawerProps {
   /** Mints (or returns) a plot panel id when the Channels drawer's
    *  click-to-bind path needs a target and none is selected. Owned by
-   *  `App.tsx`, which has the `WorkspaceHandle` ref. */
+   *  `App.tsx`, which has the `WorkspaceHandle` ref. The Layout/Add-panel
+   *  rows reach FlexLayout through `workspaceBridge` directly, so no
+   *  per-kind add-panel callbacks are threaded through the drawer. */
   ensurePlotPanel: () => string | null;
-  /** Forwarded to the Layout drawer's `+ video` row. App owns the
-   *  FlexLayout `WorkspaceHandle`; Drawer/Shell only forward. */
-  addVideoPanel: () => void;
-  /** Forwarded to the Layout drawer's `+ plot` row. */
-  addPlotPanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ 3D scene` row. */
-  addScenePanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ map` row. */
-  addMapPanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ table` row. */
-  addTablePanel: () => void;
-  /** Forwarded to the Layout drawer's `+ value` row. */
-  addValuePanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ enum` row. */
-  addEnumPanel: () => void;
-  /** Forwarded to the Layout drawer's `Reset layout` row. */
-  resetLayout: () => void;
 }
 
-export function Drawer({
-  ensurePlotPanel,
-  addVideoPanel,
-  addPlotPanel,
-  addScenePanel,
-  addMapPanel,
-  addTablePanel,
-  addValuePanel,
-  addEnumPanel,
-  resetLayout,
-}: DrawerProps) {
+export function Drawer({ ensurePlotPanel }: DrawerProps) {
   const activeRailTab = useSession((s) => s.activeRailTab);
   const storedWidth = useSession((s) => s.drawerWidth);
   const setDrawerWidth = useSession((s) => s.setDrawerWidth);
@@ -80,26 +55,10 @@ export function Drawer({
       <DrawerBody
         activeRailTab={activeRailTab}
         ensurePlotPanel={ensurePlotPanel}
-        addVideoPanel={addVideoPanel}
-        addPlotPanel={addPlotPanel}
-        addScenePanel={addScenePanel}
-        addMapPanel={addMapPanel}
-        addTablePanel={addTablePanel}
-        addValuePanel={addValuePanel}
-        addEnumPanel={addEnumPanel}
-        resetLayout={resetLayout}
       />
       {/* Persistent shortcut: add a panel from whichever drawer is open,
-          not just the Layout tab. */}
-      <AddPanelMenu
-        addVideoPanel={addVideoPanel}
-        addPlotPanel={addPlotPanel}
-        addScenePanel={addScenePanel}
-        addMapPanel={addMapPanel}
-        addTablePanel={addTablePanel}
-        addValuePanel={addValuePanel}
-        addEnumPanel={addEnumPanel}
-      />
+          not just the Layout tab. Reaches FlexLayout via `workspaceBridge`. */}
+      <AddPanelMenu />
       {/* Drag handle on the drawer's right edge. Absolutely positioned so
           it spans the full height without disturbing the column stack. */}
       <DrawerResizer
@@ -117,14 +76,6 @@ export function Drawer({
 function DrawerBody({
   activeRailTab,
   ensurePlotPanel,
-  addVideoPanel,
-  addPlotPanel,
-  addScenePanel,
-  addMapPanel,
-  addTablePanel,
-  addValuePanel,
-  addEnumPanel,
-  resetLayout,
 }: DrawerProps & { activeRailTab: RailTab }) {
   switch (activeRailTab) {
     case "sources":
@@ -132,18 +83,7 @@ function DrawerBody({
     case "channels":
       return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
     case "layout":
-      return (
-        <LayoutDrawer
-          addVideoPanel={addVideoPanel}
-          addPlotPanel={addPlotPanel}
-          addScenePanel={addScenePanel}
-          addMapPanel={addMapPanel}
-          addTablePanel={addTablePanel}
-          addValuePanel={addValuePanel}
-          addEnumPanel={addEnumPanel}
-          resetLayout={resetLayout}
-        />
-      );
+      return <LayoutDrawer />;
     case "panel":
       return <PanelDrawer />;
     case "events":

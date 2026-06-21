@@ -45,6 +45,7 @@
 
 import type { useSession } from "../store";
 import { colorFor } from "../../panels/palette";
+import { isPlainObject } from "./validators";
 
 export const BOOKMARKS_STORAGE_KEY = "driveline.bookmarks.v2";
 const BOOKMARKS_STORAGE_KEY_V1 = "driveline.bookmarks.v1";
@@ -93,10 +94,6 @@ export interface PersistedBookmarks {
 
 function defaultStorage(): Storage | undefined {
   return typeof localStorage !== "undefined" ? localStorage : undefined;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 function tryParseBigInt(s: string): bigint | null {

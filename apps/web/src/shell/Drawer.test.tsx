@@ -18,18 +18,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Drawer } from "./Drawer";
 import { useSession } from "../state/store";
 
-// The host's forwarded props are only exercised by the Layout/Channels
-// drawers; for these tests we open the Sources drawer, which ignores them.
+// The host's forwarded prop is only exercised by the Channels drawer; for
+// these tests we open the Sources drawer, which ignores it.
 const noopProps = {
   ensurePlotPanel: () => null,
-  addVideoPanel: () => {},
-  addPlotPanel: () => {},
-  addScenePanel: () => {},
-  addMapPanel: () => {},
-  addTablePanel: () => {},
-  addValuePanel: () => {},
-  addEnumPanel: () => {},
-  resetLayout: () => {},
 };
 
 afterEach(async () => {

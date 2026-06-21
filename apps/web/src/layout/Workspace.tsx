@@ -2,9 +2,10 @@
 //
 // Holds the `flexlayout-react` Model, wires user drag-rearrange actions
 // back into `useSession.setLayoutJson` via `onModelChange`, and exposes
-// imperative `addVideoPanel` / `addPlotPanel` / `resetLayout` methods so
-// the top-bar `+` buttons (and dev hooks for future e2e) can add panels
-// without having to know the internal `Model` API.
+// an imperative `createPanel(kind)` / `closePanel` / `resetLayout` handle
+// so the dev hooks (e2e) can drive panels without having to know the
+// internal `Model` API. The same trio is published on the module-scoped
+// `workspaceBridge` for the agent surface and the drawer add-panel rows.
 //
 // Layout JSON round-trips through the store. The persistence adapter in
 // `./persist.ts` then fans `layoutJson` + `videoBindings` + `plotBindings`
@@ -62,15 +63,31 @@ import { setWorkspaceBridge } from "./workspaceBridge";
 import styles from "./Workspace.module.css";
 
 export interface WorkspaceHandle {
-  addVideoPanel(channelId?: string): string | undefined;
-  addPlotPanel(): string | undefined;
-  addScenePanel(): string | undefined;
-  addMapPanel(): string | undefined;
-  addTablePanel(): string | undefined;
-  addValuePanel(): string | undefined;
-  addEnumPanel(): string | undefined;
+  /** Mint a panel of `kind`, returning its freshly-minted tab id (or
+   *  `undefined` if no tabset could host it). `video` accepts an optional
+   *  channel id to pre-bind. Mirrors `WorkspaceBridge.createPanel`. */
+  createPanel(kind: PanelKind, channelId?: string): string | undefined;
+  /** Delete the tab with `panelId`; `true` if it existed. */
+  closePanel(panelId: string): boolean;
+  /** Reset the FlexLayout model to the default split. */
   resetLayout(): void;
 }
+
+// Per-kind tab descriptors. `createPanel` looks the prefix + name +
+// component up here so there is exactly one place that knows how each
+// kind maps onto a FlexLayout tab.
+const KIND_TAB: Record<
+  PanelKind,
+  { prefix: string; name: string; component: string }
+> = {
+  video: { prefix: VIDEO_PREFIX, name: "Video", component: PANEL_COMPONENT_VIDEO },
+  plot: { prefix: PLOT_PREFIX, name: "Plot", component: PANEL_COMPONENT_PLOT },
+  scene: { prefix: SCENE_PREFIX, name: "Scene", component: PANEL_COMPONENT_SCENE },
+  map: { prefix: MAP_PREFIX, name: "Map", component: PANEL_COMPONENT_MAP },
+  table: { prefix: TABLE_PREFIX, name: "Table", component: PANEL_COMPONENT_TABLE },
+  value: { prefix: VALUE_PREFIX, name: "Value", component: PANEL_COMPONENT_VALUE },
+  enum: { prefix: ENUM_PREFIX, name: "Enum", component: PANEL_COMPONENT_ENUM },
+};
 
 function newPanelId(prefix: string): string {
   const rand =
@@ -184,115 +201,27 @@ export const Workspace = forwardRef<WorkspaceHandle>(
       [model, setLayoutJson],
     );
 
-    const addVideoPanel = useCallback(
-      (channelId?: string) => {
-        const id = newPanelId(VIDEO_PREFIX);
-        if (channelId) setVideoBinding(id, channelId);
-        return addTab({
-          type: "tab",
-          id,
-          name: "Video",
-          component: PANEL_COMPONENT_VIDEO,
-        });
-      },
-      [addTab, setVideoBinding],
-    );
-
-    const addPlotPanel = useCallback(() => {
-      const id = newPanelId(PLOT_PREFIX);
-      return addTab({
-        type: "tab",
-        id,
-        name: "Plot",
-        component: PANEL_COMPONENT_PLOT,
-      });
-    }, [addTab]);
-
-    const addScenePanel = useCallback(() => {
-      const id = newPanelId(SCENE_PREFIX);
-      return addTab({
-        type: "tab",
-        id,
-        name: "Scene",
-        component: PANEL_COMPONENT_SCENE,
-      });
-    }, [addTab]);
-
-    const addMapPanel = useCallback(() => {
-      const id = newPanelId(MAP_PREFIX);
-      return addTab({
-        type: "tab",
-        id,
-        name: "Map",
-        component: PANEL_COMPONENT_MAP,
-      });
-    }, [addTab]);
-
-    const addTablePanel = useCallback(() => {
-      const id = newPanelId(TABLE_PREFIX);
-      return addTab({
-        type: "tab",
-        id,
-        name: "Table",
-        component: PANEL_COMPONENT_TABLE,
-      });
-    }, [addTab]);
-
-    const addValuePanel = useCallback(() => {
-      const id = newPanelId(VALUE_PREFIX);
-      return addTab({
-        type: "tab",
-        id,
-        name: "Value",
-        component: PANEL_COMPONENT_VALUE,
-      });
-    }, [addTab]);
-
-    const addEnumPanel = useCallback(() => {
-      const id = newPanelId(ENUM_PREFIX);
-      return addTab({
-        type: "tab",
-        id,
-        name: "Enum",
-        component: PANEL_COMPONENT_ENUM,
-      });
-    }, [addTab]);
-
     const resetLayout = useCallback(() => {
       setLayoutJson(null);
     }, [setLayoutJson]);
 
-    // Phase 3a (Format Agent) · single kind-dispatched panel mint, shared by
-    // the workspace bridge so the agent API and dev hooks reach FlexLayout
-    // through one place. Mirrors the per-kind `add*Panel` methods above.
+    // Phase 3a (Format Agent) · the single kind-dispatched panel mint,
+    // shared by the workspace bridge (agent API), the dev hooks, and the
+    // drawer add-panel rows so every caller reaches FlexLayout through one
+    // place. `video` pre-binds an optional channel before the tab mounts.
     const createPanel = useCallback(
       (kind: PanelKind, channelId?: string): string | undefined => {
-        switch (kind) {
-          case "video":
-            return addVideoPanel(channelId);
-          case "plot":
-            return addPlotPanel();
-          case "scene":
-            return addScenePanel();
-          case "map":
-            return addMapPanel();
-          case "table":
-            return addTablePanel();
-          case "value":
-            return addValuePanel();
-          case "enum":
-            return addEnumPanel();
-        }
+        const spec = KIND_TAB[kind];
+        const id = newPanelId(spec.prefix);
+        if (kind === "video" && channelId) setVideoBinding(id, channelId);
+        return addTab({
+          type: "tab",
+          id,
+          name: spec.name,
+          component: spec.component,
+        });
       },
-      [
-        addVideoPanel,
-        addPlotPanel,
-        addScenePanel,
-        addMapPanel,
-        addTablePanel,
-        addValuePanel,
-        addEnumPanel,
-      ],
+      [addTab, setVideoBinding],
     );
 
     // Delete a tab by id, reporting whether it existed (the per-tab close
@@ -411,26 +340,8 @@ export const Workspace = forwardRef<WorkspaceHandle>(
 
     useImperativeHandle(
       ref,
-      () => ({
-        addVideoPanel,
-        addPlotPanel,
-        addScenePanel,
-        addMapPanel,
-        addTablePanel,
-        addValuePanel,
-        addEnumPanel,
-        resetLayout,
-      }),
-      [
-        addVideoPanel,
-        addPlotPanel,
-        addScenePanel,
-        addMapPanel,
-        addTablePanel,
-        addValuePanel,
-        addEnumPanel,
-        resetLayout,
-      ],
+      () => ({ createPanel, closePanel, resetLayout }),
+      [createPanel, closePanel, resetLayout],
     );
 
     // If the user has somehow closed every tab (FlexLayout does allow an
