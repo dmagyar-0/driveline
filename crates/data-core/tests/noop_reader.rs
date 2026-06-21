@@ -15,7 +15,7 @@ use data_core::{Error, Reader, TimeRange};
 #[test]
 fn noop_video_stream_defaults_to_unsupported_kind() {
     let r = NoopReader::open(&[]).expect("open noop");
-    let result = r.video_stream(&"any".to_string(), 0);
+    let result = r.video_stream("any", 0);
     match result {
         Err(Error::UnsupportedKind) => {}
         Err(e) => panic!("expected UnsupportedKind, got {e:?}"),

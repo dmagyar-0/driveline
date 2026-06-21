@@ -21,7 +21,7 @@ const USAGE: &str = "usage:
   driveline-data info <file>
   driveline-data fetch <file> <channel-id> [--start NS] [--end NS] [--include-prev] [--json]
 
-supported files: .mcap, .mf4, .bag (ROS1), .db3 (ROS2)";
+supported files: .mcap, .mf4, .bag (ROS1), .db3 (ROS2), .xodr (OpenDRIVE map)";
 
 fn fail(msg: &str) -> ExitCode {
     eprintln!("driveline-data: {msg}");

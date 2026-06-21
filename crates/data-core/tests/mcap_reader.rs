@@ -53,11 +53,7 @@ fn opens_and_describes_fixture() {
 fn fetch_range_produces_contract_scalar_ipc() {
     let r = McapReader::open(FIXTURE).expect("open short.mcap");
     let ipc = r
-        .fetch_range(
-            &"/vehicle/speed".to_string(),
-            r.meta().time_range,
-            FetchOpts::default(),
-        )
+        .fetch_range("/vehicle/speed", r.meta().time_range, FetchOpts::default())
         .expect("fetch_range");
 
     let reader = FileReader::try_new(Cursor::new(ipc.as_slice()), None).expect("valid ipc");

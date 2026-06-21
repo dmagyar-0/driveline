@@ -629,12 +629,12 @@ impl Reader for Mp4SidecarReader {
     /// readers.
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         _range: TimeRange,
         _opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        if !self.meta.channels.iter().any(|c| &c.id == channel_id) {
-            return Err(crate::Error::ChannelNotFound(channel_id.clone()));
+        if !self.meta.channels.iter().any(|c| c.id == channel_id) {
+            return Err(crate::Error::ChannelNotFound(channel_id.to_string()));
         }
         Err(crate::Error::UnsupportedKind)
     }
@@ -1143,11 +1143,7 @@ mod tests {
         let r = Mp4SidecarReader::open_pair(&mp4, &sidecar).unwrap();
 
         let err = r
-            .fetch_range(
-                &"does-not-exist".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("does-not-exist", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

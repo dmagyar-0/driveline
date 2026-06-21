@@ -4,6 +4,7 @@
 //! on top of `mf4-rs`, `McapReader` on top of the `mcap` crate, and
 //! `Mp4SidecarReader` for mp4 + `.mp4.timestamps` sidecar pairs.
 
+pub mod arrow;
 pub mod calibration;
 pub mod fixtures;
 pub mod map_geometry;
@@ -140,6 +141,13 @@ pub enum Error {
 
     #[error("ros2 db3 error: {0}")]
     Ros2Db3(String),
+
+    /// A structured failure from the dynamic ROS message decoder
+    /// ([`crate::ros::RosDecodeError`]). Wired in via `#[from]` so the decoder's
+    /// context (offset/needed/remaining for EOFs, the field path for missing
+    /// fields, etc.) survives instead of being flattened to a string.
+    #[error("ros decode error: {0}")]
+    RosDecode(#[from] crate::ros::RosDecodeError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

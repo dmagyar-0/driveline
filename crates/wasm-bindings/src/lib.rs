@@ -9,10 +9,10 @@
 use std::cell::RefCell;
 
 use data_core::{
-    BoxedRangeReader, ByteRangeReader, CalibrationReader, ChannelKind, DType, EncodedChunk,
-    FetchOpts, MapGeometryReader, McapReader, McapVideoCursor, MdfError, Mf4Reader,
-    Mp4SidecarReader, OpenLabelReader, PointCloudReader, Reader, RecipeReader, Ros1BagReader,
-    Ros2Db3Reader, TabularReader, TimeBasis, TimeRange, TrajectoryReader,
+    BoxedRangeReader, ByteRangeReader, CalibrationReader, DType, EncodedChunk, FetchOpts,
+    MapGeometryReader, McapReader, McapVideoCursor, MdfError, Mf4Reader, Mp4SidecarReader,
+    OpenLabelReader, PointCloudReader, Reader, RecipeReader, Ros1BagReader, Ros2Db3Reader,
+    SourceMeta, TabularReader, TimeBasis, TimeRange, TrajectoryReader,
 };
 use js_sys::{Array, Uint8Array};
 use serde::Serialize;
@@ -94,6 +94,234 @@ fn bigint_serializer() -> serde_wasm_bindgen::Serializer {
     serde_wasm_bindgen::Serializer::new().serialize_large_number_types_as_bigints(true)
 }
 
+// ---------------------------------------------------------------------------
+// Shared summary shapes + endpoint helpers
+//
+// Every `*_summary` / `*_fetch_range` / `close_*` / `*_times` endpoint used to
+// be a hand-written copy of the same thread-local-borrow + slab-get +
+// serialise/transfer dance. These structs, helper fns, and declarative macros
+// collapse that into one definition each; the macros expand to the exact same
+// `#[wasm_bindgen]` functions (names and JS signatures unchanged).
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct ChannelInfo {
+    id: String,
+    name: String,
+    unit: Option<String>,
+    /// Channel-group label this channel belongs to, so the UI can nest
+    /// MF4 channels under their group. `None` only if the id is unknown.
+    group: Option<String>,
+    sample_count: u64,
+    start_ns: i64,
+    end_ns: i64,
+}
+
+/// Summary shape for sources whose channels are all the same implicit kind
+/// (MF4 / tabular / lidar / openlabel / calibration / trajectory / recipe):
+/// no per-channel `kind`/`dtype` tag, just id/name/unit/group/count/range. The
+/// JS store hardcodes the kind for these sources.
+#[derive(Serialize)]
+struct ScalarSummary {
+    start_ns: i64,
+    end_ns: i64,
+    channels: Vec<ChannelInfo>,
+}
+
+/// MCAP channels carry heterogeneous kinds (scalar / vector / video / enum /
+/// bytes), so — unlike the `ScalarSummary` sources — every entry needs an
+/// explicit `kind` tag plus an optional `dtype` string. Values are the
+/// lowercased `ChannelKind` / `DType` enum variants, matching
+/// `docs/03-data-model.md`.
+#[derive(Serialize)]
+struct McapChannelInfo {
+    id: String,
+    name: String,
+    kind: &'static str,
+    dtype: Option<&'static str>,
+    unit: Option<String>,
+    sample_count: u64,
+    start_ns: i64,
+    end_ns: i64,
+}
+
+#[derive(Serialize)]
+struct McapSummary {
+    start_ns: i64,
+    end_ns: i64,
+    channels: Vec<McapChannelInfo>,
+}
+
+/// Build a kind-tagged summary (`McapSummary`) JS object from a `SourceMeta`.
+/// Used by sources with heterogeneous channel kinds (mcap / ros / map). The
+/// kind/dtype strings come from `data-core` so the wasm and CLI surfaces can't
+/// drift.
+fn mcap_summary_value(meta: &SourceMeta) -> Result<JsValue, JsError> {
+    let summary = McapSummary {
+        start_ns: meta.time_range.start_ns,
+        end_ns: meta.time_range.end_ns,
+        channels: meta
+            .channels
+            .iter()
+            .map(|c| McapChannelInfo {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                kind: c.kind.as_str(),
+                dtype: c.dtype.map(DType::as_str),
+                unit: c.unit.clone(),
+                sample_count: c.sample_count,
+                start_ns: c.time_range.start_ns,
+                end_ns: c.time_range.end_ns,
+            })
+            .collect(),
+    };
+    summary
+        .serialize(&bigint_serializer())
+        .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+}
+
+/// Build an untagged summary (`ScalarSummary`) JS object from a `SourceMeta`,
+/// resolving each channel's `group` label via `group_fn` (always `None` except
+/// for MF4). Used by sources whose channels are all the same implicit kind.
+fn scalar_summary_value(
+    meta: &SourceMeta,
+    group_fn: impl Fn(&str) -> Option<String>,
+) -> Result<JsValue, JsError> {
+    let summary = ScalarSummary {
+        start_ns: meta.time_range.start_ns,
+        end_ns: meta.time_range.end_ns,
+        channels: meta
+            .channels
+            .iter()
+            .map(|c| ChannelInfo {
+                id: c.id.clone(),
+                name: c.name.clone(),
+                unit: c.unit.clone(),
+                group: group_fn(&c.id),
+                sample_count: c.sample_count,
+                start_ns: c.time_range.start_ns,
+                end_ns: c.time_range.end_ns,
+            })
+            .collect(),
+    };
+    summary
+        .serialize(&bigint_serializer())
+        .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+}
+
+/// Copy Arrow IPC bytes into a freshly-allocated `Uint8Array` for transfer to
+/// JS — the tail of every `*_fetch_range` endpoint.
+fn ipc_to_uint8(bytes: &[u8]) -> Uint8Array {
+    let out = Uint8Array::new_with_length(bytes.len() as u32);
+    out.copy_from(bytes);
+    out
+}
+
+/// Borrow the reader at `handle` from a thread-local slab and run the body over
+/// it, returning the supplied `not_found` error if the handle is stale. Hides
+/// the `RefCell` borrow + slab `get` + `ok_or_else` boilerplate every endpoint
+/// repeated.
+macro_rules! with_reader {
+    ($slab:ident, $handle:expr, $not_found:expr, |$reader:ident| $body:expr) => {
+        $slab.with(|cell| {
+            let slab = cell.borrow();
+            let $reader = slab
+                .get($handle as usize)
+                .ok_or_else(|| JsError::new($not_found))?;
+            $body
+        })
+    };
+}
+
+/// Define a `close_*` endpoint that drops the reader at `handle` from `$slab`.
+/// Leading `#[doc]`/attributes (`$(#[$attr])*`) pass through to the generated fn.
+macro_rules! close_endpoint {
+    ($(#[$attr:meta])* $name:ident, $slab:ident) => {
+        $(#[$attr])*
+        #[wasm_bindgen]
+        pub fn $name(handle: u32) {
+            $slab.with(|cell| {
+                let mut slab = cell.borrow_mut();
+                if slab.contains(handle as usize) {
+                    slab.remove(handle as usize);
+                }
+            });
+        }
+    };
+}
+
+/// Define a `*_fetch_range` endpoint over `$slab` with the standard
+/// `(handle, channel_id, start_ns, end_ns, include_prev)` signature.
+macro_rules! fetch_range_endpoint {
+    ($(#[$attr:meta])* $name:ident, $slab:ident, $not_found:expr) => {
+        $(#[$attr])*
+        #[wasm_bindgen]
+        pub fn $name(
+            handle: u32,
+            channel_id: &str,
+            start_ns: i64,
+            end_ns: i64,
+            include_prev: bool,
+        ) -> Result<Uint8Array, JsError> {
+            with_reader!($slab, handle, $not_found, |reader| {
+                let bytes = reader
+                    .fetch_range(
+                        channel_id,
+                        TimeRange { start_ns, end_ns },
+                        FetchOpts { include_prev },
+                    )
+                    .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+                Ok(ipc_to_uint8(&bytes))
+            })
+        }
+    };
+}
+
+/// Define a `*_summary` endpoint over `$slab` that emits a `ScalarSummary`
+/// (untagged, `group` always `None`).
+macro_rules! scalar_summary_endpoint {
+    ($(#[$attr:meta])* $name:ident, $slab:ident, $not_found:expr) => {
+        $(#[$attr])*
+        #[wasm_bindgen]
+        pub fn $name(handle: u32) -> Result<JsValue, JsError> {
+            with_reader!($slab, handle, $not_found, |reader| {
+                scalar_summary_value(reader.meta(), |_| None)
+            })
+        }
+    };
+}
+
+/// Define a `*_summary` endpoint over `$slab` that emits a kind-tagged
+/// `McapSummary`.
+macro_rules! mcap_summary_endpoint {
+    ($(#[$attr:meta])* $name:ident, $slab:ident, $not_found:expr) => {
+        $(#[$attr])*
+        #[wasm_bindgen]
+        pub fn $name(handle: u32) -> Result<JsValue, JsError> {
+            with_reader!($slab, handle, $not_found, |reader| {
+                mcap_summary_value(reader.meta())
+            })
+        }
+    };
+}
+
+/// Define a `*_frame_times` / `*_spin_times` endpoint returning a
+/// `BigInt64Array` produced by `$method` on the reader.
+macro_rules! times_endpoint {
+    ($(#[$attr:meta])* $name:ident, $slab:ident, $not_found:expr, $method:ident) => {
+        $(#[$attr])*
+        #[wasm_bindgen]
+        pub fn $name(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
+            with_reader!($slab, handle, $not_found, |reader| {
+                let ts = reader.$method();
+                let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
+                arr.copy_from(ts);
+                Ok(arr)
+            })
+        }
+    };
+}
+
 #[wasm_bindgen]
 pub fn ping() -> String {
     "pong".to_string()
@@ -132,18 +360,12 @@ pub fn open_mf4_ranged(read_fn: js_sys::Function, file_size: f64) -> Result<u32,
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the reader at `handle` and free its memory (index, timelines, and any
-/// cached channel values). No-op if the handle is already stale. The JS caller
-/// is responsible for closing the backing OPFS sync access handle afterwards.
-#[wasm_bindgen]
-pub fn close_mf4(handle: u32) {
-    READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the reader at `handle` and free its memory (index, timelines, and any
+    /// cached channel values). No-op if the handle is already stale. The JS caller
+    /// is responsible for closing the backing OPFS sync access handle afterwards.
+    close_mf4, READERS
+);
 
 /// Drop the cached decoded values for one channel — call when a channel is
 /// removed from all plots so its samples no longer occupy memory. Timestamps
@@ -153,29 +375,9 @@ pub fn mf4_release_channel(handle: u32, channel_id: &str) {
     READERS.with(|cell| {
         let slab = cell.borrow();
         if let Some(reader) = slab.get(handle as usize) {
-            reader.release_channel(&channel_id.to_string());
+            reader.release_channel(channel_id);
         }
     });
-}
-
-#[derive(Serialize)]
-struct ChannelInfo {
-    id: String,
-    name: String,
-    unit: Option<String>,
-    /// Channel-group label this channel belongs to, so the UI can nest
-    /// MF4 channels under their group. `None` only if the id is unknown.
-    group: Option<String>,
-    sample_count: u64,
-    start_ns: i64,
-    end_ns: i64,
-}
-
-#[derive(Serialize)]
-struct Mf4Summary {
-    start_ns: i64,
-    end_ns: i64,
-    channels: Vec<ChannelInfo>,
 }
 
 /// Return the reader's `SourceMeta` as a plain JS object: `{ start_ns,
@@ -184,32 +386,8 @@ struct Mf4Summary {
 /// Arrow bytes here.
 #[wasm_bindgen]
 pub fn mf4_summary(handle: u32) -> Result<JsValue, JsError> {
-    READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid mf4 handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: reader.group_label(&c.id),
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+    with_reader!(READERS, handle, "invalid mf4 handle", |reader| {
+        scalar_summary_value(reader.meta(), |id| reader.group_label(id))
     })
 }
 
@@ -246,96 +424,41 @@ pub fn open_mp4_sidecar(mp4_bytes: &[u8], sidecar_bytes: &[u8]) -> Result<u32, J
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the mp4+sidecar reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_mp4_sidecar(handle: u32) {
-    MP4_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the mp4+sidecar reader at `handle`. No-op if the handle is stale.
+    close_mp4_sidecar, MP4_READERS
+);
 
 /// Return the reader's `SourceMeta` as a plain JS object. Video-only source;
 /// channels have `kind = Video` implicitly — no `dtype` is emitted.
 #[wasm_bindgen]
 pub fn mp4_sidecar_summary(handle: u32) -> Result<JsValue, JsError> {
-    MP4_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid mp4+sidecar handle"))?;
-        let meta = reader.meta();
-        let summary = Mp4SidecarSummary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| Mp4VideoChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
-
-/// MCAP channels carry heterogeneous kinds (scalar / vector / video / enum /
-/// bytes), so — unlike the MF4 and MP4+sidecar summaries — every entry needs
-/// an explicit `kind` tag plus an optional `dtype` string. Values are the
-/// lowercased `ChannelKind` / `DType` enum variants, matching
-/// `docs/03-data-model.md`.
-#[derive(Serialize)]
-struct McapChannelInfo {
-    id: String,
-    name: String,
-    kind: &'static str,
-    dtype: Option<&'static str>,
-    unit: Option<String>,
-    sample_count: u64,
-    start_ns: i64,
-    end_ns: i64,
-}
-
-#[derive(Serialize)]
-struct McapSummary {
-    start_ns: i64,
-    end_ns: i64,
-    channels: Vec<McapChannelInfo>,
-}
-
-fn channel_kind_str(k: ChannelKind) -> &'static str {
-    match k {
-        ChannelKind::Scalar => "scalar",
-        ChannelKind::Vector => "vector",
-        ChannelKind::Video => "video",
-        ChannelKind::Enum => "enum",
-        ChannelKind::Bytes => "bytes",
-        ChannelKind::PointCloud => "point_cloud",
-        ChannelKind::BoundingBox => "bounding_box",
-        ChannelKind::CameraCalibration => "camera_calibration",
-        ChannelKind::Trajectory => "trajectory",
-        ChannelKind::MapGeometry => "map_geometry",
-    }
-}
-
-fn dtype_str(d: DType) -> &'static str {
-    match d {
-        DType::F32 => "f32",
-        DType::F64 => "f64",
-        DType::I32 => "i32",
-        DType::I64 => "i64",
-        DType::U32 => "u32",
-        DType::U64 => "u64",
-    }
+    with_reader!(
+        MP4_READERS,
+        handle,
+        "invalid mp4+sidecar handle",
+        |reader| {
+            let meta = reader.meta();
+            let summary = Mp4SidecarSummary {
+                start_ns: meta.time_range.start_ns,
+                end_ns: meta.time_range.end_ns,
+                channels: meta
+                    .channels
+                    .iter()
+                    .map(|c| Mp4VideoChannelInfo {
+                        id: c.id.clone(),
+                        name: c.name.clone(),
+                        sample_count: c.sample_count,
+                        start_ns: c.time_range.start_ns,
+                        end_ns: c.time_range.end_ns,
+                    })
+                    .collect(),
+            };
+            summary
+                .serialize(&bigint_serializer())
+                .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
+        }
+    )
 }
 
 /// Parse an MCAP blob and register a `McapReader` in the thread-local slab.
@@ -372,103 +495,21 @@ pub fn open_mcap_ranged(read_fn: js_sys::Function, file_size: f64) -> Result<u32
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the mcap reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_mcap(handle: u32) {
-    MCAP_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the mcap reader at `handle`. No-op if the handle is stale.
+    close_mcap, MCAP_READERS
+);
 
-/// Return the mcap reader's `SourceMeta` as a plain JS object. Channel
-/// records carry an explicit `kind` (and optional `dtype`) so the JS store
-/// can route scalar / vector / video channels appropriately.
-#[wasm_bindgen]
-pub fn mcap_summary(handle: u32) -> Result<JsValue, JsError> {
-    MCAP_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid mcap handle"))?;
-        let meta = reader.meta();
-        let summary = McapSummary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| McapChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    kind: channel_kind_str(c.kind),
-                    dtype: c.dtype.map(dtype_str),
-                    unit: c.unit.clone(),
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+mcap_summary_endpoint!(
+    /// Return the mcap reader's `SourceMeta` as a plain JS object. Channel
+    /// records carry an explicit `kind` (and optional `dtype`) so the JS store
+    /// can route scalar / vector / video channels appropriately.
+    mcap_summary, MCAP_READERS, "invalid mcap handle"
+);
 
-#[wasm_bindgen]
-pub fn mf4_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid mf4 handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(mf4_fetch_range, READERS, "invalid mf4 handle");
 
-#[wasm_bindgen]
-pub fn mcap_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    MCAP_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid mcap handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(mcap_fetch_range, MCAP_READERS, "invalid mcap handle");
 
 /// Parse a ROS 1 bag (rosbag v2.0) blob and register a `Ros1BagReader` in the
 /// thread-local slab. Like `open_lidar`, the whole file is decoded in memory
@@ -483,77 +524,23 @@ pub fn open_ros1_bag(data: &[u8]) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the ROS 1 bag reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_ros1_bag(handle: u32) {
-    ROS1_BAG_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the ROS 1 bag reader at `handle`. No-op if the handle is stale.
+    close_ros1_bag, ROS1_BAG_READERS
+);
 
-/// Return the ROS 1 bag reader's `SourceMeta` as a plain JS object. ROS 1 bag
-/// channels carry the same `kind` / optional `dtype` shape as mcap channels, so
-/// this reuses `McapSummary` / `McapChannelInfo`.
-#[wasm_bindgen]
-pub fn ros1_bag_summary(handle: u32) -> Result<JsValue, JsError> {
-    ROS1_BAG_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid ros1 bag handle"))?;
-        let meta = reader.meta();
-        let summary = McapSummary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| McapChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    kind: channel_kind_str(c.kind),
-                    dtype: c.dtype.map(dtype_str),
-                    unit: c.unit.clone(),
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+mcap_summary_endpoint!(
+    /// Return the ROS 1 bag reader's `SourceMeta` as a plain JS object. ROS 1 bag
+    /// channels carry the same `kind` / optional `dtype` shape as mcap channels, so
+    /// this reuses `McapSummary` / `McapChannelInfo`.
+    ros1_bag_summary, ROS1_BAG_READERS, "invalid ros1 bag handle"
+);
 
-#[wasm_bindgen]
-pub fn ros1_bag_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    ROS1_BAG_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid ros1 bag handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    ros1_bag_fetch_range,
+    ROS1_BAG_READERS,
+    "invalid ros1 bag handle"
+);
 
 /// Parse a ROS 2 rosbag2 SQLite (`.db3`) blob and register a `Ros2Db3Reader`
 /// in the thread-local slab. Like `open_ros1_bag`, the whole file is decoded in
@@ -568,77 +555,23 @@ pub fn open_ros2_db3(data: &[u8]) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the ROS 2 db3 reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_ros2_db3(handle: u32) {
-    ROS2_DB3_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the ROS 2 db3 reader at `handle`. No-op if the handle is stale.
+    close_ros2_db3, ROS2_DB3_READERS
+);
 
-/// Return the ROS 2 db3 reader's `SourceMeta` as a plain JS object. ROS 2 db3
-/// channels carry the same `kind` / optional `dtype` shape as mcap channels, so
-/// this reuses `McapSummary` / `McapChannelInfo`.
-#[wasm_bindgen]
-pub fn ros2_db3_summary(handle: u32) -> Result<JsValue, JsError> {
-    ROS2_DB3_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid ros2 db3 handle"))?;
-        let meta = reader.meta();
-        let summary = McapSummary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| McapChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    kind: channel_kind_str(c.kind),
-                    dtype: c.dtype.map(dtype_str),
-                    unit: c.unit.clone(),
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+mcap_summary_endpoint!(
+    /// Return the ROS 2 db3 reader's `SourceMeta` as a plain JS object. ROS 2 db3
+    /// channels carry the same `kind` / optional `dtype` shape as mcap channels, so
+    /// this reuses `McapSummary` / `McapChannelInfo`.
+    ros2_db3_summary, ROS2_DB3_READERS, "invalid ros2 db3 handle"
+);
 
-#[wasm_bindgen]
-pub fn ros2_db3_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    ROS2_DB3_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid ros2 db3 handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    ros2_db3_fetch_range,
+    ROS2_DB3_READERS,
+    "invalid ros2 db3 handle"
+);
 
 /// Open an MCAP video stream, snapping to the keyframe at or before
 /// `from_pts_ns`. Returns a handle into `VIDEO_STREAMS`; callers must
@@ -651,7 +584,7 @@ pub fn mcap_video_open(handle: u32, channel_id: &str, from_pts_ns: i64) -> Resul
             .get(handle as usize)
             .ok_or_else(|| JsError::new("invalid mcap handle"))?;
         reader
-            .open_video_cursor(&channel_id.to_string(), from_pts_ns)
+            .open_video_cursor(channel_id, from_pts_ns)
             .map_err(|e| JsError::new(&format!("video_stream failed: {e}")))
     })?;
     let key = VIDEO_STREAMS.with(|cell| {
@@ -838,81 +771,26 @@ pub fn open_tabular(bytes: &[u8], format: &str, basis_json: &str) -> Result<u32,
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the tabular reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_tabular(handle: u32) {
-    TABULAR_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the tabular reader at `handle`. No-op if the handle is stale.
+    close_tabular, TABULAR_READERS
+);
 
-/// Return the tabular reader's `SourceMeta` as a plain JS object. Every
-/// surfaced channel is a `Scalar` / `Float64` signal, so — like the MF4
-/// summary — no per-channel `kind`/`dtype` tag is emitted; the shape is
-/// `{ start_ns, end_ns, channels: [{ id, name, unit, sample_count, start_ns,
-/// end_ns }] }`.
-#[wasm_bindgen]
-pub fn tabular_summary(handle: u32) -> Result<JsValue, JsError> {
-    TABULAR_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid tabular handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: None,
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+scalar_summary_endpoint!(
+    /// Return the tabular reader's `SourceMeta` as a plain JS object. Every
+    /// surfaced channel is a `Scalar` / `Float64` signal, so — like the MF4
+    /// summary — no per-channel `kind`/`dtype` tag is emitted; the shape is
+    /// `{ start_ns, end_ns, channels: [{ id, name, unit, sample_count, start_ns,
+    /// end_ns }] }`.
+    tabular_summary, TABULAR_READERS, "invalid tabular handle"
+);
 
-/// Arrow IPC bytes for `[start_ns, end_ns)` of the given tabular channel id
-/// (the column name). `include_prev` controls the step-hold leading-sample
-/// option documented in `docs/03-data-model.md` FetchOpts.
-#[wasm_bindgen]
-pub fn tabular_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    TABULAR_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid tabular handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    /// Arrow IPC bytes for `[start_ns, end_ns)` of the given tabular channel id
+    /// (the column name). `include_prev` controls the step-hold leading-sample
+    /// option documented in `docs/03-data-model.md` FetchOpts.
+    tabular_fetch_range, TABULAR_READERS, "invalid tabular handle"
+);
 
 /// The converted time column (ns-UTC, ascending) of a tabular source, as a
 /// `BigInt64Array`. Used to derive per-frame video timestamps from a
@@ -1016,100 +894,38 @@ pub fn open_alpamayo_lidar(
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the lidar reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_lidar(handle: u32) {
-    LIDAR_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the lidar reader at `handle`. No-op if the handle is stale.
+    close_lidar, LIDAR_READERS
+);
 
-/// Return the lidar reader's `SourceMeta` as a plain JS object. A point-cloud
-/// source surfaces exactly one channel; like the MF4 summary the kind is
-/// implicit (the JS store hardcodes `point_cloud`), so the shape reuses the
-/// MF4 summary layout (`group` always null, `sample_count` = peak points/spin).
-#[wasm_bindgen]
-pub fn lidar_summary(handle: u32) -> Result<JsValue, JsError> {
-    LIDAR_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid lidar handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: None,
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+scalar_summary_endpoint!(
+    /// Return the lidar reader's `SourceMeta` as a plain JS object. A point-cloud
+    /// source surfaces exactly one channel; like the MF4 summary the kind is
+    /// implicit (the JS store hardcodes `point_cloud`), so the shape reuses the
+    /// MF4 summary layout (`group` always null, `sample_count` = peak points/spin).
+    lidar_summary, LIDAR_READERS, "invalid lidar handle"
+);
 
-/// Arrow IPC bytes for the spins overlapping `[start_ns, end_ns)` of the given
-/// point-cloud channel. The 3D scene panel passes a zero/one-width window plus
-/// `include_prev` to fetch exactly the spin active at the cursor. The emitted
-/// schema is `{ ts: Timestamp(ns), positions: List<Float32>, intensities:
-/// List<Float32> }` (one row per spin) — see `pointcloud.rs`.
-#[wasm_bindgen]
-pub fn lidar_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    LIDAR_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid lidar handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    /// Arrow IPC bytes for the spins overlapping `[start_ns, end_ns)` of the given
+    /// point-cloud channel. The 3D scene panel passes a zero/one-width window plus
+    /// `include_prev` to fetch exactly the spin active at the cursor. The emitted
+    /// schema is `{ ts: Timestamp(ns), positions: List<Float32>, intensities:
+    /// List<Float32> }` (one row per spin) — see `pointcloud.rs`.
+    lidar_fetch_range, LIDAR_READERS, "invalid lidar handle"
+);
 
-/// Ascending spin start timestamps (ns) of a point-cloud source, as a
-/// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
-/// locally to map the cursor to a spin index, so it only refetches point data
-/// when the active spin changes (not once per cursor tick).
-#[wasm_bindgen]
-pub fn lidar_spin_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
-    LIDAR_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid lidar handle"))?;
-        let ts = reader.spin_times();
-        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
-        arr.copy_from(ts);
-        Ok(arr)
-    })
-}
+times_endpoint!(
+    /// Ascending spin start timestamps (ns) of a point-cloud source, as a
+    /// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
+    /// locally to map the cursor to a spin index, so it only refetches point data
+    /// when the active spin changes (not once per cursor tick).
+    lidar_spin_times,
+    LIDAR_READERS,
+    "invalid lidar handle",
+    spin_times
+);
 
 // ---------------------------------------------------------------------------
 // OpenLABEL (ASAM OpenLABEL JSON — 3D cuboid bounding boxes)
@@ -1130,101 +946,43 @@ pub fn open_openlabel(bytes: Vec<u8>) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the openlabel reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_openlabel(handle: u32) {
-    OPENLABEL_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the openlabel reader at `handle`. No-op if the handle is stale.
+    close_openlabel, OPENLABEL_READERS
+);
 
-/// Return the openlabel reader's `SourceMeta` as a plain JS object. An
-/// OpenLABEL source surfaces exactly one `bounding_box` channel; the shape
-/// reuses the MF4/lidar summary layout (`group` always null, `sample_count` =
-/// peak boxes-per-frame). 64-bit numbers serialise as `BigInt`.
-#[wasm_bindgen]
-pub fn openlabel_summary(handle: u32) -> Result<JsValue, JsError> {
-    OPENLABEL_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: None,
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+scalar_summary_endpoint!(
+    /// Return the openlabel reader's `SourceMeta` as a plain JS object. An
+    /// OpenLABEL source surfaces exactly one `bounding_box` channel; the shape
+    /// reuses the MF4/lidar summary layout (`group` always null, `sample_count` =
+    /// peak boxes-per-frame). 64-bit numbers serialise as `BigInt`.
+    openlabel_summary,
+    OPENLABEL_READERS,
+    "invalid openlabel handle"
+);
 
-/// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
-/// bounding-box channel. The 3D scene panel passes a zero/one-width window plus
-/// `include_prev` to fetch exactly the frame active at the cursor. The emitted
-/// schema is `{ ts: Timestamp(ns), centers: List<Float32>, sizes:
-/// List<Float32>, rotations: List<Float32>, labels: List<Utf8> }` (one row per
-/// frame) — see `openlabel.rs`.
-#[wasm_bindgen]
-pub fn openlabel_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    OPENLABEL_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    /// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
+    /// bounding-box channel. The 3D scene panel passes a zero/one-width window plus
+    /// `include_prev` to fetch exactly the frame active at the cursor. The emitted
+    /// schema is `{ ts: Timestamp(ns), centers: List<Float32>, sizes:
+    /// List<Float32>, rotations: List<Float32>, labels: List<Utf8> }` (one row per
+    /// frame) — see `openlabel.rs`.
+    openlabel_fetch_range,
+    OPENLABEL_READERS,
+    "invalid openlabel handle"
+);
 
-/// Ascending frame timestamps (ns) of an OpenLABEL source, as a
-/// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
-/// locally to map the cursor to a frame index, so it only refetches box data
-/// when the active frame changes (not once per cursor tick).
-#[wasm_bindgen]
-pub fn openlabel_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
-    OPENLABEL_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid openlabel handle"))?;
-        let ts = reader.frame_times();
-        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
-        arr.copy_from(ts);
-        Ok(arr)
-    })
-}
+times_endpoint!(
+    /// Ascending frame timestamps (ns) of an OpenLABEL source, as a
+    /// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
+    /// locally to map the cursor to a frame index, so it only refetches box data
+    /// when the active frame changes (not once per cursor tick).
+    openlabel_frame_times,
+    OPENLABEL_READERS,
+    "invalid openlabel handle",
+    frame_times
+);
 
 // ---------------------------------------------------------------------------
 // Calibration (driveline.calibration/v1 — camera ↔ LiDAR calibration)
@@ -1247,51 +1005,20 @@ pub fn open_calibration(bytes: Vec<u8>) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the calibration reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_calibration(handle: u32) {
-    CALIBRATION_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the calibration reader at `handle`. No-op if the handle is stale.
+    close_calibration, CALIBRATION_READERS
+);
 
-/// Return the calibration reader's `SourceMeta` as a plain JS object. A
-/// calibration source surfaces exactly one `camera_calibration` channel; the
-/// shape reuses the MF4/lidar summary layout (`group` always null,
-/// `sample_count` = camera count). 64-bit numbers serialise as `BigInt`.
-#[wasm_bindgen]
-pub fn calibration_summary(handle: u32) -> Result<JsValue, JsError> {
-    CALIBRATION_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid calibration handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: None,
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+scalar_summary_endpoint!(
+    /// Return the calibration reader's `SourceMeta` as a plain JS object. A
+    /// calibration source surfaces exactly one `camera_calibration` channel; the
+    /// shape reuses the MF4/lidar summary layout (`group` always null,
+    /// `sample_count` = camera count). 64-bit numbers serialise as `BigInt`.
+    calibration_summary,
+    CALIBRATION_READERS,
+    "invalid calibration handle"
+);
 
 /// Arrow IPC bytes for the calibration channel. Calibration is **config, not a
 /// time series**: there is no range — every camera is always returned, one row
@@ -1301,22 +1028,17 @@ pub fn calibration_summary(handle: u32) -> Result<JsValue, JsError> {
 /// `calibration.rs` and `docs/13-camera-lidar-calibration.md`.
 #[wasm_bindgen]
 pub fn calibration_fetch_range(handle: u32, channel_id: &str) -> Result<Uint8Array, JsError> {
-    CALIBRATION_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid calibration handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange::empty(),
-                FetchOpts::default(),
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
+    with_reader!(
+        CALIBRATION_READERS,
+        handle,
+        "invalid calibration handle",
+        |reader| {
+            let bytes = reader
+                .fetch_range(channel_id, TimeRange::empty(), FetchOpts::default())
+                .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
+            Ok(ipc_to_uint8(&bytes))
+        }
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1339,101 +1061,43 @@ pub fn open_trajectory(bytes: Vec<u8>) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the trajectory reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_trajectory(handle: u32) {
-    TRAJECTORY_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the trajectory reader at `handle`. No-op if the handle is stale.
+    close_trajectory, TRAJECTORY_READERS
+);
 
-/// Return the trajectory reader's `SourceMeta` as a plain JS object. A
-/// trajectory source surfaces exactly one `trajectory` channel; the shape
-/// reuses the MF4/lidar summary layout (`group` always null, `sample_count` =
-/// peak paths-per-frame). 64-bit numbers serialise as `BigInt`.
-#[wasm_bindgen]
-pub fn trajectory_summary(handle: u32) -> Result<JsValue, JsError> {
-    TRAJECTORY_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: None,
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+scalar_summary_endpoint!(
+    /// Return the trajectory reader's `SourceMeta` as a plain JS object. A
+    /// trajectory source surfaces exactly one `trajectory` channel; the shape
+    /// reuses the MF4/lidar summary layout (`group` always null, `sample_count` =
+    /// peak paths-per-frame). 64-bit numbers serialise as `BigInt`.
+    trajectory_summary,
+    TRAJECTORY_READERS,
+    "invalid trajectory handle"
+);
 
-/// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
-/// trajectory channel. The 3D scene panel passes a zero/one-width window plus
-/// `include_prev` to fetch exactly the frame active at the cursor. The emitted
-/// schema is `{ ts: Timestamp(ns), points: List<Float32>, path_lengths:
-/// List<Int32>, confidences: List<Float32> }` (one row per frame) — see
-/// `trajectory.rs`.
-#[wasm_bindgen]
-pub fn trajectory_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    TRAJECTORY_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    /// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
+    /// trajectory channel. The 3D scene panel passes a zero/one-width window plus
+    /// `include_prev` to fetch exactly the frame active at the cursor. The emitted
+    /// schema is `{ ts: Timestamp(ns), points: List<Float32>, path_lengths:
+    /// List<Int32>, confidences: List<Float32> }` (one row per frame) — see
+    /// `trajectory.rs`.
+    trajectory_fetch_range,
+    TRAJECTORY_READERS,
+    "invalid trajectory handle"
+);
 
-/// Ascending frame timestamps (ns) of a trajectory source, as a
-/// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
-/// locally to map the cursor to a frame index, so it only refetches trajectory
-/// data when the active frame changes (not once per cursor tick).
-#[wasm_bindgen]
-pub fn trajectory_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
-    TRAJECTORY_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid trajectory handle"))?;
-        let ts = reader.frame_times();
-        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
-        arr.copy_from(ts);
-        Ok(arr)
-    })
-}
+times_endpoint!(
+    /// Ascending frame timestamps (ns) of a trajectory source, as a
+    /// `BigInt64Array` — one entry per frame. The scene panel binary-searches this
+    /// locally to map the cursor to a frame index, so it only refetches trajectory
+    /// data when the active frame changes (not once per cursor tick).
+    trajectory_frame_times,
+    TRAJECTORY_READERS,
+    "invalid trajectory handle",
+    frame_times
+);
 
 // ---------------------------------------------------------------------------
 // Map geometry (road network — OpenDRIVE .xodr or simple `drivelineMap` JSON)
@@ -1455,104 +1119,45 @@ pub fn open_map_geometry(bytes: Vec<u8>) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the map-geometry reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_map_geometry(handle: u32) {
-    MAP_GEOMETRY_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the map-geometry reader at `handle`. No-op if the handle is stale.
+    close_map_geometry, MAP_GEOMETRY_READERS
+);
 
-/// Return the map-geometry reader's `SourceMeta` as a plain JS object. A map
-/// source surfaces exactly one `map_geometry` channel; the shape reuses the
-/// MF4/lidar summary layout (`group` always null, `sample_count` = polyline
-/// count). Channels carry an explicit `kind` (`"map_geometry"`) so the JS
-/// normaliser routes them to the scene panel. 64-bit numbers serialise as
-/// `BigInt`.
-#[wasm_bindgen]
-pub fn map_geometry_summary(handle: u32) -> Result<JsValue, JsError> {
-    MAP_GEOMETRY_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid map geometry handle"))?;
-        let meta = reader.meta();
-        let summary = McapSummary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| McapChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    kind: channel_kind_str(c.kind),
-                    dtype: c.dtype.map(dtype_str),
-                    unit: c.unit.clone(),
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+mcap_summary_endpoint!(
+    /// Return the map-geometry reader's `SourceMeta` as a plain JS object. A map
+    /// source surfaces exactly one `map_geometry` channel; the shape reuses the
+    /// MF4/lidar summary layout (`group` always null, `sample_count` = polyline
+    /// count). Channels carry an explicit `kind` (`"map_geometry"`) so the JS
+    /// normaliser routes them to the scene panel. 64-bit numbers serialise as
+    /// `BigInt`.
+    map_geometry_summary,
+    MAP_GEOMETRY_READERS,
+    "invalid map geometry handle"
+);
 
-/// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
-/// map-geometry channel. A map is a single static frame at `t = 0`; the scene
-/// panel passes a zero/one-width window plus `include_prev` to fetch it. The
-/// emitted schema is `{ ts: Timestamp(ns), points: List<Float32>, path_lengths:
-/// List<Int32>, types: List<Utf8> }` (one row per frame) — see
-/// `map_geometry.rs`.
-#[wasm_bindgen]
-pub fn map_geometry_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    MAP_GEOMETRY_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid map geometry handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    /// Arrow IPC bytes for the frames overlapping `[start_ns, end_ns)` of the given
+    /// map-geometry channel. A map is a single static frame at `t = 0`; the scene
+    /// panel passes a zero/one-width window plus `include_prev` to fetch it. The
+    /// emitted schema is `{ ts: Timestamp(ns), points: List<Float32>, path_lengths:
+    /// List<Int32>, types: List<Utf8> }` (one row per frame) — see
+    /// `map_geometry.rs`.
+    map_geometry_fetch_range,
+    MAP_GEOMETRY_READERS,
+    "invalid map geometry handle"
+);
 
-/// Ascending frame timestamps (ns) of a map-geometry source, as a
-/// `BigInt64Array` — always a single entry `[0]` (a map is static). The scene
-/// panel reads frame 0 to fetch the road network once. Mirrors
-/// `openlabel_frame_times`.
-#[wasm_bindgen]
-pub fn map_geometry_frame_times(handle: u32) -> Result<js_sys::BigInt64Array, JsError> {
-    MAP_GEOMETRY_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid map geometry handle"))?;
-        let ts = reader.frame_times();
-        let arr = js_sys::BigInt64Array::new_with_length(ts.len() as u32);
-        arr.copy_from(ts);
-        Ok(arr)
-    })
-}
+times_endpoint!(
+    /// Ascending frame timestamps (ns) of a map-geometry source, as a
+    /// `BigInt64Array` — always a single entry `[0]` (a map is static). The scene
+    /// panel reads frame 0 to fetch the road network once. Mirrors
+    /// `openlabel_frame_times`.
+    map_geometry_frame_times,
+    MAP_GEOMETRY_READERS,
+    "invalid map geometry handle",
+    frame_times
+);
 
 // ---------------------------------------------------------------------------
 // Recipe (Format Agent — declarative decode of an unknown format)
@@ -1584,77 +1189,22 @@ pub fn open_recipe(bytes: &[u8], recipe_json: &str) -> Result<u32, JsError> {
     u32::try_from(key).map_err(|_| JsError::new("reader handle overflowed u32"))
 }
 
-/// Drop the recipe reader at `handle`. No-op if the handle is stale.
-#[wasm_bindgen]
-pub fn close_recipe(handle: u32) {
-    RECIPE_READERS.with(|cell| {
-        let mut slab = cell.borrow_mut();
-        if slab.contains(handle as usize) {
-            slab.remove(handle as usize);
-        }
-    });
-}
+close_endpoint!(
+    /// Drop the recipe reader at `handle`. No-op if the handle is stale.
+    close_recipe, RECIPE_READERS
+);
 
-/// Return the recipe reader's `SourceMeta` as a plain JS object — the same shape
-/// `tabular_summary` emits (`{ start_ns, end_ns, channels: [{ id, name, unit,
-/// group, sample_count, start_ns, end_ns }] }`), since every recipe channel is a
-/// scalar f64 signal.
-#[wasm_bindgen]
-pub fn recipe_summary(handle: u32) -> Result<JsValue, JsError> {
-    RECIPE_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid recipe handle"))?;
-        let meta = reader.meta();
-        let summary = Mf4Summary {
-            start_ns: meta.time_range.start_ns,
-            end_ns: meta.time_range.end_ns,
-            channels: meta
-                .channels
-                .iter()
-                .map(|c| ChannelInfo {
-                    id: c.id.clone(),
-                    name: c.name.clone(),
-                    unit: c.unit.clone(),
-                    group: None,
-                    sample_count: c.sample_count,
-                    start_ns: c.time_range.start_ns,
-                    end_ns: c.time_range.end_ns,
-                })
-                .collect(),
-        };
-        summary
-            .serialize(&bigint_serializer())
-            .map_err(|e| JsError::new(&format!("serialise summary: {e}")))
-    })
-}
+scalar_summary_endpoint!(
+    /// Return the recipe reader's `SourceMeta` as a plain JS object — the same shape
+    /// `tabular_summary` emits (`{ start_ns, end_ns, channels: [{ id, name, unit,
+    /// group, sample_count, start_ns, end_ns }] }`), since every recipe channel is a
+    /// scalar f64 signal.
+    recipe_summary, RECIPE_READERS, "invalid recipe handle"
+);
 
-/// Arrow IPC bytes for `[start_ns, end_ns)` of the given recipe channel id.
-/// `include_prev` controls the step-hold leading-sample option documented in
-/// `docs/03-data-model.md` FetchOpts.
-#[wasm_bindgen]
-pub fn recipe_fetch_range(
-    handle: u32,
-    channel_id: &str,
-    start_ns: i64,
-    end_ns: i64,
-    include_prev: bool,
-) -> Result<Uint8Array, JsError> {
-    RECIPE_READERS.with(|cell| {
-        let slab = cell.borrow();
-        let reader = slab
-            .get(handle as usize)
-            .ok_or_else(|| JsError::new("invalid recipe handle"))?;
-        let bytes = reader
-            .fetch_range(
-                &channel_id.to_string(),
-                TimeRange { start_ns, end_ns },
-                FetchOpts { include_prev },
-            )
-            .map_err(|e| JsError::new(&format!("fetch_range failed: {e}")))?;
-        let out = Uint8Array::new_with_length(bytes.len() as u32);
-        out.copy_from(&bytes);
-        Ok(out)
-    })
-}
+fetch_range_endpoint!(
+    /// Arrow IPC bytes for `[start_ns, end_ns)` of the given recipe channel id.
+    /// `include_prev` controls the step-hold leading-sample option documented in
+    /// `docs/03-data-model.md` FetchOpts.
+    recipe_fetch_range, RECIPE_READERS, "invalid recipe handle"
+);

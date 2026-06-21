@@ -52,7 +52,6 @@ use arrow_array::builder::{Float32Builder, ListBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{Array, RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
@@ -466,12 +465,12 @@ impl Reader for PointCloudReader {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        if channel_id != &self.channel_id {
-            return Err(crate::Error::ChannelNotFound(channel_id.clone()));
+        if channel_id != self.channel_id {
+            return Err(crate::Error::ChannelNotFound(channel_id.to_string()));
         }
 
         // Spins overlapping [start, end). With `include_prev` we also emit the
@@ -537,15 +536,7 @@ impl Reader for PointCloudReader {
             vec![Arc::new(ts_array), Arc::new(pos_array), Arc::new(int_array)],
         )?;
 
-        // Pre-size the IPC output buffer: each point contributes 3×f32 (pos)
-        // + 1×f32 (intensity) = 16 bytes; add ~2 KiB of header/schema slack.
-        let mut buf = Vec::with_capacity(total_points * 16 + 2048);
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+        crate::arrow::write_ipc(schema, batch)
     }
 }
 
@@ -768,11 +759,7 @@ mod tests {
             end_ns: 1_150_000_000,
         };
         let ipc = r
-            .fetch_range(
-                &"lidar_top_360fov".to_string(),
-                range,
-                FetchOpts { include_prev: true },
-            )
+            .fetch_range("lidar_top_360fov", range, FetchOpts { include_prev: true })
             .unwrap();
         let batch = parse_ipc(&ipc);
         let pos = batch.column(1).as_list::<i32>().value(0);
@@ -847,11 +834,7 @@ mod tests {
             end_ns: 1_150_000_000,
         };
         let ipc = r
-            .fetch_range(
-                &"lidar_top_360fov".to_string(),
-                range,
-                FetchOpts { include_prev: true },
-            )
+            .fetch_range("lidar_top_360fov", range, FetchOpts { include_prev: true })
             .unwrap();
         let batch = parse_ipc(&ipc);
         assert_eq!(batch.num_rows(), 1);
@@ -894,7 +877,7 @@ mod tests {
         // Window covering both spins.
         let ipc = r
             .fetch_range(
-                &"lidar_top_360fov".to_string(),
+                "lidar_top_360fov",
                 TimeRange {
                     start_ns: 1_000_000_000,
                     end_ns: 1_200_000_000,
@@ -909,11 +892,7 @@ mod tests {
     fn unknown_channel_errors() {
         let r = PointCloudReader::open(&sample()).unwrap();
         let err = r
-            .fetch_range(
-                &"nope".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("nope", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }
@@ -974,7 +953,7 @@ mod tests {
         // fourth row group) — values must not be smeared by neighbours.
         let ipc = r
             .fetch_range(
-                &"lidar_top_360fov".to_string(),
+                "lidar_top_360fov",
                 TimeRange {
                     start_ns: 1_900_000_000,
                     end_ns: 1_900_000_001,

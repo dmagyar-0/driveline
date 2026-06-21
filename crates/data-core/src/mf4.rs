@@ -25,13 +25,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use arrow_array::{Float64Array, RecordBatch, TimestampNanosecondArray};
-use arrow_ipc::writer::FileWriter;
-use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use mf4_rs::error::MdfError;
 use mf4_rs::index::{ByteRangeReader, IndexedChannelGroup, MdfIndex, SliceRangeReader};
 
-use crate::reader::ArrowIpc;
+use crate::reader::{ArrowIpc, Reader};
 use crate::types::{
     Channel, ChannelId, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange,
 };
@@ -416,7 +413,7 @@ impl Mf4Reader {
     /// comment, then a positional `Group {g}` fallback so MF4 channels can
     /// always be nested under a named group in the UI. Returns `None` only
     /// for an unknown id.
-    pub fn group_label(&self, channel_id: &ChannelId) -> Option<String> {
+    pub fn group_label(&self, channel_id: &str) -> Option<String> {
         let (g, _c, _key) = self.channel_map.get(channel_id)?;
         let cg = self.idx.channel_groups.get(*g)?;
         let non_empty = |s: &String| !s.trim().is_empty();
@@ -451,7 +448,7 @@ impl Mf4Reader {
 
     /// Drop the cached decoded values for `channel_id`, e.g. when the channel
     /// is removed from all plots. Timestamps and the index are retained.
-    pub fn release_channel(&self, channel_id: &ChannelId) {
+    pub fn release_channel(&self, channel_id: &str) {
         if let Some((g, c, _key)) = self.channel_map.get(channel_id) {
             self.value_cache.borrow_mut().remove(&(*g, *c));
         }
@@ -459,14 +456,14 @@ impl Mf4Reader {
 
     pub fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
         let (g, c, key) = self
             .channel_map
             .get(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.clone()))?;
+            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
         let (g, c) = (*g, *c);
 
         let abs_ns = &self.cg_time_ns[g];
@@ -482,15 +479,6 @@ impl Mf4Reader {
             None
         };
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new(
-                "ts",
-                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-                false,
-            ),
-            Field::new("value", DataType::Float64, false),
-        ]));
-
         let (ts_final, vals_final): (Vec<i64>, Vec<f64>) =
             if start_idx == end_idx && prev_idx.is_none() {
                 (Vec::new(), Vec::new())
@@ -505,29 +493,41 @@ impl Mf4Reader {
                 (ts, vs)
             };
 
-        let ts_array = TimestampNanosecondArray::from(ts_final).with_timezone("UTC");
-        let value_array = Float64Array::from(vals_final);
+        crate::arrow::build_scalar_ipc(ts_final, vals_final)
+    }
+}
 
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(ts_array), Arc::new(value_array)],
-        )?;
+/// Bring `Mf4Reader` under the shared [`Reader`] trait so generic callers treat
+/// it like every other format. `open` maps to the in-memory [`Self::open_slice`];
+/// the lazy ranged constructor (`open_ranged`) stays inherent — it needs a
+/// `BoxedRangeReader` and file size that the byte-slice trait `open` can't
+/// supply. MF4 produces no video channels, so `video_stream` uses the trait
+/// default (`UnsupportedKind`).
+impl Reader for Mf4Reader {
+    fn open(bytes: &[u8]) -> crate::Result<Self> {
+        Mf4Reader::open_slice(bytes)
+    }
 
-        let mut buf = Vec::new();
-        {
-            let mut w = FileWriter::try_new(&mut buf, &schema)?;
-            w.write(&batch)?;
-            w.finish()?;
-        }
-        Ok(buf)
+    fn meta(&self) -> &SourceMeta {
+        Mf4Reader::meta(self)
+    }
+
+    fn fetch_range(
+        &self,
+        channel_id: &str,
+        range: TimeRange,
+        opts: FetchOpts,
+    ) -> crate::Result<ArrowIpc> {
+        Mf4Reader::fetch_range(self, channel_id, range, opts)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Array;
+    use arrow_array::{Array, Float64Array, RecordBatch, TimestampNanosecondArray};
     use arrow_ipc::reader::FileReader;
+    use arrow_schema::{DataType, TimeUnit};
     use mf4_rs::blocks::common::DataType as Mf4DataType;
     use mf4_rs::writer::MdfWriter;
     use std::io::Cursor;
@@ -620,7 +620,7 @@ mod tests {
         // The writer leaves this group unnamed, so `group_label` falls back
         // to the positional `Group {g}` so the UI can still nest it.
         assert_eq!(r.group_label(&ch.id), Some("Group 0".to_string()));
-        assert_eq!(r.group_label(&"9/9".to_string()), None);
+        assert_eq!(r.group_label("9/9"), None);
 
         // Default MDF header abs_time is 2h in ns; the exact value doesn't
         // matter, only that all samples are within [start, end).
@@ -726,11 +726,7 @@ mod tests {
         let bytes = synth_single_group();
         let r = Mf4Reader::open_slice(&bytes).unwrap();
         let err = r
-            .fetch_range(
-                &"99/99".to_string(),
-                r.meta().time_range,
-                FetchOpts::default(),
-            )
+            .fetch_range("99/99", r.meta().time_range, FetchOpts::default())
             .unwrap_err();
         assert!(matches!(err, crate::Error::ChannelNotFound(_)));
     }

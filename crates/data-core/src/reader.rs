@@ -5,7 +5,7 @@
 //! simplified: `open` takes an in-memory slice; `video_stream` is not present
 //! yet because no `Video` channels are produced in this milestone.
 
-use crate::types::{ChannelId, EncodedChunk, FetchOpts, SourceMeta, TimeRange};
+use crate::types::{EncodedChunk, FetchOpts, SourceMeta, TimeRange};
 
 /// A freshly-serialised Arrow IPC (File format) byte payload, ready to
 /// `postMessage` to the main thread as a `Transferable`.
@@ -16,7 +16,14 @@ pub type ArrowIpc = Vec<u8>;
 /// store heterogeneous readers behind a single trait object.
 pub type EncodedChunkIter = Box<dyn Iterator<Item = EncodedChunk> + Send>;
 
-pub trait Reader: Send {
+/// The single seam between format adapters and downstream consumers.
+///
+/// Not `Send`: the MCAP and MF4 adapters hold `Rc`/`RefCell`-based caches and a
+/// non-`Send` byte-range source, and the only multi-threaded boundary
+/// (the browser worker) keeps readers in a thread-local slab and never moves
+/// them across threads. The video iterator that *does* cross a boundary carries
+/// its own `Send` bound on [`EncodedChunkIter`].
+pub trait Reader {
     fn open(bytes: &[u8]) -> crate::Result<Self>
     where
         Self: Sized;
@@ -25,7 +32,7 @@ pub trait Reader: Send {
 
     fn fetch_range(
         &self,
-        channel_id: &ChannelId,
+        channel_id: &str,
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc>;
@@ -35,11 +42,7 @@ pub trait Reader: Send {
     /// `<= from_pts_ns`. If no such keyframe exists, the iterator starts at
     /// the first keyframe. Readers that do not produce video channels
     /// return `Err(UnsupportedKind)`.
-    fn video_stream(
-        &self,
-        channel_id: &ChannelId,
-        from_pts_ns: i64,
-    ) -> crate::Result<EncodedChunkIter> {
+    fn video_stream(&self, channel_id: &str, from_pts_ns: i64) -> crate::Result<EncodedChunkIter> {
         let _ = (channel_id, from_pts_ns);
         Err(crate::Error::UnsupportedKind)
     }

@@ -81,11 +81,7 @@ fn fetch_pose_x_returns_scalar_batch_in_range() {
     assert_eq!(ch.kind, ChannelKind::Scalar);
 
     let ipc = r
-        .fetch_range(
-            &"/turtle1/pose.x".to_string(),
-            ch.time_range,
-            FetchOpts::default(),
-        )
+        .fetch_range("/turtle1/pose.x", ch.time_range, FetchOpts::default())
         .expect("fetch pose.x");
     let batch = parse_ipc(&ipc);
 
@@ -171,11 +167,7 @@ fn fetch_cmd_vel_linear_returns_vector_batch() {
 fn unknown_channel_errors() {
     let r = open();
     let err = r
-        .fetch_range(
-            &"/nope/missing.x".to_string(),
-            r.meta().time_range,
-            FetchOpts::default(),
-        )
+        .fetch_range("/nope/missing.x", r.meta().time_range, FetchOpts::default())
         .unwrap_err();
     assert!(matches!(err, data_core::Error::ChannelNotFound(_)));
 }

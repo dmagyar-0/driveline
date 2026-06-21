@@ -253,7 +253,7 @@ fn ros2_cdr_test_bag_opens_and_decodes() {
             "expected scalar leaf {id}; got {basic_leaves:?}"
         );
         let ipc = r
-            .fetch_range(&id.to_string(), r.meta().time_range, FetchOpts::default())
+            .fetch_range(id, r.meta().time_range, FetchOpts::default())
             .unwrap_or_else(|e| panic!("fetch {id}: {e:?}"));
         let batch = parse_ipc(&ipc);
         assert!(batch.num_rows() > 0, "fetch returned no rows for {id}");
