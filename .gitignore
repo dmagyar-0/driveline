@@ -82,10 +82,12 @@ sample-data/realworld/*
 # ...except the small committed synthetic calibration fixture (see above).
 !sample-data/calib/scene.lidar.parquet
 
-# Shareable demo video produced by `_demo-nuscenes-fusion.spec.ts` + the
+# Shareable demo video/GIF produced by `_demo-nuscenes-fusion.spec.ts` + the
 # README ffmpeg trim — NC-licensed (CC BY-NC-SA 4.0) and multi-MB, never
 # committed; regenerate locally (see sample-data/realworld/README.md).
 /driveline-nuscenes-fusion.mp4
 /driveline-nuscenes-fusion-loop.mp4
+/driveline-nuscenes-fusion-loop.gif
+/driveline-nuscenes-fusion-loop-900.gif
 
 .claude/worktrees/
