@@ -33,7 +33,7 @@ import {
   bandFracTop,
   niceBandSplits,
   stackedBandRange,
-} from "./PlotPanel";
+} from "./plotAxes";
 
 // uPlot maps a scale's [min, max] across the full plot height with min at
 // the bottom (0) and max at the top (1). This is the normalised vertical

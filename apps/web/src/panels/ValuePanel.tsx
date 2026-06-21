@@ -13,134 +13,70 @@
 // fetch per channel per `globalRange` change; the cursor tick only
 // re-runs the binary search, so no fetches fire on scrub.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { useSession } from "../state/store";
-import type { Channel, SourceMeta } from "../state/store";
+import type { Channel } from "../state/store";
 import { effectiveUnit } from "../state/units";
-import { seriesFromArrow, type PlotSeries } from "./seriesFromArrow";
+import { decodeSeries, type PlotSeries } from "./seriesFromArrow";
 import { colorFor, MAX_PLOT_SERIES } from "./palette";
+import { formatValue } from "./shared/formatValue";
+import { lastIndexAtOrBefore } from "./shared/cursorLookup";
+import { usePanelChannels } from "./shared/usePanelChannels";
+import { useChannelRanges } from "./shared/useChannelRanges";
 import styles from "./ValuePanel.module.css";
 
 interface ValuePanelProps {
   panelId: string;
 }
 
-const EMPTY: readonly string[] = Object.freeze([]);
-
-function lastIndexAtOrBefore(tsNs: BigInt64Array, cursorNs: bigint): number {
-  let lo = 0;
-  let hi = tsNs.length - 1;
-  let ans = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
-    if (tsNs[mid] <= cursorNs) {
-      ans = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return ans;
-}
-
-function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
-  for (const s of sources) {
-    const hit = s.channels.find((c) => c.id === channelId);
-    if (hit) return hit;
-  }
-  return null;
-}
+const isScalar = (c: Channel) => c.kind === "scalar";
 
 export function ValuePanel({ panelId }: ValuePanelProps) {
-  const sources = useSession((s) => s.sources);
   const unitOverrides = useSession((s) => s.unitOverrides);
   const globalRange = useSession((s) => s.globalRange);
   const cursorNs = useSession((s) => s.cursorNs);
   const storedBindings = useSession((s) => s.valueBindings[panelId]);
   const setValueBinding = useSession((s) => s.setValueBinding);
 
-  const boundIds = useMemo(() => storedBindings ?? EMPTY, [storedBindings]);
+  const { boundChannels } = usePanelChannels({
+    panelId,
+    bindings: storedBindings,
+    isValid: isScalar,
+    setBindings: setValueBinding,
+  });
 
-  // Resolve binding ids to live Channel records. Drop any that no
-  // longer exist (defence against stale persisted ids — same pattern
-  // PlotPanel uses).
-  const boundChannels = useMemo(
-    () =>
-      boundIds
-        .map((id) => findChannel(sources, id))
-        .filter((c): c is Channel => c !== null),
-    [boundIds, sources],
-  );
+  // Abortable fetch — one batch per bound channel per range change. Decoded
+  // below so a per-channel dtype mismatch surfaces as a visible error rather
+  // than a silently blank row.
+  const load = useChannelRanges(boundChannels, globalRange, "ValuePanel");
 
-  // Skip the cull until at least one source is loaded so a fresh
-  // hydrate doesn't wipe every persisted binding before the user has
-  // dropped a file.
-  useEffect(() => {
-    if (sources.length === 0) return;
-    const filtered = boundIds.filter((id) => {
-      const c = findChannel(sources, id);
-      return c !== null && c.kind === "scalar";
-    });
-    if (filtered.length !== boundIds.length) {
-      setValueBinding(panelId, filtered);
+  // Decode the batches into per-channel series (or a first error message).
+  // Recomputed only when the fetch settles, never on the cursor hot path.
+  const decoded = useMemo<{
+    series: { channelId: string; series: PlotSeries }[];
+    error: string | null;
+  }>(() => {
+    if (load.status !== "ready") return { series: [], error: null };
+    const series: { channelId: string; series: PlotSeries }[] = [];
+    for (let i = 0; i < boundChannels.length; i++) {
+      const res = decodeSeries(load.data[i]);
+      if (!res.ok) return { series: [], error: res.message };
+      series.push({ channelId: boundChannels[i].id, series: res });
     }
-  }, [boundIds, sources, panelId, setValueBinding]);
-
-  // Decoded series cache keyed in bound order. One fetch per bound
-  // channel per `globalRange` change.
-  const decodedRef = useRef<{ channelId: string; series: PlotSeries }[]>([]);
-  const [renderTick, setRenderTick] = useState(0);
-
-  const fetchKey = boundIds.join("|");
-  useEffect(() => {
-    if (!globalRange || boundChannels.length === 0) {
-      decodedRef.current = [];
-      setRenderTick((n) => n + 1);
-      return;
-    }
-    let aborted = false;
-    void (async () => {
-      try {
-        const store = useSession.getState();
-        const batches = await Promise.all(
-          boundChannels.map((c) =>
-            store.fetchChannelRange(
-              c.id,
-              globalRange.startNs,
-              globalRange.endNs,
-              false,
-            ),
-          ),
-        );
-        if (aborted) return;
-        decodedRef.current = boundChannels.map((c, i) => ({
-          channelId: c.id,
-          series: seriesFromArrow(batches[i]),
-        }));
-        setRenderTick((n) => n + 1);
-      } catch (err) {
-        if (!aborted) console.error("ValuePanel fetch failed", err);
-      }
-    })();
-    return () => {
-      aborted = true;
-    };
+    return { series, error: null };
+    // boundChannels identity tracks the same fetch generation as `load`.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchKey, globalRange]);
+  }, [load]);
 
-  // Compute sample-at-cursor on every render (cheap binary search).
-  // `renderTick` is a hidden dependency that bumps on fetch completion
-  // so the table refreshes when new data lands without a useEffect.
-  void renderTick;
+  // Compute sample-at-cursor on every render (cheap binary search). The
+  // decoded series come from React state, so the table refreshes when new
+  // data lands without a hidden ref-bump.
   const rows = boundChannels.map((channel) => {
-    const decoded = decodedRef.current.find((d) => d.channelId === channel.id);
-    if (!decoded) return { channel, value: null };
-    const idx = lastIndexAtOrBefore(decoded.series.rawTsNs, cursorNs);
+    const hit = decoded.series.find((d) => d.channelId === channel.id);
+    if (!hit) return { channel, value: null };
+    const idx = lastIndexAtOrBefore(hit.series.rawTsNs, cursorNs);
     if (idx < 0) return { channel, value: null };
-    return {
-      channel,
-      value: decoded.series.ys[idx],
-    };
+    return { channel, value: hit.series.ys[idx] };
   });
 
   const isEmpty = boundChannels.length === 0;
@@ -154,6 +90,11 @@ export function ValuePanel({ panelId }: ValuePanelProps) {
             Bind scalar channels from the Panel drawer (up to {MAX_PLOT_SERIES}
             ).
           </p>
+        </div>
+      ) : decoded.error !== null ? (
+        <div className={styles.empty} role="alert" data-testid="value-error">
+          <p className={styles.emptyTitle}>Value</p>
+          <p className={styles.emptyBody}>{decoded.error}</p>
         </div>
       ) : (
         <div
@@ -206,13 +147,4 @@ export function ValuePanel({ panelId }: ValuePanelProps) {
       )}
     </section>
   );
-}
-
-function formatValue(v: number): string {
-  if (!Number.isFinite(v)) return String(v);
-  // Compact 4 sig-fig rendering — enough to read the value without
-  // dominating the row width on a narrow drawer.
-  const abs = Math.abs(v);
-  if (abs >= 1000 || (abs > 0 && abs < 0.01)) return v.toExponential(3);
-  return v.toFixed(3);
 }

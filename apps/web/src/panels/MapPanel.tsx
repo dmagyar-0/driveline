@@ -31,9 +31,17 @@ import * as L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { LatLngExpression } from "leaflet";
 import { useSession } from "../state/store";
-import type { Channel, SourceMeta } from "../state/store";
 import { colorFor } from "./palette";
 import { decodeSeries } from "./seriesFromArrow";
+import { findChannel } from "./shared/channels";
+import { lastIndexAtOrBefore } from "./shared/cursorLookup";
+import {
+  LOAD_IDLE,
+  LOAD_LOADING,
+  loadError,
+  loadReady,
+  type PanelLoad,
+} from "./shared/panelLoad";
 import styles from "./MapPanel.module.css";
 
 interface MapPanelProps {
@@ -58,21 +66,10 @@ interface TrackPoint {
   tsNs: bigint;
 }
 
-// Load status for the fetch+decode pipeline. Discriminated so the render
-// branches are explicit (no "blank when not ready" bug).
-type Load =
-  | { status: "idle" } // no binding / no range yet
-  | { status: "loading" }
-  | { status: "error"; message: string }
-  | { status: "ready"; track: TrackPoint[] };
-
-function findChannel(sources: SourceMeta[], channelId: string): Channel | null {
-  for (const s of sources) {
-    const hit = s.channels.find((c) => c.id === channelId);
-    if (hit) return hit;
-  }
-  return null;
-}
+// Load status for the fetch+decode pipeline — the shared `PanelLoad` union so
+// the render branches are explicit (no "blank when not ready" bug). The
+// `ready` payload is the decoded track.
+type Load = PanelLoad<TrackPoint[]>;
 
 // Zip lat/lon by index into timestamped track points, dropping non-finite
 // coordinates, and downsample to ≤ MAX_POINTS. The final in-range sample is
@@ -112,26 +109,24 @@ function buildTrack(
   return out;
 }
 
+// Stable empty track so the "not ready" render path keeps a constant identity
+// (the `points`/`trackStarts` memos don't churn on every render).
+const EMPTY_TRACK: TrackPoint[] = [];
+
 function toLatLng(track: TrackPoint[]): LatLngExpression[] {
   return track.map((p) => [p.lat, p.lon] as [number, number]);
 }
 
-// Locate the track point at (or just before) cursorNs via binary search.
-// `track` is ordered by tsNs (GPS samples are emitted in time order).
+// Locate the track point at (or just before) cursorNs. `track` is ordered by
+// tsNs (GPS samples are emitted in time order); `starts` is its parallel
+// start-timestamp index, so the lookup reuses the shared binary search.
 function trackPointAt(
   track: TrackPoint[],
+  starts: BigInt64Array,
   cursorNs: bigint,
 ): TrackPoint | null {
-  if (track.length === 0) return null;
-  if (cursorNs < track[0].tsNs) return null;
-  let lo = 0;
-  let hi = track.length - 1;
-  while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (track[mid].tsNs <= cursorNs) lo = mid;
-    else hi = mid - 1;
-  }
-  return track[lo];
+  const idx = lastIndexAtOrBefore(starts, cursorNs);
+  return idx < 0 ? null : track[idx];
 }
 
 export function MapPanel({ panelId }: MapPanelProps) {
@@ -163,29 +158,38 @@ export function MapPanel({ panelId }: MapPanelProps) {
     }
   }, [binding, latChannel, lonChannel, panelId, setMapBinding, sources.length]);
 
-  const [load, setLoad] = useState<Load>({ status: "idle" });
+  const [load, setLoad] = useState<Load>(LOAD_IDLE);
 
+  // Keyed on the range's bigint `startNs`/`endNs` values (not the `range`
+  // object identity) so a new `globalRange` with the same window won't refetch.
+  const rangeStartNs = globalRange?.startNs ?? null;
+  const rangeEndNs = globalRange?.endNs ?? null;
   useEffect(() => {
-    if (!globalRange || !latChannel || !lonChannel) {
-      setLoad({ status: "idle" });
+    if (
+      rangeStartNs === null ||
+      rangeEndNs === null ||
+      !latChannel ||
+      !lonChannel
+    ) {
+      setLoad(LOAD_IDLE);
       return;
     }
     let aborted = false;
-    setLoad({ status: "loading" });
+    setLoad(LOAD_LOADING);
     void (async () => {
       try {
         const store = useSession.getState();
         const [latBytes, lonBytes] = await Promise.all([
           store.fetchChannelRange(
             latChannel.id,
-            globalRange.startNs,
-            globalRange.endNs,
+            rangeStartNs,
+            rangeEndNs,
             false,
           ),
           store.fetchChannelRange(
             lonChannel.id,
-            globalRange.startNs,
-            globalRange.endNs,
+            rangeStartNs,
+            rangeEndNs,
             false,
           ),
         ]);
@@ -193,29 +197,29 @@ export function MapPanel({ panelId }: MapPanelProps) {
         const latRes = decodeSeries(latBytes);
         const lonRes = decodeSeries(lonBytes);
         if (!latRes.ok) {
-          setLoad({ status: "error", message: latRes.message });
+          setLoad(loadError(latRes.message));
           return;
         }
         if (!lonRes.ok) {
-          setLoad({ status: "error", message: lonRes.message });
+          setLoad(loadError(lonRes.message));
           return;
         }
         const track = buildTrack(latRes.ys, lonRes.ys, latRes.rawTsNs);
-        setLoad({ status: "ready", track });
+        setLoad(loadReady(track));
       } catch (err) {
         if (aborted) return;
         console.error("MapPanel fetch failed", err);
-        setLoad({
-          status: "error",
-          message:
+        setLoad(
+          loadError(
             err instanceof Error ? err.message : "Failed to load GPS data.",
-        });
+          ),
+        );
       }
     })();
     return () => {
       aborted = true;
     };
-  }, [globalRange, latChannel, lonChannel]);
+  }, [rangeStartNs, rangeEndNs, latChannel, lonChannel]);
 
   const isEmpty =
     binding === null || latChannel === null || lonChannel === null;
@@ -227,11 +231,18 @@ export function MapPanel({ panelId }: MapPanelProps) {
     ? `${binding.latChannelId}|${binding.lonChannelId}`
     : "";
 
-  const track = load.status === "ready" ? load.track : [];
+  const track = load.status === "ready" ? load.data : EMPTY_TRACK;
   const points = useMemo(() => toLatLng(track), [track]);
+  // Parallel start-timestamp index, rebuilt once per track so the per-cursor
+  // lookup reuses the shared binary search without allocating a view each tick.
+  const trackStarts = useMemo(() => {
+    const starts = new BigInt64Array(track.length);
+    for (let i = 0; i < track.length; i++) starts[i] = track[i].tsNs;
+    return starts;
+  }, [track]);
   const cursorPoint = useMemo(
-    () => trackPointAt(track, cursorNs),
-    [track, cursorNs],
+    () => trackPointAt(track, trackStarts, cursorNs),
+    [track, trackStarts, cursorNs],
   );
 
   // Imperative Leaflet wiring. The host <div> only exists in the bound
@@ -351,7 +362,7 @@ export function MapPanel({ panelId }: MapPanelProps) {
               <span className={styles.statusIcon} aria-hidden="true">
                 !
               </span>
-              {load.message}
+              {load.error}
             </div>
           )}
           {load.status === "ready" && points.length === 0 && (

@@ -97,20 +97,6 @@ export function buildTableModel(inputs: TableColumnInput[]): TableModel {
   return { rowTsNs, columns: cols, truncated };
 }
 
-// Index of the last row at-or-before `cursorNs`, or -1 when the cursor
-// precedes every row. Binary search over the ascending `rowTsNs`.
-export function lastRowAtOrBefore(rowTsNs: bigint[], cursorNs: bigint): number {
-  let lo = 0;
-  let hi = rowTsNs.length - 1;
-  let ans = -1;
-  while (lo <= hi) {
-    const mid = (lo + hi) >>> 1;
-    if (rowTsNs[mid] <= cursorNs) {
-      ans = mid;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  return ans;
-}
+// The "last row at-or-before the cursor" lookup that walked this model lives in
+// the shared `shared/cursorLookup.ts` (`lastIndexAtOrBefore`) now — `bigint[]`
+// is one of the two sequence shapes it handles.
