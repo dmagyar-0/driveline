@@ -26,9 +26,10 @@ import { useSession } from "../state/store";
 import { makeVideoDecodeClient } from "../workerClient";
 import type { VideoDecodeApi } from "../workerClient";
 import type {
-  BlitStatus,
   CadenceSummary,
+  SinkMessage,
 } from "../workers/videoDecode.worker";
+import { READY_EPSILON_NS } from "../timeline/readinessConstants";
 import {
   mark,
   measure,
@@ -91,13 +92,6 @@ import styles from "./VideoPanel.module.css";
 //      whether or not the most-recent blit happens to be within the
 //      tight ε at the moment we polled.
 //
-// Mirrors `READY_EPSILON_NS` in `timeline/playback.ts` (see the full rationale
-// there): ε must clear the steady-state cursor↔blit lag — ~33 ms coalescing +
-// one inter-frame interval — or the playback gate throttles low-frame-rate
-// streams into slow-motion. 300 ms covers ~12 fps camera content (~85 ms
-// frames) while still flagging a genuine stall. Both modules keep their own
-// copy so neither imports across the panels/timeline seam.
-const READY_EPSILON_NS = 300_000_000n;
 const FRAME_LIVE_WINDOW_MS = 250;
 // Issue #2 — once a panel has been "waiting" continuously for this long
 // AND `frameIndex` has not advanced since the wait began, the panel
@@ -527,10 +521,7 @@ export function VideoPanel({
     // status; here we just stash it and react to the edges (decode-error
     // recovery, the first-blit/seek-blit perf marks, decoder-liveness clock).
     port.onmessage = (ev: MessageEvent) => {
-      const data = ev.data as
-        | BlitStatus
-        | { type: "decode-error"; reason: string }
-        | null;
+      const data = ev.data as SinkMessage | null;
       if (!data) return;
       // Task 2 — control message: the worker latched a fatal decode fault.
       // Surface it proactively so the panel doesn't sit on a frozen canvas
