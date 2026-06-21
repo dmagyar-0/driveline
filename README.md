@@ -5,16 +5,14 @@ high-rate signal data. See [`docs/`](./docs) for the full design.
 
 ## Demo
 
-<!-- TO ENABLE PLAYBACK: drag driveline-nuscenes-fusion-loop.mp4 into any
-     GitHub comment/PR box to upload it, copy the resulting
-     https://github.com/user-attachments/assets/<uuid> URL, and paste it in
-     place of PASTE_GITHUB_ATTACHMENT_URL below. The autoplay/loop/muted
-     attributes are what make GitHub play it continuously and automatically
-     (muted is required by browser autoplay policy; the clip has no audio).
-     The clip is CC BY-NC-SA 4.0 (nuScenes) so it is hosted as a GitHub
-     attachment, NEVER committed — see sample-data/realworld/README.md. -->
+<!-- The clip is CC BY-NC-SA 4.0 (nuScenes) so it is hosted as a GitHub
+     attachment, NEVER committed (see sample-data/realworld/README.md). The
+     autoplay/loop/muted attributes make GitHub play it continuously and
+     automatically; muted is required by browser autoplay policy (the clip
+     has no audio). To refresh: re-upload driveline-nuscenes-fusion-loop.mp4
+     by dragging it into any GitHub comment box and swap the src URL below. -->
 
-<video src="PASTE_GITHUB_ATTACHMENT_URL" autoplay loop muted playsinline width="100%"></video>
+<video src="https://github.com/user-attachments/assets/d1f6cd3a-fc15-448d-9270-46566cae9f9a" autoplay loop muted playsinline width="100%"></video>
 
 Camera + LiDAR **fusion** on nuScenes v1.0-mini scene-0061: the CAM_FRONT
 dashcam with the LiDAR point cloud projected onto it, the same spin in the 3D
