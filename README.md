@@ -3,6 +3,27 @@
 Browser-first multimodal log viewer for synchronised 4K video and
 high-rate signal data. See [`docs/`](./docs) for the full design.
 
+## Demo
+
+<!-- Embedded as a GIF (not <video>): GitHub strips autoplay/loop from
+     <video> in rendered READMEs and shows a play button, whereas a GIF
+     autoplays and loops on its own. The clip is CC BY-NC-SA 4.0 (nuScenes)
+     so it is hosted as a GitHub attachment, NEVER committed (see
+     sample-data/realworld/README.md). To refresh: regenerate the GIF per
+     that README, drag it into any GitHub comment box, and swap the URL. -->
+
+![Camera + LiDAR fusion replay on nuScenes scene-0061](https://github.com/user-attachments/assets/3877ca75-1ac0-4ce9-9b95-ba4657259993)
+
+Camera + LiDAR **fusion** on nuScenes v1.0-mini scene-0061: the CAM_FRONT
+dashcam with the LiDAR point cloud projected onto it, the same spin in the 3D
+scene panel, and the ego speed / yaw-rate plot — all on one synchronised
+timeline. Produced by
+[`apps/e2e/tests/_demo-nuscenes-fusion.spec.ts`](./apps/e2e/tests/_demo-nuscenes-fusion.spec.ts)
+(see [`sample-data/realworld/README.md`](./sample-data/realworld/README.md) to
+reproduce it).
+
+<sub>Data: nuScenes v1.0-mini scene-0061 © Motional, licensed CC BY-NC-SA 4.0 — non-commercial demo.</sub>
+
 ## Prerequisites
 
 - Rust (stable) with the `wasm32-unknown-unknown` target installed
