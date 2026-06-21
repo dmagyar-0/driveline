@@ -18,6 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "../../state/store";
 import type { PanelKind } from "../../layout/panelId";
+import { getWorkspaceBridge } from "../../layout/workspaceBridge";
 import { PanelKindIcon, panelKindName } from "../../layout/PanelKindIcon";
 import drawerStyles from "../Drawer.module.css";
 import { DRAWER_REGION_ID } from "../Drawer";
@@ -26,43 +27,20 @@ import s from "./LayoutDrawer.module.css";
 const HEADING_SAVED_ID = "drawer-layout-saved-h";
 const HEADING_ADD_ID = "drawer-layout-add-h";
 
-interface Props {
-  /** Mints a new video panel. Forwarded from `App.tsx` via `Shell` →
-   *  `Drawer` because the FlexLayout `WorkspaceHandle` lives in
-   *  `App.tsx`'s ref and the drawer can't reach it directly. */
-  addVideoPanel: () => void;
-  /** Mints a new plot panel. Same indirection as `addVideoPanel`. */
-  addPlotPanel: () => void;
-  /** Phase 6 · mints a 3D scene panel. */
-  addScenePanel: () => void;
-  /** Phase 6 · mints a map panel. */
-  addMapPanel: () => void;
-  /** Phase 6 · mints a table panel. */
-  addTablePanel: () => void;
-  /** Mints a value panel (compact sample-at-cursor reader). */
-  addValuePanel: () => void;
-  /** Phase 6 · mints an enum strip panel. */
-  addEnumPanel: () => void;
-  /** Resets the FlexLayout model to the default split. */
-  resetLayout: () => void;
-}
+// Every add-panel kind shown in the drawer, with the testid the e2e specs
+// pin. Each row mints through the single `workspaceBridge.createPanel`
+// seam — no per-kind callbacks threaded from `App.tsx`.
+const ADD_ROWS: readonly { kind: PanelKind; testid: string }[] = [
+  { kind: "video", testid: "add-video-panel" },
+  { kind: "plot", testid: "add-plot-panel" },
+  { kind: "scene", testid: "add-scene-panel" },
+  { kind: "map", testid: "add-map-panel" },
+  { kind: "table", testid: "add-table-panel" },
+  { kind: "value", testid: "add-value-panel" },
+  { kind: "enum", testid: "add-enum-panel" },
+];
 
-interface AddRow {
-  kind: PanelKind;
-  testid: string;
-  onClick: () => void;
-}
-
-export function LayoutDrawer({
-  addVideoPanel,
-  addPlotPanel,
-  addScenePanel,
-  addMapPanel,
-  addTablePanel,
-  addValuePanel,
-  addEnumPanel,
-  resetLayout,
-}: Props) {
+export function LayoutDrawer() {
   const layoutJson = useSession((st) => st.layoutJson);
   const namedLayouts = useSession((st) => st.namedLayouts);
   const activeId = useSession((st) => st.activeNamedLayoutId);
@@ -219,38 +197,12 @@ export function LayoutDrawer({
         </div>
 
         <ul className={s.addList} data-testid="layout-add-list">
-          {(
-            [
-              {
-                kind: "video",
-                testid: "add-video-panel",
-                onClick: addVideoPanel,
-              },
-              { kind: "plot", testid: "add-plot-panel", onClick: addPlotPanel },
-              {
-                kind: "scene",
-                testid: "add-scene-panel",
-                onClick: addScenePanel,
-              },
-              { kind: "map", testid: "add-map-panel", onClick: addMapPanel },
-              {
-                kind: "table",
-                testid: "add-table-panel",
-                onClick: addTablePanel,
-              },
-              {
-                kind: "value",
-                testid: "add-value-panel",
-                onClick: addValuePanel,
-              },
-              { kind: "enum", testid: "add-enum-panel", onClick: addEnumPanel },
-            ] as readonly AddRow[]
-          ).map((row) => (
+          {ADD_ROWS.map((row) => (
             <li key={row.testid}>
               <button
                 type="button"
                 className={s.addRow}
-                onClick={row.onClick}
+                onClick={() => getWorkspaceBridge()?.createPanel(row.kind)}
                 data-testid={row.testid}
               >
                 <span className={s.addIcon}>
@@ -265,7 +217,7 @@ export function LayoutDrawer({
         <button
           type="button"
           className={s.resetRow}
-          onClick={resetLayout}
+          onClick={() => getWorkspaceBridge()?.resetLayout()}
           data-testid="reset-layout"
         >
           Reset layout

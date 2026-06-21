@@ -29,24 +29,10 @@ export interface ShellProps {
   onDragLeave: (e: React.DragEvent<HTMLElement>) => void;
   /** Forwarded to the Channels drawer so it can mint a plot panel
    *  when the user clicks a channel without a panel selected. App
-   *  owns the FlexLayout `WorkspaceHandle`; Shell only forwards. */
+   *  owns the FlexLayout `WorkspaceHandle`; Shell only forwards. The
+   *  Layout/Add-panel rows reach FlexLayout through `workspaceBridge`
+   *  directly, so no per-kind add-panel props are threaded here. */
   ensurePlotPanel: () => string | null;
-  /** Forwarded to the Layout drawer's `+ video` row. */
-  addVideoPanel: () => void;
-  /** Forwarded to the Layout drawer's `+ plot` row. */
-  addPlotPanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ 3D scene` row. */
-  addScenePanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ map` row. */
-  addMapPanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ table` row. */
-  addTablePanel: () => void;
-  /** Forwarded to the Layout drawer's `+ value` row. */
-  addValuePanel: () => void;
-  /** Phase 6 · forwarded to the Layout drawer's `+ enum` row. */
-  addEnumPanel: () => void;
-  /** Forwarded to the Layout drawer's `Reset layout` row. */
-  resetLayout: () => void;
   transport: ReactNode;
   children: ReactNode;
 }
@@ -58,14 +44,6 @@ export function Shell({
   onDragOver,
   onDragLeave,
   ensurePlotPanel,
-  addVideoPanel,
-  addPlotPanel,
-  addScenePanel,
-  addMapPanel,
-  addTablePanel,
-  addValuePanel,
-  addEnumPanel,
-  resetLayout,
   transport,
   children,
 }: ShellProps) {
@@ -80,17 +58,7 @@ export function Shell({
       <TopBar ready={ready} />
       <div className={styles.work}>
         <Rail />
-        <Drawer
-          ensurePlotPanel={ensurePlotPanel}
-          addVideoPanel={addVideoPanel}
-          addPlotPanel={addPlotPanel}
-          addScenePanel={addScenePanel}
-          addMapPanel={addMapPanel}
-          addTablePanel={addTablePanel}
-          addValuePanel={addValuePanel}
-          addEnumPanel={addEnumPanel}
-          resetLayout={resetLayout}
-        />
+        <Drawer ensurePlotPanel={ensurePlotPanel} />
         <div className={styles.workMain}>
           {children}
           <FirstRun />

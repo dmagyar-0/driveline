@@ -13,19 +13,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { AddPanelMenu } from "./AddPanelMenu";
+import { setWorkspaceBridge } from "../layout/workspaceBridge";
 
 function setup() {
-  const handlers = {
-    addVideoPanel: vi.fn(),
-    addPlotPanel: vi.fn(),
-    addScenePanel: vi.fn(),
-    addMapPanel: vi.fn(),
-    addTablePanel: vi.fn(),
-    addValuePanel: vi.fn(),
-    addEnumPanel: vi.fn(),
-  };
-  render(<AddPanelMenu {...handlers} />);
-  return handlers;
+  // The menu mints panels through the module-scoped workspace bridge; mock
+  // it so each menu item is observed via a single `createPanel(kind)` call.
+  const createPanel = vi.fn(() => "panel-1");
+  const cleanupBridge = setWorkspaceBridge({
+    createPanel,
+    closePanel: vi.fn(() => true),
+    resetLayout: vi.fn(),
+  });
+  render(<AddPanelMenu />);
+  return { createPanel, cleanupBridge };
 }
 
 afterEach(() => {
@@ -44,21 +44,23 @@ describe("AddPanelMenu", () => {
     expect(screen.getByTestId("drawer-add-panel-menu")).not.toBeNull();
   });
 
-  it("offers every panel kind and invokes the matching callback", () => {
-    const handlers = setup();
-    const cases: ReadonlyArray<[string, keyof typeof handlers]> = [
-      ["add-panel-video", "addVideoPanel"],
-      ["add-panel-plot", "addPlotPanel"],
-      ["add-panel-scene", "addScenePanel"],
-      ["add-panel-map", "addMapPanel"],
-      ["add-panel-table", "addTablePanel"],
-      ["add-panel-value", "addValuePanel"],
-      ["add-panel-enum", "addEnumPanel"],
+  it("offers every panel kind and mints the matching kind", () => {
+    const { createPanel } = setup();
+    const cases: ReadonlyArray<[string, string]> = [
+      ["add-panel-video", "video"],
+      ["add-panel-plot", "plot"],
+      ["add-panel-scene", "scene"],
+      ["add-panel-map", "map"],
+      ["add-panel-table", "table"],
+      ["add-panel-value", "value"],
+      ["add-panel-enum", "enum"],
     ];
-    for (const [testid, fnName] of cases) {
+    for (const [testid, kind] of cases) {
+      createPanel.mockClear();
       fireEvent.click(screen.getByTestId("drawer-add-panel"));
       fireEvent.click(screen.getByTestId(testid));
-      expect(handlers[fnName]).toHaveBeenCalledTimes(1);
+      expect(createPanel).toHaveBeenCalledTimes(1);
+      expect(createPanel).toHaveBeenCalledWith(kind);
       // Choosing a kind closes the menu.
       expect(screen.queryByTestId("drawer-add-panel-menu")).toBeNull();
     }

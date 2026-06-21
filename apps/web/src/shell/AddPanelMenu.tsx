@@ -13,6 +13,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PanelKind } from "../layout/panelId";
+import { getWorkspaceBridge } from "../layout/workspaceBridge";
 import {
   PanelKindIcon,
   panelKindBlurb,
@@ -20,49 +21,30 @@ import {
 } from "../layout/PanelKindIcon";
 import s from "./AddPanelMenu.module.css";
 
-interface Props {
-  /** Mint a new video panel. Owned by `App.tsx`'s `WorkspaceHandle`,
-   *  forwarded through `Shell` → `Drawer`. */
-  addVideoPanel: () => void;
-  addPlotPanel: () => void;
-  addScenePanel: () => void;
-  addMapPanel: () => void;
-  addTablePanel: () => void;
-  addValuePanel: () => void;
-  addEnumPanel: () => void;
-}
-
 interface PanelOption {
   kind: PanelKind;
   testid: string;
-  add: () => void;
 }
 
-export function AddPanelMenu({
-  addVideoPanel,
-  addPlotPanel,
-  addScenePanel,
-  addMapPanel,
-  addTablePanel,
-  addValuePanel,
-  addEnumPanel,
-}: Props) {
+// The panel kinds offered by the menu, with the testids the e2e specs pin.
+// Each item mints through the single `workspaceBridge.createPanel` seam.
+const PANEL_OPTIONS: readonly PanelOption[] = [
+  { kind: "video", testid: "add-panel-video" },
+  { kind: "plot", testid: "add-panel-plot" },
+  { kind: "scene", testid: "add-panel-scene" },
+  { kind: "map", testid: "add-panel-map" },
+  { kind: "table", testid: "add-panel-table" },
+  { kind: "value", testid: "add-panel-value" },
+  { kind: "enum", testid: "add-panel-enum" },
+];
+
+export function AddPanelMenu() {
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   // Resolved on-screen position. `null` until measured so the first
   // paint doesn't flash the menu at an unclamped anchor point.
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
-
-  const options: readonly PanelOption[] = [
-    { kind: "video", testid: "add-panel-video", add: addVideoPanel },
-    { kind: "plot", testid: "add-panel-plot", add: addPlotPanel },
-    { kind: "scene", testid: "add-panel-scene", add: addScenePanel },
-    { kind: "map", testid: "add-panel-map", add: addMapPanel },
-    { kind: "table", testid: "add-panel-table", add: addTablePanel },
-    { kind: "value", testid: "add-panel-value", add: addValuePanel },
-    { kind: "enum", testid: "add-panel-enum", add: addEnumPanel },
-  ];
 
   // Close on outside click and Escape while open. Escape returns focus
   // to the trigger so keyboard users don't lose their place.
@@ -119,8 +101,8 @@ export function AddPanelMenu({
     setPos({ top, left });
   }, [open]);
 
-  const choose = (add: () => void) => {
-    add();
+  const choose = (kind: PanelKind) => {
+    getWorkspaceBridge()?.createPanel(kind);
     setOpen(false);
   };
 
@@ -150,13 +132,13 @@ export function AddPanelMenu({
               : { position: "fixed", visibility: "hidden" }
           }
         >
-          {options.map((o) => (
+          {PANEL_OPTIONS.map((o) => (
             <button
               key={o.testid}
               type="button"
               role="menuitem"
               className={s.item}
-              onClick={() => choose(o.add)}
+              onClick={() => choose(o.kind)}
               data-testid={o.testid}
             >
               <span className={s.itemIcon}>
