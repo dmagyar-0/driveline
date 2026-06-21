@@ -42,11 +42,14 @@ const SAMPLE_LAYOUT: NamedLayout = {
   valueBindings: { "value-1": ["/vehicle/rpm"] },
   enumBindings: { "enum-1": ["/state/gear"] },
   plotPanelSettings: { "plot-1": { gapThresholdSec: 1.5 } },
+  videoHudOn: { "video-1": true },
+  pointCloudOverlays: { "video-1": null },
+  unitOverrides: { "/vehicle/speed": "km/h" },
   createdAt: 1_700_000_000_000,
 };
 
 const SAMPLE: PersistedNamedLayouts = {
-  version: 2,
+  version: 3,
   layouts: [SAMPLE_LAYOUT],
   activeNamedLayoutId: "uuid-default",
 };
@@ -72,12 +75,12 @@ describe("namedLayouts persist", () => {
     const s = makeStorage();
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
-      JSON.stringify({ ...SAMPLE, version: 3 }),
+      JSON.stringify({ ...SAMPLE, version: 4 }),
     );
     expect(loadNamedLayoutsFromStorage(s)).toBeNull();
   });
 
-  it("returns null for legacy v1 payloads (Phase 6 schema bump)", () => {
+  it("returns null for legacy v1 payloads", () => {
     const s = makeStorage();
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
@@ -103,7 +106,7 @@ describe("namedLayouts persist", () => {
     const s = makeStorage();
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
-      JSON.stringify({ version: 2, layouts: {}, activeNamedLayoutId: null }),
+      JSON.stringify({ version: 3, layouts: {}, activeNamedLayoutId: null }),
     );
     expect(loadNamedLayoutsFromStorage(s)).toBeNull();
   });
@@ -113,7 +116,7 @@ describe("namedLayouts persist", () => {
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 3,
         layouts: [{ id: "x", name: "x" }], // missing bindings, createdAt
         activeNamedLayoutId: null,
       }),
@@ -126,7 +129,7 @@ describe("namedLayouts persist", () => {
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 3,
         layouts: [
           {
             id: "x",
@@ -152,7 +155,7 @@ describe("namedLayouts persist", () => {
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 3,
         layouts: [
           {
             id: "x",
@@ -187,7 +190,7 @@ describe("namedLayouts persist", () => {
   it("accepts an explicitly null layoutJson on a saved entry", () => {
     const s = makeStorage();
     const payload: PersistedNamedLayouts = {
-      version: 2,
+      version: 3,
       layouts: [{ ...SAMPLE_LAYOUT, layoutJson: null }],
       activeNamedLayoutId: SAMPLE_LAYOUT.id,
     };
@@ -203,7 +206,7 @@ describe("namedLayouts persist", () => {
   it("accepts an empty layouts array", () => {
     const s = makeStorage();
     const empty: PersistedNamedLayouts = {
-      version: 2,
+      version: 3,
       layouts: [],
       activeNamedLayoutId: null,
     };
@@ -218,7 +221,7 @@ describe("namedLayouts persist", () => {
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 3,
         layouts: [
           {
             id: "x",
@@ -241,6 +244,49 @@ describe("namedLayouts persist", () => {
     expect(loaded?.layouts[0].plotPanelSettings).toEqual({});
   });
 
+  it("forward-migrates a legacy v2 payload, defaulting v3 maps to {}", () => {
+    // A named layout saved under the v2 key (before videoHudOn /
+    // pointCloudOverlays / unitOverrides were carried) must still load —
+    // the three new maps default to {} rather than dropping the layout.
+    const s = makeStorage();
+    s.setItem(
+      "driveline.layouts.named.v2",
+      JSON.stringify({
+        version: 2,
+        layouts: [
+          {
+            id: "x",
+            name: "x",
+            layoutJson: null,
+            videoBindings: {},
+            plotBindings: {},
+            sceneBindings: {},
+            mapBindings: {},
+            tableBindings: {},
+            enumBindings: {},
+            createdAt: 0,
+          },
+        ],
+        activeNamedLayoutId: null,
+      }),
+    );
+    const loaded = loadNamedLayoutsFromStorage(s);
+    expect(loaded?.version).toBe(3);
+    expect(loaded?.layouts[0].videoHudOn).toEqual({});
+    expect(loaded?.layouts[0].pointCloudOverlays).toEqual({});
+    expect(loaded?.layouts[0].unitOverrides).toEqual({});
+  });
+
+  it("prefers a present v3 payload over the legacy v2 key", () => {
+    const s = makeStorage();
+    s.setItem(
+      "driveline.layouts.named.v2",
+      JSON.stringify({ version: 2, layouts: [], activeNamedLayoutId: null }),
+    );
+    saveNamedLayoutsToStorage(SAMPLE, s);
+    expect(loadNamedLayoutsFromStorage(s)).toEqual(SAMPLE);
+  });
+
   it("migrates legacy single-channel enumBindings to arrays on read", () => {
     // A named layout saved before the enum panel went multi-channel must
     // still restore, coercing the old channel-or-null shape to a list.
@@ -248,7 +294,7 @@ describe("namedLayouts persist", () => {
     s.setItem(
       NAMED_LAYOUTS_STORAGE_KEY,
       JSON.stringify({
-        version: 2,
+        version: 3,
         layouts: [
           {
             id: "x",
@@ -317,7 +363,7 @@ describe("attachNamedLayoutsPersistence", () => {
       activeNamedLayoutId: SAMPLE_LAYOUT.id,
     });
     expect(loadNamedLayoutsFromStorage(s)).toEqual({
-      version: 2,
+      version: 3,
       layouts: [SAMPLE_LAYOUT],
       activeNamedLayoutId: SAMPLE_LAYOUT.id,
     });

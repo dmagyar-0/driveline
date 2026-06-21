@@ -88,6 +88,7 @@ import { readMp4HeaderBytes } from "./mp4HeaderSlice";
 import { synthesizeSidecarBytes } from "./videoTimestampBinding";
 import { shiftFetchWindow, shiftRangeArrowTs } from "./offsetShift";
 import { parseEpochOffsetNs } from "./tabularImport";
+import { cloneBindings, emptyBindings } from "./bindings";
 import {
   setInlineSource,
   dropInlineSource,
@@ -255,6 +256,12 @@ export interface WorkspaceSnapshot {
   valueBindings: Record<string, string[]>;
   enumBindings: Record<string, string[]>;
   plotPanelSettings: Record<string, PlotPanelSettings>;
+  // Optional: a demo workspace may also seed the per-panel HUD bits,
+  // point-cloud overlays, and unit overrides. Absent ⇒ reset to `{}` on
+  // apply (the common case — most demos don't touch these).
+  videoHudOn?: Record<string, boolean>;
+  pointCloudOverlays?: Record<string, PointCloudOverlayBinding | null>;
+  unitOverrides?: Record<string, string>;
 }
 
 /**
@@ -474,7 +481,7 @@ export interface SessionState {
   // model (`Model.toJson()` output); the binding maps are keyed by the
   // FlexLayout tab id so a closed-and-reopened panel can reclaim its
   // configuration on reload.
-  layoutJson: unknown | null;
+  layoutJson: unknown;
   videoBindings: Record<string, string | null>;
   plotBindings: Record<string, string[]>;
   // Per-plot-panel display settings (Phase 8). Decoupled from
@@ -776,7 +783,7 @@ export interface SessionState {
    *  and end-of-session auto-pause as `setCursor`. */
   advanceCursor(ns: bigint): void;
   /** Replace the FlexLayout JSON model wholesale. */
-  setLayoutJson(json: unknown | null): void;
+  setLayoutJson(json: unknown): void;
   /** Bind a video panel to a channel, or `null` to clear. */
   setVideoBinding(panelId: string, channelId: string | null): void;
   /** Set a video panel's HUD overlay bit. */
@@ -972,25 +979,32 @@ export interface SessionState {
     entries: Bookmark[],
     mode: "merge" | "replace",
   ): { added: number; updated: number };
-  /** Remove a bookmark; no-op on unknown id. */
-  removeBookmark(id: string): void;
+  /**
+   * Remove a bookmark; no-op on unknown id. Returns `true` when an entry
+   * was actually removed, `false` on a no-op (unknown id) so an agent
+   * mutator can report whether anything changed.
+   */
+  removeBookmark(id: string): boolean;
   /**
    * Rename a bookmark in-place. Trimmed empty labels are rejected
    * (no-op) so an accidental Enter on an empty input doesn't blank
-   * the row.
+   * the row. Returns `true` when the label changed, `false` on a no-op
+   * (unknown id, empty label, or unchanged value).
    */
-  renameBookmark(id: string, label: string): void;
+  renameBookmark(id: string, label: string): boolean;
   /**
    * Set an event's optional before/after range durations (nanoseconds).
    * Both are clamped to `>= 0`; `0/0` is a point event. No-op on an
-   * unknown id or when neither value changes.
+   * unknown id or when neither value changes. Returns `true` when the
+   * range changed, `false` on a no-op.
    */
-  setBookmarkRange(id: string, beforeNs: bigint, afterNs: bigint): void;
+  setBookmarkRange(id: string, beforeNs: bigint, afterNs: bigint): boolean;
   /**
    * Set (or, when `value` trims to empty, clear) one tag attribute value
    * on an event. No-op on an unknown id or when the value is unchanged.
+   * Returns `true` when a tag was set/cleared, `false` on a no-op.
    */
-  setBookmarkTag(id: string, attributeId: string, value: string): void;
+  setBookmarkTag(id: string, attributeId: string, value: string): boolean;
   /**
    * Replace the whole Event Tag config. Tag values on existing events
    * whose attribute id no longer exists are pruned in the same update.
@@ -1552,6 +1566,76 @@ export function effectivePlotZoomX(
     : (s.plotZoom[panelId]?.x ?? null);
 }
 
+/**
+ * Build a `channelId → Channel` lookup from the flat channel list. Exported
+ * as a selector so panels / the agent surface can resolve a channel without
+ * re-implementing the linear `channels.find(...)` scan. The store keeps an
+ * internal index in sync for its own hot paths; this is the public, pure
+ * derivation (consumers should memoize on `state.channels` identity, which
+ * only changes when sources open / close).
+ */
+export function selectChannelsById(
+  s: Pick<SessionState, "channels">,
+): Map<string, Channel> {
+  const m = new Map<string, Channel>();
+  for (const c of s.channels) m.set(c.id, c);
+  return m;
+}
+
+// The worker fetch-range method for each plottable source kind, plus whether
+// its Arrow batches carry the scalar `{ts,value}` schema that
+// `shiftRangeArrowTs` rewrites for the per-source time offset. Geometry kinds
+// (lidar / openlabel / trajectory / map_geometry) carry multi-column List
+// schemas and always run at offset 0n, so their bytes pass through unshifted
+// (`shiftTs: false`). Turns the former 11-arm `if (source.kind === …)` ladder
+// in `fetchChannelRange` into a single table lookup. `inline` is served from
+// the main thread and handled before this table; kinds absent here are not
+// plottable.
+type FetchRangeMethod = {
+  [K in keyof DataCoreApi]: DataCoreApi[K] extends (
+    handle: number,
+    nativeId: string,
+    startNs: bigint,
+    endNs: bigint,
+    includePrev: boolean,
+  ) => Promise<Uint8Array>
+    ? K
+    : never;
+}[keyof DataCoreApi];
+
+const FETCH_RANGE_BY_KIND: Partial<
+  Record<SourceKind, { method: FetchRangeMethod; shiftTs: boolean }>
+> = {
+  mcap: { method: "mcapFetchRange", shiftTs: true },
+  ros1: { method: "ros1BagFetchRange", shiftTs: true },
+  ros2db3: { method: "ros2Db3FetchRange", shiftTs: true },
+  mf4: { method: "mf4FetchRange", shiftTs: true },
+  tabular: { method: "tabularFetchRange", shiftTs: true },
+  recipe: { method: "recipeFetchRange", shiftTs: true },
+  lidar: { method: "lidarFetchRange", shiftTs: false },
+  openlabel: { method: "openlabelFetchRange", shiftTs: false },
+  trajectory: { method: "trajectoryFetchRange", shiftTs: false },
+  map_geometry: { method: "mapGeometryFetchRange", shiftTs: false },
+};
+
+// The worker close method for each source kind that owns a wasm slab handle.
+// `inline` is main-thread only (no handle) and handled by callers before this
+// table; any kind not listed falls back to `closeMp4Sidecar` to preserve the
+// historical ladder's `else` branch exactly (covers `mp4+sidecar` and the
+// `calibration` kind, which the original ladders also routed there).
+const CLOSE_METHOD_BY_KIND: Partial<Record<SourceKind, keyof DataCoreApi>> = {
+  mcap: "closeMcap",
+  ros1: "closeRos1Bag",
+  ros2db3: "closeRos2Db3",
+  mf4: "closeMf4",
+  tabular: "closeTabular",
+  recipe: "closeRecipe",
+  lidar: "closeLidar",
+  openlabel: "closeOpenlabel",
+  trajectory: "closeTrajectory",
+  map_geometry: "closeMapGeometry",
+};
+
 export const useSession = create<SessionState>((set, get) => {
   let worker: Remote<DataCoreApi> | null = null;
   // Serialise `openFiles` so two rapid drops don't interleave `set()` calls.
@@ -1571,6 +1655,59 @@ export const useSession = create<SessionState>((set, get) => {
   // Entries are deleted when the promise settles (finally). No result cache —
   // offset-shift invalidation makes that a separate design task.
   const inFlightFetches = new Map<string, Promise<Uint8Array>>();
+  // Derived lookup index over `sources`/`channels` so the fetch / frame-times
+  // / calibration paths resolve a channel + its source in O(1) instead of two
+  // linear `.find` scans each. Rebuilt lazily: `syncIndex()` rebuilds only
+  // when the `channels`/`sources` array references have changed since the last
+  // build, so it stays correct no matter how state was mutated (the store's
+  // own actions OR a direct `setState` in tests). The public
+  // `selectChannelsById` selector derives the same map for outside consumers.
+  const channelsById = new Map<string, Channel>();
+  const sourcesById = new Map<string, SourceMeta>();
+  let indexedChannels: Channel[] | null = null;
+  let indexedSources: SourceMeta[] | null = null;
+  const syncIndex = (): void => {
+    const { channels, sources } = get();
+    if (channels === indexedChannels && sources === indexedSources) return;
+    channelsById.clear();
+    sourcesById.clear();
+    for (const s of sources) sourcesById.set(s.id, s);
+    for (const c of channels) channelsById.set(c.id, c);
+    indexedChannels = channels;
+    indexedSources = sources;
+  };
+
+  // Resolve a channel id to its `Channel` + owning `SourceMeta`, the
+  // duplicated preamble of `fetchChannelRange`, `lidarSpinTimes`,
+  // `boxFrameTimes`, `trajectoryFrameTimes`, `mapGeometryFrameTimes`, and
+  // `loadCalibration`. Throws the same messages the inline preamble did so
+  // callers' error contracts are unchanged.
+  const resolveChannel = (
+    channelId: string,
+  ): { channel: Channel; source: SourceMeta } => {
+    syncIndex();
+    const channel = channelsById.get(channelId);
+    if (!channel) throw new Error(`unknown channel: ${channelId}`);
+    const source = sourcesById.get(channel.sourceId);
+    if (!source) {
+      throw new Error(`unknown source for channel: ${channelId}`);
+    }
+    return { channel, source };
+  };
+
+  // Close a source's wasm slab handle via the right `close_*` worker method.
+  // `inline` has no handle (main-thread storage) and is filtered by callers
+  // before this runs; any kind not in `CLOSE_METHOD_BY_KIND` falls back to
+  // `closeMp4Sidecar`, preserving the original ladders' `else` branch (covers
+  // `mp4+sidecar` and `calibration`). Shared by `clear()` and `removeSource`.
+  const closeFor = async (
+    w: Remote<DataCoreApi>,
+    source: SourceMeta,
+  ): Promise<void> => {
+    const method = CLOSE_METHOD_BY_KIND[source.kind] ?? "closeMp4Sidecar";
+    await (w[method] as (handle: number) => Promise<void>)(source.handle);
+  };
+
   // Hydrate layout + bindings synchronously so the first render paints the
   // saved layout. Missing / malformed storage → `null` and empty maps; the
   // Workspace falls back to `defaultLayoutModel` when `layoutJson === null`.
@@ -1611,6 +1748,89 @@ export const useSession = create<SessionState>((set, get) => {
     } else {
       set({ lastOpenErrors: errors });
     }
+  };
+
+  // The four multi-channel binding maps (plot/table/value/enum) share an
+  // identical `set` (dedup + cap), `add` (skip dupes / over-cap), and
+  // `remove` (filter) shape. Centralise the loops here so a new
+  // multi-binding panel kind is a one-line wrapper rather than another
+  // copy-pasted triple. `mapKey` names the `Record<string, string[]>`
+  // slice on the store.
+  type MultiBindingKey =
+    | "plotBindings"
+    | "tableBindings"
+    | "valueBindings"
+    | "enumBindings";
+
+  const setMulti = (mapKey: MultiBindingKey, panelId: string, ids: string[]) => {
+    const seen = new Set<string>();
+    const next: string[] = [];
+    for (const id of ids) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      next.push(id);
+      if (next.length >= MAX_PLOT_SERIES) break;
+    }
+    set({ [mapKey]: { ...get()[mapKey], [panelId]: next } } as Partial<
+      SessionState
+    >);
+  };
+
+  const addMulti = (
+    mapKey: MultiBindingKey,
+    panelId: string,
+    channelId: string,
+  ) => {
+    const prev = get()[mapKey];
+    const existing = prev[panelId] ?? [];
+    if (existing.includes(channelId)) return;
+    if (existing.length >= MAX_PLOT_SERIES) return;
+    set({
+      [mapKey]: { ...prev, [panelId]: [...existing, channelId] },
+    } as Partial<SessionState>);
+  };
+
+  const removeMulti = (
+    mapKey: MultiBindingKey,
+    panelId: string,
+    channelId: string,
+  ) => {
+    const prev = get()[mapKey];
+    const existing = prev[panelId];
+    if (!existing || !existing.includes(channelId)) return;
+    set({
+      [mapKey]: {
+        ...prev,
+        [panelId]: existing.filter((x) => x !== channelId),
+      },
+    } as Partial<SessionState>);
+  };
+
+  // Centralised merge + normalize-defaults-to-absent for the per-plot-panel
+  // settings map. Every plot-settings setter (axis / stack / sync / transform
+  // / gap-threshold) shares the same convention: spread the panel's *actual*
+  // prior settings (not the full defaults) so an untouched panel keeps a
+  // minimal payload, ensure `gapThresholdSec` is always present (null = off),
+  // apply the field-specific `patch`, then drop any sub-field that has
+  // collapsed back to its default so the persisted map stays minimal and
+  // `seriesKey`/identity comparisons stay stable. Callers keep their own
+  // short-circuit (no-op) checks; this just builds + writes the next entry.
+  const writePlotPanelSettings = (
+    panelId: string,
+    patch: Partial<PlotPanelSettings>,
+  ): void => {
+    const prev = get().plotPanelSettings;
+    const existing = prev[panelId];
+    const next: PlotPanelSettings = {
+      ...existing,
+      gapThresholdSec: existing?.gapThresholdSec ?? null,
+      ...patch,
+    };
+    // `false` is the stack default and `true` is the sync default; persist
+    // them as deletions so an untouched panel keeps a minimal payload.
+    if (next.stackAxes === false) delete next.stackAxes;
+    if (next.syncTimeAxis === true) delete next.syncTimeAxis;
+    set({ plotPanelSettings: { ...prev, [panelId]: next } });
   };
 
   return {
@@ -1757,63 +1977,30 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setPlotBinding(panelId, ids) {
-      const seen = new Set<string>();
-      const next: string[] = [];
-      for (const id of ids) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        next.push(id);
-        if (next.length >= MAX_PLOT_SERIES) break;
-      }
-      set({ plotBindings: { ...get().plotBindings, [panelId]: next } });
+      setMulti("plotBindings", panelId, ids);
     },
 
     addPlotChannel(panelId, channelId) {
-      const prev = get().plotBindings;
-      const existing = prev[panelId] ?? [];
-      if (existing.includes(channelId)) return;
-      if (existing.length >= MAX_PLOT_SERIES) return;
-      set({
-        plotBindings: { ...prev, [panelId]: [...existing, channelId] },
-      });
+      addMulti("plotBindings", panelId, channelId);
     },
 
     removePlotChannel(panelId, channelId) {
-      const prev = get().plotBindings;
-      const existing = prev[panelId];
-      if (!existing || !existing.includes(channelId)) return;
-      set({
-        plotBindings: {
-          ...prev,
-          [panelId]: existing.filter((x) => x !== channelId),
-        },
-      });
+      removeMulti("plotBindings", panelId, channelId);
     },
 
     setPlotGapThreshold(panelId, sec) {
-      const prev = get().plotPanelSettings;
-      // Spread only the panel's *actual* prior settings (not the full
-      // defaults) so an untouched panel keeps a minimal `{ gapThresholdSec }`
-      // payload — axisAssignments / transforms stay absent until the user
-      // sets them, and readers default via `?? {}`.
-      const existing = prev[panelId];
+      const existing = get().plotPanelSettings[panelId];
       // Normalise: any non-finite or non-positive value collapses to
       // null (the "off" state), so the persistence layer doesn't have
       // to defend against -Infinity / NaN coming from a numeric input.
       const normalised: number | null =
         sec !== null && Number.isFinite(sec) && sec > 0 ? sec : null;
       if ((existing?.gapThresholdSec ?? null) === normalised) return;
-      set({
-        plotPanelSettings: {
-          ...prev,
-          [panelId]: { ...existing, gapThresholdSec: normalised },
-        },
-      });
+      writePlotPanelSettings(panelId, { gapThresholdSec: normalised });
     },
 
     setPlotChannelAxis(panelId, channelId, axis) {
-      const prev = get().plotPanelSettings;
-      const existing = prev[panelId];
+      const existing = get().plotPanelSettings[panelId];
       // Clamp into the renderable range; non-finite input collapses to 0.
       const clamped =
         Number.isFinite(axis) && axis > 0
@@ -1831,33 +2018,13 @@ export const useSession = create<SessionState>((set, get) => {
         if (nextAssignments[channelId] === clamped) return;
         nextAssignments[channelId] = clamped;
       }
-      set({
-        plotPanelSettings: {
-          ...prev,
-          [panelId]: {
-            ...existing,
-            gapThresholdSec: existing?.gapThresholdSec ?? null,
-            axisAssignments: nextAssignments,
-          },
-        },
-      });
+      writePlotPanelSettings(panelId, { axisAssignments: nextAssignments });
     },
 
     setPlotStackAxes(panelId, on) {
-      const prev = get().plotPanelSettings;
-      const existing = prev[panelId];
+      const existing = get().plotPanelSettings[panelId];
       if ((existing?.stackAxes ?? false) === on) return;
-      // Spread the panel's prior settings so axisAssignments / transforms /
-      // gapThreshold survive. `false` is stored as a deletion (mirrors the
-      // axis / transform "default" posture) so an untouched panel keeps a
-      // minimal payload.
-      const next: PlotPanelSettings = {
-        ...existing,
-        gapThresholdSec: existing?.gapThresholdSec ?? null,
-      };
-      if (on) next.stackAxes = true;
-      else delete next.stackAxes;
-      set({ plotPanelSettings: { ...prev, [panelId]: next } });
+      writePlotPanelSettings(panelId, { stackAxes: on });
     },
 
     setPlotSyncTimeAxis(panelId, on) {
@@ -1870,18 +2037,9 @@ export const useSession = create<SessionState>((set, get) => {
       // The y-zoom is untouched either way — only the time axis syncs.
       if (on) get().setPlotZoomX(panelId, null);
       else get().setPlotZoomX(panelId, get().sharedPlotZoomX);
-      // `true` is the default, so persist it as a deletion (mirrors the
-      // stack / axis "default" posture); store `false` explicitly. Read the
-      // settings map fresh — `setPlotZoomX` above only touched `plotZoom`.
-      const next: PlotPanelSettings = {
-        ...existing,
-        gapThresholdSec: existing?.gapThresholdSec ?? null,
-      };
-      if (on) delete next.syncTimeAxis;
-      else next.syncTimeAxis = false;
-      set({
-        plotPanelSettings: { ...get().plotPanelSettings, [panelId]: next },
-      });
+      // `setPlotZoomX` above only touched `plotZoom`; the settings map is
+      // re-read fresh inside `writePlotPanelSettings`.
+      writePlotPanelSettings(panelId, { syncTimeAxis: on });
     },
 
     setPlotZoomX(panelId, window) {
@@ -1974,8 +2132,7 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setPlotChannelTransform(panelId, channelId, transform) {
-      const prev = get().plotPanelSettings;
-      const existing = prev[panelId];
+      const existing = get().plotPanelSettings[panelId];
       const nextTransforms: Record<string, PlotTransform> = {
         ...(existing?.transforms ?? {}),
       };
@@ -1987,16 +2144,7 @@ export const useSession = create<SessionState>((set, get) => {
       } else {
         nextTransforms[channelId] = transform;
       }
-      set({
-        plotPanelSettings: {
-          ...prev,
-          [panelId]: {
-            ...existing,
-            gapThresholdSec: existing?.gapThresholdSec ?? null,
-            transforms: nextTransforms,
-          },
-        },
-      });
+      writePlotPanelSettings(panelId, { transforms: nextTransforms });
     },
 
     setHoverNs(ns) {
@@ -2059,10 +2207,12 @@ export const useSession = create<SessionState>((set, get) => {
       const cached = get().calibrationCache[calibrationChannelId];
       if (cached) return cached;
       if (!worker) throw new Error("session store: worker not initialised");
-      const { channels, sources } = get();
-      const channel = channels.find((c) => c.id === calibrationChannelId);
+      // This path returns `[]` (not throw) for unknown / wrong-kind channels,
+      // so resolve directly off the index rather than via `resolveChannel`.
+      syncIndex();
+      const channel = channelsById.get(calibrationChannelId);
       if (!channel) return [];
-      const source = sources.find((s) => s.id === channel.sourceId);
+      const source = sourcesById.get(channel.sourceId);
       if (!source || source.kind !== "calibration") return [];
       let cameras: CameraCalibration[] = [];
       try {
@@ -2085,105 +2235,39 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     setTableBinding(panelId, ids) {
-      const seen = new Set<string>();
-      const next: string[] = [];
-      for (const id of ids) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        next.push(id);
-        if (next.length >= MAX_PLOT_SERIES) break;
-      }
-      set({ tableBindings: { ...get().tableBindings, [panelId]: next } });
+      setMulti("tableBindings", panelId, ids);
     },
 
     addTableChannel(panelId, channelId) {
-      const prev = get().tableBindings;
-      const existing = prev[panelId] ?? [];
-      if (existing.includes(channelId)) return;
-      if (existing.length >= MAX_PLOT_SERIES) return;
-      set({
-        tableBindings: { ...prev, [panelId]: [...existing, channelId] },
-      });
+      addMulti("tableBindings", panelId, channelId);
     },
 
     removeTableChannel(panelId, channelId) {
-      const prev = get().tableBindings;
-      const existing = prev[panelId];
-      if (!existing || !existing.includes(channelId)) return;
-      set({
-        tableBindings: {
-          ...prev,
-          [panelId]: existing.filter((x) => x !== channelId),
-        },
-      });
+      removeMulti("tableBindings", panelId, channelId);
     },
 
     setValueBinding(panelId, ids) {
-      const seen = new Set<string>();
-      const next: string[] = [];
-      for (const id of ids) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        next.push(id);
-        if (next.length >= MAX_PLOT_SERIES) break;
-      }
-      set({ valueBindings: { ...get().valueBindings, [panelId]: next } });
+      setMulti("valueBindings", panelId, ids);
     },
 
     addValueChannel(panelId, channelId) {
-      const prev = get().valueBindings;
-      const existing = prev[panelId] ?? [];
-      if (existing.includes(channelId)) return;
-      if (existing.length >= MAX_PLOT_SERIES) return;
-      set({
-        valueBindings: { ...prev, [panelId]: [...existing, channelId] },
-      });
+      addMulti("valueBindings", panelId, channelId);
     },
 
     removeValueChannel(panelId, channelId) {
-      const prev = get().valueBindings;
-      const existing = prev[panelId];
-      if (!existing || !existing.includes(channelId)) return;
-      set({
-        valueBindings: {
-          ...prev,
-          [panelId]: existing.filter((x) => x !== channelId),
-        },
-      });
+      removeMulti("valueBindings", panelId, channelId);
     },
 
     setEnumBinding(panelId, ids) {
-      const seen = new Set<string>();
-      const next: string[] = [];
-      for (const id of ids) {
-        if (seen.has(id)) continue;
-        seen.add(id);
-        next.push(id);
-        if (next.length >= MAX_PLOT_SERIES) break;
-      }
-      set({ enumBindings: { ...get().enumBindings, [panelId]: next } });
+      setMulti("enumBindings", panelId, ids);
     },
 
     addEnumChannel(panelId, channelId) {
-      const prev = get().enumBindings;
-      const existing = prev[panelId] ?? [];
-      if (existing.includes(channelId)) return;
-      if (existing.length >= MAX_PLOT_SERIES) return;
-      set({
-        enumBindings: { ...prev, [panelId]: [...existing, channelId] },
-      });
+      addMulti("enumBindings", panelId, channelId);
     },
 
     removeEnumChannel(panelId, channelId) {
-      const prev = get().enumBindings;
-      const existing = prev[panelId];
-      if (!existing || !existing.includes(channelId)) return;
-      set({
-        enumBindings: {
-          ...prev,
-          [panelId]: existing.filter((x) => x !== channelId),
-        },
-      });
+      removeMulti("enumBindings", panelId, channelId);
     },
 
     setActiveRailTab(tab) {
@@ -2210,34 +2294,20 @@ export const useSession = create<SessionState>((set, get) => {
 
     saveCurrentLayoutAs(name) {
       const id = mintId("nl");
-      const {
-        layoutJson,
-        videoBindings,
-        plotBindings,
-        plotPanelSettings,
-        sceneBindings,
-        mapBindings,
-        tableBindings,
-        valueBindings,
-        enumBindings,
-        namedLayouts,
-      } = get();
+      const state = get();
+      // Snapshot the EXACT field set the live-layout shard persists (via
+      // `cloneBindings`) so a saved layout never silently drops HUD /
+      // overlay / unit state — keeping named layouts in lockstep with the
+      // live layout.
       const entry: NamedLayout = {
         id,
         name,
-        layoutJson,
-        videoBindings: { ...videoBindings },
-        plotBindings: { ...plotBindings },
-        sceneBindings: { ...sceneBindings },
-        mapBindings: { ...mapBindings },
-        tableBindings: { ...tableBindings },
-        valueBindings: { ...valueBindings },
-        enumBindings: { ...enumBindings },
-        plotPanelSettings: { ...plotPanelSettings },
+        layoutJson: state.layoutJson,
+        ...cloneBindings(state),
         createdAt: Date.now(),
       };
       set({
-        namedLayouts: [...namedLayouts, entry],
+        namedLayouts: [...state.namedLayouts, entry],
         activeNamedLayoutId: id,
       });
       return id;
@@ -2249,17 +2319,11 @@ export const useSession = create<SessionState>((set, get) => {
       // Single `set` so the persist adapter writes one snapshot and
       // FlexLayout's external-rebuild effect sees the restored JSON
       // alongside the active-id update (no race with the `setLayoutJson`
-      // clearing path).
+      // clearing path). A layout saved before a given map existed defaults
+      // it to `{}` via `emptyBindings()` so older entries restore cleanly.
       set({
         layoutJson: entry.layoutJson,
-        videoBindings: { ...entry.videoBindings },
-        plotBindings: { ...entry.plotBindings },
-        sceneBindings: { ...entry.sceneBindings },
-        mapBindings: { ...entry.mapBindings },
-        tableBindings: { ...entry.tableBindings },
-        valueBindings: { ...(entry.valueBindings ?? {}) },
-        enumBindings: { ...entry.enumBindings },
-        plotPanelSettings: { ...(entry.plotPanelSettings ?? {}) },
+        ...cloneBindings({ ...emptyBindings(), ...entry }),
         activeNamedLayoutId: id,
       });
     },
@@ -2271,17 +2335,12 @@ export const useSession = create<SessionState>((set, get) => {
     applyDemoWorkspace(snapshot) {
       // Single `set` for the same reason as `restoreNamedLayout`: the
       // persist adapter writes one snapshot and FlexLayout's external-
-      // rebuild effect sees the new JSON together with its bindings.
+      // rebuild effect sees the new JSON together with its bindings. Maps
+      // the snapshot omits (e.g. `videoHudOn`) reset to `{}` via
+      // `emptyBindings()` so the demo always starts from a clean slate.
       set({
         layoutJson: snapshot.layoutJson,
-        videoBindings: { ...snapshot.videoBindings },
-        plotBindings: { ...snapshot.plotBindings },
-        sceneBindings: { ...snapshot.sceneBindings },
-        mapBindings: { ...snapshot.mapBindings },
-        tableBindings: { ...snapshot.tableBindings },
-        valueBindings: { ...snapshot.valueBindings },
-        enumBindings: { ...snapshot.enumBindings },
-        plotPanelSettings: { ...snapshot.plotPanelSettings },
+        ...cloneBindings({ ...emptyBindings(), ...snapshot }),
         activeNamedLayoutId: null,
         selectedPanelId: null,
       });
@@ -2370,8 +2429,9 @@ export const useSession = create<SessionState>((set, get) => {
     removeBookmark(id) {
       const prev = get().bookmarks;
       const next = prev.filter((b) => b.id !== id);
-      if (next.length === prev.length) return;
+      if (next.length === prev.length) return false;
       set({ bookmarks: next });
+      return true;
     },
 
     dismissOpenErrors() {
@@ -2381,7 +2441,7 @@ export const useSession = create<SessionState>((set, get) => {
 
     renameBookmark(id, label) {
       const trimmed = label.trim();
-      if (trimmed.length === 0) return;
+      if (trimmed.length === 0) return false;
       const prev = get().bookmarks;
       let changed = false;
       const next = prev.map((b) => {
@@ -2390,8 +2450,9 @@ export const useSession = create<SessionState>((set, get) => {
         changed = true;
         return { ...b, label: trimmed };
       });
-      if (!changed) return;
+      if (!changed) return false;
       set({ bookmarks: next });
+      return true;
     },
 
     setBookmarkRange(id, beforeNs, afterNs) {
@@ -2405,8 +2466,9 @@ export const useSession = create<SessionState>((set, get) => {
         changed = true;
         return { ...b, beforeNs: before, afterNs: after };
       });
-      if (!changed) return;
+      if (!changed) return false;
       set({ bookmarks: next });
+      return true;
     },
 
     setBookmarkTag(id, attributeId, value) {
@@ -2427,8 +2489,9 @@ export const useSession = create<SessionState>((set, get) => {
         changed = true;
         return { ...b, tags: { ...b.tags, [attributeId]: value } };
       });
-      if (!changed) return;
+      if (!changed) return false;
       set({ bookmarks: next });
+      return true;
     },
 
     setEventTagConfig(config) {
@@ -2480,11 +2543,7 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     async fetchChannelRange(channelId, startNs, endNs, includePrev) {
-      const { channels, sources } = get();
-      const channel = channels.find((c) => c.id === channelId);
-      if (!channel) throw new Error(`unknown channel: ${channelId}`);
-      const source = sources.find((s) => s.id === channel.sourceId);
-      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      const { channel, source } = resolveChannel(channelId);
 
       // Inline (agent-pushed) sources are served straight from the main-thread
       // store — no worker round-trip. They honour the same per-source offset
@@ -2507,6 +2566,7 @@ export const useSession = create<SessionState>((set, get) => {
       }
 
       if (!worker) throw new Error("session store: worker not initialised");
+      const w = worker;
 
       // In-flight dedup: two panels bound to the same channel that issue
       // concurrent fetches for the same window share one worker round-trip.
@@ -2526,127 +2586,28 @@ export const useSession = create<SessionState>((set, get) => {
       // shifted back by the offset, then shift every returned `ts` forward by
       // the same offset so the source lines up with the session timeline. Both
       // are cheap `bigint` ops off the cursor/video hot path; a 0n offset is a
-      // pass-through (no window shift, no Arrow re-encode).
+      // pass-through (no window shift, no Arrow re-encode). Geometry kinds
+      // (`shiftTs: false`) always run at offset 0n and pass bytes through
+      // unmodified — the multi-column List<Float32>/<Int32>/<Utf8> schemas
+      // aren't the scalar `{ts,value}` shape `shiftRangeArrowTs` rewrites.
       const offset = source.timeOffsetNs ?? 0n;
       const win = shiftFetchWindow(startNs, endNs, offset);
 
       const fetchPromise = (async (): Promise<Uint8Array> => {
         try {
-          if (source.kind === "mcap") {
-            const bytes = await worker.mcapFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-            return shiftRangeArrowTs(bytes, offset);
+          const entry = FETCH_RANGE_BY_KIND[source.kind];
+          if (!entry) {
+            throw new Error(`channel kind not plottable: ${source.kind}`);
           }
-          if (source.kind === "ros1") {
-            const bytes = await worker.ros1BagFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-            return shiftRangeArrowTs(bytes, offset);
-          }
-          if (source.kind === "ros2db3") {
-            const bytes = await worker.ros2Db3FetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-            return shiftRangeArrowTs(bytes, offset);
-          }
-          if (source.kind === "mf4") {
-            const bytes = await worker.mf4FetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-            return shiftRangeArrowTs(bytes, offset);
-          }
-          if (source.kind === "tabular") {
-            const bytes = await worker.tabularFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-            return shiftRangeArrowTs(bytes, offset);
-          }
-          if (source.kind === "recipe") {
-            // A recipe source decodes to scalar `{ts,value}` batches, exactly
-            // like tabular — same Arrow schema, same ts-shift handling.
-            const bytes = await worker.recipeFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-            return shiftRangeArrowTs(bytes, offset);
-          }
-          if (source.kind === "lidar") {
-            // Point-cloud batches carry a List<Float32> geometry schema, not the
-            // scalar `{ts,value}` shape `shiftRangeArrowTs` rewrites — and lidar
-            // sources never carry a time offset (always 0n), so pass the bytes
-            // through unmodified. The window is already un-shifted (offset 0).
-            return worker.lidarFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-          }
-          if (source.kind === "openlabel") {
-            // Bounding-box frames carry a multi-column List<Float32>/List<Utf8>
-            // geometry schema, not the scalar `{ts,value}` shape
-            // `shiftRangeArrowTs` rewrites — and OpenLABEL sources never carry a
-            // time offset (always 0n), so pass the bytes through unmodified.
-            return worker.openlabelFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-          }
-          if (source.kind === "trajectory") {
-            // Trajectory frames carry a multi-column List<Float32>/List<Int32>
-            // geometry schema, not the scalar `{ts,value}` shape
-            // `shiftRangeArrowTs` rewrites — and trajectory sources never carry
-            // a time offset (always 0n), so pass the bytes through unmodified.
-            return worker.trajectoryFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-          }
-          if (source.kind === "map_geometry") {
-            // Road-network frames carry a multi-column List<Float32>/List<Int32>
-            // /List<Utf8> geometry schema, not the scalar `{ts,value}` shape
-            // `shiftRangeArrowTs` rewrites — and map-geometry sources never carry
-            // a time offset (always 0n), so pass the bytes through unmodified.
-            return worker.mapGeometryFetchRange(
-              source.handle,
-              channel.nativeId,
-              win.startNs,
-              win.endNs,
-              includePrev,
-            );
-          }
-          throw new Error(`channel kind not plottable: ${source.kind}`);
+          const fetch = w[entry.method].bind(w);
+          const bytes = await fetch(
+            source.handle,
+            channel.nativeId,
+            win.startNs,
+            win.endNs,
+            includePrev,
+          );
+          return entry.shiftTs ? shiftRangeArrowTs(bytes, offset) : bytes;
         } finally {
           mark(perfEnd);
           measure(`fetch-range:${channelId}`, perfStart, perfEnd);
@@ -2660,11 +2621,7 @@ export const useSession = create<SessionState>((set, get) => {
 
     async lidarSpinTimes(channelId) {
       if (!worker) throw new Error("session store: worker not initialised");
-      const { channels, sources } = get();
-      const channel = channels.find((c) => c.id === channelId);
-      if (!channel) throw new Error(`unknown channel: ${channelId}`);
-      const source = sources.find((s) => s.id === channel.sourceId);
-      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      const { source } = resolveChannel(channelId);
       if (source.kind !== "lidar") {
         throw new Error(`not a point-cloud channel: ${channelId}`);
       }
@@ -2686,11 +2643,7 @@ export const useSession = create<SessionState>((set, get) => {
 
     async boxFrameTimes(channelId) {
       if (!worker) throw new Error("session store: worker not initialised");
-      const { channels, sources } = get();
-      const channel = channels.find((c) => c.id === channelId);
-      if (!channel) throw new Error(`unknown channel: ${channelId}`);
-      const source = sources.find((s) => s.id === channel.sourceId);
-      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      const { source } = resolveChannel(channelId);
       if (source.kind !== "openlabel") {
         throw new Error(`not a bounding-box channel: ${channelId}`);
       }
@@ -2699,11 +2652,7 @@ export const useSession = create<SessionState>((set, get) => {
 
     async trajectoryFrameTimes(channelId) {
       if (!worker) throw new Error("session store: worker not initialised");
-      const { channels, sources } = get();
-      const channel = channels.find((c) => c.id === channelId);
-      if (!channel) throw new Error(`unknown channel: ${channelId}`);
-      const source = sources.find((s) => s.id === channel.sourceId);
-      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      const { source } = resolveChannel(channelId);
       if (source.kind !== "trajectory") {
         throw new Error(`not a trajectory channel: ${channelId}`);
       }
@@ -2712,11 +2661,7 @@ export const useSession = create<SessionState>((set, get) => {
 
     async mapGeometryFrameTimes(channelId) {
       if (!worker) throw new Error("session store: worker not initialised");
-      const { channels, sources } = get();
-      const channel = channels.find((c) => c.id === channelId);
-      if (!channel) throw new Error(`unknown channel: ${channelId}`);
-      const source = sources.find((s) => s.id === channel.sourceId);
-      if (!source) throw new Error(`unknown source for channel: ${channelId}`);
+      const { source } = resolveChannel(channelId);
       if (source.kind !== "map_geometry") {
         throw new Error(`not a map-geometry channel: ${channelId}`);
       }
@@ -3442,10 +3387,11 @@ export const useSession = create<SessionState>((set, get) => {
       await get().openFiles([file]);
       const fresh = get().sources.filter((s) => !before.has(s.id));
       if (fresh.length > 0) {
+        const nextSources = get().sources.map((s) =>
+          fresh.some((f) => f.id === s.id) ? { ...s, oneShot: true } : s,
+        );
         set({
-          sources: get().sources.map((s) =>
-            fresh.some((f) => f.id === s.id) ? { ...s, oneShot: true } : s,
-          ),
+          sources: nextSources,
           // Drop the originating unknown import — its escape hatch is done.
           pendingUnknownImports: get().pendingUnknownImports.filter(
             (p) => p.id !== id,
@@ -3563,11 +3509,12 @@ export const useSession = create<SessionState>((set, get) => {
       // stays offset-free): no-op.
       if (!src || src.kind === "mp4+sidecar") return;
       if ((src.timeOffsetNs ?? 0n) === parsed) return;
-      set({
-        sources: prev.map((s) =>
-          s.id === sourceId ? { ...s, timeOffsetNs: parsed } : s,
-        ),
-      });
+      const nextSources = prev.map((s) =>
+        s.id === sourceId ? { ...s, timeOffsetNs: parsed } : s,
+      );
+      // The new `sources` array reference makes `syncIndex()` rebuild the
+      // derived index on the next fetch, so it reads the new `timeOffsetNs`.
+      set({ sources: nextSources });
     },
 
     async openUrl(url) {
@@ -3648,18 +3595,7 @@ export const useSession = create<SessionState>((set, get) => {
         for (const s of get().sources) {
           try {
             if (s.kind === "inline") continue; // no wasm handle to free
-            if (s.kind === "mcap") await w.closeMcap(s.handle);
-            else if (s.kind === "ros1") await w.closeRos1Bag(s.handle);
-            else if (s.kind === "ros2db3") await w.closeRos2Db3(s.handle);
-            else if (s.kind === "mf4") await w.closeMf4(s.handle);
-            else if (s.kind === "tabular") await w.closeTabular(s.handle);
-            else if (s.kind === "recipe") await w.closeRecipe(s.handle);
-            else if (s.kind === "lidar") await w.closeLidar(s.handle);
-            else if (s.kind === "openlabel") await w.closeOpenlabel(s.handle);
-            else if (s.kind === "trajectory") await w.closeTrajectory(s.handle);
-            else if (s.kind === "map_geometry")
-              await w.closeMapGeometry(s.handle);
-            else await w.closeMp4Sidecar(s.handle);
+            await closeFor(w, s);
             // Drop the lazy sample cache — releases its `File` ref,
             // detaches notification subscribers, and frees any cached
             // sample bytes.
@@ -3690,19 +3626,11 @@ export const useSession = create<SessionState>((set, get) => {
           speed: 1,
           seekEpoch: 0,
           hoverNs: null,
-          videoBindings: {},
-          plotBindings: {},
-          plotPanelSettings: {},
+          // Reset every per-panel binding map in one place (one source of
+          // truth) so a new binding map can't be forgotten here.
+          ...emptyBindings(),
           plotZoom: {},
           sharedPlotZoomX: null,
-          unitOverrides: {},
-          videoHudOn: {},
-          sceneBindings: {},
-          mapBindings: {},
-          tableBindings: {},
-          valueBindings: {},
-          enumBindings: {},
-          pointCloudOverlays: {},
           calibrationCache: {},
           lastOpenErrors: [],
           loadedRanges: {},
@@ -3737,20 +3665,7 @@ export const useSession = create<SessionState>((set, get) => {
         } else if (worker) {
           const w = worker;
           try {
-            if (src.kind === "mcap") await w.closeMcap(src.handle);
-            else if (src.kind === "ros1") await w.closeRos1Bag(src.handle);
-            else if (src.kind === "ros2db3") await w.closeRos2Db3(src.handle);
-            else if (src.kind === "mf4") await w.closeMf4(src.handle);
-            else if (src.kind === "tabular") await w.closeTabular(src.handle);
-            else if (src.kind === "recipe") await w.closeRecipe(src.handle);
-            else if (src.kind === "lidar") await w.closeLidar(src.handle);
-            else if (src.kind === "openlabel")
-              await w.closeOpenlabel(src.handle);
-            else if (src.kind === "trajectory")
-              await w.closeTrajectory(src.handle);
-            else if (src.kind === "map_geometry")
-              await w.closeMapGeometry(src.handle);
-            else await w.closeMp4Sidecar(src.handle);
+            await closeFor(w, src);
           } catch (err) {
             // Mirror `clear()`: a failed close shouldn't strand the source
             // in the UI, so we log and proceed with the state reset.

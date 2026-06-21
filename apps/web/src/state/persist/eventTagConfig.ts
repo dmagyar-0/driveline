@@ -18,6 +18,7 @@
 // rather than empty, so the feature is useful out of the box.
 
 import type { useSession } from "../store";
+import { isPlainObject, isStringArray } from "./validators";
 
 export const EVENT_TAG_CONFIG_STORAGE_KEY = "driveline.eventTags.config.v1";
 export const EVENT_TAG_CONFIG_SCHEMA_VERSION = 1 as const;
@@ -126,14 +127,6 @@ export const DEFAULT_EVENT_TAG_CONFIG: EventTagConfig = {
 
 function defaultStorage(): Storage | undefined {
   return typeof localStorage !== "undefined" ? localStorage : undefined;
-}
-
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every((x) => typeof x === "string");
 }
 
 /** Strict attribute validation used on persistence load (fail-closed). */

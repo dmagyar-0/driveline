@@ -25,7 +25,7 @@ import type { TimeMode } from "../timeline/formatTime";
  * `setCursor(BigInt(...))` boundary in {@link applyViewStateFromUrl}.
  */
 export interface ViewState {
-  layoutJson: unknown | null;
+  layoutJson: unknown;
   bindings: {
     plot: Record<string, string[]>;
     video: Record<string, string | null>;
