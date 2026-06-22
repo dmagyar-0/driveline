@@ -287,19 +287,11 @@ impl Reader for MapGeometryReader {
         // is the "previous" frame just before the window. partition_point over
         // the one-element `[0]` table keeps the logic in lock-step.
         let ts = &self.frame_ts;
-        let start_idx = ts.partition_point(|&t| t < range.start_ns);
-        let end_idx = ts.partition_point(|&t| t < range.end_ns).max(start_idx);
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
-
-        let mut idxs: Vec<usize> = Vec::new();
-        if let Some(p) = prev_idx {
-            idxs.push(p);
-        }
-        idxs.extend(start_idx..end_idx);
+        let (lo, hi) =
+            crate::time::range_window(ts, range.start_ns, range.end_ns, opts.include_prev);
+        // Contiguous because `include_prev` (when active) folds the frame
+        // immediately before the window into `lo`: optional prev + body.
+        let idxs: Vec<usize> = (lo..hi).collect();
 
         let schema = Self::fetch_schema();
 

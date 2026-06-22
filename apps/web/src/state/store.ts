@@ -1179,22 +1179,65 @@ function mcapChannels(sourceId: string, s: McapSummary): Channel[] {
     timeRange: { startNs: c.start_ns, endNs: c.end_ns },
   }));
 }
-function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
-  // Readers currently emit one kind per source: Mf4Reader always yields
-  // scalar F64 channels. Hardcode the kind/dtype here so the wasm summary
-  // doesn't have to widen.
+// Shared shape for every "simple" channel builder. The wasm readers emit one
+// kind of channel per source, so the JS side hardcodes the `kind`/`dtype` here
+// rather than widening the summary. Each builder differs only by that
+// kind/dtype pair and whether it carries the per-channel `group`/`unit`
+// (scalar sources do; the scene/video kinds force both to `null`). MCAP is the
+// lone exception — its channels carry per-channel kind/dtype — so it keeps its
+// own specialization below.
+//
+// CRITICAL: `start_ns`/`end_ns` flow straight through as `bigint`; never narrow
+// a timestamp to `Number`.
+type ChannelKindDefaults = {
+  kind: ChannelKind;
+  dtype: string | null;
+  // When true, carry the summary's per-channel `group`/`unit`; otherwise force
+  // both to `null` (matches the scene/video builders).
+  carryGroupUnit?: boolean;
+};
+
+// Common shape across every "simple" summary: the id/name/count/range fields
+// each builder reads. `group`/`unit` are optional so the mp4 sidecar channel
+// (which carries neither) and the MF4-shaped channel (which carries both) both
+// fit; the `carryGroupUnit` flag decides whether to surface them.
+type SummaryChannel = {
+  id: string;
+  name: string;
+  group?: string | null;
+  unit?: string | null;
+  sample_count: number;
+  start_ns: bigint;
+  end_ns: bigint;
+};
+
+function channelsFromSummary(
+  sourceId: string,
+  s: { channels: readonly SummaryChannel[] },
+  { kind, dtype, carryGroupUnit = false }: ChannelKindDefaults,
+): Channel[] {
   return s.channels.map((c) => ({
     id: qualifiedChannelId(sourceId, c.id),
     nativeId: c.id,
     sourceId,
     name: c.name,
-    group: c.group,
-    kind: "scalar" as const,
-    dtype: "f64",
-    unit: c.unit,
+    group: carryGroupUnit ? (c.group ?? null) : null,
+    kind,
+    dtype,
+    unit: carryGroupUnit ? (c.unit ?? null) : null,
     sampleCount: c.sample_count,
     timeRange: { startNs: c.start_ns, endNs: c.end_ns },
   }));
+}
+
+// Readers currently emit one kind per source: Mf4Reader always yields scalar
+// F64 channels, carrying the per-channel group/unit.
+function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
+  return channelsFromSummary(sourceId, s, {
+    kind: "scalar",
+    dtype: "f64",
+    carryGroupUnit: true,
+  });
 }
 // Tabular (CSV / Parquet) summaries arrive in the MF4 shape — one scalar F64
 // channel per surfaced numeric column — so the channel mapping mirrors
@@ -1202,68 +1245,31 @@ function mf4Channels(sourceId: string, s: Mf4Summary): Channel[] {
 // indistinguishable to the panels (Plot/Table/Map/Value/Enum all consume the
 // flat `channels` list and the ranged `fetchChannelRange` path).
 function tabularChannels(sourceId: string, s: Mf4Summary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: c.group,
-    kind: "scalar" as const,
+  return channelsFromSummary(sourceId, s, {
+    kind: "scalar",
     dtype: "f64",
-    unit: c.unit,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+    carryGroupUnit: true,
+  });
 }
 function mp4Channels(sourceId: string, s: Mp4SidecarSummary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: null,
-    kind: "video" as const,
-    dtype: null,
-    unit: null,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+  return channelsFromSummary(sourceId, s, { kind: "video", dtype: null });
 }
 // Point-cloud (LiDAR) summaries arrive in the MF4 shape — the reader emits a
 // single channel — so the mapping mirrors `mf4Channels` but hardcodes the
 // `point_cloud` kind so the ScenePanel/PanelDrawer route it to the 3D scene
 // pipeline rather than a plot. `sample_count` carries peak points-per-spin.
 function lidarChannels(sourceId: string, s: Mf4Summary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: null,
-    kind: "point_cloud" as const,
-    dtype: null,
-    unit: null,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+  return channelsFromSummary(sourceId, s, { kind: "point_cloud", dtype: null });
 }
 // OpenLABEL summaries arrive in the same MF4 shape as LiDAR (a single channel,
 // `sample_count` = peak boxes/frame). Mirrors `lidarChannels` but hardcodes the
 // `bounding_box` kind so the ScenePanel/PanelDrawer route it to the 3D scene
 // pipeline as wireframe boxes rather than a plot or a point cloud.
 function openLabelChannels(sourceId: string, s: Mf4Summary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: null,
-    kind: "bounding_box" as const,
+  return channelsFromSummary(sourceId, s, {
+    kind: "bounding_box",
     dtype: null,
-    unit: null,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+  });
 }
 // Trajectory summaries arrive in the same MF4 shape as LiDAR/OpenLABEL (a
 // single channel, `sample_count` = peak paths/frame). Mirrors
@@ -1271,36 +1277,17 @@ function openLabelChannels(sourceId: string, s: Mf4Summary): Channel[] {
 // ScenePanel/PanelDrawer route it to the 3D scene pipeline as predicted
 // polylines.
 function trajectoryChannels(sourceId: string, s: Mf4Summary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: null,
-    kind: "trajectory" as const,
-    dtype: null,
-    unit: null,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+  return channelsFromSummary(sourceId, s, { kind: "trajectory", dtype: null });
 }
 // Map-geometry summaries arrive in the same MF4 shape as LiDAR/OpenLABEL/
 // trajectory (a single channel, `sample_count` = polyline count). Mirrors
 // `trajectoryChannels` but hardcodes the `map_geometry` kind so the
 // ScenePanel/PanelDrawer route it to the 3D scene pipeline as road polylines.
 function mapGeometryChannels(sourceId: string, s: Mf4Summary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: null,
-    kind: "map_geometry" as const,
+  return channelsFromSummary(sourceId, s, {
+    kind: "map_geometry",
     dtype: null,
-    unit: null,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+  });
 }
 
 // Validate + build an inline (agent-pushed) source from its spec: parse every
@@ -1430,18 +1417,10 @@ function buildInlineSource(
 // is config, not a time series — `timeRange` mirrors the summary's bounds (the
 // reader emits a degenerate range) and is never used for fetching.
 function calibrationChannels(sourceId: string, s: Mf4Summary): Channel[] {
-  return s.channels.map((c) => ({
-    id: qualifiedChannelId(sourceId, c.id),
-    nativeId: c.id,
-    sourceId,
-    name: c.name,
-    group: null,
-    kind: "camera_calibration" as const,
+  return channelsFromSummary(sourceId, s, {
+    kind: "camera_calibration",
     dtype: null,
-    unit: null,
-    sampleCount: c.sample_count,
-    timeRange: { startNs: c.start_ns, endNs: c.end_ns },
-  }));
+  });
 }
 
 // Prune helper for the object-valued point-cloud overlay map: a binding dies
@@ -1706,6 +1685,28 @@ export const useSession = create<SessionState>((set, get) => {
   ): Promise<void> => {
     const method = CLOSE_METHOD_BY_KIND[source.kind] ?? "closeMp4Sidecar";
     await (w[method] as (handle: number) => Promise<void>)(source.handle);
+  };
+
+  // Shared body for the per-kind frame/spin-time actions (lidar spins,
+  // OpenLABEL/trajectory/map-geometry frames): resolve the channel, assert the
+  // source kind, then call the matching worker method. Each scene kind exposes
+  // one `(handle) => Promise<BigInt64Array>` worker method; the result flows
+  // straight through (BigInt64Array, never narrowed). `errMsg` mirrors each
+  // action's original "not a … channel" message verbatim.
+  const frameTimes = async (
+    channelId: string,
+    kind: SourceKind,
+    method:
+      | "lidarSpinTimes"
+      | "openlabelFrameTimes"
+      | "trajectoryFrameTimes"
+      | "mapGeometryFrameTimes",
+    errMsg: string,
+  ): Promise<BigInt64Array> => {
+    if (!worker) throw new Error("session store: worker not initialised");
+    const { source } = resolveChannel(channelId);
+    if (source.kind !== kind) throw new Error(errMsg);
+    return worker[method](source.handle);
   };
 
   // Hydrate layout + bindings synchronously so the first render paints the
@@ -2620,12 +2621,12 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     async lidarSpinTimes(channelId) {
-      if (!worker) throw new Error("session store: worker not initialised");
-      const { source } = resolveChannel(channelId);
-      if (source.kind !== "lidar") {
-        throw new Error(`not a point-cloud channel: ${channelId}`);
-      }
-      return worker.lidarSpinTimes(source.handle);
+      return frameTimes(
+        channelId,
+        "lidar",
+        "lidarSpinTimes",
+        `not a point-cloud channel: ${channelId}`,
+      );
     },
 
     addInlineSource(spec) {
@@ -2642,30 +2643,30 @@ export const useSession = create<SessionState>((set, get) => {
     },
 
     async boxFrameTimes(channelId) {
-      if (!worker) throw new Error("session store: worker not initialised");
-      const { source } = resolveChannel(channelId);
-      if (source.kind !== "openlabel") {
-        throw new Error(`not a bounding-box channel: ${channelId}`);
-      }
-      return worker.openlabelFrameTimes(source.handle);
+      return frameTimes(
+        channelId,
+        "openlabel",
+        "openlabelFrameTimes",
+        `not a bounding-box channel: ${channelId}`,
+      );
     },
 
     async trajectoryFrameTimes(channelId) {
-      if (!worker) throw new Error("session store: worker not initialised");
-      const { source } = resolveChannel(channelId);
-      if (source.kind !== "trajectory") {
-        throw new Error(`not a trajectory channel: ${channelId}`);
-      }
-      return worker.trajectoryFrameTimes(source.handle);
+      return frameTimes(
+        channelId,
+        "trajectory",
+        "trajectoryFrameTimes",
+        `not a trajectory channel: ${channelId}`,
+      );
     },
 
     async mapGeometryFrameTimes(channelId) {
-      if (!worker) throw new Error("session store: worker not initialised");
-      const { source } = resolveChannel(channelId);
-      if (source.kind !== "map_geometry") {
-        throw new Error(`not a map-geometry channel: ${channelId}`);
-      }
-      return worker.mapGeometryFrameTimes(source.handle);
+      return frameTimes(
+        channelId,
+        "map_geometry",
+        "mapGeometryFrameTimes",
+        `not a map-geometry channel: ${channelId}`,
+      );
     },
 
     async openFiles(files) {

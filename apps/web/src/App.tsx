@@ -985,16 +985,6 @@ export function App() {
     setDragActive(false);
   };
 
-  // Phase 3 — the Channels drawer auto-adds a plot panel when the user
-  // clicks a channel with no panel selected. The drawer can't reach
-  // FlexLayout directly; App owns `workspaceRef`, so it forwards a
-  // narrow callback. `createPanel("plot")` is synchronous (it mutates the
-  // FlexLayout model and returns the new tab id), so reading the id
-  // here is safe. The Layout/Add-panel drawer rows reach FlexLayout
-  // through `workspaceBridge` directly, so no add-panel props are threaded.
-  const ensurePlotPanel = (): string | null =>
-    workspaceRef.current?.createPanel("plot") ?? null;
-
   return (
     <>
       {workerCrash && <WorkerErrorBanner crash={workerCrash} />}
@@ -1004,7 +994,6 @@ export function App() {
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        ensurePlotPanel={ensurePlotPanel}
         transport={<Transport />}
       >
         <Workspace ref={workspaceRef} />

@@ -683,18 +683,11 @@ impl McapReader {
         }
 
         let timestamps: Vec<i64> = merged.iter().map(|r| r.0).collect();
-        let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
-        let end_idx = timestamps
-            .partition_point(|&t| t < range.end_ns)
-            .max(start_idx);
-        let lo = if opts.include_prev && start_idx > 0 {
-            start_idx - 1
-        } else {
-            start_idx
-        };
+        let (lo, hi) =
+            crate::time::range_window(&timestamps, range.start_ns, range.end_ns, opts.include_prev);
 
-        let ts_slice = &timestamps[lo..end_idx];
-        let val_refs: Vec<&ParsedValue> = merged[lo..end_idx].iter().map(|r| r.1).collect();
+        let ts_slice = &timestamps[lo..hi];
+        let val_refs: Vec<&ParsedValue> = merged[lo..hi].iter().map(|r| r.1).collect();
 
         match cm.kind {
             ChannelKind::Scalar => {
@@ -800,18 +793,11 @@ impl McapReader {
         }
 
         let timestamps: Vec<i64> = merged.iter().map(|r| r.0).collect();
-        let start_idx = timestamps.partition_point(|&t| t < range.start_ns);
-        let end_idx = timestamps
-            .partition_point(|&t| t < range.end_ns)
-            .max(start_idx);
-        let lo = if opts.include_prev && start_idx > 0 {
-            start_idx - 1
-        } else {
-            start_idx
-        };
+        let (lo, hi) =
+            crate::time::range_window(&timestamps, range.start_ns, range.end_ns, opts.include_prev);
 
-        let ts_slice = &timestamps[lo..end_idx];
-        let val_refs: Vec<&ParsedValue> = merged[lo..end_idx].iter().map(|r| r.1).collect();
+        let ts_slice = &timestamps[lo..hi];
+        let val_refs: Vec<&ParsedValue> = merged[lo..hi].iter().map(|r| r.1).collect();
 
         match exp.kind {
             ChannelKind::Scalar => {

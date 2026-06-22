@@ -24,16 +24,7 @@ import type { RailTab } from "../state/persist/ui";
 // it via aria-controls so AT can announce the rail/drawer relationship.
 export const DRAWER_REGION_ID = "shell-drawer-region";
 
-export interface DrawerProps {
-  /** Mints (or returns) a plot panel id when the Channels drawer's
-   *  click-to-bind path needs a target and none is selected. Owned by
-   *  `App.tsx`, which has the `WorkspaceHandle` ref. The Layout/Add-panel
-   *  rows reach FlexLayout through `workspaceBridge` directly, so no
-   *  per-kind add-panel callbacks are threaded through the drawer. */
-  ensurePlotPanel: () => string | null;
-}
-
-export function Drawer({ ensurePlotPanel }: DrawerProps) {
+export function Drawer() {
   const activeRailTab = useSession((s) => s.activeRailTab);
   const storedWidth = useSession((s) => s.drawerWidth);
   const setDrawerWidth = useSession((s) => s.setDrawerWidth);
@@ -52,10 +43,7 @@ export function Drawer({ ensurePlotPanel }: DrawerProps) {
       data-testid="drawer-host"
       style={{ width: `${width}px` }}
     >
-      <DrawerBody
-        activeRailTab={activeRailTab}
-        ensurePlotPanel={ensurePlotPanel}
-      />
+      <DrawerBody activeRailTab={activeRailTab} />
       {/* Persistent shortcut: add a panel from whichever drawer is open,
           not just the Layout tab. Reaches FlexLayout via `workspaceBridge`. */}
       <AddPanelMenu />
@@ -73,15 +61,12 @@ export function Drawer({ ensurePlotPanel }: DrawerProps) {
   );
 }
 
-function DrawerBody({
-  activeRailTab,
-  ensurePlotPanel,
-}: DrawerProps & { activeRailTab: RailTab }) {
+function DrawerBody({ activeRailTab }: { activeRailTab: RailTab }) {
   switch (activeRailTab) {
     case "sources":
       return <SourcesDrawer />;
     case "channels":
-      return <ChannelsDrawer ensurePlotPanel={ensurePlotPanel} />;
+      return <ChannelsDrawer />;
     case "layout":
       return <LayoutDrawer />;
     case "panel":

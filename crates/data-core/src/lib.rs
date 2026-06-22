@@ -22,6 +22,7 @@ pub mod ros1_bag;
 pub mod ros2_db3;
 pub mod sqlite;
 pub mod tabular;
+pub(crate) mod time;
 pub mod trajectory;
 pub mod types;
 

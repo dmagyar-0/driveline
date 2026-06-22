@@ -18,12 +18,6 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Drawer } from "./Drawer";
 import { useSession } from "../state/store";
 
-// The host's forwarded prop is only exercised by the Channels drawer; for
-// these tests we open the Sources drawer, which ignores it.
-const noopProps = {
-  ensurePlotPanel: () => null,
-};
-
 afterEach(async () => {
   cleanup();
   await useSession.getState().clear();
@@ -34,14 +28,14 @@ afterEach(async () => {
 describe("Drawer host", () => {
   it("renders nothing when no rail tab is active", () => {
     useSession.getState().setActiveRailTab(null);
-    const { container } = render(<Drawer {...noopProps} />);
+    const { container } = render(<Drawer />);
     expect(container.firstChild).toBeNull();
   });
 
   it("reflects the stored drawer width on the host wrapper", () => {
     useSession.getState().setActiveRailTab("sources");
     useSession.getState().setDrawerWidth(360);
-    render(<Drawer {...noopProps} />);
+    render(<Drawer />);
     const resizer = screen.getByTestId("drawer-resizer");
     const host = resizer.parentElement as HTMLElement;
     expect(host.style.width).toBe("360px");
@@ -49,7 +43,7 @@ describe("Drawer host", () => {
 
   it("exposes the splitter as a vertical separator with width bounds", () => {
     useSession.getState().setActiveRailTab("sources");
-    render(<Drawer {...noopProps} />);
+    render(<Drawer />);
     const resizer = screen.getByTestId("drawer-resizer");
     expect(resizer.getAttribute("role")).toBe("separator");
     expect(resizer.getAttribute("aria-orientation")).toBe("vertical");
@@ -60,7 +54,7 @@ describe("Drawer host", () => {
 
   it("ArrowRight widens the drawer and commits to the store", () => {
     useSession.getState().setActiveRailTab("sources");
-    render(<Drawer {...noopProps} />);
+    render(<Drawer />);
     fireEvent.keyDown(screen.getByTestId("drawer-resizer"), {
       key: "ArrowRight",
     });
@@ -70,7 +64,7 @@ describe("Drawer host", () => {
   it("ArrowLeft is clamped at the minimum width", () => {
     useSession.getState().setActiveRailTab("sources");
     useSession.getState().setDrawerWidth(220);
-    render(<Drawer {...noopProps} />);
+    render(<Drawer />);
     fireEvent.keyDown(screen.getByTestId("drawer-resizer"), {
       key: "ArrowLeft",
     });
@@ -79,7 +73,7 @@ describe("Drawer host", () => {
 
   it("End jumps to the maximum width", () => {
     useSession.getState().setActiveRailTab("sources");
-    render(<Drawer {...noopProps} />);
+    render(<Drawer />);
     fireEvent.keyDown(screen.getByTestId("drawer-resizer"), { key: "End" });
     expect(useSession.getState().drawerWidth).toBe(560);
   });

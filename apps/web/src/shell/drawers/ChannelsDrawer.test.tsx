@@ -24,6 +24,7 @@ import {
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { ChannelsDrawer } from "./ChannelsDrawer";
+import { setWorkspaceBridge } from "../../layout/workspaceBridge";
 import { CHANNEL_DND_MIME } from "../../panels/channelDrag";
 import {
   useSession,
@@ -123,8 +124,20 @@ function seedTree(channels: Channel[]) {
   useSession.setState({ sources, channels, globalRange: range });
 }
 
+// The drawer mints a plot through the module-scoped workspace bridge when a
+// channel is clicked with no panel selected. Register a stub that mirrors the
+// real `createPanel("plot")` contract (returns the new tab id) so the
+// click-to-bind path has a target; clear it after each test.
+let createPanel = vi.fn((_kind: string, _channelId?: string) => "plot-1");
+
 // ResizeObserver is not implemented in jsdom.
 beforeEach(() => {
+  createPanel = vi.fn((_kind: string, _channelId?: string) => "plot-1");
+  setWorkspaceBridge({
+    createPanel: createPanel as never,
+    closePanel: () => false,
+    resetLayout: () => {},
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -169,16 +182,14 @@ afterEach(async () => {
 });
 
 describe("ChannelsDrawer windowing", () => {
-  const noop = () => null;
-
   it("shows the empty state when no channels are loaded", () => {
-    render(<ChannelsDrawer ensurePlotPanel={noop} />);
+    render(<ChannelsDrawer />);
     expect(screen.getByText("No channels loaded")).toBeTruthy();
   });
 
   it("windows a large channel set instead of mounting every row", () => {
     loadSession([makeSource("big.mcap", 5000)]);
-    render(<ChannelsDrawer ensurePlotPanel={noop} />);
+    render(<ChannelsDrawer />);
 
     // Pill reflects the full count even though most rows are unmounted.
     expect(screen.getByTestId("channels-count-pill").textContent).toBe("5000");
@@ -192,7 +203,7 @@ describe("ChannelsDrawer windowing", () => {
 
   it("filters by name and updates the count pill", async () => {
     loadSession([makeSource("big.mcap", 200)]);
-    render(<ChannelsDrawer ensurePlotPanel={noop} />);
+    render(<ChannelsDrawer />);
 
     const search = screen.getByTestId("channels-search");
     await act(async () => {
@@ -206,7 +217,7 @@ describe("ChannelsDrawer windowing", () => {
 
   it("renders a different window of rows after scrolling down", () => {
     loadSession([makeSource("big.mcap", 2000)]);
-    render(<ChannelsDrawer ensurePlotPanel={noop} />);
+    render(<ChannelsDrawer />);
 
     // Capture the mounted window at the top of the list.
     const before = screen
@@ -234,7 +245,7 @@ describe("ChannelsDrawer windowing", () => {
 
   it("collapsing a source hides its rows but keeps the header", () => {
     loadSession([makeSource("a.mcap", 50)]);
-    render(<ChannelsDrawer ensurePlotPanel={noop} />);
+    render(<ChannelsDrawer />);
 
     expect(screen.getAllByTestId(/^channel-row-/).length).toBeGreaterThan(0);
 
@@ -252,7 +263,7 @@ describe("ChannelsDrawer tree", () => {
       mcapChannel("/vehicle/gps/lat"),
       mcapChannel("/vehicle/gps/lon"),
     ]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     // The `vehicle` branch carries all three descendants.
     const vehicle = screen.getByTestId("channels-branch-demo.mcap::vehicle");
@@ -273,7 +284,7 @@ describe("ChannelsDrawer tree", () => {
 
   it("collapses a branch and hides its descendants", () => {
     seedTree([mcapChannel("/vehicle/gps/lat")]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     expect(
       screen.getByTestId("channel-row-mcap::/vehicle/gps/lat"),
@@ -289,7 +300,7 @@ describe("ChannelsDrawer tree", () => {
       mf4Channel("vehicle_speed", "speed @100Hz"),
       mf4Channel("imu_accel", "imu @1kHz"),
     ]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     const speedGroup = screen.getByTestId(
       "channels-branch-demo.mf4::speed @100Hz",
@@ -306,7 +317,7 @@ describe("ChannelsDrawer tree", () => {
       mcapChannel("/vehicle/speed"),
       mcapChannel("/imu/accel"),
     ]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     await act(async () => {
       fireEvent.change(screen.getByTestId("channels-search"), {
@@ -327,7 +338,7 @@ describe("ChannelsDrawer tree", () => {
       mf4Channel("vehicle_speed", "Powertrain"),
       mf4Channel("imu_accel", "Inertial"),
     ]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     await act(async () => {
       fireEvent.change(screen.getByTestId("channels-search"), {
@@ -342,7 +353,7 @@ describe("ChannelsDrawer tree", () => {
 
   it("binds a channel to a freshly minted plot panel on leaf click", () => {
     seedTree([mcapChannel("/vehicle/speed")]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     fireEvent.click(screen.getByTestId("channel-row-mcap::/vehicle/speed"));
     expect(useSession.getState().plotBindings["plot-1"]).toEqual([
@@ -352,7 +363,7 @@ describe("ChannelsDrawer tree", () => {
 
   it("makes a scalar channel row draggable and stamps its id on dragstart", () => {
     seedTree([mcapChannel("/vehicle/speed")]);
-    render(<ChannelsDrawer ensurePlotPanel={() => "plot-1"} />);
+    render(<ChannelsDrawer />);
 
     const row = screen.getByTestId("channel-row-mcap::/vehicle/speed");
     expect(row.getAttribute("draggable")).toBe("true");

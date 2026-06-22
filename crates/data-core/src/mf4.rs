@@ -467,31 +467,18 @@ impl Mf4Reader {
         let (g, c) = (*g, *c);
 
         let abs_ns = &self.cg_time_ns[g];
-        // Half-open lookup matching the data-model contract.
-        let start_idx = abs_ns.partition_point(|&t| t < range.start_ns);
-        let end_idx = abs_ns.partition_point(|&t| t < range.end_ns).max(start_idx);
-        // `include_prev` is tracked separately from the in-range body so
-        // the T4.3 min-max decimation path cannot absorb the leading
-        // sample into a bucket.
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
+        // Half-open lookup matching the data-model contract. `include_prev`
+        // folds the leading sample into `lo` so the T4.3 min-max decimation
+        // path receives it as the first element of a contiguous slice.
+        let (lo, hi) =
+            crate::time::range_window(abs_ns, range.start_ns, range.end_ns, opts.include_prev);
 
-        let (ts_final, vals_final): (Vec<i64>, Vec<f64>) =
-            if start_idx == end_idx && prev_idx.is_none() {
-                (Vec::new(), Vec::new())
-            } else {
-                let all_values = self.channel_values(g, c, key)?;
-                let mut ts: Vec<i64> = abs_ns[start_idx..end_idx].to_vec();
-                let mut vs: Vec<f64> = all_values[start_idx..end_idx].to_vec();
-                if let Some(p) = prev_idx {
-                    ts.insert(0, abs_ns[p]);
-                    vs.insert(0, all_values[p]);
-                }
-                (ts, vs)
-            };
+        let (ts_final, vals_final): (Vec<i64>, Vec<f64>) = if lo == hi {
+            (Vec::new(), Vec::new())
+        } else {
+            let all_values = self.channel_values(g, c, key)?;
+            (abs_ns[lo..hi].to_vec(), all_values[lo..hi].to_vec())
+        };
 
         crate::arrow::build_scalar_ipc(ts_final, vals_final)
     }

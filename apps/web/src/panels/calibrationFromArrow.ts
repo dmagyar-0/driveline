@@ -19,6 +19,7 @@
 // without retaining the table.
 
 import { tableFromIPC, type Table } from "apache-arrow";
+import { listRow, type ListCol } from "./shared/arrowList";
 
 /** Projection model. `pinhole` uses intrinsics + Brown–Conrady distortion;
  * `ftheta` uses the `forwardPoly` (angle→pixel-radius) fisheye polynomial. */
@@ -63,38 +64,6 @@ export interface CalibrationError {
 export type CalibrationResult =
   | { ok: true; cameras: CameraCalibration[] }
   | ({ ok: false } & CalibrationError);
-
-// Minimal structural view of an Arrow `List<T>` column's backing data — a
-// single chunk with i32 value offsets and a numeric child values buffer.
-// Mirrors the access pattern in `pointCloudFromArrow.ts` / `boxesFromArrow.ts`.
-interface ListData {
-  offset: number;
-  valueOffsets: ArrayLike<number>;
-  children: ReadonlyArray<{ values: ArrayLike<number> }>;
-}
-interface ListCol {
-  data: ReadonlyArray<ListData>;
-}
-
-// Pull row `r`'s numeric slice out of a single-chunk List<Float32|Int32>
-// column as a `Float32Array` or `Int32Array`. Returns null if the structure
-// isn't the expected single chunk of the expected typed-array class.
-function listRow<T extends Float32Array | Int32Array>(
-  col: ListCol,
-  r: number,
-  Ctor: { new (): T } & Function,
-): T | null {
-  if (col.data.length !== 1) return null;
-  const d = col.data[0];
-  const child = d.children?.[0]?.values;
-  const offsets = d.valueOffsets;
-  if (!child || !offsets) return null;
-  const base = d.offset ?? 0;
-  const start = Number(offsets[base + r]);
-  const end = Number(offsets[base + r + 1]);
-  if (!(child instanceof Ctor)) return null;
-  return (child as T).subarray(start, end) as T;
-}
 
 // Read row `r`'s string out of a single-chunk Utf8 column: a Uint8 byte buffer
 // indexed by i32 value offsets. Returns null if the structure isn't expected.

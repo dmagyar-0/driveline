@@ -15,6 +15,12 @@
 // wireframe geometry without re-touching the table.
 
 import { tableFromIPC, type Table } from "apache-arrow";
+import {
+  lastRowTsNs,
+  listRowF32,
+  listRowUtf8,
+  type ListCol,
+} from "./shared/arrowList";
 
 export interface BoundingBox {
   // Box centre in the vehicle frame (metres, z-up: x-fwd, y-left, z-up).
@@ -49,71 +55,6 @@ export type BoxesResult =
   | ({ ok: false } & BoxesError);
 
 const EMPTY_FRAME: BoxesFrame = { tsNs: null, boxes: [] };
-
-// Minimal structural view of an Arrow `List<Float32>` column's backing data —
-// a single chunk with i32 value offsets and a Float32 child values buffer.
-// Mirrors the access pattern in `pointCloudFromArrow.ts`.
-interface ListData {
-  offset: number;
-  valueOffsets: ArrayLike<number>;
-  children: ReadonlyArray<{ values: ArrayLike<number> }>;
-}
-interface ListCol {
-  data: ReadonlyArray<ListData>;
-}
-
-// Pull row `r`'s Float32 slice out of a single-chunk List<Float32> column.
-function listRowF32(col: ListCol, r: number): Float32Array | null {
-  if (col.data.length !== 1) return null;
-  const d = col.data[0];
-  const child = d.children?.[0]?.values;
-  const offsets = d.valueOffsets;
-  if (!child || !offsets) return null;
-  const base = d.offset ?? 0;
-  const start = Number(offsets[base + r]);
-  const end = Number(offsets[base + r + 1]);
-  const values = child as Float32Array;
-  if (!(values instanceof Float32Array)) return null;
-  return values.subarray(start, end);
-}
-
-// Read row `r`'s list of strings out of a single-chunk List<Utf8> column. The
-// outer list offsets pick the [start,end) range of element indices; the inner
-// Utf8 child is decoded element-by-element via its own value offsets + a UTF-8
-// byte buffer. Returns null if the structure isn't the expected single chunk.
-function listRowUtf8(
-  col: {
-    data: ReadonlyArray<{
-      offset?: number;
-      valueOffsets: ArrayLike<number>;
-      children: ReadonlyArray<{
-        valueOffsets: ArrayLike<number>;
-        values: ArrayLike<number> | Uint8Array;
-      }>;
-    }>;
-  },
-  r: number,
-): string[] | null {
-  if (col.data.length !== 1) return null;
-  const d = col.data[0];
-  const child = d.children?.[0];
-  const outer = d.valueOffsets;
-  if (!child || !outer) return null;
-  const base = d.offset ?? 0;
-  const start = Number(outer[base + r]);
-  const end = Number(outer[base + r + 1]);
-  const innerOffsets = child.valueOffsets;
-  const bytes = child.values;
-  if (!innerOffsets || !(bytes instanceof Uint8Array)) return null;
-  const dec = new TextDecoder("utf-8");
-  const out: string[] = [];
-  for (let i = start; i < end; i++) {
-    const s = Number(innerOffsets[i]);
-    const e = Number(innerOffsets[i + 1]);
-    out.push(dec.decode(bytes.subarray(s, e)));
-  }
-  return out;
-}
 
 export function decodeBoxes(bytes: Uint8Array): BoxesResult {
   let table: Table;
@@ -182,16 +123,7 @@ export function decodeBoxes(bytes: Uint8Array): BoxesResult {
     });
   }
 
-  let tsNs: bigint | null = null;
-  const tsCol = table.getChild("ts") as {
-    data: ReadonlyArray<{ values: ArrayLike<bigint> | BigInt64Array }>;
-  } | null;
-  if (tsCol && tsCol.data.length === 1) {
-    const tsVals = tsCol.data[0].values;
-    if (tsVals instanceof BigInt64Array && tsVals.length > r) {
-      tsNs = tsVals[r];
-    }
-  }
+  const tsNs = lastRowTsNs(table, r);
 
   return { ok: true, tsNs, boxes };
 }
