@@ -11,8 +11,9 @@
 // Store-driven and self-contained (mirrors `OpenErrorToast`): no props, reads
 // the one Zustand store via selectors. Mounted once in `Shell`.
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useSession } from "../state/store";
+import { Dialog } from "./Dialog";
 import {
   TIME_UNITS,
   timeUnitLabel,
@@ -80,16 +81,6 @@ function TabularImportForm({
   const previewId = useId();
   const titleId = useId();
 
-  // Initial focus + Escape-to-cancel. Cancel is stable for the import id.
-  useEffect(() => {
-    firstFieldRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onCancel(importId);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [importId, onCancel, busy]);
-
   const valid = isDraftValid(draft);
   const isRelative = draft.mode === "Relative";
   const offsetLabel = isRelative
@@ -110,11 +101,11 @@ function TabularImportForm({
   };
 
   return (
-    <div
-      className={s.scrim}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
+    <Dialog
+      onClose={() => onCancel(importId)}
+      escapeEnabled={!busy}
+      ariaLabelledBy={titleId}
+      initialFocusRef={firstFieldRef}
       data-testid="tabular-import-dialog"
     >
       <form
@@ -267,6 +258,6 @@ function TabularImportForm({
           </button>
         </footer>
       </form>
-    </div>
+    </Dialog>
   );
 }

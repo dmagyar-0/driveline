@@ -2,7 +2,7 @@
 // scrim listing the transport shortcuts; click the scrim, press the
 // Close button, or hit Escape to dismiss. Chrome-only (no store reads).
 
-import { useEffect } from "react";
+import { Dialog } from "./Dialog";
 import styles from "./ShortcutsOverlay.module.css";
 
 export interface ShortcutsOverlayProps {
@@ -16,21 +16,11 @@ const SHORTCUTS: ReadonlyArray<{ keys: readonly string[]; label: string }> = [
 ];
 
 export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className={styles.scrim}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Keyboard shortcuts"
-      onClick={onClose}
+    <Dialog
+      onClose={onClose}
+      closeOnScrimClick
+      ariaLabel="Keyboard shortcuts"
       data-testid="shortcuts-overlay"
     >
       <div className={styles.card} onClick={(e) => e.stopPropagation()}>
@@ -53,6 +43,6 @@ export function ShortcutsOverlay({ onClose }: ShortcutsOverlayProps) {
           Close
         </button>
       </div>
-    </div>
+    </Dialog>
   );
 }
