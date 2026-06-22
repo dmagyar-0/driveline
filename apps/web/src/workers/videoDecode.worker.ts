@@ -517,20 +517,51 @@ function postSinkControl(message: SinkDecodeError): void {
 
 // Handle the async `VideoDecoder` error callback. Latch the error, end the
 // current session so the pull loop and drains stop touching a dead decoder,
-// and notify the panel proactively. Recovery happens on the next open/seek,
-// which recreates the decoder from scratch.
+// notify the panel proactively, AND self-heal by re-priming the stream at the
+// current cursor without waiting for a human to click "retry".
+//
+// HEADLESS SELF-HEAL: a mid-stream decode fault (a stressed decoder under a big
+// seek catch-up on a contended machine, a transient GPU hiccup, the odd corrupt
+// NAL) ends the session with a closed/errored decoder. The panel surfaces a
+// "retry" affordance, but an automated/headless consumer (Playwright, an agent
+// driving the page) never clicks it, so the stream would stay frozen forever —
+// exactly the human-in-the-loop dependency the project's agent-friendly contract
+// forbids. The worker owns the session's own source params, so it re-opens
+// itself at the live cursor through the same `seek` pipeline a user retry would
+// trigger (`force` bypasses the coalescing / duplicate-target guards so a
+// same-target re-prime always rebuilds). Fires whether playing or paused (a
+// paused scrub-to-frame that faults must converge too). Guarded by
+// `selfHealInFlight` so a storm of error callbacks schedules at most one reheal,
+// and only when the failed session is still the active one (a concurrent seek
+// rebuilds anyway).
+let selfHealInFlight = false;
 function onDecoderError(e: DOMException | Error): void {
   const reason = e instanceof Error ? e.message : String(e);
   console.error("VideoDecoder error:", e);
   decodeError = e instanceof Error ? e : new Error(reason);
-  if (session) {
-    session.ended = true;
-    if (session.pendingPreTargetFrame) {
-      session.pendingPreTargetFrame.close();
-      session.pendingPreTargetFrame = null;
+  const failed = session;
+  if (failed) {
+    failed.ended = true;
+    if (failed.pendingPreTargetFrame) {
+      failed.pendingPreTargetFrame.close();
+      failed.pendingPreTargetFrame = null;
     }
   }
   postSinkControl({ type: "decode-error", reason });
+  if (failed && session === failed && !selfHealInFlight) {
+    selfHealInFlight = true;
+    const target = cursorNs;
+    // Defer off the error callback so we don't re-enter the decoder from inside
+    // its own error handler; `seek` serialises behind `runExclusive`.
+    queueMicrotask(() => {
+      void videoDecodeApi
+        .seek(target, true)
+        .catch(() => undefined)
+        .finally(() => {
+          selfHealInFlight = false;
+        });
+    });
+  }
 }
 
 // Post the current blit metrics to the main thread over the sink port. Cheap
@@ -704,11 +735,17 @@ let encodedEnded = false;
 let pumpInFlight = false;
 // Keep the ring at least this deep; the background pump refills when it drops
 // below. Several seconds of lookahead at these frame rates — comfortably more
-// than the worst-case reader-RPC stall under main-thread contention.
-const ENCODED_RING_TARGET = 48;
+// than the worst-case reader-RPC stall under main-thread contention. Sized deep
+// so that after a seek (which empties the ring) the decoder can walk a whole GOP
+// to the target and keep catching up even when the reader RPC is slow because
+// the main thread is saturated — e.g. the rear mp4's `mp4Lazy` reads contending
+// with page-video recording + a second concurrent decoder. Encoded chunks cost
+// no decoder DPB slot, so a deep ring is cheap (just bytes); the live DECODED
+// footprint stays bounded by `decodedAheadCap`.
+const ENCODED_RING_TARGET = 96;
 // Chunks read per background RPC. Large, to amortise the Comlink round-trip so
-// a handful of reads keep the ring full.
-const ENCODED_RING_BATCH = 24;
+// ONE read after a seek delivers enough to ride through a slow follow-up RPC.
+const ENCODED_RING_BATCH = 48;
 
 function resetEncodedRing(): void {
   localEncoded = [];
@@ -757,7 +794,24 @@ function feedFromRing(): void {
     localEncoded.length > 0 &&
     reorderBuffer.length + blitQueue.length < decodedAheadCap &&
     shouldRefill({
-      inFlight: session.inFlight,
+      // The low-water gate must reflect the decoder's REAL backlog, so use its
+      // own `decodeQueueSize` — NOT our `session.inFlight` (fed-minus-emitted)
+      // counter. The two diverge on B-frame streams: the decoder readily
+      // CONSUMES a chunk (its `decodeQueueSize` drops) but does not EMIT until a
+      // later GOP reference resolves the reorder group, so `inFlight` stays stuck
+      // while the decoder sits genuinely IDLE (`decodeQueueSize === 0`). Gating
+      // the refill on that stale `inFlight` then refuses to feed the very chunks
+      // the idle decoder needs to flush the group: it plateaus at exactly
+      // `REFILL_LOW_WATER`, never emits, `onFrame` never fires to decrement
+      // `inFlight`, and the stream WEDGES — a hard freeze after a forward seek
+      // during play (queues empty, `decodeQueue 0`, the canvas frozen, catch-up
+      // never completes), worst on a CPU-contended second concurrent decoder.
+      // `decodeQueueSize` is the decoder's accurate, self-decrementing backlog,
+      // so an idle decoder is always re-fed and the lookahead/output caps still
+      // bound how far ahead it runs. (`session.inFlight` stays as the HUD/pacing
+      // diagnostic it always was; only this pull gate switches to the real
+      // backlog.)
+      inFlight: session.decoder.decodeQueueSize,
       lastEmittedPtsNs: session.lastEmittedPtsNs,
       cursorNs,
     })
@@ -944,6 +998,17 @@ async function openInternal(
     }
     session.inFlight += 1;
   }
+  // Kick the background ring refill NOW, concurrently with the decoder consuming
+  // the priming batch above. `openInternal` reset the ring empty and priming fed
+  // the decoder DIRECTLY (not via the ring), so without this the ring stays
+  // empty until the first `maybeRefill` (setCursor / blit clock / onFrame) — and
+  // the decoder can drain the priming batch (emitting only pre-target frames)
+  // before any further chunks arrive. Under main-thread contention (page
+  // recording + a second decoder slowing the rear mp4's `mp4Lazy` reads) that
+  // first-pull gap is exactly when a forward seek wedges: the decoder goes idle
+  // with an empty ring. Pre-filling here overlaps the refill RPC with priming so
+  // chunks are ready the moment the decoder needs to walk past the seek target.
+  void pumpEncoded();
   return result;
 }
 
