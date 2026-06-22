@@ -17,6 +17,7 @@ pub mod pcd;
 pub mod pointcloud;
 pub mod reader;
 pub mod recipe;
+pub mod registry;
 pub mod ros;
 pub mod ros1_bag;
 pub mod ros2_db3;
@@ -40,6 +41,7 @@ pub use openlabel::OpenLabelReader;
 pub use pointcloud::PointCloudReader;
 pub use reader::{ArrowIpc, EncodedChunkIter, Reader};
 pub use recipe::{DryRunReport, Recipe, RecipeReader};
+pub use registry::{BoxedReader, FormatEntry};
 pub use ros1_bag::Ros1BagReader;
 pub use ros2_db3::Ros2Db3Reader;
 pub use tabular::{

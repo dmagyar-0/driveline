@@ -20,6 +20,7 @@
 pub mod cdr;
 pub mod error;
 pub mod msgdef;
+pub(crate) mod reader_common;
 pub mod ros1;
 pub mod typestore;
 
