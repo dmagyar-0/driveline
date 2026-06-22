@@ -16,7 +16,7 @@
 // field.
 
 import type { MapBinding, PointCloudOverlayBinding } from "../layout/persist";
-import type { PlotPanelSettings } from "./store";
+import type { PlotPanelSettings } from "./types";
 
 /** Every per-panel binding / settings map that round-trips through a layout
  *  snapshot. `layoutJson` is carried alongside these but is not itself a map,
