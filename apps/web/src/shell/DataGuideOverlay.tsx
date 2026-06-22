@@ -6,8 +6,9 @@
 // Pure chrome, no store reads — modelled on ShortcutsOverlay. Open state is
 // owned by the TopBar. Click the scrim, press Close, or hit Escape to dismiss.
 
-import { useEffect, useId, useState } from "react";
+import { useId, useState } from "react";
 import { AGENT_API_VERSION } from "../agent/agentApi";
+import { Dialog } from "./Dialog";
 import { FORMATS, AGENTS } from "./dataGuide";
 import type { FormatEntry, AgentEntry } from "./dataGuide";
 import styles from "./DataGuideOverlay.module.css";
@@ -25,21 +26,11 @@ export function DataGuideOverlay({ onClose }: DataGuideOverlayProps) {
   const agentsTabId = useId();
   const panelId = useId();
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      className={styles.scrim}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      onClick={onClose}
+    <Dialog
+      onClose={onClose}
+      closeOnScrimClick
+      ariaLabelledBy={titleId}
       data-testid="data-guide-overlay"
     >
       <div className={styles.card} onClick={(e) => e.stopPropagation()}>
@@ -124,7 +115,7 @@ export function DataGuideOverlay({ onClose }: DataGuideOverlayProps) {
           </button>
         </footer>
       </div>
-    </div>
+    </Dialog>
   );
 }
 

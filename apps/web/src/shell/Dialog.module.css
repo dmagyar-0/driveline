@@ -1,0 +1,11 @@
+/* Shared modal scrim (SHELL-02). Identical to the per-dialog `.scrim` rules
+   it replaces. Individual dialogs that need a different stacking context pass
+   a `scrimClassName` with just a `z-index` override. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: grid;
+  place-items: center;
+  background: var(--scrim-hud);
+}
