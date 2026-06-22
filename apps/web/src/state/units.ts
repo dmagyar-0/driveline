@@ -11,7 +11,7 @@
 //   - empty string `""` → "explicitly no unit" (suppress the inferred one)
 //   - any other string  → that unit (trimmed)
 
-import type { Channel } from "./store";
+import type { Channel } from "./types";
 
 /**
  * The effective unit for a channel, honouring a user override. Returns
