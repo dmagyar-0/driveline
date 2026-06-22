@@ -16,6 +16,12 @@
 // `types` List<Utf8> column instead of trajectory's `confidences` List<Float32>.
 
 import { tableFromIPC, type Table } from "apache-arrow";
+import {
+  lastRowTsNs,
+  listRowF32,
+  listRowI32,
+  type ListCol,
+} from "./shared/arrowList";
 
 export interface MapFeature {
   // Polyline vertices in the world/vehicle frame (metres, z-up: x-fwd, y-left).
@@ -49,48 +55,6 @@ export type MapGeometryResult =
   | ({ ok: false } & MapGeometryError);
 
 const EMPTY_FRAME: MapGeometryFrame = { tsNs: null, features: [] };
-
-// Minimal structural view of an Arrow `List<Float32>`/`List<Int32>` column's
-// backing data — a single chunk with i32 value offsets and a typed-array child
-// values buffer. Mirrors the access pattern in `trajectoriesFromArrow.ts`.
-interface ListData {
-  offset: number;
-  valueOffsets: ArrayLike<number>;
-  children: ReadonlyArray<{ values: ArrayLike<number> }>;
-}
-interface ListCol {
-  data: ReadonlyArray<ListData>;
-}
-
-// Pull row `r`'s Float32 slice out of a single-chunk List<Float32> column.
-function listRowF32(col: ListCol, r: number): Float32Array | null {
-  if (col.data.length !== 1) return null;
-  const d = col.data[0];
-  const child = d.children?.[0]?.values;
-  const offsets = d.valueOffsets;
-  if (!child || !offsets) return null;
-  const base = d.offset ?? 0;
-  const start = Number(offsets[base + r]);
-  const end = Number(offsets[base + r + 1]);
-  const values = child as Float32Array;
-  if (!(values instanceof Float32Array)) return null;
-  return values.subarray(start, end);
-}
-
-// Pull row `r`'s Int32 slice out of a single-chunk List<Int32> column.
-function listRowI32(col: ListCol, r: number): Int32Array | null {
-  if (col.data.length !== 1) return null;
-  const d = col.data[0];
-  const child = d.children?.[0]?.values;
-  const offsets = d.valueOffsets;
-  if (!child || !offsets) return null;
-  const base = d.offset ?? 0;
-  const start = Number(offsets[base + r]);
-  const end = Number(offsets[base + r + 1]);
-  const values = child as Int32Array;
-  if (!(values instanceof Int32Array)) return null;
-  return values.subarray(start, end);
-}
 
 export function decodeMapGeometry(bytes: Uint8Array): MapGeometryResult {
   let table: Table;
@@ -182,16 +146,7 @@ export function decodeMapGeometry(bytes: Uint8Array): MapGeometryResult {
     };
   }
 
-  let tsNs: bigint | null = null;
-  const tsCol = table.getChild("ts") as {
-    data: ReadonlyArray<{ values: ArrayLike<bigint> | BigInt64Array }>;
-  } | null;
-  if (tsCol && tsCol.data.length === 1) {
-    const tsVals = tsCol.data[0].values;
-    if (tsVals instanceof BigInt64Array && tsVals.length > r) {
-      tsNs = tsVals[r];
-    }
-  }
+  const tsNs = lastRowTsNs(table, r);
 
   return { ok: true, tsNs, features };
 }

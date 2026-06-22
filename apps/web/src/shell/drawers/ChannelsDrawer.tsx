@@ -19,8 +19,9 @@
 //     `addPlotChannel`.
 //   - If a panel is selected and it is a video, set the binding via
 //     `setVideoBinding` (single-channel).
-//   - If no panel is selected, call `ensurePlotPanel()` (provided by
-//     `App.tsx`) to mint one, mark it selected, then bind.
+//   - If no panel is selected, mint a plot through the module-scoped
+//     `workspaceBridge` (the same seam every other add-panel caller uses),
+//     mark it selected, then bind.
 //
 // Performance (10k+ channels): the visible tree is *flattened* into a single
 // positioned list (collapse-aware) and then *windowed* — only the slice
@@ -41,6 +42,7 @@ import { useSession, type Channel, type SourceMeta } from "../../state/store";
 import { colorFor, MAX_PLOT_SERIES } from "../../panels/palette";
 import { setChannelDragData } from "../../panels/channelDrag";
 import { panelKindOf } from "../../layout/panelId";
+import { getWorkspaceBridge } from "../../layout/workspaceBridge";
 import {
   buildChannelTree,
   channelMatchesQuery,
@@ -72,14 +74,6 @@ type Row =
       expanded: boolean;
     }
   | { type: "leaf"; channel: Channel; label: string; depth: number };
-
-interface Props {
-  /** Returns the id of an existing or newly-created plot panel, or
-   *  `null` if no panel could be created (e.g. workspace not yet
-   *  mounted). The drawer calls this when the user clicks a channel
-   *  while no panel is selected. */
-  ensurePlotPanel: () => string | null;
-}
 
 // Disclosure chevron for source-header and branch rows. The glyph points
 // right when collapsed and the CSS rotates it to point down when the parent
@@ -119,7 +113,7 @@ function firstVisibleIndex(offsets: number[], scrollTop: number): number {
   return lo;
 }
 
-export function ChannelsDrawer({ ensurePlotPanel }: Props) {
+export function ChannelsDrawer() {
   const channels = useSession((st) => st.channels);
   const sources = useSession((st) => st.sources);
   const selectedPanelId = useSession((st) => st.selectedPanelId);
@@ -241,7 +235,13 @@ export function ChannelsDrawer({ ensurePlotPanel }: Props) {
   const onPick = (channelId: string) => {
     let panelId = selectedPanelId;
     if (panelId === null) {
-      panelId = ensurePlotPanel();
+      // No panel selected: mint a plot through the workspace bridge — the
+      // same module-scoped seam the Add-panel menu, Layout drawer, and agent
+      // API use — then bind into it. `createPanel` is synchronous (it mutates
+      // the FlexLayout model and returns the new tab id). It can return
+      // `undefined` if the workspace hasn't mounted yet or no tabset can host
+      // the tab, in which case there's nothing to bind to.
+      panelId = getWorkspaceBridge()?.createPanel("plot") ?? null;
       if (panelId === null) return;
       useSession.getState().setSelectedPanelId(panelId);
     }

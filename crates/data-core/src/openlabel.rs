@@ -188,7 +188,7 @@ impl OpenLabelReader {
         frames.sort_by_key(|f| f.ts_ns);
         let frame_ts: Vec<i64> = frames.iter().map(|f| f.ts_ns).collect();
 
-        let period = infer_period_ns(&frame_ts);
+        let period = crate::time::infer_period_ns(&frame_ts, DEFAULT_FRAME_PERIOD_NS);
         let time_range = match (frame_ts.first(), frame_ts.last()) {
             (Some(&a), Some(&b)) => TimeRange {
                 start_ns: a,
@@ -277,19 +277,11 @@ impl Reader for OpenLabelReader {
         // frame active at the cursor" (a zero/one-width window + prev). Mirrors
         // the point-cloud reader.
         let ts = &self.frame_ts;
-        let start_idx = ts.partition_point(|&t| t < range.start_ns);
-        let end_idx = ts.partition_point(|&t| t < range.end_ns).max(start_idx);
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
-
-        let mut idxs: Vec<usize> = Vec::new();
-        if let Some(p) = prev_idx {
-            idxs.push(p);
-        }
-        idxs.extend(start_idx..end_idx);
+        let (lo, hi) =
+            crate::time::range_window(ts, range.start_ns, range.end_ns, opts.include_prev);
+        // Contiguous because `include_prev` (when active) folds the sample
+        // immediately before the window into `lo`: optional prev + body.
+        let idxs: Vec<usize> = (lo..hi).collect();
 
         let schema = Self::fetch_schema();
 
@@ -561,25 +553,6 @@ fn euler_xyz_to_quat(rx: f64, ry: f64, rz: f64) -> [f32; 4] {
     let qw = cz * cy * cx + sz * sy * sx;
 
     [qx as f32, qy as f32, qz as f32, qw as f32]
-}
-
-/// Infer the per-frame display duration from the median inter-frame gap; falls
-/// back to [`DEFAULT_FRAME_PERIOD_NS`] for fewer than two frames. Mirrors the
-/// point-cloud reader's `infer_period_ns`.
-fn infer_period_ns(frame_ts: &[i64]) -> i64 {
-    if frame_ts.len() < 2 {
-        return DEFAULT_FRAME_PERIOD_NS;
-    }
-    let mut gaps: Vec<i64> = frame_ts
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .filter(|&g| g > 0)
-        .collect();
-    if gaps.is_empty() {
-        return DEFAULT_FRAME_PERIOD_NS;
-    }
-    gaps.sort_unstable();
-    gaps[gaps.len() / 2]
 }
 
 #[cfg(test)]

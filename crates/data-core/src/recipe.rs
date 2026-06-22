@@ -761,26 +761,14 @@ impl Reader for RecipeReader {
             .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
 
         let ts = &self.table.ts_ns;
-        let start_idx = ts.partition_point(|&t| t < range.start_ns);
-        let end_idx = ts.partition_point(|&t| t < range.end_ns).max(start_idx);
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
+        let (lo, hi) =
+            crate::time::range_window(ts, range.start_ns, range.end_ns, opts.include_prev);
 
-        let (ts_final, vals_final): (Vec<i64>, Vec<f64>) =
-            if start_idx == end_idx && prev_idx.is_none() {
-                (Vec::new(), Vec::new())
-            } else {
-                let mut t: Vec<i64> = ts[start_idx..end_idx].to_vec();
-                let mut v: Vec<f64> = values[start_idx..end_idx].to_vec();
-                if let Some(p) = prev_idx {
-                    t.insert(0, ts[p]);
-                    v.insert(0, values[p]);
-                }
-                (t, v)
-            };
+        let (ts_final, vals_final): (Vec<i64>, Vec<f64>) = if lo == hi {
+            (Vec::new(), Vec::new())
+        } else {
+            (ts[lo..hi].to_vec(), values[lo..hi].to_vec())
+        };
 
         crate::arrow::build_scalar_ipc(ts_final, vals_final)
     }

@@ -14,6 +14,7 @@
 // renderer to upload. Treat them as read-only.
 
 import { tableFromIPC, type Table } from "apache-arrow";
+import { lastRowTsNs, listRowF32, type ListCol } from "./shared/arrowList";
 
 export interface PointCloudFrame {
   // Spin timestamp (ns). Null only for an empty batch.
@@ -47,33 +48,6 @@ const EMPTY_FRAME: PointCloudFrame = {
   intensities: new Float32Array(),
   count: 0,
 };
-
-// Minimal structural view of an Arrow `List<Float32>` column's backing data —
-// a single chunk with i32 value offsets and a Float32 child values buffer.
-// Mirrors the `.data[0]` access pattern `seriesFromArrow.ts` already relies on.
-interface ListData {
-  offset: number;
-  valueOffsets: ArrayLike<number>;
-  children: ReadonlyArray<{ values: ArrayLike<number> }>;
-}
-interface ListCol {
-  data: ReadonlyArray<ListData>;
-}
-
-// Pull row `r`'s Float32 slice out of a single-chunk List<Float32> column.
-function listRowF32(col: ListCol, r: number): Float32Array | null {
-  if (col.data.length !== 1) return null;
-  const d = col.data[0];
-  const child = d.children?.[0]?.values;
-  const offsets = d.valueOffsets;
-  if (!child || !offsets) return null;
-  const base = d.offset ?? 0;
-  const start = Number(offsets[base + r]);
-  const end = Number(offsets[base + r + 1]);
-  const values = child as Float32Array;
-  if (!(values instanceof Float32Array)) return null;
-  return values.subarray(start, end);
-}
 
 export function decodePointCloud(bytes: Uint8Array): PointCloudResult {
   let table: Table;
@@ -119,16 +93,7 @@ export function decodePointCloud(bytes: Uint8Array): PointCloudResult {
     };
   }
 
-  let tsNs: bigint | null = null;
-  const tsCol = table.getChild("ts") as {
-    data: ReadonlyArray<{ values: ArrayLike<bigint> | BigInt64Array }>;
-  } | null;
-  if (tsCol && tsCol.data.length === 1) {
-    const tsVals = tsCol.data[0].values;
-    if (tsVals instanceof BigInt64Array && tsVals.length > r) {
-      tsNs = tsVals[r];
-    }
-  }
+  const tsNs = lastRowTsNs(table, r);
 
   return { ok: true, tsNs, positions, intensities, count };
 }

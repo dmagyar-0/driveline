@@ -133,7 +133,7 @@ impl PointCloudReader {
         // Cover the last spin's display duration so the cursor parked on the
         // final frame still resolves to it. Infer the cadence from the median
         // inter-spin gap; fall back to 100 ms for a single spin.
-        let period = infer_period_ns(&spin_ts);
+        let period = crate::time::infer_period_ns(&spin_ts, DEFAULT_SPIN_PERIOD_NS);
         let time_range = match (spin_ts.first(), spin_ts.last()) {
             (Some(&a), Some(&b)) => TimeRange {
                 start_ns: a,
@@ -477,19 +477,11 @@ impl Reader for PointCloudReader {
         // spin just before the window — that's exactly how the panel asks for
         // "the spin active at the cursor" (a zero/one-width window + prev).
         let ts = &self.spin_ts;
-        let start_idx = ts.partition_point(|&t| t < range.start_ns);
-        let end_idx = ts.partition_point(|&t| t < range.end_ns).max(start_idx);
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
-
-        let mut idxs: Vec<usize> = Vec::new();
-        if let Some(p) = prev_idx {
-            idxs.push(p);
-        }
-        idxs.extend(start_idx..end_idx);
+        let (lo, hi) =
+            crate::time::range_window(ts, range.start_ns, range.end_ns, opts.include_prev);
+        // Contiguous because `include_prev` (when active) folds the spin
+        // immediately before the window into `lo`: optional prev + body.
+        let idxs: Vec<usize> = (lo..hi).collect();
 
         let schema = Self::fetch_schema();
 
@@ -538,25 +530,6 @@ impl Reader for PointCloudReader {
 
         crate::arrow::write_ipc(schema, batch)
     }
-}
-
-/// Infer the per-spin display duration from the median gap between spin
-/// timestamps. Robust to a stray out-of-order or duplicated timestamp; falls
-/// back to [`DEFAULT_SPIN_PERIOD_NS`] for fewer than two spins.
-fn infer_period_ns(spin_ts: &[i64]) -> i64 {
-    if spin_ts.len() < 2 {
-        return DEFAULT_SPIN_PERIOD_NS;
-    }
-    let mut gaps: Vec<i64> = spin_ts
-        .windows(2)
-        .map(|w| w[1] - w[0])
-        .filter(|&g| g > 0)
-        .collect();
-    if gaps.is_empty() {
-        return DEFAULT_SPIN_PERIOD_NS;
-    }
-    gaps.sort_unstable();
-    gaps[gaps.len() / 2]
 }
 
 #[cfg(test)]
