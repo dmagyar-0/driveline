@@ -33,27 +33,13 @@ import { READY_EPSILON_NS } from "../timeline/readinessConstants";
 import {
   mark,
   measure,
-  OVERLAY_DRAW,
-  OVERLAY_DRAW_END,
-  OVERLAY_DRAW_START,
   VIDEO_FIRST_FRAME,
   VIDEO_SEEK_END,
   VIDEO_SEEK_START,
   VIDEO_SEEK_TO_BLIT,
 } from "../perf";
-import { fetchDecodedSpin } from "./pointCloudSpinCache";
-import {
-  makeProjectionBuffers,
-  projectPointsInto,
-  type ProjectionBuffers,
-} from "./cameraProjection";
+import { createLidarOverlay, type LidarOverlay } from "./lidarOverlay";
 import { pickOverlayCamera, pickOverlayPointCloud } from "./overlayDefaults";
-import {
-  buildDepthPalette,
-  contentRect,
-  depthBucketIndex,
-  type DepthPalette,
-} from "./videoOverlay";
 import {
   clearVideoOverlayInfo,
   setVideoOverlayInfo,
@@ -190,46 +176,19 @@ export function VideoPanel({
   videoSourceName,
 }: VideoPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  // Point-cloud overlay (docs/13). A second canvas sized to the letterboxed
-  // content rect; the rAF tick projects the bound LiDAR spin onto it after the
-  // video blit. All overlay hot-path inputs are mirrored into refs so the tick
-  // never reads a reactive selector.
+  // Point-cloud overlay (docs/13, PANEL-03). A second canvas sized to the
+  // letterboxed content rect; the rAF tick projects the bound LiDAR spin onto
+  // it after the video blit. The overlay's projection/cache/draw machinery
+  // lives in `lidarOverlay.ts`; the panel keeps the canvas element ref (it
+  // attaches it in JSX and locks its CSS zoom/pan transform to the video) and
+  // drives the controller from the rAF tick + the binding effect. The
+  // controller owns all overlay hot-path state in refs, so the tick still
+  // never reads a reactive selector and allocates nothing new per frame.
   const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const overlayBindingRef = useRef<PointCloudOverlayBinding | null>(null);
-  const overlayCalibRef = useRef<CameraCalibration | null>(null);
-  // Spin start timestamps for the bound point-cloud channel.
-  const overlaySpinTimesRef = useRef<BigInt64Array | null>(null);
-  // The spin index currently projected + its cached projection, so we only
-  // recompute when the active spin index OR the calibration changes.
-  const overlaySpinIdxRef = useRef<number>(-1);
-  const overlayProjRef = useRef<ProjectionBuffers | null>(null);
-  const overlayProjCountRef = useRef<number>(0);
-  const overlayDepthsRef = useRef<{ near: number; far: number }>({
-    near: 1,
-    far: 60,
-  });
-  // Bumped whenever the cached projection changes (new spin landed, or it
-  // emptied). The per-tick overlay draw compares this against the last paint to
-  // skip a redundant clear+redraw when nothing visible changed.
-  const overlayGenRef = useRef<number>(0);
-  // The (gen, canvas size, depth range) actually last painted onto the overlay.
-  // A sentinel `gen: -1` means the overlay canvas currently holds nothing.
-  const overlayDrawnRef = useRef<{
-    gen: number;
-    w: number;
-    h: number;
-    near: number;
-    far: number;
-  }>({ gen: -1, w: -1, h: -1, near: NaN, far: NaN });
-  // Cached depth->colour palette (rebuilt only when the depth range changes)
-  // and the per-bucket Path2D scratch reused across redraws.
-  const overlayPaletteRef = useRef<DepthPalette | null>(null);
-  const overlayBucketPathsRef = useRef<Path2D[] | null>(null);
-  // True while an async spin fetch+project is inflight, so the tick coalesces
-  // to ≤1 outstanding overlay refresh (never stacks fetches per rAF).
-  const overlayBusyRef = useRef<boolean>(false);
-  // Monotonic token so a late spin fetch result for a stale binding is dropped.
-  const overlayReqRef = useRef<number>(0);
+  const lidarOverlayRef = useRef<LidarOverlay | null>(null);
+  if (lidarOverlayRef.current === null) {
+    lidarOverlayRef.current = createLidarOverlay(overlayCanvasRef, panelId);
+  }
   const cursorRef = useRef<bigint>(0n);
   const rafRef = useRef<number | null>(null);
   const seekTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -703,194 +662,6 @@ export function VideoPanel({
       }
     })();
 
-    // Largest spin index with `times[i] <= ptsNs`, or -1 if before the first
-    // spin. `times` is ascending. Same binary search the ScenePanel uses.
-    const activeSpinIndex = (times: BigInt64Array, ptsNs: bigint): number => {
-      if (times.length === 0 || ptsNs < times[0]) return -1;
-      let lo = 0;
-      let hi = times.length - 1;
-      while (lo < hi) {
-        const mid = (lo + hi + 1) >> 1;
-        if (times[mid] <= ptsNs) lo = mid;
-        else hi = mid - 1;
-      }
-      return lo;
-    };
-
-    // Fetch + decode + project the spin at `idx` into the cached projection
-    // buffers. Coalesced: at most one outstanding refresh; a stale binding's
-    // late result is dropped via the request token. Off the synchronous tick.
-    const refreshOverlaySpin = (idx: number) => {
-      const binding = overlayBindingRef.current;
-      const calib = overlayCalibRef.current;
-      const times = overlaySpinTimesRef.current;
-      if (!binding || !calib || !times || idx < 0 || idx >= times.length) {
-        return;
-      }
-      if (overlayBusyRef.current) return;
-      overlayBusyRef.current = true;
-      const token = ++overlayReqRef.current;
-      const ts = times[idx];
-      void (async () => {
-        try {
-          // Shared with the 3D scene panel: the spin is decoded once per
-          // (channel, ts) and both viewers read the same buffers.
-          const res = await fetchDecodedSpin(binding.pointcloudChannelId, ts);
-          if (token !== overlayReqRef.current) return;
-          if (!res.ok || res.count === 0) {
-            overlayProjCountRef.current = 0;
-            overlaySpinIdxRef.current = idx;
-            overlayGenRef.current += 1;
-            return;
-          }
-          // Grow the reusable projection buffers when the spin gets denser.
-          let buf = overlayProjRef.current;
-          if (!buf || buf.us.length < res.count) {
-            buf = makeProjectionBuffers(res.count);
-            overlayProjRef.current = buf;
-          }
-          const visible = projectPointsInto(
-            calib,
-            res.positions,
-            res.count,
-            buf,
-          );
-          overlayProjCountRef.current = res.count;
-          overlaySpinIdxRef.current = idx;
-          overlayGenRef.current += 1;
-          setVideoOverlayInfo(panelId, {
-            enabled: true,
-            cameraName: binding.cameraName,
-            spinTsNs: (res.tsNs ?? ts).toString(),
-            pointCount: res.count,
-            projectedVisibleCount: visible,
-          });
-        } catch {
-          /* advisory overlay; leave the previous projection on screen */
-        } finally {
-          if (token === overlayReqRef.current) overlayBusyRef.current = false;
-        }
-      })();
-    };
-
-    // Per-tick overlay paint. Sizes the overlay canvas to the panel and, when
-    // the active spin index changed, kicks a (coalesced) async refresh. The
-    // actual clear + redraw of the cached projection only runs when the painted
-    // pixels would differ from the last frame (see the dirty check below), so a
-    // 60 Hz tick does not force a 60 Hz redraw of a cloud that changes at the
-    // spin rate.
-    const drawOverlay = () => {
-      const overlayCanvas = overlayCanvasRef.current;
-      const overlayCtx = overlayCanvas?.getContext("2d") ?? null;
-      if (!overlayCanvas || !overlayCtx) return;
-      const binding = overlayBindingRef.current;
-      const calib = overlayCalibRef.current;
-      const times = overlaySpinTimesRef.current;
-      const blitPts = lastBlitPtsRef.current;
-      const drawn = overlayDrawnRef.current;
-      // Match the overlay canvas's pixel buffer to its CSS box (the panel) so
-      // its coordinate space is panel pixels. Setting width/height clears the
-      // canvas, so only touch it on an actual size change.
-      const cw = overlayCanvas.clientWidth;
-      const ch = overlayCanvas.clientHeight;
-      if (cw > 0 && ch > 0) {
-        if (overlayCanvas.width !== cw) overlayCanvas.width = cw;
-        if (overlayCanvas.height !== ch) overlayCanvas.height = ch;
-      }
-
-      if (!binding || !calib || !times || blitPts === null) {
-        // Nothing to project. Clear once on the transition into this state so a
-        // stale cloud doesn't linger; then stay idle (no per-tick clears).
-        if (drawn.gen !== -1) {
-          overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-          drawn.gen = -1;
-        }
-        return;
-      }
-      // Refetch only when the active spin actually changes.
-      const idx = activeSpinIndex(times, blitPts);
-      if (idx !== overlaySpinIdxRef.current && idx >= 0) {
-        refreshOverlaySpin(idx);
-      }
-      const { near, far } = overlayDepthsRef.current;
-
-      // The overlay canvas is a separate layer stacked over the video, and
-      // zoom/pan is a CSS transform on the element — not a pixel redraw. So the
-      // painted pixels are a pure function of the projected spin
-      // (`overlayGenRef`), the canvas size, and the depth range. When none of
-      // those changed since the last paint, the cached pixels are still correct
-      // and we skip the (expensive) clear + per-point redraw entirely. This
-      // collapses a ~60 Hz redraw into a ~spin-rate one, freeing the main
-      // thread for the video blit and keeping playback smooth under load.
-      const gen = overlayGenRef.current;
-      if (
-        drawn.gen === gen &&
-        drawn.w === overlayCanvas.width &&
-        drawn.h === overlayCanvas.height &&
-        drawn.near === near &&
-        drawn.far === far
-      ) {
-        return;
-      }
-      drawn.gen = gen;
-      drawn.w = overlayCanvas.width;
-      drawn.h = overlayCanvas.height;
-      drawn.near = near;
-      drawn.far = far;
-
-      mark(OVERLAY_DRAW_START);
-      overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-      const buf = overlayProjRef.current;
-      const count = overlayProjCountRef.current;
-      if (buf && count > 0) {
-        // Rebuild the colour palette only when the depth range changes.
-        let palette = overlayPaletteRef.current;
-        if (!palette || palette.near !== near || palette.far !== far) {
-          palette = buildDepthPalette(near, far);
-          overlayPaletteRef.current = palette;
-        }
-        const rect = contentRect(
-          calib.intrinsics.width,
-          calib.intrinsics.height,
-          overlayCanvas.width,
-          overlayCanvas.height,
-        );
-        const radius = Math.max(1, rect.width / 760);
-        const fw = calib.intrinsics.width;
-        const fh = calib.intrinsics.height;
-        const sx = rect.width / fw;
-        const sy = rect.height / fh;
-        // One Path2D per depth bucket: accumulate every dot, then emit a single
-        // fill per bucket. Turns a fillStyle assignment + beginPath + arc +
-        // fill *per point* into ~`buckets` fills total — the dominant overlay
-        // cost when a dense spin lands. Path2D has no clear, so re-allocate.
-        let paths = overlayBucketPathsRef.current;
-        if (!paths || paths.length !== palette.buckets) {
-          paths = Array.from({ length: palette.buckets }, () => new Path2D());
-        } else {
-          for (let b = 0; b < paths.length; b++) paths[b] = new Path2D();
-        }
-        overlayBucketPathsRef.current = paths;
-        const TWO_PI = Math.PI * 2;
-        for (let i = 0; i < count; i++) {
-          if (buf.visible[i] === 0) continue;
-          const px = rect.left + buf.us[i] * sx;
-          const py = rect.top + buf.vs[i] * sy;
-          const path = paths[depthBucketIndex(buf.depths[i], palette)];
-          // `moveTo` before `arc` starts a fresh subpath so the dots don't get
-          // chained together by an implicit line from the previous arc's end.
-          path.moveTo(px + radius, py);
-          path.arc(px, py, radius, 0, TWO_PI);
-        }
-        for (let b = 0; b < paths.length; b++) {
-          overlayCtx.fillStyle = palette.colors[b];
-          overlayCtx.fill(paths[b]);
-        }
-      }
-      mark(OVERLAY_DRAW_END);
-      measure(OVERLAY_DRAW, OVERLAY_DRAW_START, OVERLAY_DRAW_END);
-    };
-
     const tick = () => {
       const cursor = cursorRef.current;
       // T7 — is the cursor inside this source's frame coverage?
@@ -918,13 +689,14 @@ export function VideoPanel({
         uncoveredPaintedRef.current = false;
       }
 
-      // Point-cloud overlay (docs/13). After the video blit, project the LiDAR
-      // spin nearest the on-screen frame PTS onto the overlay canvas. The heavy
-      // fetch+decode+project is coalesced to ≤1 outstanding refresh and only
-      // re-run when the active spin index (or the calibration) changes — so the
-      // per-tick cost is just a clear+redraw of the cached projection, which we
-      // bracket with a perf measure to keep it inside the hot-path budget.
-      drawOverlay();
+      // Point-cloud overlay (docs/13, PANEL-03). After the video blit, project
+      // the LiDAR spin nearest the on-screen frame PTS onto the overlay canvas.
+      // The heavy fetch+decode+project is coalesced to ≤1 outstanding refresh
+      // and only re-run when the active spin index (or the calibration)
+      // changes — so the per-tick cost is just a clear+redraw of the cached
+      // projection, which the controller brackets with a perf measure to keep
+      // it inside the hot-path budget. Same blit-PTS input as before.
+      lidarOverlayRef.current?.draw(lastBlitPtsRef.current);
 
       // Publish a HUD snapshot every tick. Cheap (plain object) and the
       // dev hook needs it available whether or not the HUD is visible.
@@ -1150,11 +922,10 @@ export function VideoPanel({
   // refs. Reset the cached projection so the next tick recomputes. None of this
   // is on the cursor hot path — it runs once per binding change.
   useEffect(() => {
-    overlayBindingRef.current = overlayBinding;
-    overlayCalibRef.current = null;
-    overlaySpinTimesRef.current = null;
-    overlaySpinIdxRef.current = -1;
-    overlayProjCountRef.current = 0;
+    const overlay = lidarOverlayRef.current;
+    if (!overlay) return;
+    overlay.setBinding(overlayBinding);
+    overlay.resetProjection();
     // Clear stale dots immediately when the binding goes away / changes.
     const oc = overlayCanvasRef.current;
     if (oc) {
@@ -1177,18 +948,18 @@ export function VideoPanel({
       const cams = await st.loadCalibration(
         overlayBinding.calibrationChannelId,
       );
-      if (aborted || overlayBindingRef.current !== overlayBinding) return;
+      if (aborted || overlay.currentBinding() !== overlayBinding) return;
       const cam =
         cams.find((c) => c.name === overlayBinding.cameraName) ?? null;
-      overlayCalibRef.current = cam;
+      overlay.setCalibration(cam);
       try {
         const times = await st.lidarSpinTimes(
           overlayBinding.pointcloudChannelId,
         );
-        if (aborted || overlayBindingRef.current !== overlayBinding) return;
-        overlaySpinTimesRef.current = times;
+        if (aborted || overlay.currentBinding() !== overlayBinding) return;
+        overlay.setSpinTimes(times);
       } catch {
-        overlaySpinTimesRef.current = null;
+        overlay.setSpinTimes(null);
       }
       setVideoOverlayInfo(panelId, {
         enabled: true,
