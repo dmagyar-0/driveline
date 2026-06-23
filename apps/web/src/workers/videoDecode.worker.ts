@@ -533,8 +533,15 @@ function postSinkControl(message: SinkDecodeError): void {
 // paused scrub-to-frame that faults must converge too). Guarded by
 // `selfHealInFlight` so a storm of error callbacks schedules at most one reheal,
 // and only when the failed session is still the active one (a concurrent seek
-// rebuilds anyway).
+// rebuilds anyway). Bounded by `MAX_SELF_HEAL_ATTEMPTS`: a genuinely
+// unrecoverable stream (unsupported codec on this GPU, a persistent fault) would
+// otherwise re-prime → fault → re-prime forever, spamming reader RPCs and
+// flickering `lastError()`. The counter resets the instant a frame actually
+// emits (the decoder proved alive), so transient faults still heal every time;
+// only sustained back-to-back failures fall back to the passive retry UI.
+const MAX_SELF_HEAL_ATTEMPTS = 3;
 let selfHealInFlight = false;
+let consecutiveSelfHeals = 0;
 function onDecoderError(e: DOMException | Error): void {
   const reason = e instanceof Error ? e.message : String(e);
   console.error("VideoDecoder error:", e);
@@ -548,8 +555,14 @@ function onDecoderError(e: DOMException | Error): void {
     }
   }
   postSinkControl({ type: "decode-error", reason });
-  if (failed && session === failed && !selfHealInFlight) {
+  if (
+    failed &&
+    session === failed &&
+    !selfHealInFlight &&
+    consecutiveSelfHeals < MAX_SELF_HEAL_ATTEMPTS
+  ) {
     selfHealInFlight = true;
+    consecutiveSelfHeals += 1;
     const target = cursorNs;
     // Defer off the error callback so we don't re-enter the decoder from inside
     // its own error handler; `seek` serialises behind `runExclusive`.
@@ -1073,6 +1086,9 @@ function onFrame(frame: VideoFrame): void {
     return;
   }
   session.inFlight = Math.max(0, session.inFlight - 1);
+  // A frame emitted ⇒ the decoder is alive: clear the self-heal budget so a
+  // later transient fault gets its full set of re-prime attempts again.
+  consecutiveSelfHeals = 0;
   // Wall clock (worker) of this frame's arrival — surfaced in the status
   // message so the main thread can run the "decoder is alive" arm of the
   // readiness predicate against its own receipt time.
@@ -1499,6 +1515,11 @@ export const videoDecodeApi = {
       // Coalesce: a queued seek that a later seek has already superseded does
       // nothing — the newer one will reopen at the final target.
       if (!force && myGen !== seekGeneration) return;
+      // NOTE: the headless self-heal (onDecoderError) re-primes through this
+      // forced path and depends on `session` still being set — a faulted
+      // session is marked `ended` but never nulled. If a future change nulls
+      // `session` on fatal error, route the self-heal through `open()` with the
+      // captured source params instead, or this guard will silently no-op it.
       if (!session) return;
       // Duplicate-target guard: the debounced effect in VideoPanel can fire
       // with an unchanged target after a drag that ended on the same PTS.
