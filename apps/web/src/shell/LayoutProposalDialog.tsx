@@ -22,6 +22,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useSession, type Channel } from "../state/store";
+import { Dialog } from "./Dialog";
 import { proposeLayoutHeuristic } from "../llm/layoutHeuristics";
 import { applyLayoutPanels } from "../llm/applyLayoutProposal";
 import type {
@@ -135,18 +136,9 @@ function LayoutProposalForm({ sourceName, channels, onDismiss }: FormProps) {
 
   const abortRef = useRef<AbortController | null>(null);
   const titleId = useId();
+  // Initial focus lands on the Skip button (mirroring the prior behaviour);
+  // Escape is suppressed while a refine is in flight (the BYOK run lock).
   const closeRef = useRef<HTMLButtonElement | null>(null);
-
-  // Move focus into the dialog on mount; Escape skips (unless a refine is in
-  // flight — then it's busy, mirroring the BYOK run lock).
-  useEffect(() => {
-    closeRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && refine.kind !== "running") onDismiss();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onDismiss, refine.kind]);
 
   // Abort any in-flight refine when the dialog unmounts.
   useEffect(() => {
@@ -214,11 +206,11 @@ function LayoutProposalForm({ sourceName, channels, onDismiss }: FormProps) {
   const busy = refine.kind === "running";
 
   return (
-    <div
-      className={s.scrim}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
+    <Dialog
+      onClose={onDismiss}
+      escapeEnabled={refine.kind !== "running"}
+      ariaLabelledBy={titleId}
+      initialFocusRef={closeRef}
       data-testid="layout-proposal-dialog"
     >
       <div className={s.card} onClick={(e) => e.stopPropagation()}>
@@ -312,6 +304,6 @@ function LayoutProposalForm({ sourceName, channels, onDismiss }: FormProps) {
           </button>
         </div>
       </div>
-    </div>
+    </Dialog>
   );
 }

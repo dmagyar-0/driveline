@@ -15,44 +15,43 @@ use arrow_array::Array;
 use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_ipc::reader::FileReader;
 use arrow_schema::DataType;
-use data_core::reader::Reader;
+use data_core::registry;
 use data_core::types::{DType, FetchOpts, TimeRange};
-use data_core::{MapGeometryReader, McapReader, Mf4Reader, Ros1BagReader, Ros2Db3Reader};
 use serde_json::{json, Value};
 
 /// A boxed, format-erased reader. Every format the CLI handles implements the
-/// shared [`Reader`] trait (`meta` / `fetch_range`), so a single trait object
-/// covers them all — no per-format enum dispatch. The CLI only needs the
-/// metadata + signal-fetch surface; the video-cursor entry points are
-/// MCAP-specific and stay off this path.
-pub type LogReader = Box<dyn Reader>;
+/// shared [`Reader`](data_core::Reader) trait (`meta` / `fetch_range`), so a
+/// single trait object covers them all — no per-format enum dispatch. The CLI
+/// only needs the metadata + signal-fetch surface; the video-cursor entry
+/// points are MCAP-specific and stay off this path.
+pub type LogReader = data_core::BoxedReader;
 
 /// Open `path` with the reader matching its extension.
-/// Supported: `.mcap`, `.mf4`, `.bag` (ROS1), `.db3` (ROS2), `.xodr` (OpenDRIVE
-/// map geometry).
+///
+/// Dispatch is delegated to the central [`data_core::registry`] so this CLI and
+/// the browser surface cannot silently diverge on which formats are supported:
+/// every single-blob format registered in `data-core` is reachable here, and
+/// the "unsupported extension" message is built from that same table.
 pub fn open_reader(path: &Path) -> Result<LogReader, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    let to_err = |e: data_core::Error| e.to_string();
-    let reader: LogReader = match ext.as_str() {
-        "mcap" => Box::new(McapReader::open(&bytes).map_err(to_err)?),
-        // MF4's byte-slice constructor is `open_slice`, not the trait `open`
-        // (which would also work, but `open_slice` is the documented name).
-        "mf4" => Box::new(Mf4Reader::open_slice(&bytes).map_err(to_err)?),
-        "bag" => Box::new(Ros1BagReader::open(&bytes).map_err(to_err)?),
-        "db3" => Box::new(Ros2Db3Reader::open(&bytes).map_err(to_err)?),
-        "xodr" => Box::new(MapGeometryReader::open(&bytes).map_err(to_err)?),
-        other => {
-            return Err(format!(
-                "unsupported extension {other:?} (expected .mcap, .mf4, .bag, .db3 or .xodr)"
+    match registry::open_path(path, &bytes) {
+        Some(res) => res.map_err(|e| e.to_string()),
+        None => {
+            let exts = registry::supported_extensions()
+                .iter()
+                .map(|e| format!(".{e}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| e.to_ascii_lowercase())
+                .unwrap_or_default();
+            Err(format!(
+                "unsupported extension {ext:?} (expected one of: {exts})"
             ))
         }
-    };
-    Ok(reader)
+    }
 }
 
 /// `info` — source metadata + channel list as JSON. Nanosecond ranges

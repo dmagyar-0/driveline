@@ -36,8 +36,11 @@
 use std::collections::HashMap;
 
 use crate::reader::{ArrowIpc, Reader};
-use crate::ros::{extract, numeric_leaves, Extracted, MessageRegistry, Wire};
-use crate::types::{Channel, ChannelKind, DType, FetchOpts, SourceKind, SourceMeta, TimeRange};
+use crate::ros::reader_common::{
+    expand_topic_channels, fetch_topic_range, is_image_type, RosTopic,
+};
+use crate::ros::{MessageRegistry, Wire};
+use crate::types::{Channel, FetchOpts, SourceKind, SourceMeta, TimeRange};
 
 const MAGIC: &[u8] = b"#ROSBAG V2.0\n";
 
@@ -45,26 +48,6 @@ const OP_BAG_HEADER: u8 = 0x03;
 const OP_CHUNK: u8 = 0x05;
 const OP_CONNECTION: u8 = 0x07;
 const OP_MESSAGE_DATA: u8 = 0x02;
-
-/// Image-like message types we skip (no scalar channels): a later phase adds
-/// video.
-fn is_image_type(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "sensor_msgs/Image" | "sensor_msgs/CompressedImage"
-    )
-}
-
-/// One decoded connection: its topic, message type, parsed registry, and the
-/// time-sorted list of message `(time_ns, payload)`.
-struct Connection {
-    topic: String,
-    #[allow(dead_code)]
-    msg_type: String,
-    registry: MessageRegistry,
-    /// `(time_ns, payload)` sorted ascending by time.
-    messages: Vec<(i64, Vec<u8>)>,
-}
 
 /// In-progress accumulator while walking records (before sorting / channel
 /// expansion).
@@ -86,8 +69,8 @@ impl Builder {
 
 pub struct Ros1BagReader {
     meta: SourceMeta,
-    /// Topic -> connection (used by `fetch_range` to resolve `topic.path`).
-    by_topic: HashMap<String, Connection>,
+    /// Topic -> resolved topic (used by `fetch_range` to resolve `topic.path`).
+    by_topic: HashMap<String, RosTopic>,
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +273,7 @@ fn handle_chunk(rec: &Record, builder: &mut Builder) -> Result<(), crate::Error>
 
 impl Ros1BagReader {
     fn from_builder(builder: Builder) -> Result<Self, crate::Error> {
-        let mut by_topic: HashMap<String, Connection> = HashMap::new();
+        let mut by_topic: HashMap<String, RosTopic> = HashMap::new();
         let mut channels: Vec<Channel> = Vec::new();
         let mut overall: Option<(i64, i64)> = None;
 
@@ -304,55 +287,23 @@ impl Ros1BagReader {
             messages.sort_by_key(|(t, _)| *t);
 
             // Skip image/video topics for now (no channels), but still keep the
-            // connection so we don't crash on lookups.
+            // connection so we don't crash on lookups. ROS1 type names are
+            // already in canonical `pkg/Type` form.
             let make_channels = !is_image_type(msg_type);
 
-            let (conn_start, conn_end) = match (messages.first(), messages.last()) {
-                (Some((a, _)), Some((b, _))) => (*a, b.saturating_add(1)),
-                _ => (0, 0),
-            };
-            let conn_range = TimeRange {
-                start_ns: conn_start,
-                end_ns: conn_end,
-            };
-            if !messages.is_empty() {
-                overall = Some(match overall {
-                    Some((s, e)) => (s.min(conn_start), e.max(conn_end)),
-                    None => (conn_start, conn_end),
-                });
-            }
-
-            if make_channels {
-                for leaf in numeric_leaves(registry) {
-                    // Dynamic-length arrays (dims == 0) are not plottable as a
-                    // fixed channel.
-                    if leaf.dims == 0 {
-                        continue;
-                    }
-                    let id = format!("{topic}.{}", leaf.path);
-                    let (kind, dtype) = if leaf.dims == 1 {
-                        (ChannelKind::Scalar, Some(DType::F64))
-                    } else {
-                        (ChannelKind::Vector, Some(DType::F64))
-                    };
-                    channels.push(Channel {
-                        id: id.clone(),
-                        source_id: String::new(),
-                        name: id,
-                        kind,
-                        dtype,
-                        unit: None,
-                        sample_count: messages.len() as u64,
-                        time_range: conn_range,
-                    });
-                }
-            }
+            expand_topic_channels(
+                topic,
+                registry,
+                &messages,
+                make_channels,
+                &mut channels,
+                &mut overall,
+            );
 
             by_topic.insert(
                 topic.clone(),
-                Connection {
+                RosTopic {
                     topic: topic.clone(),
-                    msg_type: msg_type.clone(),
                     registry: registry.clone(),
                     messages,
                 },
@@ -375,30 +326,6 @@ impl Ros1BagReader {
         };
 
         Ok(Ros1BagReader { meta, by_topic })
-    }
-
-    /// Resolve a `"{topic}.{path}"` channel id to its connection and the field
-    /// path within the message. Topics contain `/` and may themselves contain
-    /// `.`-free segments, so we match against known topics by longest prefix.
-    fn resolve<'a>(&'a self, channel_id: &str) -> Option<(&'a Connection, String)> {
-        // Try every known topic; the path is the remainder after `"{topic}."`.
-        // Prefer the longest matching topic (defensive against topic names that
-        // are prefixes of one another).
-        let mut best: Option<(&Connection, String)> = None;
-        for (topic, conn) in &self.by_topic {
-            if let Some(rest) = channel_id.strip_prefix(topic.as_str()) {
-                if let Some(path) = rest.strip_prefix('.') {
-                    let better = match &best {
-                        Some((c, _)) => topic.len() > c.topic.len(),
-                        None => true,
-                    };
-                    if better {
-                        best = Some((conn, path.to_string()));
-                    }
-                }
-            }
-        }
-        best
     }
 }
 
@@ -427,89 +354,7 @@ impl Reader for Ros1BagReader {
         range: TimeRange,
         opts: FetchOpts,
     ) -> crate::Result<ArrowIpc> {
-        let (conn, path) = self
-            .resolve(channel_id)
-            .ok_or_else(|| crate::Error::ChannelNotFound(channel_id.to_string()))?;
-
-        let msgs = &conn.messages;
-        let start_idx = msgs.partition_point(|(t, _)| *t < range.start_ns);
-        let end_idx = msgs
-            .partition_point(|(t, _)| *t < range.end_ns)
-            .max(start_idx);
-        let prev_idx = if opts.include_prev && start_idx > 0 {
-            Some(start_idx - 1)
-        } else {
-            None
-        };
-
-        // Build the selected index list: optional prev, then [start, end).
-        let mut indices: Vec<usize> = Vec::new();
-        if let Some(p) = prev_idx {
-            indices.push(p);
-        }
-        indices.extend(start_idx..end_idx);
-
-        // Decode each selected message; skip individual decode failures so a
-        // single malformed payload doesn't sink the whole range.
-        let mut ts: Vec<i64> = Vec::with_capacity(indices.len());
-        let mut scalars: Vec<f64> = Vec::new();
-        let mut vectors: Vec<Vec<f64>> = Vec::new();
-        // Track the vector width once known (from the first decoded vector).
-        let mut vec_width: Option<usize> = None;
-        // Are we producing scalars or vectors? Determined by the first success.
-        let mut is_vector: Option<bool> = None;
-
-        for &i in &indices {
-            let (t, payload) = &msgs[i];
-            match extract(&conn.registry, payload, Wire::Ros1, &path) {
-                Ok(Extracted::Scalar(v)) => {
-                    if is_vector == Some(true) {
-                        continue;
-                    }
-                    is_vector = Some(false);
-                    ts.push(*t);
-                    scalars.push(v);
-                }
-                Ok(Extracted::Enum(v)) => {
-                    if is_vector == Some(true) {
-                        continue;
-                    }
-                    is_vector = Some(false);
-                    ts.push(*t);
-                    scalars.push(v as f64);
-                }
-                Ok(Extracted::Vector(vals)) => {
-                    if is_vector == Some(false) {
-                        continue;
-                    }
-                    // Lock width to the first vector; skip mismatched widths.
-                    match vec_width {
-                        None => vec_width = Some(vals.len()),
-                        Some(w) if w != vals.len() => continue,
-                        _ => {}
-                    }
-                    is_vector = Some(true);
-                    ts.push(*t);
-                    vectors.push(vals);
-                }
-                Err(_) => {
-                    // Skip undecodable samples.
-                }
-            }
-        }
-
-        match is_vector {
-            Some(true) => {
-                let n = vec_width.unwrap_or(0);
-                let mut flat = Vec::with_capacity(vectors.len() * n);
-                for v in &vectors {
-                    flat.extend_from_slice(v);
-                }
-                crate::arrow::build_vector_ipc(ts, flat, n)
-            }
-            // Scalars, or an empty range (default to scalar schema).
-            _ => crate::arrow::build_scalar_ipc(ts, scalars),
-        }
+        fetch_topic_range(&self.by_topic, channel_id, range, opts, Wire::Ros1)
     }
 }
 

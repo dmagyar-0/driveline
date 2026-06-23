@@ -15,8 +15,9 @@
 // shows once the tabular-import queue has drained, so the source dropdown is
 // already populated when a user drops an mp4 + csv together.
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useSession } from "../state/store";
+import { Dialog } from "./Dialog";
 import s from "./VideoTimestampDialog.module.css";
 
 export function VideoTimestampDialog() {
@@ -76,22 +77,14 @@ function VideoTimestampForm({
     tabularSources[0]?.id ?? "",
   );
   const [busy, setBusy] = useState(false);
+  // Lands initial focus on the source <select>. When no tabular source is
+  // loaded the select isn't rendered, so `Dialog` falls back to the first
+  // focusable element — the Cancel button — matching the prior behaviour.
   const firstFieldRef = useRef<HTMLSelectElement | null>(null);
-  const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   const sourceId = useId();
   const titleId = useId();
   const noteId = useId();
-
-  // Initial focus + Escape-to-cancel.
-  useEffect(() => {
-    (firstFieldRef.current ?? cancelRef.current)?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy) onCancel(bindingId);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [bindingId, onCancel, busy]);
 
   const valid = hasSources && selectedId.length > 0;
 
@@ -109,11 +102,11 @@ function VideoTimestampForm({
   };
 
   return (
-    <div
-      className={s.scrim}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
+    <Dialog
+      onClose={() => onCancel(bindingId)}
+      escapeEnabled={!busy}
+      ariaLabelledBy={titleId}
+      initialFocusRef={firstFieldRef}
       data-testid="video-timestamp-dialog"
     >
       <form
@@ -175,7 +168,6 @@ function VideoTimestampForm({
         <footer className={s.actions}>
           <button
             type="button"
-            ref={cancelRef}
             className={s.cancel}
             onClick={() => onCancel(bindingId)}
             disabled={busy}
@@ -193,6 +185,6 @@ function VideoTimestampForm({
           </button>
         </footer>
       </form>
-    </div>
+    </Dialog>
   );
 }

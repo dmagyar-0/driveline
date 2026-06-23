@@ -56,20 +56,14 @@ import {
   scaleWindowY,
   zoomTargetForPointer,
 } from "./plotZoom";
-import {
-  STACK_BAND_TICK_TARGET,
-  bandFracTop,
-  niceBandSplits,
-  stackedBandRange,
-  yAxisSize,
-} from "./plotAxes";
+import { bandFracTop } from "./plotAxes";
+import { buildPlotOptions } from "./buildPlotOptions";
 import { buildZoomGeometry, tooltipPositionStyle } from "./plotGeometry";
 import { channelMap } from "./shared/channels";
 import { formatValue } from "./shared/formatValue";
 import { lastIndexAtOrBefore } from "./shared/cursorLookup";
 import { ChannelPicker } from "./ChannelPicker";
 import { mark, measure } from "../perf";
-import { formatAxisTick } from "../timeline/formatTime";
 import styles from "./PlotPanel.module.css";
 
 interface PlotPanelProps {
@@ -559,227 +553,33 @@ export function PlotPanel({ panelId }: PlotPanelProps) {
 
     const rect = container.getBoundingClientRect();
     const { fg, grid } = axisStyle();
-    // X-axis carries the time-tick formatter so its labels track the
-    // Transport's relative/absolute mode and use the same `formatTime`
-    // helpers. Reads mode + relative origin through refs (see above) so a
-    // mode toggle repaints via `redraw()` without rebuilding the plot.
-    const xAxisOpts: uPlot.Axis = {
-      stroke: fg,
-      ticks: { stroke: grid },
-      grid: { stroke: grid },
-      values: (_u, splits) => {
-        const startSec = globalRangeSecRef.current?.[0] ?? 0;
-        return splits.map((s) =>
-          formatAxisTick(s, startSec, timeModeRef.current),
-        );
-      },
-      // Reserve more horizontal room per tick in absolute mode: the
-      // `YYYY-MM-DD HH:MM:SS.mmm` label is ~3× wider than a relative
-      // `MM:SS.mmm`, so the default spacing packs in enough ticks to
-      // overlap. A wider minimum makes uPlot pick a coarser increment.
-      space: (_u, _axisIdx, _min, _max, _dim) =>
-        timeModeRef.current === "absolute" ? 180 : 70,
-    };
-    // Build the y-axis groups from the explicit per-channel assignments.
-    // Each distinct axis index in use gets its own auto-ranged scale so a
-    // 0-1 signal and a 0-10000 signal stay individually readable, and so
-    // one series' NaN gaps can never poison another axis's range. Axis 0
-    // is always scale "y", rendered LEFT (the e2e plot-sync specs read
-    // `scales.y`); higher indices render on the RIGHT (`side:1`).
-    //
-    // The y-axis grows its gutter to fit the widest tick (see yAxisSize)
-    // so large-magnitude signals aren't truncated at the panel edge.
-    //
-    // Axis label: only show a unit when EVERY signal on that axis shares
-    // the same (effective) unit. Mixed-unit or unitless axes stay unlabelled.
-    const usedAxes = new Set<number>();
-    for (const c of boundChannels) usedAxes.add(axisOf(c.id));
-    // Always keep axis 0 present so `scales.y` stays defined even with
-    // zero bound channels.
-    usedAxes.add(0);
-    const axisOrder = [...usedAxes].sort((a, b) => a - b);
-
-    const sharedUnitFor = (axisIdx: number): string | undefined => {
-      let shared: string | null | undefined;
-      for (const c of boundChannels) {
-        if (axisOf(c.id) !== axisIdx) continue;
-        const u = effectiveUnit(c, unitOverrides);
-        if (shared === undefined) shared = u;
-        else if (shared !== u) return undefined;
-      }
-      // `shared` is undefined (no signals) or null (all unitless) ⇒ no label.
-      return shared ? shared : undefined;
-    };
-
-    // Default: each axis auto-ranges to its own data and draws across the
-    // full plot height (axes overlay). Stacked: each axis that carries data
-    // is remapped into its own horizontal band, lowest index on top, so the
-    // signals don't overlap. `dataAxisOrder` excludes the always-present
-    // axis 0 when nothing sits on it, so an empty forced axis never reserves
-    // a band. Stacking is a no-op below two data-bearing axes.
-    const dataAxisOrder = [
-      ...new Set(boundChannels.map((c) => axisOf(c.id))),
-    ].sort((a, b) => a - b);
-    const bandCount = dataAxisOrder.length;
-    // Data extent per banded scale, recorded by the `range` callback and read
-    // by each axis's tick/grid `filter` so an axis only labels (and grids) its
-    // own band — without this, the expanded scale paints ticks all through the
-    // empty space outside the band. Persists across redraws within this plot;
-    // a rebuild gets a fresh map.
-    const bandExtent = new Map<string, [number, number] | null>();
-    // Every y-scale carries a `range` callback (resolved synchronously inside
-    // `setData`, so the e2e/plot-sync specs can read `scales.y` straight off).
-    // Priority per axis:
-    //   - Overlay: an explicit wheel/side-menu zoom window wins; else uPlot's
-    //     default auto-range (`rangeNum(d,d,0.1,true)` ≡ the built-in
-    //     `snapNumY`), so an unzoomed, unstacked axis looks exactly as before.
-    //   - Stacked: the band remaps its DATA extent into its vertical slice; a
-    //     per-band zoom window narrows that extent (so the band shows a zoomed
-    //     slice of its signal) while keeping the same slot. Either way the
-    //     extent is recorded for the wheel base (bandDataExtentRef) and the
-    //     ticks (bandExtent → niceBandSplits) so the grid tracks the zoom.
-    const yScales: uPlot.Scales = {};
-    for (const axisIdx of axisOrder) {
-      const key = scaleKeyForAxis(axisIdx);
-      const isBandedAxis = stacking && dataAxisOrder.includes(axisIdx);
-      const slot = isBandedAxis ? dataAxisOrder.indexOf(axisIdx) : 0;
-      yScales[key] = {
-        auto: true,
-        range: (_u, dMin, dMax) => {
-          const z = zoomRef.current?.y?.[axisIdx];
-          if (isBandedAxis) {
-            const dataLo = Number.isFinite(dMin) ? dMin : 0;
-            const dataHi = Number.isFinite(dMax) ? dMax : 1;
-            bandDataExtentRef.current.set(axisIdx, {
-              min: dataLo,
-              max: dataHi,
-            });
-            const lo = z && z.max > z.min ? z.min : dataLo;
-            const hi = z && z.max > z.min ? z.max : dataHi;
-            bandExtent.set(key, hi > lo ? [lo, hi] : null);
-            return stackedBandRange(lo, hi, slot, bandCount);
-          }
-          if (z) return [z.min, z.max];
-          if (!Number.isFinite(dMin) || !Number.isFinite(dMax)) {
-            return [null, null];
-          }
-          return uPlot.rangeNum(dMin, dMax, 0.1, true);
-        },
-      };
-    }
-
-    const yAxes: uPlot.Axis[] = axisOrder.map((axisIdx, idx) => {
-      const onLeft = idx === 0;
-      const rendered = idx < MAX_RENDERED_Y_AXES;
-      const key = scaleKeyForAxis(axisIdx);
-      const isBanded = stacking && dataAxisOrder.includes(axisIdx);
-      const axis: uPlot.Axis = {
-        scale: key,
-        side: onLeft ? 3 : 1, // uPlot sides: 3 = left, 1 = right
-        stroke: fg,
-        ticks: { stroke: grid },
-        // Overlaid: only the primary (left) axis paints the horizontal grid;
-        // extra axes would overpaint it with their own (misaligned) lines.
-        // Stacked: each banded axis owns a disjoint vertical slice, so every
-        // band paints its own grid (confined to its band by the splits below)
-        // and the empty forced axis paints none.
-        grid: stacking
-          ? isBanded
-            ? { stroke: grid }
-            : { show: false }
-          : onLeft
-            ? { stroke: grid }
-            : { show: false },
-        size: yAxisSize,
-        label: sharedUnitFor(axisIdx),
-        // Axes past the render cap still own a scale (data stays ranged)
-        // but hide their axis so the gutters don't stack up.
-        show: rendered,
-      };
-      if (isBanded) {
-        // Generate this band's ticks from its own data extent (recorded by the
-        // `range` callback above) rather than letting uPlot derive them from
-        // the expanded scale — see niceBandSplits. The values stay inside the
-        // band, so the grid is evenly spaced and confined to the band, and
-        // every band lands the same density regardless of magnitude.
-        axis.splits = () =>
-          niceBandSplits(bandExtent.get(key) ?? null, STACK_BAND_TICK_TARGET);
-        // Format the ticks ourselves too. uPlot's default formatter derives its
-        // decimal places from the *expanded* scale's increment, which would
-        // round a finer band tick (e.g. a 0.5 step) to the wrong precision; our
-        // splits are already clean numbers, so render them verbatim.
-        axis.values = (_self, splits) => splits.map((v) => String(v));
-      }
-      return axis;
+    // Assemble the uPlot option tree (x/y scales, axes, series + their
+    // baked-in `range`/`values`/`splits` callbacks) in `buildPlotOptions`
+    // (PANEL-04). The factory is given the same live refs the inline code
+    // closed over, so the built callbacks read current zoom/mode/range
+    // values without a rebuild — behaviour is identical to the previous
+    // inline assembly. The factory also mutates `bandDataExtentRef` (the
+    // wheel-zoom base) exactly as the inline code did.
+    const opts = buildPlotOptions({
+      width: rect.width,
+      height: rect.height,
+      fg,
+      grid,
+      boundChannels,
+      axisOf,
+      seriesScaleKeys,
+      maxRenderedYAxes: MAX_RENDERED_Y_AXES,
+      unitOverrides,
+      channelLabel,
+      colorFor,
+      stacking,
+      gapThresholdSec,
+      globalRangeSecRef,
+      timeModeRef,
+      effectiveZoomXRef,
+      zoomRef,
+      bandDataExtentRef,
     });
-    // Default mode: `mergeSeries` emits `null` at every union timestamp
-    // where *this* series has no sample. With two same-rate signals on
-    // different CAN mailboxes (e.g. /vehicle/speed and
-    // /vehicle/steering_angle in comma2k19) every other slot is null
-    // per series, so `spanGaps:false` collapsed each trace to invisible
-    // 1-pixel dots. Spanning gives each series the step-hold rendering
-    // 03-data-model.md promises — at the cost of hiding real
-    // channel-loss gaps as longer horizontal holds.
-    //
-    // Gap-threshold mode: `mergeSeries` already step-holds within the
-    // threshold and emits explicit `null`s at gap markers, so the
-    // renderer must NOT span — `spanGaps:false` lets those nulls draw
-    // as actual gaps without losing the multi-mailbox interleave fix.
-    const spanGaps = gapThresholdSec === null;
-    const opts: uPlot.Options = {
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
-      scales: {
-        x: {
-          time: true,
-          // Pin the x-domain to the shared global timeline. Returning an
-          // explicit range here disables uPlot's auto-fit-to-data (and
-          // its range padding), so a short signal no longer stretches to
-          // fill the panel — it occupies only its real slice of absolute
-          // time. Falls back to the data extent only before any source
-          // has set a global range.
-          //
-          // A wheel/side-menu x-zoom narrows the domain to its window
-          // (converted ns → epoch seconds, the same precision the global
-          // range uses), taking precedence over the global pin. The window
-          // is the shared one when this panel is synced, else its own —
-          // resolved by `effectivePlotZoomX` and read through a ref.
-          range: (_u, dataMin, dataMax) => {
-            const zx = effectiveZoomXRef.current;
-            if (zx) {
-              const lo = Number(zx.startNs) / 1e9;
-              const hi = Number(zx.endNs) / 1e9;
-              if (hi > lo) return [lo, hi];
-            }
-            const r = globalRangeSecRef.current;
-            if (r && r[1] > r[0]) return r;
-            return [dataMin, dataMax];
-          },
-        },
-        ...yScales,
-      },
-      series: [
-        {},
-        ...boundChannels.map((c, i) => ({
-          label: channelLabel(c, unitOverrides),
-          stroke: colorFor(c.id),
-          width: 1,
-          spanGaps,
-          // P1 — pin each series to its unit-group scale.
-          scale: seriesScaleKeys[i],
-        })),
-      ],
-      axes: [xAxisOpts, ...yAxes],
-      cursor: { show: false },
-      // The control bar's chips (colour swatch + label + remove) already
-      // act as this plot's legend, and the cursor is disabled so uPlot's
-      // built-in legend would only ever show static series names. Keeping
-      // it on rendered a redundant table *below* the canvas, which (since
-      // the canvas is sized to the full container height) overflowed the
-      // panel and forced a scrollbar. Disable it and let the chips own the
-      // legend role.
-      legend: { show: false },
-    };
     const plot = new uPlot(opts, EMPTY_DATA, mount);
     plotRef.current = plot;
     sizeOverlayToContainer();

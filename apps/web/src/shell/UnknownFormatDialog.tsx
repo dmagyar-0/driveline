@@ -21,6 +21,7 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useSession } from "../state/store";
+import { Dialog } from "./Dialog";
 import { parseRecipe, type RawRecipeDryRunReport } from "../state/recipe";
 // `formatRegistry` is already in the entry chunk (the store imports it), so
 // statically importing `saveDraft` here adds nothing to first-load and avoids a
@@ -137,14 +138,12 @@ function UnknownFormatForm({
   // orphan an in-flight upload); the flow reports that back via `lockEscape`.
   const [escapeLocked, setEscapeLocked] = useState(false);
 
+  // The dialog owns its own initial focus (it depends on `mode`): land on the
+  // recipe textarea when on the manual tab, re-focusing when the tab changes.
+  // `Dialog` handles Escape, the focus-trap and focus restoration.
   useEffect(() => {
     if (mode === "manual") firstFieldRef.current?.focus();
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !busy && !escapeLocked) onCancel(importId);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [importId, onCancel, busy, escapeLocked, mode]);
+  }, [mode]);
 
   const loadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -197,11 +196,11 @@ function UnknownFormatForm({
     report.coverage > 0.5;
 
   return (
-    <div
-      className={s.scrim}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
+    <Dialog
+      onClose={() => onCancel(importId)}
+      escapeEnabled={!busy && !escapeLocked}
+      ariaLabelledBy={titleId}
+      manageInitialFocus={false}
       data-testid="unknown-format-dialog"
     >
       <div className={s.card} onClick={(e) => e.stopPropagation()}>
@@ -345,7 +344,7 @@ function UnknownFormatForm({
           />
         )}
       </div>
-    </div>
+    </Dialog>
   );
 }
 

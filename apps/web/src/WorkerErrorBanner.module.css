@@ -1,5 +1,5 @@
 /* Fatal worker-crash banner. Pinned to the top of the viewport above all
- * shell chrome (the shortcuts scrim is z-index 100). Non-dismissable: the
+ * shell chrome (the shared dialog scrim is z-index 110). Non-dismissable: the
  * only resolution is a reload, so there is no close affordance. */
 .banner {
   position: fixed;

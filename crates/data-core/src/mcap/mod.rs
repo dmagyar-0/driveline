@@ -43,14 +43,10 @@
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::io::SeekFrom;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use base64::Engine as _;
-use mcap::sans_io::summary_reader::{SummaryReadEvent, SummaryReader, SummaryReaderOptions};
-use mcap::McapError;
-use mf4_rs::index::{ByteRangeReader, SliceRangeReader};
+use mf4_rs::index::SliceRangeReader;
 
 use crate::mf4::BoxedRangeReader;
 use crate::reader::{ArrowIpc, EncodedChunkIter, Reader};
@@ -59,17 +55,22 @@ use crate::types::{
     TimeRange,
 };
 
-/// MCAP file magic — opens and closes every well-formed file.
-const MCAP_MAGIC: &[u8] = b"\x89MCAP0\r\n";
+mod cdr;
+mod summary;
+mod video_scan;
 
-/// Bytes occupied by the footer record plus the trailing end magic:
-/// 1 opcode + 8 length + 8 summary_start + 8 summary_offset_start +
-/// 4 summary_crc + 8 end magic.
-const FOOTER_AND_END_MAGIC: u64 = 1 + 8 + 8 + 8 + 4 + 8;
+// `infer_channel_kind` is exercised by `reader.rs`'s schema-mapping test and
+// re-exported for that path; keep it reachable under `crate::mcap::`.
+pub(crate) use cdr::infer_channel_kind;
 
-/// Serialized length of an MCAP `MessageHeader`: channel_id(2) + sequence(4) +
-/// log_time(8) + publish_time(8).
-const MESSAGE_HEADER_LEN: usize = 2 + 4 + 8 + 8;
+use cdr::{
+    build_enum_ipc, build_scalar_ipc_raw, build_vector_ipc, parse_value, parsed_scalar_as_f64,
+    try_expand_ros2, ParsedValue, RosExpanded, RosVideo,
+};
+use summary::{
+    for_each_message, read_footer_summary_start, read_segment_bytes, read_summary, MCAP_MAGIC,
+};
+use video_scan::{extract_video_bytes_from_json, is_keyframe};
 
 /// Per-channel routing metadata resolved from the summary. Keyed by topic
 /// (the public `ChannelId`).
@@ -86,29 +87,6 @@ struct ChannelMeta {
     /// Foxglove-JSON video (and all non-video channels), which keep the legacy
     /// JSON/raw-bytes path.
     ros_video: Option<RosVideo>,
-}
-
-/// Decoder for a ROS2 (CDR) video channel: the message-definition registry and
-/// the top-level field path (`"data"`) carrying the compressed Annex-B bytes.
-struct RosVideo {
-    registry: Arc<crate::ros::MessageRegistry>,
-    data_path: String,
-}
-
-/// Routing metadata for a ROS2 (CDR) topic expanded into one Driveline channel
-/// per numeric leaf. Keyed by the expanded channel id (`"{topic}.{path}"`).
-/// The `registry` is `Arc`-shared across every leaf of the same topic.
-struct RosExpanded {
-    /// MCAP channel id of the underlying topic, used to filter messages.
-    mcap_id: u16,
-    /// Shared message-definition registry for the topic's root type.
-    registry: Arc<crate::ros::MessageRegistry>,
-    /// Dot-separated leaf path passed to `crate::ros::extract`.
-    leaf_path: String,
-    /// Driveline kind for this leaf: `Scalar`, `Vector`, or `Enum`.
-    kind: ChannelKind,
-    /// Element count per sample for `Vector` leaves; 0 otherwise.
-    width: usize,
 }
 
 /// A decodable run of records: either one chunk (chunked file) or the whole
@@ -136,13 +114,6 @@ impl Segment {
     fn has_channel(&self, mcap_id: u16) -> bool {
         self.channel_ids.is_empty() || self.channel_ids.contains(&mcap_id)
     }
-}
-
-/// A decoded scalar/vector/enum value, paired with a timestamp during a fetch.
-enum ParsedValue {
-    Scalar(f64),
-    Vector(Vec<f64>),
-    Enum(i32),
 }
 
 /// Stateful, bounded cursor over a video channel. Holds only owned data (no
@@ -1016,365 +987,6 @@ impl Reader for McapReader {
     }
 }
 
-/// Drive the sans-IO [`SummaryReader`] over `reader` to pull the summary
-/// section. `file_size` is supplied so the reader seeks directly to the footer
-/// rather than relying on a seek-to-end probe.
-fn read_summary(reader: &mut BoxedRangeReader, file_size: u64) -> crate::Result<mcap::Summary> {
-    let mut sr =
-        SummaryReader::new_with_options(SummaryReaderOptions::default().with_file_size(file_size));
-    let mut pos: u64 = 0;
-    while let Some(event) = sr.next_event() {
-        match event? {
-            SummaryReadEvent::SeekRequest(to) => {
-                pos = match to {
-                    SeekFrom::Start(p) => p,
-                    SeekFrom::End(e) => (file_size as i64 + e).max(0) as u64,
-                    SeekFrom::Current(c) => (pos as i64 + c).max(0) as u64,
-                };
-                sr.notify_seeked(pos);
-            }
-            SummaryReadEvent::ReadRequest(n) => {
-                let want = (n as u64).min(file_size.saturating_sub(pos));
-                if want == 0 {
-                    sr.notify_read(0);
-                    continue;
-                }
-                let bytes = reader.read_range(pos, want)?;
-                let dst = sr.insert(want as usize);
-                dst[..bytes.len()].copy_from_slice(&bytes);
-                sr.notify_read(bytes.len());
-                pos += bytes.len() as u64;
-            }
-        }
-    }
-    sr.finish().ok_or(crate::Error::McapMissingSummary)
-}
-
-/// Little-endian `u64` from `buf[at..at+8]`, or `None` if the slice is too
-/// short. Replaces `buf[a..b].try_into().expect("8-byte slice")` so a malformed
-/// record yields a clean skip rather than a panic.
-fn read_u64_le(buf: &[u8], at: usize) -> Option<u64> {
-    buf.get(at..at + 8)
-        .and_then(|s| <[u8; 8]>::try_from(s).ok())
-        .map(u64::from_le_bytes)
-}
-
-/// Read the footer at the tail of the file and return its `summary_start`
-/// offset. Only used for unchunked files (to bound the data section).
-fn read_footer_summary_start(reader: &mut BoxedRangeReader, file_size: u64) -> crate::Result<u64> {
-    if file_size < FOOTER_AND_END_MAGIC {
-        return Err(crate::Error::McapMissingSummary);
-    }
-    let buf = reader.read_range(file_size - FOOTER_AND_END_MAGIC, FOOTER_AND_END_MAGIC)?;
-    // [op:1][len:8][summary_start:8][summary_offset_start:8][crc:4][magic:8]
-    read_u64_le(&buf, 9).ok_or(crate::Error::McapMissingSummary)
-}
-
-/// Read a segment's bytes through `reader` and decompress them.
-fn read_segment_bytes(reader: &mut BoxedRangeReader, seg: &Segment) -> crate::Result<Vec<u8>> {
-    if seg.compressed_size == 0 {
-        return Ok(Vec::new());
-    }
-    let comp = reader.read_range(seg.data_offset, seg.compressed_size)?;
-    decompress_records(&seg.compression, comp, seg.uncompressed_size as usize)
-}
-
-/// Decompress a chunk's record stream. zstd uses the pure-Rust `ruzstd`
-/// decoder so the wasm build needs no C `zstd-sys`.
-fn decompress_records(
-    compression: &str,
-    compressed: Vec<u8>,
-    uncompressed_size: usize,
-) -> crate::Result<Vec<u8>> {
-    match compression {
-        "" => Ok(compressed),
-        "zstd" => {
-            use std::io::Read;
-            let mut decoder =
-                ruzstd::StreamingDecoder::new(compressed.as_slice()).map_err(|e| {
-                    crate::Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("ruzstd init failed: {e:?}"),
-                    ))
-                })?;
-            let mut out = Vec::with_capacity(uncompressed_size.max(compressed.len()));
-            decoder.read_to_end(&mut out)?;
-            Ok(out)
-        }
-        other => Err(crate::Error::Mcap(McapError::UnsupportedCompression(
-            other.to_string(),
-        ))),
-    }
-}
-
-/// Walk a decompressed record stream, invoking `f(channel_id, log_time,
-/// payload)` for every `Message` record. Non-message records are skipped; a
-/// `DataEnd` record or a truncated tail stops the walk.
-fn for_each_message(buf: &[u8], mut f: impl FnMut(u16, i64, &[u8])) {
-    use mcap::records::op;
-    let mut off = 0usize;
-    while off + 9 <= buf.len() {
-        let opcode = buf[off];
-        let Some(len) = read_u64_le(buf, off + 1).map(|v| v as usize) else {
-            break;
-        };
-        let body_start = off + 9;
-        let Some(body_end) = body_start.checked_add(len) else {
-            break;
-        };
-        if body_end > buf.len() {
-            break;
-        }
-        if opcode == op::DATA_END {
-            break;
-        }
-        if opcode == op::MESSAGE {
-            let body = &buf[body_start..body_end];
-            if body.len() >= MESSAGE_HEADER_LEN {
-                let channel_id = u16::from_le_bytes([body[0], body[1]]);
-                // `body` is >= MESSAGE_HEADER_LEN (>= 14), so the 8-byte read at
-                // offset 6 is always in bounds; default to 0 defensively.
-                let log_time = read_u64_le(body, 6).unwrap_or(0) as i64;
-                f(channel_id, log_time, &body[MESSAGE_HEADER_LEN..]);
-            }
-        }
-        off = body_end;
-    }
-}
-
-/// Parse a message payload into a `ParsedValue` for the given channel kind.
-fn parse_value(kind: ChannelKind, payload: &[u8]) -> Option<ParsedValue> {
-    match kind {
-        ChannelKind::Scalar => parse_scalar_json(payload).map(ParsedValue::Scalar),
-        ChannelKind::Vector => {
-            parse_vector3_json(payload).map(|(x, y, z)| ParsedValue::Vector(vec![x, y, z]))
-        }
-        ChannelKind::Enum => parse_enum_json(payload).map(ParsedValue::Enum),
-        _ => None,
-    }
-}
-
-/// Attempt to expand a ROS2 (`ros2msg`) schema into one `RosExpanded` routing
-/// entry per numeric leaf. Returns the `(expanded_channel_id, RosExpanded)`
-/// pairs, or an error if the definition fails to parse (IDL / malformed) — the
-/// caller falls back to the channel's default behaviour in that case.
-///
-/// `schema_name` is the ROS root type (e.g. `sensor_msgs/msg/Imu`),
-/// `def_bytes` the UTF-8 concatenated `.msg` text, `topic` the MCAP topic
-/// (which prefixes every expanded id), `mcap_id` the underlying channel id.
-fn try_expand_ros2(
-    schema_name: &str,
-    def_bytes: &[u8],
-    topic: &str,
-    mcap_id: u16,
-) -> Result<Vec<(ChannelId, RosExpanded)>, crate::ros::RosDecodeError> {
-    let def_text = std::str::from_utf8(def_bytes)
-        .map_err(|_| crate::ros::RosDecodeError::PathNotFound("non-utf8 schema".into()))?;
-    let registry = crate::ros::MessageRegistry::parse(schema_name, def_text)?;
-    let registry = Arc::new(registry);
-
-    let mut out: Vec<(ChannelId, RosExpanded)> = Vec::new();
-    for leaf in crate::ros::numeric_leaves(&registry) {
-        // dims == 0 is a dynamic numeric array: not a single plottable signal.
-        let (kind, width) = match leaf.dims {
-            0 => continue,
-            1 => (ChannelKind::Scalar, 0),
-            n => (ChannelKind::Vector, n),
-        };
-        let id = format!("{topic}.{}", leaf.path);
-        out.push((
-            id,
-            RosExpanded {
-                mcap_id,
-                registry: registry.clone(),
-                leaf_path: leaf.path,
-                kind,
-                width,
-            },
-        ));
-    }
-    Ok(out)
-}
-
-/// Infer the Driveline `ChannelKind` (and optional `DType`) from an MCAP
-/// schema's name + encoding. Heuristics per `docs/04-reader-abstraction.md:86-94`,
-/// extended with the well-known Foxglove JSON schemas used by the T0.3
-/// sample corpus.
-pub(crate) fn infer_channel_kind(
-    schema_name: &str,
-    schema_encoding: &str,
-) -> (ChannelKind, Option<DType>) {
-    // Exact matches for well-known video schemas (case-sensitive).
-    const VIDEO_SCHEMA_NAMES: &[&str] = &[
-        "foxglove.CompressedVideo",
-        "foxglove_msgs/CompressedVideo",
-        "foxglove_msgs/msg/CompressedVideo",
-        "sensor_msgs/Image",
-        "sensor_msgs/msg/Image",
-        "sensor_msgs/CompressedImage",
-        "sensor_msgs/msg/CompressedImage",
-    ];
-    if VIDEO_SCHEMA_NAMES.contains(&schema_name) {
-        return (ChannelKind::Video, None);
-    }
-
-    // Protobuf schemas whose name contains a video keyword.
-    if schema_encoding == "protobuf" {
-        let lower = schema_name.to_ascii_lowercase();
-        if lower.contains("image") || lower.contains("compressedvideo") || lower.contains("h264") {
-            return (ChannelKind::Video, None);
-        }
-    }
-
-    // Scalar / vector heuristics for Foxglove JSON + common ROS aliases.
-    match schema_name {
-        "foxglove.Float64" | "std_msgs/Float64" | "std_msgs/msg/Float64" => {
-            return (ChannelKind::Scalar, Some(DType::F64));
-        }
-        "foxglove.Float32" | "std_msgs/Float32" | "std_msgs/msg/Float32" => {
-            return (ChannelKind::Scalar, Some(DType::F32));
-        }
-        "foxglove.Vector3" | "geometry_msgs/Vector3" | "geometry_msgs/msg/Vector3" => {
-            return (ChannelKind::Vector, Some(DType::F64));
-        }
-        _ => {}
-    }
-
-    // `driveline.*Mode|State|Status|Enum` → Enum(I32). Heuristic for the
-    // fixture's `driveline.ControlMode`; keeps T0.3 expressive without
-    // inventing a bespoke schema registry.
-    if schema_name.starts_with("driveline.") {
-        let lower = schema_name.to_ascii_lowercase();
-        if lower.ends_with("mode")
-            || lower.ends_with("state")
-            || lower.ends_with("status")
-            || lower.ends_with("enum")
-        {
-            return (ChannelKind::Enum, Some(DType::I32));
-        }
-    }
-
-    (ChannelKind::Bytes, None)
-}
-
-fn parse_scalar_json(data: &[u8]) -> Option<f64> {
-    let v: serde_json::Value = serde_json::from_slice(data).ok()?;
-    // `value` is the Foxglove.Float64 field name; `data` is a legacy alias
-    // some writers still emit.
-    v.get("value")
-        .and_then(|f| f.as_f64())
-        .or_else(|| v.get("data").and_then(|f| f.as_f64()))
-}
-
-fn parse_vector3_json(data: &[u8]) -> Option<(f64, f64, f64)> {
-    let v: serde_json::Value = serde_json::from_slice(data).ok()?;
-    Some((
-        v.get("x")?.as_f64()?,
-        v.get("y")?.as_f64()?,
-        v.get("z")?.as_f64()?,
-    ))
-}
-
-fn parse_enum_json(data: &[u8]) -> Option<i32> {
-    let v: serde_json::Value = serde_json::from_slice(data).ok()?;
-    // Drop the sample on i32 overflow rather than silently truncating —
-    // a malformed MCAP payload with e.g. `"value": 0x1_0000_0000` would
-    // otherwise surface as a valid-looking `0` enum code.
-    v.get("value")
-        .and_then(|f| f.as_i64())
-        .and_then(|i| i32::try_from(i).ok())
-}
-
-/// Decode the base64 `data` field out of a Foxglove `CompressedVideo` JSON
-/// envelope, returning the raw Annex-B bytes. Falls back to `None` so the
-/// caller can treat the payload as already-raw bytes.
-fn extract_video_bytes_from_json(data: &[u8]) -> Option<Vec<u8>> {
-    let v: serde_json::Value = serde_json::from_slice(data).ok()?;
-    let b64 = v.get("data")?.as_str()?;
-    base64::engine::general_purpose::STANDARD.decode(b64).ok()
-}
-
-/// True if the given Annex-B byte stream is a keyframe (contains IDR or
-/// SPS before any non-IDR VCL slice). NAL type is the low 5 bits of the
-/// first byte after each start code.
-fn is_keyframe(annex_b: &[u8]) -> bool {
-    let mut i = 0;
-    while i < annex_b.len() {
-        let Some(sc_end) = find_start_code(annex_b, i) else {
-            break;
-        };
-        if sc_end >= annex_b.len() {
-            break;
-        }
-        let nal_type = annex_b[sc_end] & 0x1F;
-        match nal_type {
-            5 | 7 => return true,  // IDR slice or SPS
-            1..=4 => return false, // Non-IDR VCL slice
-            _ => {}                // AUD (9), PPS (8), SEI (6), etc. — keep scanning.
-        }
-        i = sc_end + 1;
-    }
-    false
-}
-
-/// Returns the index of the first byte AFTER a start code, searching from
-/// `from`. Handles both 3-byte (`00 00 01`) and 4-byte (`00 00 00 01`) codes.
-fn find_start_code(data: &[u8], from: usize) -> Option<usize> {
-    let mut i = from;
-    while i + 2 < data.len() {
-        if data[i] == 0 && data[i + 1] == 0 {
-            if data[i + 2] == 1 {
-                return Some(i + 3);
-            }
-            if i + 3 < data.len() && data[i + 2] == 0 && data[i + 3] == 1 {
-                return Some(i + 4);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-fn parsed_scalar_as_f64(v: &ParsedValue) -> f64 {
-    match v {
-        ParsedValue::Scalar(f) => *f,
-        _ => f64::NAN,
-    }
-}
-
-/// Build a scalar Arrow IPC buffer from owned timestamp and value vectors.
-/// Takes ownership so the vecs can be moved directly into Arrow arrays without
-/// an extra `to_vec()` copy at the call site.
-fn build_scalar_ipc_raw(timestamps: Vec<i64>, values: Vec<f64>) -> crate::Result<ArrowIpc> {
-    crate::arrow::build_scalar_ipc(timestamps, values)
-}
-
-fn build_vector_ipc(
-    timestamps: &[i64],
-    values: &[&ParsedValue],
-    n: usize,
-) -> crate::Result<ArrowIpc> {
-    let mut flat = Vec::with_capacity(values.len() * n);
-    for v in values {
-        match v {
-            ParsedValue::Vector(inner) if inner.len() == n => flat.extend_from_slice(inner),
-            _ => flat.extend(std::iter::repeat_n(f64::NAN, n)),
-        }
-    }
-    crate::arrow::build_vector_ipc(timestamps.to_vec(), flat, n)
-}
-
-fn build_enum_ipc(timestamps: &[i64], values: &[&ParsedValue]) -> crate::Result<ArrowIpc> {
-    let codes: Vec<i32> = values
-        .iter()
-        .map(|v| match v {
-            ParsedValue::Enum(c) => *c,
-            _ => 0,
-        })
-        .collect();
-    crate::arrow::build_enum_ipc(timestamps.to_vec(), codes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1729,47 +1341,6 @@ mod tests {
             Err(other) => panic!("expected ChannelNotFound, got {other:?}"),
             Ok(_) => panic!("expected error on unknown channel"),
         }
-    }
-
-    #[test]
-    fn is_keyframe_detects_idr_and_sps() {
-        // Annex-B: 4-byte start code + SPS header byte (0x67 = NAL type 7).
-        assert!(is_keyframe(&[0x00, 0x00, 0x00, 0x01, 0x67, 0xff]));
-        // 3-byte start code + IDR header (0x65 = NAL type 5).
-        assert!(is_keyframe(&[0x00, 0x00, 0x01, 0x65, 0xde, 0xad]));
-        // AUD (type 9) then IDR.
-        assert!(is_keyframe(&[
-            0x00, 0x00, 0x00, 0x01, 0x09, 0x10, 0x00, 0x00, 0x00, 0x01, 0x65
-        ]));
-        // Non-IDR VCL slice header (type 1): not a keyframe.
-        assert!(!is_keyframe(&[0x00, 0x00, 0x00, 0x01, 0x41, 0xaa]));
-    }
-
-    #[test]
-    fn parse_enum_json_in_range() {
-        assert_eq!(parse_enum_json(br#"{"value": 0}"#), Some(0));
-        assert_eq!(parse_enum_json(br#"{"value": -1}"#), Some(-1));
-        assert_eq!(parse_enum_json(br#"{"value": 2147483647}"#), Some(i32::MAX));
-        assert_eq!(
-            parse_enum_json(br#"{"value": -2147483648}"#),
-            Some(i32::MIN)
-        );
-    }
-
-    #[test]
-    fn parse_enum_json_drops_out_of_range() {
-        // 0x1_0000_0000 — one past i32::MAX. Previously truncated to 0.
-        assert_eq!(parse_enum_json(br#"{"value": 4294967296}"#), None);
-        // i32::MAX + 1.
-        assert_eq!(parse_enum_json(br#"{"value": 2147483648}"#), None);
-        // i32::MIN - 1.
-        assert_eq!(parse_enum_json(br#"{"value": -2147483649}"#), None);
-    }
-
-    #[test]
-    fn parse_enum_json_rejects_malformed() {
-        assert_eq!(parse_enum_json(b"not-json"), None);
-        assert_eq!(parse_enum_json(br#"{"other": 1}"#), None);
     }
 
     /// `short_mcap_zstd_bytes()` writes the same four-channel corpus as
