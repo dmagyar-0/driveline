@@ -54,7 +54,7 @@
 | 11 | **dev.to `#showdev`** | ★★☆☆☆ | **Yes — the "I built X" tag** | Build-story article + GIF, tags showdev/rust/webdev | any weekday | Low |
 | 12 | **This Week in Rust** (newsletter) | ★★★☆☆ | Yes — **submit a PR** linking a writeup/release | Needs a link-worthy artifact first | n/a (PR) | Low |
 | 13 | **SavvyCAN GitHub Discussions** | ★★☆☆☆ (fit-not-reach) | Yes, as interop/show post | Browser complement to SavvyCAN capture/graph | any | Low |
-| 14 | **nuScenes devkit / Zenseact ZOD repos** | ★★☆☆☆ | As a *dataset tooling* contribution (Issue/Discussion) | Clip of Driveline replaying *their* dataset | any | Low (mind licenses) |
+| 14 | **AV dataset communities** (nuScenes forum, Alpamayo HF, Waymo, Argoverse, ZOD) | ★★★☆☆ | As a *dataset tooling* contribution | Clip of Driveline replaying *their* data (mind the licence) | any | Low–Med (licence-gated) — see [dataset section](#av-dataset-communities-nuscenes-alpamayo-waymo-argoverse) |
 | 15 | **PX4 / ArduPilot Discourse** | ★★☆☆☆ today | Only as "would ULog/.bin support be useful?" | Image-first (ArduPilot Blog *requires* it), caveat foregrounded | Tue–Thu 13:00–16:00 | Med (off-topic if oversold) |
 | 16 | **Weekly Robotics** (newsletter) | ★★★☆☆ | Curator-gated tip | One-paragraph pitch + demo GIF | n/a | Low |
 | 17 | **r/embedded** (~250k) | ★★☆☆☆ | **Strict** — sparingly, FOSS-framed, no product tone | Problem-first, FOSS/no-cloud emphasis | weekday AM ET | **High** |
@@ -186,6 +186,89 @@ don't @-ping staff, don't position as a competitor.)*
 > ULog/.bin yet**. Before I build a reader, I wanted to ask the people who'd use
 > it: is "onboard video frame-locked to your flight log, in the browser" worth
 > having? [image] Repo: https://github.com/dmagyar-0/driveline
+
+---
+
+## AV dataset communities (nuScenes, Alpamayo, Waymo, Argoverse)
+
+Driveline already renders a **nuScenes** camera+LiDAR fusion demo, which gives it
+real standing to post in dataset communities as a *tooling contribution* rather
+than an ad. These are niche but precisely your users (AV researchers). **The
+licence on the data — not your MPL-2.0 code — is the thing that bites here.**
+
+### Ranked dataset posts
+
+1. **comma2k19 (comma.ai)** — already covered above (opendbc/openpilot). Your
+   **warmest** dataset audience: you render comma2k19, the crowd loves tools, and
+   the data licence is **permissive** (lowest screenshot risk). Lead here.
+2. **nuScenes → `forum.nuscenes.org`** (Discourse; category *More details* or
+   *Howto*) — the official venue. The devkit GitHub
+   (`nutonomy/nuscenes-devkit`) is **Issues-only and not for showcases** — post
+   on the forum. Prior art: Foxglove shipped a nuScenes viewer + `nuscenes2mcap`
+   and blogged it, so third-party viewers are welcomed.
+   ⚠️ **Licence: CC BY-NC-SA 4.0.** Any nuScenes screenshot/GIF is
+   non-commercial, must **attribute nuScenes/Motional**, and is share-alike.
+   (You already gitignore the NC demo artefacts — keep doing that.)
+3. **Alpamayo → Hugging Face community tab** on
+   `nvidia/PhysicalAI-Autonomous-Vehicles` — reaches NVIDIA engineers who watch
+   that tab. Frame as a **format question**, because Driveline reads MCAP/MF4 and
+   **does not read Alpamayo's MP4 + Draco-Parquet layout yet** — this is
+   "would this be useful / can it read your layout?", not "it works."
+   🚫 **Licence: proprietary `nvidia-av-dataset` EULA — far stricter than
+   nuScenes.** No derivative works, **no redistribution/hosting of the data in
+   whole or part**, 12-month expiry, scoped to "internal AV development using
+   NVIDIA technology." **Do not put any Alpamayo frame in your README/demo/post.**
+   Demo with your own footage; ask NVIDIA (in the HF thread) before publishing any
+   sample frame. Secondary venue: NVIDIA Developer Forums (DRIVE/AV) — more formal.
+4. **Waymo Open Dataset** (`waymo-research/waymo-open-dataset` Issues + Google
+   Group) — same tooling pitch. ⚠️ Non-commercial media terms like nuScenes.
+5. **Argoverse** (`github.com/argoverse` Issues + community Slack) — same pitch.
+   ⚠️ CC BY-NC-SA media terms.
+6. **Zenseact ZOD** (`zod.zenseact.com`, `zenseact/zod` Issues) — smaller/quieter,
+   friendly, permissive-ish research licence. Lower leverage.
+   **Skip:** PandaSet (withdrawn), Lyft L5 (legacy), KITTI (no live channel).
+
+### Ready-to-paste — nuScenes forum
+
+**Title:** `Driveline: open-source, browser-only viewer for nuScenes camera+LiDAR fusion (MPL-2.0)`
+> Hi all — I built **Driveline**, an open-source (MPL-2.0), fully client-side
+> viewer that replays multimodal logs in the browser, and it renders a
+> **nuScenes** CAM_FRONT + projected-LiDAR fusion (plus the 3D scene and ego
+> speed/yaw-rate) on one synchronised timeline. No install, no upload — the data
+> is read in the tab.
+>
+> Sharing in case it's useful for eyeballing scenes quickly, and to ask what
+> you'd want next (more sensors? radar? a specific scene-export path?). I went in
+> via an MCAP conversion, similar in spirit to Foxglove's `nuscenes2mcap`.
+>
+> Demo + repo: https://github.com/dmagyar-0/driveline · live:
+> https://driveline.pages.dev
+>
+> *The demo media shows nuScenes v1.0-mini data under **CC BY-NC-SA 4.0**, ©
+> Motional — non-commercial, attribution, share-alike.*
+> Honest scope: Chromium-only (WebCodecs), replay-only.
+
+### Ready-to-paste — Alpamayo (Hugging Face community tab) — *format question, no frames*
+
+**Title:** `Open-source browser viewer (Driveline) — could it read the PhysicalAI-AV MP4 + Draco-Parquet layout?`
+> Hi — I maintain **Driveline**, an open-source (MPL-2.0), client-side browser
+> viewer for multimodal driving logs. It currently reads **MCAP** and **ASAM
+> MF4**, syncing camera video to high-rate signals on one nanosecond clock, and
+> it's agent-drivable.
+>
+> I'd like to support this dataset's layout (7× MP4 1080p + LiDAR/radar in
+> Draco-compressed Parquet) so people can scrub it in a browser. Two questions
+> before I start:
+> 1. Is there appetite for a browser viewer for this dataset?
+> 2. Per the dataset licence, am I permitted to publish a small sample
+>    screenshot/clip when documenting viewer support, or should demos use only
+>    my own footage? I want to respect the EULA's redistribution terms.
+>
+> Repo: https://github.com/dmagyar-0/driveline. Happy to contribute a loader if
+> it's welcome.
+
+*(Do not attach Alpamayo frames to this post — the EULA's no-redistribution
+clause plausibly covers a public sample frame. Ask first, as above.)*
 
 ---
 
