@@ -685,7 +685,8 @@ dependencies = [
 [[package]]
 name = "mf4-rs"
 version = "2.0.0"
-source = "git+https://github.com/dmagyar-0/mf4-rs?rev=ddbad6f1067f6b172b31c80fa03b091329df0c76#ddbad6f1067f6b172b31c80fa03b091329df0c76"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd9a9103b897d87ca36a831cc426b3a0d81af7d0f31b060f61c8ed68e56e04b7"
 dependencies = [
  "byteorder",
  "memmap2",
