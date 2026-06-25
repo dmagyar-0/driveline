@@ -3,11 +3,15 @@
 **Browser-first multimodal log viewer — 4K video + high-rate signals on one
 nanosecond clock, and an agent can drive every bit of it.**
 
+[![Live on Cloudflare Pages](https://img.shields.io/badge/live-driveline.pages.dev-f97316)](https://driveline.pages.dev)
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](./LICENSE)
 [![Built with Rust → WASM](https://img.shields.io/badge/core-Rust%20%E2%86%92%20WASM-orange)](./crates)
 [![Runs in Chromium](https://img.shields.io/badge/runs%20in-Chromium-blue)](#prerequisites)
 
-🚀 **[Try it live →](https://driveline.pages.dev)** · 📖 [Design docs](./docs) · 🤖 [Bring Your Own Agent](./docs/13-bring-your-own-agent.md) · 📣 [Go-to-market](./docs/marketing)
+🚀 **[Try it live now → driveline.pages.dev](https://driveline.pages.dev)** · 📖 [Design docs](./docs) · 🤖 [Bring Your Own Agent](./docs/13-bring-your-own-agent.md) · 📣 [Go-to-market](./docs/marketing)
+
+No install required — open the link in a Chromium-based browser, drop a log file
+(or click **Try the demo**), and it runs entirely in your tab.
 
 > Reads **MCAP** and **ASAM MF4** first-class. Runs entirely client-side — your
 > files never leave the browser tab. **Replay-only, Chromium-only** (WebCodecs),
@@ -62,13 +66,15 @@ pnpm dev                # http://localhost:5173
 
 ## Deploy
 
-Driveline is a fully static, client-side SPA, so it deploys to any static
-host. CI publishes it to **Cloudflare Pages** via
+Driveline is live at **[driveline.pages.dev](https://driveline.pages.dev)**.
+
+It's a fully static, client-side SPA, so it deploys to any static host. CI
+publishes it to **Cloudflare Pages** via
 [`.github/workflows/deploy.yml`](./.github/workflows/deploy.yml): pushes to
 `main` ship a production deploy; a manual **Run workflow** (workflow_dispatch)
 from any branch ships a preview deploy.
 
-One-time setup — add two repo secrets under **Settings → Secrets and
+To deploy your own fork — add two repo secrets under **Settings → Secrets and
 variables → Actions**:
 
 - `CLOUDFLARE_API_TOKEN` — a token with the **Cloudflare Pages: Edit**
