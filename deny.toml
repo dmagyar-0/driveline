@@ -49,6 +49,6 @@ version = 2
 yanked = "warn"
 
 [sources]
-# mf4-rs is pulled from a pinned git revision; allow the GitHub org explicitly.
-unknown-git = "allow"
+# All dependencies come from crates.io (the default registry); no git sources.
+unknown-git = "deny"
 unknown-registry = "deny"
