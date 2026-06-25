@@ -4,7 +4,44 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/brand/favicon.svg" />
-    <title>Driveline</title>
+    <title>Driveline — browser-based multimodal log viewer</title>
+
+    <!-- Primary meta -->
+    <meta
+      name="description"
+      content="Browser-first viewer for multimodal logs: 4K video + high-rate signals (CAN/IMU) synced on one nanosecond clock. Reads MCAP and ASAM MF4 first-class via a Rust→WASM core — files never leave the tab. Agent-drivable. Chromium-only, replay-only. MPL-2.0."
+    />
+    <meta name="theme-color" content="#0b0e14" />
+
+    <!-- Open Graph. Swap DEPLOY_URL if you host somewhere other than Cloudflare Pages. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Driveline" />
+    <meta property="og:title" content="Driveline — multimodal log viewer in your browser" />
+    <meta
+      property="og:description"
+      content="4K video + high-rate signals synced on one nanosecond clock. Reads MCAP and ASAM MF4, runs fully client-side, and an AI agent can drive every part of it. Chromium-only, replay-only. MPL-2.0."
+    />
+    <meta property="og:url" content="https://driveline.pages.dev/" />
+    <meta property="og:image" content="https://driveline.pages.dev/brand/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Driveline replaying 4K dashcam video alongside synchronised signal plots."
+    />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Driveline — multimodal log viewer in your browser" />
+    <meta
+      name="twitter:description"
+      content="4K video + high-rate signals on one nanosecond clock. MCAP + ASAM MF4, fully client-side, agent-drivable. Chromium-only, replay-only. MPL-2.0."
+    />
+    <meta name="twitter:image" content="https://driveline.pages.dev/brand/og-image.png" />
+    <meta
+      name="twitter:image:alt"
+      content="Driveline replaying 4K dashcam video alongside synchronised signal plots."
+    />
   </head>
   <body>
     <div id="root"></div>
